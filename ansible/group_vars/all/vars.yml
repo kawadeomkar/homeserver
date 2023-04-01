@@ -1,0 +1,7 @@
+username: omkar
+packages:
+  - vim
+  - htop
+  - tmux
+  - neofetch
+  - speedtest-cli

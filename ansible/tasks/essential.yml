@@ -1,0 +1,19 @@
+
+# Revisit to pin versions to avoid breaking changes.
+- name: Update packages to the latest version. 
+  apt:
+    update_cache: yes
+    upgrade: yes
+
+- name: Install core packages
+  apt:
+    name:
+      - vim
+      - curl
+      - gnupg
+      - ca-certificates
+      - htop
+      - tmux
+      - speedtest-cli
+    state: lastest
+    update_cache: yes
