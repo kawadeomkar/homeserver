@@ -1,4 +1,4 @@
-
+---
 # Revisit to pin versions to avoid breaking changes.
 - name: Update packages to the latest version. 
   apt:
@@ -17,3 +17,11 @@
       - speedtest-cli
     state: lastest
     update_cache: yes
+
+
+- name: passwordless sudo for "{{ username }}"
+  lineinfile:
+    dest: "/etc/sudoers"
+    regexp: "^%wheel"
+    line: "{{ username }} ALL=(ALL) NOPASSWD: ALL"
+    validate: "usr/sbin/visudo -cf %s"
