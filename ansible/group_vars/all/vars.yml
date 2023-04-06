@@ -1,7 +1,14 @@
 username: omkar
+shell: /usr/bin/bash
+
 packages:
   - vim
   - htop
+  - curl
   - tmux
   - neofetch
   - speedtest-cli
+
+  # Docker
+  - ca-certificates
+  - gnupg
