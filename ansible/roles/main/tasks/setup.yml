@@ -34,7 +34,7 @@
     state: latest
 
 # TODO: Revisit to pin versions to avoid breaking changes.
-- name: Update packages to the latest version. 
-  apt:
-    update_cache: yes
-    upgrade: yes
+#- name: Update packages to the latest version. 
+#  apt:
+#    update_cache: yes
+#    upgrade: yes

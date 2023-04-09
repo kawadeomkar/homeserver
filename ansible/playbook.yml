@@ -2,5 +2,9 @@
 - hosts: all
   become: yes
   
+  pre_tasks:
+    - name: update apt cache if necessary
+      apt: update_cache=true cache_valid_time=3600
+
   roles:  
     - role: main
