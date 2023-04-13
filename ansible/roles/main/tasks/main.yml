@@ -1,3 +1,4 @@
 ---
 - include_tasks: setup.yml
 - include_tasks: ssh.yml
+- include_tasks: env.yml
