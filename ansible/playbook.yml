@@ -3,8 +3,11 @@
   become: yes
   
   pre_tasks:
-    - name: update apt cache if necessary
-      apt: update_cache=true cache_valid_time=3600
+    - name: update apt cache
+      apt: 
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_os_family == 'Ubuntu' 
 
   roles:  
     - role: main

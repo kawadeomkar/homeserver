@@ -33,6 +33,7 @@
     name: "{{ packages }}"
     state: latest
 
+
 # TODO: Revisit to pin versions to avoid breaking changes.
 #- name: Update packages to the latest version. 
 #  apt:
