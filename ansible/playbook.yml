@@ -7,8 +7,14 @@
       apt: 
         update_cache: true
         cache_valid_time: 3600
-      when: ansible_os_family == 'Ubuntu' 
+      when: ansible_os_family == 'Debian' 
 
   roles:  
     - role: main
     - role: geerlingguy.docker
+    - role: containers
+
+  tasks:
+    - name: docker pull
+      shell: |
+        docker pull nginx

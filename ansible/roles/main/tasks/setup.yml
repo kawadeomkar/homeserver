@@ -28,10 +28,10 @@
     validate: "/usr/sbin/visudo -cf %s"
 
 # TODO: Revisit to pin versions to avoid breaking changes.
-# - name: update apt cache & upgrade
-#  apt:
-#    update_cache: yes
-#    upgrade: yes
+- name: update apt cache & upgrade
+  apt:
+    update_cache: yes
+    upgrade: yes
 
 - name: install core packages
   apt:

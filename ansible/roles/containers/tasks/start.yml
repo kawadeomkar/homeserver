@@ -1,0 +1,13 @@
+---
+
+- name: register debug
+  shell: ls /homeserver/
+  register: dd
+
+- name: debug containers
+  debug:
+    msg: "compose file {{ dd }}"
+
+- name: start containers
+  command: >
+    docker-compose -f /homeserver/homeserver/docker/docker-compose.yml up

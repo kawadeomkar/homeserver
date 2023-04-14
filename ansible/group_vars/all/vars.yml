@@ -1,12 +1,6 @@
-username: omkar
 shell: /usr/bin/bash
 
-packages:
-  - vim
-  - htop
-  - curl
-  - tmux
-  - neofetch
-  - speedtest-cli
-  - openssh-server
-  - git-all
+# TODO: networking
+lan_subnet: 10.0.0.0/24
+lan_base: "{{ lan_subnet | regex_replace('.0/[0-9]{2}', '') }}"
+# homeserver_ip: "{{ lan_base }}.18"
