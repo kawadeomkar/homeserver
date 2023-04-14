@@ -1,4 +1,4 @@
 ---
 roles:
   - name: geerlingguy.docker
-    version: latest
+    version: 6.1.0

@@ -7,7 +7,6 @@
     - "{{ username }}"
     - docker
 
-
 - name: create non-root user
   user: 
     name: "{{ username }}"
@@ -28,14 +27,13 @@
     line: "{{ username }} ALL=(ALL) NOPASSWD: ALL"
     validate: "/usr/sbin/visudo -cf %s"
 
-- name: Install core packages
-  apt:
-    name: "{{ packages }}"
-    state: latest
-
-
 # TODO: Revisit to pin versions to avoid breaking changes.
-#- name: Update packages to the latest version. 
+# - name: update apt cache & upgrade
 #  apt:
 #    update_cache: yes
 #    upgrade: yes
+
+- name: install core packages
+  apt:
+    name: "{{ packages }}"
+    state: latest

@@ -8,7 +8,7 @@ packages:
   - tmux
   - neofetch
   - speedtest-cli
-
+  - openssh-server
   # Docker
   - ca-certificates
   - gnupg
