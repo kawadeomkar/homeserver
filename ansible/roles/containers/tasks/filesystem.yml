@@ -1,0 +1,10 @@
+---
+
+- name: create container directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    recurse: yes
+  loop:
+    - /opt/hass
+    - /opt/portainer
