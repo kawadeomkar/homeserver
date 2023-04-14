@@ -9,6 +9,4 @@ packages:
   - neofetch
   - speedtest-cli
   - openssh-server
-  # Docker
-  - ca-certificates
-  - gnupg
+  - git-all

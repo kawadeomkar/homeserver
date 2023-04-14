@@ -11,3 +11,4 @@
 
   roles:  
     - role: main
+    - role: geerlingguy.docker

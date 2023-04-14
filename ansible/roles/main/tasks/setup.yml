@@ -37,3 +37,10 @@
   apt:
     name: "{{ packages }}"
     state: latest
+
+- name: clone homeserver repository 
+  git:
+    repo: https://github.com/kawadeomkar/homeserver.git
+    dest: /homeserver
+    clone: yes
+    update: yes
