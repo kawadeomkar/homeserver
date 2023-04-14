@@ -1,5 +1,8 @@
 shell: /usr/bin/bash
 
+username: omkar
+password: TODO
+
 # TODO: networking
 lan_subnet: 10.0.0.0/24
 lan_base: "{{ lan_subnet | regex_replace('.0/[0-9]{2}', '') }}"

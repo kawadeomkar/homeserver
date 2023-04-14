@@ -13,8 +13,3 @@
     - role: main
     - role: geerlingguy.docker
     - role: containers
-
-  tasks:
-    - name: docker pull
-      shell: |
-        docker pull nginx
