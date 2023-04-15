@@ -21,12 +21,18 @@
       line: "PermitEmptyPasswords no"
     - regexp: "^ChallengeResponseAuthentication"
       line: "ChallengeResponseAuthentication no"
-  register: sshd_config
+  notify: test notify
 
-- name: restart ssh daemon
-  service:
-    name: sshd
-    state: restarted
-  when: sshd_config.changed
+- name: Add configured users allowed to connect over ssh
+  lineinfile:
+    dest: "/etc/ssh/sshd_config"
+    regexp: '^AllowUsers'
+    line: "AllowUsers {{ security_ssh_allowed_users | join(' ') }}"
+    state: present
+    create: true
+    validate: 'sshd -T -f %s'
+    mode: 0644
+  when: security_ssh_allowed_users | length > 0
+  notify: restart ssh
     
 

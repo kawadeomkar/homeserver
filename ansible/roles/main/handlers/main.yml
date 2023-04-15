@@ -1,0 +1,10 @@
+---
+
+- name: restart ssh daemon
+  service:
+    name: ssh
+    state: restarted
+
+- name: test notify
+  debug:
+    msg: testtesttest
