@@ -35,4 +35,3 @@
   when: security_ssh_allowed_users | length > 0
   notify: restart ssh
     
-

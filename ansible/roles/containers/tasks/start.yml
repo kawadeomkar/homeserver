@@ -3,3 +3,4 @@
 - name: start containers
   command: >
     docker-compose -f /homeserver/docker/docker-compose.yml up -d
+    
