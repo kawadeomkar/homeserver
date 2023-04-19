@@ -6,8 +6,9 @@
 *.retry
 *.*~
 
-# ansible runtime roles 
-ansible/roles/geerlingguy.docker
+# ansible runtime
+roles/geerlingguy.docker
+.vagrant
 
 # Try tyo avoid any plain-text passwords 
 *pwd*
