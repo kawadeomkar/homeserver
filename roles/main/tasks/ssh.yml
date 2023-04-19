@@ -21,7 +21,7 @@
       line: "PermitEmptyPasswords no"
     - regexp: "^ChallengeResponseAuthentication"
       line: "ChallengeResponseAuthentication no"
-  notify: test notify
+  notify: restart ssh daemon
 
 - name: Add configured users allowed to connect over ssh
   lineinfile:
@@ -33,5 +33,5 @@
     validate: 'sshd -T -f %s'
     mode: 0644
   when: security_ssh_allowed_users | length > 0
-  notify: restart ssh
+  notify: restart ssh daemon
     
