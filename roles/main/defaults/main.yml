@@ -1,7 +1,8 @@
+---
+
+# setup.yml  
 username: omkar
 password: TODO
-
-ssh_port: 22
 
 packages:
   - vim
@@ -10,8 +11,7 @@ packages:
   - tmux
   - neofetch
   - speedtest-cli
-  # Docker
-  - ca-certificates
-  - gnupg
-  - openssh-server
   - git-all
+
+# ssh.yml
+ssh_port: 22
