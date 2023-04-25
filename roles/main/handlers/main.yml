@@ -5,7 +5,7 @@
     name: ssh
     state: restarted
 
-- name: test notify
-  debug:
-    msg: testtesttest
-    
+# Debian based 
+- name: reload ufw
+  ufw:
+    state: reloaded 

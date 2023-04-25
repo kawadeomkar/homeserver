@@ -3,3 +3,7 @@
 roles:
   - name: geerlingguy.docker
     version: 6.1.0
+
+collections:
+  - name: community.general
+    version: 6.6.0

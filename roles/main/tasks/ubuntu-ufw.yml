@@ -1,0 +1,32 @@
+---
+
+- name: install UFW 
+  apt: name=ufw update_cache=true state=latest
+  
+- name: UFW deny incoming
+  ufw:
+    direction: incoming
+    proto: any
+    policy: deny
+  notify:
+  - reload ufw
+
+- name: UFW allow outgoing
+  ufw:
+    direction: outgoing
+    proto: any
+    policy: allow
+  notify:
+  - reload ufw
+
+- name: UFW allow ssh
+  ufw:
+    rule: allow
+    name: OpenSSH
+  notify:
+  - reload ufw
+
+- name: enable UFW
+  ufw:
+    state: enabled
+
