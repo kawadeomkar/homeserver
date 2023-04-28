@@ -7,3 +7,6 @@ roles:
 collections:
   - name: community.general
     version: 6.6.0
+
+  - name: kubernetes.core
+    version: 2.4.0
