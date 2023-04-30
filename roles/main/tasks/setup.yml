@@ -15,6 +15,7 @@
       - sudo
       - docker 
       - users
+      - microk8s
     append: yes
     shell: "{{ shell }}"
     # only on initial user create

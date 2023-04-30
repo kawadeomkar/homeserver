@@ -3,6 +3,7 @@
 - name: snapd install classic microk8s
   snap:
     name: microk8s
+    state: present
     classic: true
 
 - name: wait for microk8s to start
@@ -19,3 +20,18 @@
     - dashboard
     - dns
     - registry
+
+- name: add alias kubectl=microk8s kubectl
+  lineinfile:
+    path: "$HOME/.bashrc"
+    regexp: "^alias kubectl="
+    line: 'alias kubectl="microk8s kubectl"'
+    state: present
+
+- name: add bash completion for kubectl
+  lineinfile:
+    path: "$HOME/.bashrc"
+    regexp: '^source \<\(kubectl'
+    line: "source <(kubectl completion bash)"
+    state: present
+    
