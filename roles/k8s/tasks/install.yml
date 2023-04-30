@@ -1,0 +1,21 @@
+---
+
+- name: snapd install classic microk8s
+  snap:
+    name: microk8s
+    classic: true
+
+- name: wait for microk8s to start
+  command: microk8s.status --wait-ready
+  changed_when: false
+  register: microk8sstatus
+  failed_when:
+      - "'This MicroK8s deployment is acting as a node in a cluster.' not in microk8sstatus.stdout_lines"
+      - microk8sstatus.rc > 0
+
+- name: enable microk8s services
+  command: "microk8s enable {{ item }}"
+  with_items: 
+    - dashboard
+    - dns
+    - registry

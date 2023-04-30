@@ -12,6 +12,7 @@ packages:
   - neofetch
   - speedtest-cli
   - git-all
+  - snapd
 
 # ssh.yml
 ssh_port: 22
