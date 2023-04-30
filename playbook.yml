@@ -13,4 +13,5 @@
   roles:  
     - role: main
     - role: geerlingguy.docker
-    - role: containers
+#    - role: containers
+    - role: k8s
