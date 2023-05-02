@@ -5,7 +5,9 @@
 - include_tasks: "env.yml"
 
 # Debian based tasks
-- include_tasks: "ubuntu-ufw.yml"
-  when: ansible_os_family == "Debian"
+# TODO: depends on k8s ingress config
+# - include_tasks: "ubuntu-ufw.yml"
+#   when: ansible_os_family == "Debian"
+
 - include_tasks: "fail2ban.yml"
   when: ansible_os_family == "Debian"
