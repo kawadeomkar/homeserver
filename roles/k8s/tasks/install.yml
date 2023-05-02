@@ -14,6 +14,15 @@
       - "'This MicroK8s deployment is acting as a node in a cluster.' not in microk8sstatus.stdout_lines"
       - microk8sstatus.rc > 0
 
+- name: Add user to Docker and Microk8s groups, they will need to logout and in again
+  user:
+    name: "{{ username }}"
+    state: present
+    groups:
+      - docker
+      - microk8s
+    append: true
+
 - name: enable microk8s services
   command: "microk8s enable {{ item }}"
   with_items: 
@@ -34,4 +43,4 @@
     regexp: '^source \<\(kubectl'
     line: "source <(kubectl completion bash)"
     state: present
-    
+  

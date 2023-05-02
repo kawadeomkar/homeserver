@@ -1,8 +1,6 @@
 ---
 
 # setup.yml  
-username: omkar
-password: TODO
 
 packages:
   - vim
@@ -13,6 +11,8 @@ packages:
   - speedtest-cli
   - git-all
   - snapd
+  - python3-pip
+  - net-tools
 
 # ssh.yml
 ssh_port: 22

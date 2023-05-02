@@ -10,12 +10,12 @@
 - name: create non-root user
   user: 
     name: "{{ username }}"
+    state: present
     password: "{{ password | password_hash('sha512') }}"
     groups:
       - sudo
       - docker 
       - users
-      - microk8s
     append: yes
     shell: "{{ shell }}"
     # only on initial user create
@@ -33,6 +33,7 @@
   apt:
     update_cache: yes
     upgrade: yes
+    cache_valid_time: 3600
 
 - name: install core packages
   apt:

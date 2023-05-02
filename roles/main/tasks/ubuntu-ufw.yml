@@ -3,13 +3,14 @@
 - name: install UFW 
   apt: name=ufw update_cache=true state=latest
   
-- name: UFW deny incoming
-  ufw:
-    direction: incoming
-    proto: any
-    policy: deny
-  notify:
-  - reload ufw
+# TODO: Allow certain ports
+#- name: UFW deny incoming
+#  ufw:
+#    direction: incoming
+#    proto: any
+#    policy: deny
+#  notify:
+#  - reload ufw
 
 - name: UFW allow outgoing
   ufw:
