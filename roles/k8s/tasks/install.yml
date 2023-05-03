@@ -5,7 +5,7 @@
     name: microk8s
     state: present
     classic: true
-    channel: 1.27/stable
+    channel: 1.26/stable
 
 - name: wait for microk8s to start
   command: microk8s.status --wait-ready
@@ -33,12 +33,10 @@
     - storage
     - ingress
 
-- name: add alias kubectl=microk8s kubectl
-  lineinfile:
-    path: "$HOME/.bashrc"
-    regexp: "^alias kubectl="
-    line: 'alias kubectl="microk8s kubectl"'
-    state: present
+- name: create alias microk8s.kubectl=kubectl
+  command: "snap alias microk8s.kubectl kubectl"
+  register: "kastdout"
+  changed_when: "kastdout.stdout is none"
 
 - name: add bash completion for kubectl
   lineinfile:
