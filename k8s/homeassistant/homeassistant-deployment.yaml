@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homeassistant-deployment
+  labels:
+    app: homeassistant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: homeassistant
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        io.kompose.network/docker-default: "true"
+        app: homeassistant
+    spec:
+      containers:
+        - image: ghcr.io/home-assistant/home-assistant:stable
+          name: homeassistant
+          ports:
+            - containerPort: 8123
+          resources: {}
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: "/tempo"
+              name: homeassistant-opt-volume
+            - mountPath: /etc/localtime
+              name: homeassistant-claim1
+              readOnly: true
+      restartPolicy: Always
+      volumes:
+        - name: homeassistant-opt-volume
+          persistentVolumeClaim:
+            claimName: homeassistant-opt-claim
+        - name: homeassistant-claim1
+          persistentVolumeClaim:
+            claimName: homeassistant-claim1
+            readOnly: true
+status: {}
