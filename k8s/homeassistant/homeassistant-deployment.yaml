@@ -22,11 +22,12 @@ spec:
           name: homeassistant
           ports:
             - containerPort: 8123
+              protocol: TCP
           resources: {}
           securityContext:
             privileged: true
           volumeMounts:
-            - mountPath: "/tempo"
+            - mountPath: "/config"
               name: homeassistant-opt-volume
             - mountPath: /etc/localtime
               name: homeassistant-claim1
