@@ -1,0 +1,38 @@
+---
+
+- name: create .kube folder
+  file:
+    path: ~/.kube
+    state: directory
+    owner: '{{ username }}'
+    group: '{{ username }}'
+    mode: 0750
+
+- name: create kubectl config
+  shell: microk8s config > /home/{{ username }}/.kube/config
+  args:
+    executable: /bin/bash
+
+- name: create alias microk8s.kubectl=kubectl
+  command: "snap alias microk8s.kubectl kubectl"
+  register: "kastdout"
+  changed_when: "kastdout.stdout is none"
+
+- name: add bash completion for kubectl
+  lineinfile:
+    path: "$HOME/.bashrc"
+    regexp: '^source <\(kubectl completion bash'
+    line: "source <(kubectl completion bash)"
+    state: present
+
+- name: update the /etc/hosts file with internal addresses
+  tags: etchostsupdate
+  lineinfile:
+    dest: "/etc/hosts"
+    regexp: ".*\t{{ hostvars[item]['name']}}\t{{ hostvars[item]['name']}}"
+    line: "{{ item }}\t{{ hostvars[item]['name']}}"
+    state: present
+    backup: yes
+  register: etchostsupdate
+  when: inventory_hostname != "{{ item }}" or inventory_hostname == "{{ item }}"
+  with_items: "{{groups['local_addresses']}}"

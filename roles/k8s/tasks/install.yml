@@ -15,7 +15,7 @@
       - "'This MicroK8s deployment is acting as a node in a cluster.' not in microk8sstatus.stdout_lines"
       - microk8sstatus.rc > 0
 
-- name: Add user to Docker and Microk8s groups, they will need to logout and in again
+- name: add user to docker and microk8s groups
   user:
     name: "{{ username }}"
     state: present
@@ -32,16 +32,4 @@
     - registry
     - storage
     - ingress
-
-- name: create alias microk8s.kubectl=kubectl
-  command: "snap alias microk8s.kubectl kubectl"
-  register: "kastdout"
-  changed_when: "kastdout.stdout is none"
-
-- name: add bash completion for kubectl
-  lineinfile:
-    path: "$HOME/.bashrc"
-    regexp: '^source <\(kubectl completion bash'
-    line: "source <(kubectl completion bash)"
-    state: present
-  
+    
