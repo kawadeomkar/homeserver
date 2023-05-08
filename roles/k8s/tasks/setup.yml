@@ -25,14 +25,20 @@
     line: "source <(kubectl completion bash)"
     state: present
 
-- name: update the /etc/hosts file with internal addresses
-  tags: etchostsupdate
-  lineinfile:
-    dest: "/etc/hosts"
-    regexp: ".*\t{{ hostvars[item]['name']}}\t{{ hostvars[item]['name']}}"
-    line: "{{ item }}\t{{ hostvars[item]['name']}}"
-    state: present
-    backup: yes
-  register: etchostsupdate
-  when: inventory_hostname != "{{ item }}" or inventory_hostname == "{{ item }}"
-  with_items: "{{groups['local_addresses']}}"
+# TODO: The following corresponds with "local_addresses" in inventory file
+# ex:
+# [local_addresses]
+# 192.168.41.221 name=homeserver1
+# 192.168.41.222 name=homeserver2
+#
+# - name: update the /etc/hosts file with internal addresses
+#   tags: etchostsupdate
+#   lineinfile:
+#     dest: "/etc/hosts"
+#     regexp: ".*\t{{ hostvars[item]['name']}}\t{{ hostvars[item]['name']}}"
+#     line: "{{ item }}\t{{ hostvars[item]['name']}}"
+#     state: present
+#     backup: yes
+#   register: etchostsupdate
+#   when: inventory_hostname != "{{ item }}" or inventory_hostname == "{{ item }}"
+#   with_items: "{{groups['local_addresses']}}"
