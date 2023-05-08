@@ -1,3 +1,7 @@
+# homeserver repo
+# downloaded file
+k8s/cert-manager/cert-manager-1.4.0.yaml
+
 
 # Ansible runtime and backups
 *.original
