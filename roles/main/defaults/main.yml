@@ -13,6 +13,8 @@ packages:
   - snapd
   - python3-pip
   - net-tools
+  - wireshark
+  - nmap
 
 # ssh.yml
 ssh_port: 22
