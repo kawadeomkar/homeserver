@@ -1,6 +1,5 @@
 ---
-
-# setup.yml  
+# setup.yml
 
 packages:
   - vim

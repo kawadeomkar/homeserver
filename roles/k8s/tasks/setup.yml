@@ -1,25 +1,25 @@
 ---
-
-- name: create .kube folder
-  file:
+- name: Create .kube folder
+  ansible.builtin.file:
     path: ~/.kube
     state: directory
-    owner: '{{ username }}'
-    group: '{{ username }}'
-    mode: 0750
+    owner: "{{ username }}"
+    group: "{{ username }}"
+    mode: "0750"
 
-- name: create kubectl config
-  shell: microk8s config > /home/{{ username }}/.kube/config
+- name: Create kubectl config
+  ansible.builtin.shell: microk8s config > /home/{{ username }}/.kube/config
   args:
     executable: /bin/bash
+  changed_when: "[ -f /home/{{ username }}/.kube/config ] && echo 1 || echo 0"
 
-- name: create alias microk8s.kubectl=kubectl
-  command: "snap alias microk8s.kubectl kubectl"
+- name: Create alias microk8s.kubectl=kubectl
+  ansible.builtin.command: "snap alias microk8s.kubectl kubectl"
   register: "kastdout"
   changed_when: "kastdout.stdout is none"
 
-- name: add bash completion for kubectl
-  lineinfile:
+- name: Add bash completion for kubectl
+  ansible.builtin.lineinfile:
     path: "$HOME/.bashrc"
     regexp: '^source <\(kubectl completion bash'
     line: "source <(kubectl completion bash)"
@@ -43,15 +43,14 @@
 #   when: inventory_hostname != "{{ item }}" or inventory_hostname == "{{ item }}"
 #   with_items: "{{groups['local_addresses']}}"
 
-- name: allow privileged for kubelet
-  lineinfile:
+- name: Allow privileged for kubelet
+  ansible.builtin.lineinfile:
     dest: /var/snap/microk8s/current/args/kubelet
     line: "--allow-privileged=true"
     state: present
 
-- name: allow privileged for kube-apiserver
-  lineinfile:
+- name: Allow privileged for kube-apiserver
+  ansible.builtin.lineinfile:
     dest: /var/snap/microk8s/current/args/kube-apiserver
     line: "--allow-privileged=true"
     state: present
-    

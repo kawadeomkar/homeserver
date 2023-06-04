@@ -1,5 +1,4 @@
 ---
-
 - name: Install classic microk8s with snapd
   community.general.snap:
     name: microk8s
@@ -12,8 +11,8 @@
   changed_when: false
   register: microk8sstatus
   failed_when:
-      - "'This MicroK8s deployment is acting as a node in a cluster.' not in microk8sstatus.stdout_lines"
-      - microk8sstatus.rc > 0
+    - "'This MicroK8s deployment is acting as a node in a cluster.' not in microk8sstatus.stdout_lines"
+    - microk8sstatus.rc > 0
 
 - name: Add user to docker and microk8s groups
   ansible.builtin.user:
@@ -26,10 +25,9 @@
 
 - name: enable microk8s services
   command: "microk8s enable {{ item }}"
-  with_items: 
+  with_items:
     - dashboard
     - dns
     - registry
     - storage
     - ingress
-    
