@@ -1,10 +1,10 @@
 ---
 
-- name: create container directories
-  file:
+- name: Create container directories
+  ansible.builtin.file:
     path: "{{ item }}"
     state: directory
-    recurse: yes
+    recurse: true
   loop:
     - /opt/hass
     - /opt/portainer

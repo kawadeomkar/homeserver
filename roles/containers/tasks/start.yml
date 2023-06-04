@@ -1,6 +1,5 @@
 ---
 
 - name: start containers
-  command: >
+  ansible.builtin.command: >
     docker-compose -f /homeserver/docker/docker-compose.yml up -d
-    

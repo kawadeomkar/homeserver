@@ -1,3 +1,7 @@
 ---
-- include_tasks: filesystem.yml
-- include_tasks: start.yml
+
+- name: "Update filesystem"
+  ansible.builtin.include_tasks: filesystem.yml
+
+- name: "Start containers"
+  ansible.builtin.include_tasks: start.yml
