@@ -1,48 +1,50 @@
 ---
 
 - name: create groups
-  group: 
+  ansible.builtin.group:
     name: "{{ item }}"
   loop:
     - "{{ username }}"
     - docker
 
 - name: create non-root user
-  user: 
+  ansible.builtin.user:
     name: "{{ username }}"
     state: present
     password: "{{ password | password_hash('sha512') }}"
     groups:
       - sudo
-      - docker 
+      - docker
       - users
-    append: yes
+    append: true
     shell: "{{ shell }}"
     # only on initial user create
     update_password: on_create
 
 - name: passwordless sudo for "{{ username }}"
-  lineinfile:
+  ansible.builtin.lineinfile:
     dest: "/etc/sudoers"
     regexp: "^%wheel"
     line: "{{ username }} ALL=(ALL) NOPASSWD: ALL"
     validate: "/usr/sbin/visudo -cf %s"
 
 # TODO: Revisit to pin versions to avoid breaking changes.
-- name: update apt cache & upgrade
-  apt:
-    update_cache: yes
-    upgrade: yes
-    cache_valid_time: 3600
+- name: Update apt cache & upgrade
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: true
+    cache_valid_time: "3600"
 
-- name: install core packages
-  apt:
+- name: Install core packages
+  ansible.builtin.apt:
     name: "{{ packages }}"
-    state: latest
+    state: present
 
-- name: clone homeserver repository 
-  git:
+- name: Clone homeserver repository
+  ansible.builtin.git:
     repo: https://github.com/kawadeomkar/homeserver.git
+    # TODO: Move version to vars file
+    version: "09f728483479193d3b8c86b8dce6ac427144b541"
     dest: /homeserver
-    clone: yes
-    update: yes
+    clone: true
+    update: true

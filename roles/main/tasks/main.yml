@@ -1,13 +1,19 @@
 ---
 
-- include_tasks: "setup.yml"
-- include_tasks: "ssh.yml"
-- include_tasks: "env.yml"
+- name: Setup environment
+  ansible.builtin.include_tasks: "setup.yml"
+
+- name: Setup SSH configuration
+  ansible.builtin.include_tasks: "ssh.yml"
+
+- name: Pull secrets from environment variables
+  ansible.builtin.include_tasks: "env.yml"
 
 # Debian based tasks
 # TODO: depends on k8s ingress config
 # - include_tasks: "ubuntu-ufw.yml"
 #   when: ansible_os_family == "Debian"
 
-- include_tasks: "fail2ban.yml"
+- name: Install fail2ban
+  ansible.builtin.include_tasks: "fail2ban.yml"
   when: ansible_os_family == "Debian"
