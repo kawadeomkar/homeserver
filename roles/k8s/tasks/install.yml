@@ -23,8 +23,8 @@
       - microk8s
     append: true
 
-- name: enable microk8s services
-  command: "microk8s enable {{ item }}"
+- name: Enable microk8s services
+  ansible.builtin.command: "microk8s enable {{ item }}"
   with_items:
     - dashboard
     - dns

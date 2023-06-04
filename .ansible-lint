@@ -1,3 +1,6 @@
 skip_list:
   - name[casing]
+  - no-changed-when
 
+exclude_paths:
+  - "roles/geerlingguy.docker"
