@@ -15,8 +15,8 @@
 
 - name: Create alias microk8s.kubectl=kubectl
   ansible.builtin.command: "snap alias microk8s.kubectl kubectl"
-  register: "kastdout"
-  changed_when: "kastdout.stdout is none"
+  register: "k8s_kastdout"
+  changed_when: "k8s_kastdout.stdout is none"
 
 - name: Add bash completion for kubectl
   ansible.builtin.lineinfile:

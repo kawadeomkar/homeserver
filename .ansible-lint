@@ -4,3 +4,4 @@ skip_list:
 
 exclude_paths:
   - "roles/geerlingguy.docker"
+  - "k8s/cert-manager/"
