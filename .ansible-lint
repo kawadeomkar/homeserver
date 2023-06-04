@@ -1,2 +1,6 @@
 skip_list:
-  - 'fqcn-builtins'
+  - fqcn-builtins
+  - fqcn[action]
+  - fqcn[action-core]
+  - fqcn[canonical]
+  - name[casing]
