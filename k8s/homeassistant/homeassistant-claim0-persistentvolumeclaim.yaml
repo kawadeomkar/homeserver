@@ -16,7 +16,7 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: homeassistant-opt-claim  
+  name: homeassistant-opt-claim
   labels:
     io.kompose.service: homeassistant-opt-claim
 spec:

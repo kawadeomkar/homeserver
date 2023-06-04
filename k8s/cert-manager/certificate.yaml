@@ -6,7 +6,7 @@ metadata:
 spec:
   dnsNames:
   # TODO: replace with vars
-    - kawaho.me 
+    - kawaho.me
     - www.kawaho.me
   secretName: homeserver-tls
   issuerRef:

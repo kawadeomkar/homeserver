@@ -1,26 +1,30 @@
 ---
 
-- name: install UFW 
-  apt: name=ufw update_cache=true state=latest
-  
+# TODO: Move state version to vars file
+- name: Install UFW
+  ansible.builtin.apt:
+    name: ufw
+    update_cache: true
+    state: present
+
 # TODO: Allow certain ports
-#- name: UFW deny incoming
-#  ufw:
-#    direction: incoming
-#    proto: any
-#    policy: deny
-#  notify:
-#  - reload ufw
+# - name: UFW deny incoming
+#   ufw:
+#     direction: incoming
+#     proto: any
+#     policy: deny
+#   notify:
+#   - reload ufw
 
 - name: UFW allow outgoing
-  ufw:
+  community.general.ufw:
     direction: outgoing
     proto: any
     policy: allow
   notify:
-  - reload ufw
+    - reload ufw
 
-# TODO: 
+# TODO:
 # - name: UFW configure ports
 #   ufw:
 #     rule: "{{ item.rule }}"
@@ -38,13 +42,12 @@
 #   notify: reload ufw
 
 - name: UFW allow ssh
-  ufw:
+  community.general.ufw:
     rule: allow
     name: OpenSSH
   notify:
-  - reload ufw
+    - reload ufw
 
-- name: enable UFW
-  ufw:
+- name: Enable UFW
+  community.general.ufw:
     state: enabled
-

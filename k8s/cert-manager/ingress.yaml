@@ -2,23 +2,22 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   annotations:
-    kubernetes.io/ingress.class: "nginx"
+    kubernetes.io/ingress.class: nginx
   name: example-app
 spec:
   tls:
-  - hosts:
-  # TODO: replace with vars
-    - kawaho.me 
-    - www.kawaho.me
-    secretName: homeserver-tls
+    - hosts:
+        - kawaho.me
+        - www.kawaho.me
+      secretName: homeserver-tls
   rules:
-  - host: my-local-domain.com
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: homeassistant
-            port:
-              number: 8123
+    - host: my-local-domain.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: homeassistant
+                port:
+                  number: 8123
