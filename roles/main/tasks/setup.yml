@@ -28,7 +28,6 @@
     line: "{{ username }} ALL=(ALL) NOPASSWD: ALL"
     validate: "/usr/sbin/visudo -cf %s"
 
-# TODO: Revisit to pin versions to avoid breaking changes.
 - name: Update apt cache & upgrade
   ansible.builtin.apt:
     update_cache: true
