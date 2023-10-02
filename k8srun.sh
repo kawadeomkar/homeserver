@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-minikube start --kubernetes-version v1.26.3 --mount-string="/Users/Omkar/opt/hass:/opt/hass" --mount
+minikube start --kubernetes-version v1.26.3 --ports 80:80 --ports 443:443 --mount-string="/Users/Omkar/opt/hass:/opt/hass" --mount
 minikube addons enable ingress
 minikube addons enable ingress-dns
 minikube addons enable registry
