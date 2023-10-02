@@ -1,10 +1,10 @@
 shell: /usr/bin/bash
 
-username: omkar
+username: om
 password: TODO
 
 # ssh
-security_ssh_allowed_users: ["omkar", "vagrant"]
+security_ssh_allowed_users: ["omkar", "vagrant", "om"]
 
 # TODO: networking
 lan_subnet: 10.0.0.0/24

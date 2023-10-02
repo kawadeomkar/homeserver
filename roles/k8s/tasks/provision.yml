@@ -1,0 +1,9 @@
+---
+
+- name: Start kubernetes ingress controller
+  ansible.builtin.command: >
+    microk8s kubectl apply -f /homeserver/k8s/ingress
+
+- name: Start kubernetes homeassistant service
+  ansible.builtin.command: >
+    microk8s kubectl apply -f /homeserver/k8s/homeassistant
