@@ -43,7 +43,7 @@
   ansible.builtin.git:
     repo: https://github.com/kawadeomkar/homeserver.git
     # TODO: Move version to vars file
-    # version: "55d9d88c877feca4669772ef4c1519aea0a91ddf"
+    # version: "9ccfd776ac160b6303e5a141c04aec44d8d99ffe"
     dest: /homeserver
     clone: true
     update: true
