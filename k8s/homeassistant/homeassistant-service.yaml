@@ -5,10 +5,14 @@ metadata:
   labels:
     app: homeassistant
 spec:
-  type: NodePort
+  type: ClusterIP # NodePort
   ports:
     - name: http
       port: 80
+      protocol: TCP
+      targetPort: 8123
+    - name: https
+      port: 443
       protocol: TCP
       targetPort: 8123
   selector:

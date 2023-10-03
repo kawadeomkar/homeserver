@@ -7,15 +7,6 @@
     group: "{{ username }}"
     mode: "0750"
 
-- name: Create kubectl config
-  ansible.builtin.command: microk8s config > /home/{{ username }}/.kube/config
-  # changed_when: "[ -f /home/{{ username }}/.kube/config ] && echo 1 || echo 0"
-
-- name: Create alias microk8s.kubectl=kubectl
-  ansible.builtin.command: "snap alias microk8s.kubectl kubectl"
-  register: "k8s_kastdout"
-  changed_when: "k8s_kastdout.stdout is none"
-
 - name: Add bash completion for kubectl
   ansible.builtin.lineinfile:
     path: "$HOME/.bashrc"
