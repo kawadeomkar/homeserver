@@ -47,6 +47,9 @@
     - "'This MicroK8s deployment is acting as a node in a cluster.' not in k8s_microk8sstatus.stdout_lines"
     - k8s_microk8sstatus.rc > 0
 
+- name: Start microk8s
+  ansible.builtin.command: microk8s start
+
 - name: Enable microk8s services
   ansible.builtin.command: "microk8s enable {{ item }}"
   with_items:
@@ -55,3 +58,4 @@
     - registry
     - storage
     - ingress
+    - metallb:192.168.1.240/24

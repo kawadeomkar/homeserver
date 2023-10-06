@@ -7,11 +7,20 @@ metadata:
 spec:
   storageClassName: manual
   capacity:
-    storage: 100Mi
+    storage: 10Gi
   accessModes:
     - ReadWriteMany
   hostPath:
     path: "/opt/hass"
+# TODO: Add DNS hostnames 
+#  nodeAffinity:
+#    required:
+#      nodeSelectorTerms:
+#      - matchExpressions:
+#        - key: kubernetes.io/hostname
+#          operator: In
+#          values:
+#          - DNS.local
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -26,5 +35,5 @@ spec:
     - ReadWriteMany
   resources:
     requests:
-      storage: 100Mi
+      storage: 1Gi
 status: {}
