@@ -28,7 +28,6 @@ spec:
           #    port: 80
           #  initialDelaySeconds: 5
           #  timeoutSeconds: 30
-          resources: {}
           securityContext:
             privileged: true
           volumeMounts:

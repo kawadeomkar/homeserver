@@ -18,5 +18,3 @@ spec:
       targetPort: 8123
   selector:
     app: homeassistant
-status:
-  loadBalancer: {}
