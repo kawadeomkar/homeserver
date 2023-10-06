@@ -14,7 +14,6 @@ spec:
   template:
     metadata:
       labels:
-        io.kompose.network/docker-default: "true"
         app: homeassistant
     spec:
       containers:
@@ -23,12 +22,12 @@ spec:
           ports:
             - containerPort: 8123
               protocol: TCP
-          livenessProbe:
-            httpGet:
-              path: /
-              port: 80
-            initialDelaySeconds: 5
-            timeoutSeconds: 30
+          #livenessProbe:
+          #  httpGet:
+          #    path: /
+          #    port: 80
+          #  initialDelaySeconds: 5
+          #  timeoutSeconds: 30
           resources: {}
           securityContext:
             privileged: true

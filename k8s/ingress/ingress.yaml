@@ -21,26 +21,14 @@ spec:
       targetPort: 443
 ---
 apiVersion: networking.k8s.io/v1
-kind: IngressClass
-metadata:
-  name: nginx
-  annotations: 
-    ingressclass.kubernetes.io/is-default-class: "true"
-spec:
-  # use your controller name.
-  controller: k8s.io/ingress-nginx
----
-apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: homeserver-ingress
-  namespace: default
+  name: homeassistant-ingress
+  # namespace: default
   annotations:
-    kubernetes.io/ingress.class: nginx # microk8s requires public
     nginx.ingress.kubernetes.io/rewrite-target: /
     # nginx.ingress.kubernetes.io/use-regex: "true"
 spec:
-  ingressClassName: nginx
   rules:
     - host: hass.homeserver.internal
       http:
