@@ -58,4 +58,5 @@
     - registry
     - hostpath-storage
     - ingress
+    - metrics-server
     - metallb:192.168.1.240/24
