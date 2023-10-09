@@ -5,8 +5,8 @@ metadata:
   labels:
     app: homeassistant
 spec:
+  # Using NodePort to access with IP Address
   type: NodePort
-  # type: ClusterIP
   ports:
     - name: http
       port: 80

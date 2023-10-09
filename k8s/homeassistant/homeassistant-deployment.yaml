@@ -22,12 +22,6 @@ spec:
           ports:
             - containerPort: 8123
               protocol: TCP
-          #livenessProbe:
-          #  httpGet:
-          #    path: /
-          #    port: 80
-          #  initialDelaySeconds: 5
-          #  timeoutSeconds: 30
           securityContext:
             privileged: true
           volumeMounts:
