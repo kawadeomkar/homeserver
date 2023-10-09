@@ -4,7 +4,7 @@ metadata:
   name: homeassistant-ingress-tcp
   namespace: ingress
   annotations:
-    metallb.universe.tf/allow-shared-ip: "homeassistant-shared-ip"
+    metallb.universe.tf/allow-shared-ip: "homeserver-shared-ip"
 spec:
   selector:
     name: nginx-ingress-microk8s
