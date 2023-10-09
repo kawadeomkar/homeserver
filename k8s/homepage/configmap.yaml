@@ -9,7 +9,7 @@ data:
     kubernetes.yaml: |
         mode: cluster
     settings.yaml: ""
-    #settings.yaml: |
+    #settings.yaml: | 
     #  providers:
     #    longhorn:
     #      url: https://longhorn.my.network
@@ -19,11 +19,11 @@ data:
         - Developer:
             - Github:
                 - abbr: GH
-                  href: https://github.com/
+                  href: https://github.com/kawadeomkar
     services.yaml: |
-        - My First Group:
-            - My First Service:
-                href: http://localhost/
+        - Home:
+            - Home Assistant:
+                href: http://hass.homeserver.internal/
                 description: Homepage is awesome
 
         - My Second Group:
