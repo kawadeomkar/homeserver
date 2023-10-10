@@ -7,3 +7,7 @@
 - name: Start kubernetes homeassistant service
   ansible.builtin.command: >
     microk8s kubectl apply -f /homeserver/k8s/homeassistant
+
+- name: Start kubernetes homepage service
+  ansible.builtin.command: >
+    microk8s kubectl apply -f /homeserver/k8s/homepage
