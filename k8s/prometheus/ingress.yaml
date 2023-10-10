@@ -8,14 +8,13 @@ metadata:
     # kubernetes.io/ingress.class: nginx
 spec:
   rules:
-  - host: prometheus.homeserver.internal
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: prometheus-service
-            port:
-              number: 8080
-        
+    - host: prometheus.homeserver.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: prometheus-service
+                port:
+                  number: 8080

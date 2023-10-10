@@ -5,7 +5,7 @@ metadata:
   namespace: default
 spec:
   dnsNames:
-  # TODO: replace with vars
+    # TODO: replace with vars
     - kawaho.me
     - www.kawaho.me
   secretName: homeserver-tls

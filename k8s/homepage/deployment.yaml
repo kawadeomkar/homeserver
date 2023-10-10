@@ -1,43 +1,43 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-    name: homepage
-    namespace: default
-    labels:
-        app.kubernetes.io/name: homepage
+  name: homepage
+  namespace: default
+  labels:
+    app.kubernetes.io/name: homepage
 spec:
-    revisionHistoryLimit: 3
-    replicas: 1
-    strategy:
-        type: RollingUpdate
-    selector:
-        matchLabels:
-            app.kubernetes.io/name: homepage
-    template:
-        metadata:
-            labels:
-                app.kubernetes.io/name: homepage
-        spec:
-            serviceAccountName: homepage
-            automountServiceAccountToken: true
-            dnsPolicy: ClusterFirst
-            enableServiceLinks: true
-            containers:
-                - name: homepage
-                  image: "ghcr.io/gethomepage/homepage:latest"
-                  imagePullPolicy: Always
-                  ports:
-                      - name: http
-                        containerPort: 3000
-                        protocol: TCP
-                  volumeMounts:
-                      - name: homepage-config
-                        mountPath: /app/config
-                      - name: logs
-                        mountPath: /app/config/logs
-            volumes:
-                - name: homepage-config
-                  configMap:
-                      name: homepage
-                - name: logs
-                  emptyDir: {}
+  revisionHistoryLimit: 3
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: homepage
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: homepage
+    spec:
+      serviceAccountName: homepage
+      automountServiceAccountToken: true
+      dnsPolicy: ClusterFirst
+      enableServiceLinks: true
+      containers:
+        - name: homepage
+          image: "ghcr.io/gethomepage/homepage:latest"
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          volumeMounts:
+            - name: homepage-config
+              mountPath: /app/config
+            - name: logs
+              mountPath: /app/config/logs
+      volumes:
+        - name: homepage-config
+          configMap:
+            name: homepage
+        - name: logs
+          emptyDir: {}

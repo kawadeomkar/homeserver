@@ -12,6 +12,7 @@ spec:
     - ReadWriteMany
   hostPath:
     path: "/opt/hass"
+
 # TODO: Add DNS hostnames 
 #  nodeAffinity:
 #    required:
