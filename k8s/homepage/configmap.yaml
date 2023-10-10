@@ -25,16 +25,16 @@ data:
         - Home Assistant:
             icon: home-assistant
             href: http://hass.homeserver.internal/
-            ping: http://hass.homeserver.internal/
+            ping: http://hass.homeserver.internal
 
     - Monitoring:
         - Prometheus:
             icon: prometheus
             href: http://prometheus.homeserver.internal/
-            ping: http://prometheus.homeserver.internal/
+            ping: http://prometheus.homeserver.internal
             widget:
                 type: prometheus
-                url: http://prometheus.homeserver.internal/
+                url: http://prometheus.homeserver.internal
 
     - Media:
         - Temporary:
