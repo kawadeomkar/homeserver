@@ -31,7 +31,7 @@ data:
         - Prometheus:
             icon: prometheus
             href: http://prometheus.homeserver.internal/
-            ping: http://prometheus.homeserver.internal
+            ping: http://10.0.0.4:30001
             widget:
                 type: prometheus
                 url: http://10.0.0.4:30001
