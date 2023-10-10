@@ -10,10 +10,11 @@ spec:
   - host: prometheus.homeserver.internal
     http:
       paths:
-      - backend:
+      - path: /
+        pathType: Prefix
+        backend:
           service:
             name: prometheus-service
             port:
               number: 8080
-        path: /
-        pathType: Prefix
+        
