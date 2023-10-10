@@ -23,18 +23,23 @@ data:
   services.yaml: |
     - Home:
         - Home Assistant:
+            icon: home-assistant
             href: http://hass.homeserver.internal/
-            description: Homepage is awesome
+            ping: http://hass.homeserver.internal/
 
-    - My Second Group:
-        - My Second Service:
-            href: http://localhost/
-            description: Homepage is the best
+    - Monitoring:
+        - Prometheus:
+            icon: prometheus
+            href: http://prometheus.homeserver.internal/
+            ping: http://prometheus.homeserver.internal/
+            widget:
+                type: prometheus
+                url: http://prometheus.homeserver.internal/
 
-    - My Third Group:
-        - My Third Service:
+    - Media:
+        - Temporary:
+            icon: jellyfin
             href: http://localhost/
-            description: Homepage is 😎
   widgets.yaml: |
     - kubernetes:
         cluster:
