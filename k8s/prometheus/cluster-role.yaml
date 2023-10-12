@@ -2,6 +2,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: prometheus
+  namespace: prometheus
 rules:
   - apiGroups: [""]
     resources:
@@ -23,6 +24,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: prometheus
+  namespace: prometheus
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -30,5 +32,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: default
-    namespace: default
-    # namespace: monitoring
+    namespace: prometheus

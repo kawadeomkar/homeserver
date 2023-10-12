@@ -2,18 +2,18 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: prometheus-deployment
-  # namespace: monitoring
+  namespace: prometheus
   labels:
-    app: prometheus-server
+    app: prometheus
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: prometheus-server
+      app: prometheus
   template:
     metadata:
       labels:
-        app: prometheus-server
+        app: prometheus
     spec:
       containers:
         - name: prometheus
@@ -24,10 +24,10 @@ spec:
           ports:
             - containerPort: 9090
           volumeMounts:
-            - name: prometheus-config-volume
-              mountPath: /etc/prometheus/
-            - name: prometheus-storage-volume
-              mountPath: /prometheus/
+            - mountPath: /etc/prometheus/
+              name: prometheus-config-volume
+            - mountPath: /prometheus/
+              name: prometheus-storage-volume
       volumes:
         - name: prometheus-config-volume
           configMap:

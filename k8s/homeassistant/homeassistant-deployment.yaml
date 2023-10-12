@@ -25,7 +25,7 @@ spec:
           securityContext:
             privileged: true
           volumeMounts:
-            - mountPath: "/config"
+            - mountPath: /config
               name: homeassistant-opt-volume
             - mountPath: /etc/localtime
               name: homeassistant-claim1

@@ -4,11 +4,11 @@ metadata:
   name: prometheus-server-conf
   labels:
     name: prometheus-server-conf
-    # namespace: monitoring
+    namespace: prometheus
 data:
   prometheus.rules: |-
     groups:
-    - name: devopscube demo alert
+    - name: Container Memory Usage 
       rules:
       - alert: High Pod Memory
         expr: sum(container_memory_usage_bytes) > 1
