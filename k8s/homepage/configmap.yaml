@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: homepage
-  namespace: default
+  namespace: homepage
   labels:
     app.kubernetes.io/name: homepage
 data:
@@ -25,7 +25,7 @@ data:
         - Home Assistant:
             icon: home-assistant
             href: http://hass.homeserver.internal/
-            ping: http://10.0.0.4:30718
+            ping: http://10.0.0.4:30002
 
     - Monitoring:
         - Prometheus:

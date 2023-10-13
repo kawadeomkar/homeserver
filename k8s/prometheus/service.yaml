@@ -9,6 +9,7 @@ metadata:
 spec:
   selector:
     app: prometheus
+  # Using NodePort to access with IP Address
   type: NodePort
   ports:
     - port: 8080
