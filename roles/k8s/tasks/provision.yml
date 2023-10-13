@@ -11,3 +11,7 @@
 - name: Start kubernetes homepage service
   ansible.builtin.command: >
     microk8s kubectl apply -f /homeserver/k8s/homepage
+
+- name: Start kubernetes prometheus service
+  ansible.builtin.command: >
+    microk8s kubectl apply -f /homeserver/k8s/prometheus
