@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: homeassistant-lb
-  # namespace: homeassistant
+  namespace: homeassistant
   annotations:
     metallb.universe.tf/allow-shared-ip: "homeserver-shared-ip"
 spec:
@@ -24,8 +24,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: homeassistant-ingress
-  # namespace: homeassistant
-  # namespace: default
+  namespace: homeassistant
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
     # nginx.ingress.kubernetes.io/use-regex: "true"

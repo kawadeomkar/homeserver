@@ -2,7 +2,7 @@ apiVersion: v1
 kind: PersistentVolume
 metadata:
   name: homeassistant-opt-volume
-  # namespace: homeassistant
+  namespace: homeassistant
   labels:
     type: local
 spec:
@@ -28,7 +28,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: homeassistant-opt-claim
-  # namespace: homeassistant
+  namespace: homeassistant
   labels:
     io.kompose.service: homeassistant-opt-claim
 spec:
