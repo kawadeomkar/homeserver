@@ -1,9 +1,5 @@
 ---
 
-- name: Start kubernetes ingress controller
-  ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/ingress
-
 # Home assistant
 
 - name: create home assistant namespace
@@ -13,6 +9,10 @@
 - name: Start kubernetes homeassistant service
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/homeassistant
+
+- name: Start kubernetes ingress controller
+  ansible.builtin.command: >
+    kubectl apply -f /homeserver/k8s/ingress
 
 # Prometheus
 
