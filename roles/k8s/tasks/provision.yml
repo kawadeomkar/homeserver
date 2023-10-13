@@ -2,16 +2,34 @@
 
 - name: Start kubernetes ingress controller
   ansible.builtin.command: >
-    microk8s kubectl apply -f /homeserver/k8s/ingress
+    kubectl apply -f /homeserver/k8s/ingress
+
+# Home assistant
+
+- name: create home assistant namespace
+  ansible.builtin.command: >
+    kubectl create namespace homeassistant
 
 - name: Start kubernetes homeassistant service
   ansible.builtin.command: >
-    microk8s kubectl apply -f /homeserver/k8s/homeassistant
+    kubectl apply -f /homeserver/k8s/homeassistant
 
-- name: Start kubernetes homepage service
+# Prometheus
+
+- name: create prometheus namespace
   ansible.builtin.command: >
-    microk8s kubectl apply -f /homeserver/k8s/homepage
+    kubectl create namespace prometheus
 
 - name: Start kubernetes prometheus service
   ansible.builtin.command: >
-    microk8s kubectl apply -f /homeserver/k8s/prometheus
+    kubectl apply -f /homeserver/k8s/prometheus
+
+# Homepage
+
+- name: create homepage namespace
+  ansible.builtin.command: >
+    kubectl create namespace homepage
+
+- name: Start kubernetes homepage service
+  ansible.builtin.command: >
+    kubectl apply -f /homeserver/k8s/homepage
