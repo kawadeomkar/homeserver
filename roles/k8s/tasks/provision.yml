@@ -10,10 +10,6 @@
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/homeassistant
 
-- name: Start kubernetes ingress controller
-  ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/ingress
-
 # Prometheus
 
 - name: create prometheus namespace
@@ -33,3 +29,8 @@
 - name: Start kubernetes homepage service
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/homepage
+
+# Wait for pods
+- name: Wait for pods to be ready
+  ansible.builtin.command: >
+    kubectl wait pod --all --for=condition=Ready
