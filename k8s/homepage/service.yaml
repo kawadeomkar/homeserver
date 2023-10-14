@@ -13,5 +13,6 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
+      nodePort: 30000
   selector:
     app.kubernetes.io/name: homepage

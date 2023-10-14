@@ -4,7 +4,4 @@
   hosts: all
   become: true
   roles:
-    - role: main
-    - role: geerlingguy.docker
-#    - role: containers
     - role: k8s

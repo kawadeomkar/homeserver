@@ -1,6 +1,8 @@
 skip_list:
   - name[casing]
   - no-changed-when
+  - ignore-errors
+  - ignore_errors
 
 exclude_paths:
   - "roles/geerlingguy.docker"
