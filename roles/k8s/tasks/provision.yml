@@ -4,7 +4,7 @@
 
 - name: create home assistant namespace
   ansible.builtin.command: >
-    kubectl create namespace homeassistant
+    kubectl create namespace homeassistant --dry-run=client -o yaml | kubectl apply -f -
 
 - name: Start kubernetes homeassistant service
   ansible.builtin.command: >
@@ -14,7 +14,7 @@
 
 - name: create monitoring namespace
   ansible.builtin.command: >
-    kubectl create namespace monitoring
+    kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
 
 # Prometheus
 - name: Start kubernetes prometheus service
@@ -30,7 +30,7 @@
 
 - name: create homepage namespace
   ansible.builtin.command: >
-    kubectl create namespace homepage
+    kubectl create namespace homepage --dry-run=client -o yaml | kubectl apply -f -
 
 - name: Start kubernetes homepage service
   ansible.builtin.command: >
