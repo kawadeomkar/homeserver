@@ -14,7 +14,7 @@
 
 - name: create monitoring namespace
   ansible.builtin.command: >
-    kubectl create namespace prometheus
+    kubectl create namespace monitoring
 
 # Prometheus
 - name: Start kubernetes prometheus service
