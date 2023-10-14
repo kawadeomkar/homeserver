@@ -1,0 +1,12 @@
+---
+
+- name: homeserver
+  hosts: all
+  become: true
+  roles:
+    - role: main
+      tags: setup
+    - role: geerlingguy.docker
+      tags: setup
+    - role: k8s
+      tags: k8s
