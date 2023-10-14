@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: prometheus-service
-  namespace: prometheus
+  namespace: monitoring
   annotations:
     prometheus.io/scrape: 'true'
     prometheus.io/port: '9090'
@@ -12,6 +12,6 @@ spec:
   # Using NodePort to access with IP Address
   type: NodePort
   ports:
-    - port: 8080
+    - port: 9090
       targetPort: 9090
       nodePort: 30001

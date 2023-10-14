@@ -10,15 +10,21 @@
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/homeassistant
 
-# Prometheus
+# Monitoring
 
-- name: create prometheus namespace
+- name: create monitoring namespace
   ansible.builtin.command: >
     kubectl create namespace prometheus
 
+# Prometheus
 - name: Start kubernetes prometheus service
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/prometheus
+
+# Grafana
+- name: Start kubernetes grafana service
+  ansible.builtin.command: >
+    kubectl apply -f /homeserver/k8s/grafana
 
 # Homepage
 

@@ -2,10 +2,10 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: prometheus-server-conf
-  namespace: prometheus
+  namespace: monitoring
   labels:
     name: prometheus-server-conf
-    namespace: prometheus
+    namespace: monitoring
 data:
   prometheus.rules: |-
     groups:
