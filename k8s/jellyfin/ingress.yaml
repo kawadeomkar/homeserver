@@ -19,7 +19,7 @@ spec:
           service:
             name: jellyfin-tcp
             port: 
-              name: http-tcp 
+              number: 8096 
 #  tls:
 #  - hosts:
 #    - jellyfin.mydomain.com

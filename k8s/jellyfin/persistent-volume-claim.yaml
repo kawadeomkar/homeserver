@@ -8,7 +8,6 @@ spec:
   volumeName: jellyfin-opt-volume
   accessModes:
     - ReadWriteMany
-  persistentVolumeReclaimPolicy: Retain
   volumeMode: Filesystem
   resources:
     requests:
