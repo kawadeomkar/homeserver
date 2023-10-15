@@ -10,7 +10,7 @@ metadata:
 #    nginx.ingress.kubernetes.io/app-root:  
 spec:
   rules:
-  - host: jellyfin.debont.net
+  - host: jellyfin.homeserver.internal
     http:
       paths:
       - path: /
