@@ -42,3 +42,20 @@ spec:
   type: LoadBalancer
   loadBalancerIP: 192.168.1.5 
   sessionAffinity: ClientIP 
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jellyfin
+  namespace: jellyfin
+  labels:
+    app.kubernetes.io/name: jellyfin
+spec:
+  selector:
+    app: jellyfin
+  # Using NodePort to access with IP Address
+  type: NodePort
+  ports:
+    - port: 9090
+      targetPort: 9090
+      nodePort: 30006
