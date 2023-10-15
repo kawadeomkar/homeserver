@@ -11,6 +11,7 @@ spec:
     storage: 10Gi
   accessModes:
     - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
   hostPath:
     path: "/opt/hass"
 

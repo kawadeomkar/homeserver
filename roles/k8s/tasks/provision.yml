@@ -45,6 +45,20 @@
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/homepage
 
+# Jellyfin
+
+- name: create jellyfin namespace
+  register: ignore
+  # ignore failed on exists error
+  failed_when: ignore.rc == 2
+  ansible.builtin.command: >
+    kubectl create namespace jellyfin
+
+- name: Start kubernetes jellyfin service
+  ansible.builtin.command: >
+    kubectl apply -f /homeserver/k8s/jellyfin
+
+
 # Wait for pods
 # - name: Wait for pods to be ready
 #   ansible.builtin.command: >

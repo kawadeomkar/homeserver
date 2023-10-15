@@ -17,3 +17,6 @@
 - name: Install fail2ban
   ansible.builtin.include_tasks: "fail2ban.yml"
   when: ansible_os_family == "Debian"
+
+- name: Setup filesystem directories
+  ansible.builtin.include_tasks: "filesystem.yml"

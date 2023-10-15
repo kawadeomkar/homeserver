@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: jellyfin
+  name: jellyfin # TODO rename
+  namespace: jellyfin
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: jellyfin
+  template:
+    metadata:
+      labels:
+        app: jellyfin
+    spec:
+      volumes:
+      - name: fs-jellyfin-config
+        persistentVolumeClaim:
+          claimName: jellyfin-pvc-config
+      - name: fs-jellyfin-data
+        persistentVolumeClaim:
+          claimName: jellyfin-pvc-data
+      containers:
+      - env:
+        - name: JELLYFIN_PublishedServerUrl 
+          value: 192.168.1.5 
+        - name: TZ
+          value: America/Los_Angeles
+        securityContext:
+          privileged: true 
+        image: ghcr.io/linuxserver/jellyfin
+        imagePullPolicy: Always
+        name: jellyfin
+        ports:
+        - containerPort: 8096
+          name: http-tcp
+          protocol: TCP
+        - containerPort: 8920
+          name: https-tcp
+          protocol: TCP
+        - containerPort: 1900
+          name: dlna-udp
+          protocol: UDP
+        - containerPort: 7359
+          name: discovery-udp
+          protocol: UDP      
+        resources: {}
+        stdin: true
+        tty: true
+        volumeMounts:
+        - mountPath: /config
+          name: fs-jellyfin-config
+        - mountPath: /data
+          name: fs-jellyfin-data
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always

@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jellyfin-pvc-config
+  namespace: jellyfin
+spec:
+  storageClassName: manual
+  volumeName: jellyfin-opt-volume
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  volumeMode: Filesystem
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jellyfin-pvc-data
+  namespace: jellyfin
+spec:
+  storageClassName: manual
+  volumeName: jellyfin-opt-data
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  resources:
+    requests:
+      storage: 1T

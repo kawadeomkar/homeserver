@@ -1,6 +1,6 @@
 ---
 
-- name: Create container directories
+- name: Create container services directories
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
@@ -8,3 +8,5 @@
   loop:
     - /opt/hass
     - /opt/portainer
+    - /opt/jellyfin/config
+    - /opt/jellyfin/data

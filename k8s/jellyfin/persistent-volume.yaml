@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jellyfin-opt-volume
+  namespace: jellyfin
+  labels:
+    type: local
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: "/opt/jellyfin/config"
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jellyfin-opt-data
+  namespace: jellyfin
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 1Ti
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: "/opt/jellyfin/data"
