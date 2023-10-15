@@ -56,6 +56,6 @@ spec:
   # Using NodePort to access with IP Address
   type: NodePort
   ports:
-    - port: 9090
-      targetPort: 9090
+    - port: 8096
+      targetPort: 8096
       nodePort: 30006
