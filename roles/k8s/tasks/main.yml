@@ -6,5 +6,5 @@
 #- name: Setup k8s
 #  ansible.builtin.include_tasks: "setup.yml"
 #
-- name: Provision containers
-  ansible.builtin.include_tasks: "provision.yml"
+#- name: Provision containers
+#  ansible.builtin.include_tasks: "provision.yml"
