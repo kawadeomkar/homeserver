@@ -2,12 +2,13 @@ kind: Service
 apiVersion: v1
 metadata:
   name: jellyfin-ingress-udp
-  namespace: ingress
+  namespace: jellyfin
   annotations:
     metallb.universe.tf/allow-shared-ip: "homeserver-shared-ip"
 spec:
   selector:
-    name: nginx-ingress-microk8s
+    # name: nginx-ingress-microk8s
+    app: jellyfin
   type: LoadBalancer
   loadBalancerIP: 192.168.1.5
   sessionAffinity: ClientIP
@@ -25,12 +26,13 @@ kind: Service
 apiVersion: v1
 metadata:
   name: jellyfin-ingress-tcp
-  namespace: ingress
+  namespace: jellyfin
   annotations:
     metallb.universe.tf/allow-shared-ip: "homeserver-shared-ip"
 spec:
   selector:
-    name: nginx-ingress-microk8s
+    # name: nginx-ingress-microk8s
+    app: jellyfin
   type: LoadBalancer
   loadBalancerIP: 192.168.1.5 
   sessionAffinity: ClientIP 
