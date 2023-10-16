@@ -2,7 +2,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: homepage
-  # namespace: homepage
+  namespace: homepage
   labels:
     app.kubernetes.io/name: homepage
 rules:
@@ -43,7 +43,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: homepage
-  # namespace: homepage
+  namespace: homepage
   labels:
     app.kubernetes.io/name: homepage
 roleRef:
@@ -53,5 +53,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: homepage
-    namespace: default
-    # namespace: homepage
+    namespace: homepage
