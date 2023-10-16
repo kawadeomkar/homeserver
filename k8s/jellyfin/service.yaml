@@ -1,48 +1,3 @@
-kind: Service
-apiVersion: v1
-metadata:
-  name: jellyfin-udp
-  namespace: jellyfin
-  annotations:
-    metallb.universe.tf/allow-shared-ip: jellyfin
-spec:
-  selector:
-    app: jellyfin
-  ports:
-  - port: 1900
-    targetPort: 1900
-    name: dlna-udp 
-    protocol: UDP
-  - port: 7359
-    targetPort: 7359
-    name: discovery-udp
-    protocol: UDP
-  type: LoadBalancer
-  loadBalancerIP: 192.168.1.5
-  sessionAffinity: ClientIP
----
-kind: Service
-apiVersion: v1
-metadata:
-  name: jellyfin-tcp
-  namespace: jellyfin
-  annotations:
-    metallb.universe.tf/allow-shared-ip: jellyfin
-spec:
-  selector:
-    app: jellyfin
-  ports:
-  - port: 8096
-    targetPort: 8096
-    name: http-tcp 
-    protocol: TCP
-  - port: 8920
-    targetPort: 8920
-    name: https-tcp
-  type: LoadBalancer
-  loadBalancerIP: 192.168.1.5 
-  sessionAffinity: ClientIP 
----
 apiVersion: v1
 kind: Service
 metadata:
@@ -56,6 +11,8 @@ spec:
   # Using NodePort to access with IP Address
   type: NodePort
   ports:
-    - port: 8096
+    - name: http
+      protocol: TCP
+      port: 8096
       targetPort: 8096
       nodePort: 30006

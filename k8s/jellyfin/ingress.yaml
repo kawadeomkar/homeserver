@@ -1,3 +1,48 @@
+kind: Service
+apiVersion: v1
+metadata:
+  name: jellyfin-ingress-udp
+  namespace: ingress
+  annotations:
+    metallb.universe.tf/allow-shared-ip: "homeserver-shared-ip"
+spec:
+  selector:
+    name: nginx-ingress-microk8s
+  type: LoadBalancer
+  loadBalancerIP: 192.168.1.5
+  sessionAffinity: ClientIP
+  ports:
+  - name: dlna-udp 
+    protocol: UDP
+    port: 1900
+    targetPort: 1900
+  - name: discovery-udp
+    protocol: UDP
+    port: 7359
+    targetPort: 7359
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: jellyfin-ingress-tcp
+  namespace: ingress
+  annotations:
+    metallb.universe.tf/allow-shared-ip: "homeserver-shared-ip"
+spec:
+  selector:
+    name: nginx-ingress-microk8s
+  type: LoadBalancer
+  loadBalancerIP: 192.168.1.5 
+  sessionAffinity: ClientIP 
+  ports:
+  - name: http-tcp 
+    protocol: TCP
+    port: 8096
+    targetPort: 8096
+  - name: https-tcp
+    port: 8920
+    targetPort: 8920
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -18,7 +63,7 @@ spec:
         pathType: Prefix 
         backend:
           service:
-            name: jellyfin-tcp
+            name: jellyfin
             port: 
               number: 8096 
 #  tls:
