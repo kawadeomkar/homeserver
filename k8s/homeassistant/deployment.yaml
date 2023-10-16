@@ -21,7 +21,8 @@ spec:
         - image: ghcr.io/home-assistant/home-assistant:stable
           name: homeassistant
           ports:
-            - containerPort: 8123
+            - name: http
+              containerPort: 8123
               protocol: TCP
           securityContext:
             privileged: true

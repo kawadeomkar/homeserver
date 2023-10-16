@@ -35,10 +35,10 @@ metadata:
     gethomepage.dev/name: Homepage
 spec:
   rules:
-    - host: "homeserver.internal"
+    - host: homeserver.internal
       http:
         paths:
-          - path: "/"
+          - path: /
             pathType: Prefix
             backend:
               service:

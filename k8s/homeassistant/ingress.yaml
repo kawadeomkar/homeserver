@@ -1,15 +1,15 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: homeassistant-lb
-  namespace: homeassistant
+  name: homeassistant-ingress
+  namespace: ingress
   annotations:
     metallb.universe.tf/allow-shared-ip: "homeserver-shared-ip"
 spec:
   selector:
     name: nginx-ingress-microk8s
   type: LoadBalancer
-  loadBalancerIP: 192.168.1.2
+  loadBalancerIP: 192.168.1.1
   ports:
     - name: http
       protocol: TCP
@@ -39,4 +39,4 @@ spec:
               service:
                 name: homeassistant
                 port:
-                  number: 80
+                  number: 8123
