@@ -6,6 +6,7 @@ metadata:
   labels:
     app: homeassistant
 spec:
+  # TODO: Currently the only way to expose service with IP
   # Using NodePort to access with IP Address
   type: NodePort
   ports:

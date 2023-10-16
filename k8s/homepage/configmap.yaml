@@ -37,9 +37,10 @@ data:
                 url: http://10.0.0.4:30001
 
     - Media:
-        - Temporary:
+        - Jellyfin:
             icon: jellyfin
-            href: http://localhost/
+            href: http://jellyfin.homeserver.internal/
+
   widgets.yaml: |
     - kubernetes:
         cluster:
