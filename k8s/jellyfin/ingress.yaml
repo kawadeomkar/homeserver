@@ -63,9 +63,9 @@ spec:
         pathType: Prefix 
         backend:
           service:
-            name: jellyfin
+            name: jellyfin-ingress-tcp
             port: 
-              number: 8096 
+              name: http-tcp 
 #  tls:
 #  - hosts:
 #    - jellyfin.mydomain.com
