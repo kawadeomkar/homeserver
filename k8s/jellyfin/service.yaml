@@ -16,10 +16,10 @@ spec:
       port: 8096
       targetPort: 8096
       nodePort: 30006
-    - name: http
+    - name: https
       protocol: TCP
-      port: 8096
-      targetPort: 8096
+      port: 8920
+      targetPort: 8920
       nodePort: 30007
     - name: dlna-udp 
       protocol: UDP

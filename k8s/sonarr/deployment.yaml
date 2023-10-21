@@ -3,6 +3,8 @@ kind: Deployment
 metadata:
   name: sonarr
   namespace: sonarr
+  labels:
+    app: sonarr
 spec:
   replicas: 1
   selector:
@@ -26,6 +28,8 @@ spec:
           value: "1000"
         - name: PUID
           value: "1000"
+        - name: TZ
+          value: America/Los_Angeles
         volumeMounts:
         - mountPath: /config
           name: sonarr

@@ -2,25 +2,9 @@
 
 # Home assistant
 
-- name: create home assistant namespace
-  register: ignore
-  # ignore failed on exists error
-  failed_when: ignore.rc == 2
-  ansible.builtin.command: >
-    kubectl create namespace homeassistant
-
 - name: Start kubernetes homeassistant service
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/homeassistant
-
-# Monitoring
-
-- name: create monitoring namespace
-  register: ignore
-  # ignore failed on exists error
-  failed_when: ignore.rc == 2
-  ansible.builtin.command: >
-    kubectl create namespace monitoring
 
 # Prometheus
 - name: Start kubernetes prometheus service
