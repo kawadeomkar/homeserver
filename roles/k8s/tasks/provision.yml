@@ -34,6 +34,12 @@
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/sonarr
 
+# Radarr
+
+- name: Start kubernetes radarr service
+  ansible.builtin.command: >
+    kubectl apply -f /homeserver/k8s/radarr
+
 
 # Wait for pods
 # - name: Wait for pods to be ready

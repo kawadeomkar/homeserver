@@ -16,3 +16,4 @@
     - /opt/radarr/config
     - /opt/radarr/downloads
     - /opt/radarr/movies
+    - /opt/prowlarr/config
