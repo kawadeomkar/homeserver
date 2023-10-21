@@ -1,5 +1,5 @@
 ---
-apiVersion: certmanager.k8s.io/v1alpha1
+apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: homepage-cert
@@ -7,9 +7,10 @@ spec:
   secretName: homepage-cert-tls
   issuerRef:
     name: lets-encrypt-staging
-  commonName: homeserver.internal
+    kind: ClusterIssuer
+  commonName: homeserver.homes
   dnsNames:
-  - homeserver.internal
+  - homeserver.homes
 
 #  acme:
 #    config:

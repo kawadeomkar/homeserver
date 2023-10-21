@@ -28,7 +28,7 @@ metadata:
   labels:
     app.kubernetes.io/name: homepage
   annotations:
-    cert-manager.io/cluster-issuer: "lets-encrypt"
+    cert-manager.io/cluster-issuer: "lets-encrypt-staging"
     kubernetes.io/ingress.class: "public"
     gethomepage.dev/description: Dynamically Detected Homepage
     gethomepage.dev/enabled: "true"
@@ -38,10 +38,10 @@ metadata:
 spec:
   tls:
     - hosts:
-      -  homeserver.internal
+      -  homeserver.homes
       secretName: homepage-cert-tls
   rules:
-    - host: homeserver.internal
+    - host: homeserver.homes
       http:
         paths:
           - path: /
