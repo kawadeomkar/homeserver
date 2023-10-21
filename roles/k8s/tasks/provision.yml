@@ -18,39 +18,17 @@
 
 # Homepage
 
-- name: create homepage namespace
-  register: ignore
-  # ignore failed on exists error
-  failed_when: ignore.rc == 2
-  ansible.builtin.command: >
-    kubectl create namespace homepage
-
 - name: Start kubernetes homepage service
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/homepage
 
 # Jellyfin
 
-- name: create jellyfin namespace
-  register: ignore
-  # ignore failed on exists error
-  failed_when: ignore.rc == 2
-  ansible.builtin.command: >
-    kubectl create namespace jellyfin
-
 - name: Start kubernetes jellyfin service
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/jellyfin
 
-
 # Sonarr
-
-- name: create sonarr namespace
-  register: ignore
-  # ignore failed on exists error
-  failed_when: ignore.rc == 2
-  ansible.builtin.command: >
-    kubectl create namespace sonarr
 
 - name: Start kubernetes sonarr service
   ansible.builtin.command: >
