@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: radarr
+  namespace: radarr
+  labels:
+    app: radarr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: radarr
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: radarr
+    spec:
+      containers:
+      - name: radarr
+        image: linuxserver/radarr
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 7878
+        env:
+        - name: PGID
+          value: "1000"
+        - name: PUID
+          value: "1000"
+        - name: TZ
+          value: America/Los_Angeles
+        volumeMounts:
+        - mountPath: /config
+          name: radarr
+        - mountPath: /downloads
+          name: radarr-downloads
+        - mountPath: /movies
+          name: radarr-lib
+      volumes:
+      - name: radarr
+        hostPath:
+          path: /opt/radarr/config
+      - name: radarr-downloads
+        hostPath:
+          path: /opt/radarr/downloads
+      - name: radarr-lib
+        hostPath:
+          path: /opt/radarr/movies
