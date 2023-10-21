@@ -26,6 +26,9 @@ data:
             icon: home-assistant
             href: http://hass.homeserver.internal/
             ping: http://10.0.0.4:30002
+            widget:
+              type: homeassistant
+              url: http://10.0.0.4:30002
 
     - Monitoring:
         - Prometheus:
@@ -36,10 +39,50 @@ data:
                 type: prometheus
                 url: http://10.0.0.4:30001
 
+        - Grafana:
+            icon: grafana
+            href: http://grafana.homeserver.internal/
+            ping: http://10.0.0.4:30005
+            widget:
+                type: grafana
+                url: http://10.0.0.4:30005
+
     - Media:
         - Jellyfin:
             icon: jellyfin
             href: http://jellyfin.homeserver.internal/
+            ping: http://10.0.0.4:30006
+            widget:
+              type: jellyfin
+              url: http://10.0.0.4:30006
+              enableBlocks: true
+  
+        - Sonarr:
+            icon: sonarr
+            href: http://sonarr.homeserver.internal/
+            ping: http://10.0.0.4:30004
+            widget:
+              type: sonarr
+              url: http://10.0.0.4:30004
+              enableQueue: true
+   
+        - Radarr:
+            icon: radarr
+            href: http://radarr.homeserver.internal/
+            ping: http://10.0.0.4:30010
+            widget:
+              type: radarr
+              url: http://10.0.0.4:30010
+              enableQueue: true
+  
+        - Prowlarr:
+            icon: prowlarr
+            href: http://prowlarr.homeserver.internal/
+            ping: http://10.0.0.4:30011
+            widget:
+              type: prowlarr
+              url: http://10.0.0.4:30011
+
 
   widgets.yaml: |
     - kubernetes:

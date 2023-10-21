@@ -40,6 +40,11 @@
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/radarr
 
+# Prowlarr
+
+- name: Start kubernetes prowlarr service
+  ansible.builtin.command: >
+    kubectl apply -f /homeserver/k8s/prowlarr
 
 # Wait for pods
 # - name: Wait for pods to be ready
