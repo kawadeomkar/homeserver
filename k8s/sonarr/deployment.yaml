@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sonarr
+  namespace: sonarr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sonarr
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: sonarr
+    spec:
+      containers:
+      - name: sonarr
+        image: linuxserver/sonarr
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8989
+        env:
+        - name: PGID
+          value: "1000"
+        - name: PUID
+          value: "1000"
+        volumeMounts:
+        - mountPath: /config
+          name: sonarr
+        - mountPath: /downloads
+          name: sonarr-downloads
+        - mountPath: /tv
+          name: sonarr-lib
+      volumes:
+      - name: sonarr
+        hostPath:
+          path: /opt/sonarr/config
+      - name: sonarr-downloads
+        hostPath:
+          path: /opt/sonarr/downloads
+      - name: sonarr-lib
+        hostPath:
+          path: /opt/sonarr/tv

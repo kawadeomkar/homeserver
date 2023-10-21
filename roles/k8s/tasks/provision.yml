@@ -59,6 +59,20 @@
     kubectl apply -f /homeserver/k8s/jellyfin
 
 
+# Sonarr
+
+- name: create sonarr namespace
+  register: ignore
+  # ignore failed on exists error
+  failed_when: ignore.rc == 2
+  ansible.builtin.command: >
+    kubectl create namespace sonarr
+
+- name: Start kubernetes sonarr service
+  ansible.builtin.command: >
+    kubectl apply -f /homeserver/k8s/sonarr
+
+
 # Wait for pods
 # - name: Wait for pods to be ready
 #   ansible.builtin.command: >

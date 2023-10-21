@@ -5,6 +5,7 @@ metadata:
   namespace: homeassistant
   labels:
     app: homeassistant
+    kubernetes.io/name: "homeassistant"
 spec:
   # TODO: Currently the only way to expose service with IP
   # Using NodePort to access with IP Address

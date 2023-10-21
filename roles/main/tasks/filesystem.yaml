@@ -10,3 +10,6 @@
     - /opt/portainer
     - /opt/jellyfin/config
     - /opt/jellyfin/data
+    - /opt/sonarr/config
+    - /opt/sonarr/downloads
+    - /opt/sonarr/tv

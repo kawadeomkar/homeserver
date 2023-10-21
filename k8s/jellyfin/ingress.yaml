@@ -1,5 +1,5 @@
+apiVersion: networking.k8s.io/v1
 kind: Service
-apiVersion: v1
 metadata:
   name: jellyfin-ingress-udp
   namespace: jellyfin
@@ -65,9 +65,9 @@ spec:
         pathType: Prefix 
         backend:
           service:
-            name: jellyfin-ingress-tcp
+            name: jellyfin
             port: 
-              name: http-tcp 
+              number: 8096
 #  tls:
 #  - hosts:
 #    - jellyfin.mydomain.com

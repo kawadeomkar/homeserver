@@ -1,0 +1,44 @@
+apiVersion: networking.k8s.io/v1
+kind: Service
+metadata:
+  name: sonarr-lb
+  namespace: ingress
+  # namespace: sonarr
+  annotations:
+    metallb.universe.tf/allow-shared-ip: "sonarr-shared-ip"
+spec:
+  selector:
+    # app: sonarr
+    name: nginx-ingress-microk8s
+  type: LoadBalancer
+  loadBalancerIP: 192.168.1.3
+  ports:
+    - name: sonarr
+      protocol: TCP
+      port: 8989
+      targetPort: 8989
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sonarr-ingress
+  namespace: sonarr
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    # kubernetes.io/tls-acme: "true"
+spec:
+  rules:
+  - host: sonarr.homeserver.internal
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: sonarr
+            port:
+              number: 8989
