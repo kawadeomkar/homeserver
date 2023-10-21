@@ -1,14 +1,37 @@
+# ACME DNS (dns server approach)
+#apiVersion: certmanager.k8s.io/v1alpha1
+#kind: Issuer
+#metadata:
+#  name: issuer-letsencrypt
+#spec:
+#  acme:
+#    # TODO: server: https://acme-v02.api.letsencrypt.org/directory
+#    server: https://acme-staging-v02.api.letsencrypt.org/directory
+#    # TODO: Parametrize
+#    email: kawade.omkar21.com
+#    privateKeySecretRef:
+#      name: account-private-key-secret
+#    dns01:
+#      providers:
+#      - name: acmedns
+#        acmedns:
+#          host: https://acme.homeserver.internal
+#          accountSecretRef:
+#            name: certmanager-secret
+#            key: acmedns.json
+#---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
-  name: letsencrypt-cluster-issuer
+ name: lets-encrypt-staging
 spec:
-  acme:
-    server: https://acme-v02.api.letsencrypt.org/directory
-    email: kawade.omkar21@email.com
-    privateKeySecretRef:
-      name: letsencrypt-cluster-issuer-key
-    solvers:
-      - http01:
-        ingress:
-          class: nginx
+ acme:
+   server: https://acme-staging-v02.api.letsencrypt.org/directory
+   # TODO: Parametrize
+   email: kawade.omkar21@gmail.com 
+   privateKeySecretRef:
+     name: lets-encrypt-staging
+   solvers:
+   - http01:
+       ingress:
+         class:  public

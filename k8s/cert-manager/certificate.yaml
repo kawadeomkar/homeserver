@@ -1,14 +1,20 @@
-apiVersion: cert-manager.io/v1
+---
+apiVersion: certmanager.k8s.io/v1alpha1
 kind: Certificate
 metadata:
-  name: example-app
-  namespace: default
+  name: homepage-cert
 spec:
-  dnsNames:
-    # TODO: replace with vars
-    - kawaho.me
-    - www.kawaho.me
-  secretName: homeserver-tls
+  secretName: homepage-cert-tls
   issuerRef:
-    name: letsencrypt-cluster-issuer
-    kind: ClusterIssuer
+    name: lets-encrypt-staging
+  commonName: homeserver.internal
+  dnsNames:
+  - homeserver.internal
+
+#  acme:
+#    config:
+#    - dns01:
+#        provider: acmedns
+#      domains:
+#        - homeserver.internal
+#        - "*.homeserver.internal"

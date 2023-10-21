@@ -28,12 +28,18 @@ metadata:
   labels:
     app.kubernetes.io/name: homepage
   annotations:
+    cert-manager.io/cluster-issuer: "lets-encrypt"
+    kubernetes.io/ingress.class: "public"
     gethomepage.dev/description: Dynamically Detected Homepage
     gethomepage.dev/enabled: "true"
     gethomepage.dev/group: Cluster Management
     gethomepage.dev/icon: homepage.png
     gethomepage.dev/name: Homepage
 spec:
+  tls:
+    - hosts:
+      -  homeserver.internal
+      secretName: homepage-cert-tls
   rules:
     - host: homeserver.internal
       http:
