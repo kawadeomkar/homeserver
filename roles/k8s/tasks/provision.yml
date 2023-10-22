@@ -6,6 +6,8 @@
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/homeassistant
 
+# Monitoring -----
+
 # Prometheus
 - name: Start kubernetes prometheus service
   ansible.builtin.command: >
@@ -15,6 +17,13 @@
 - name: Start kubernetes grafana service
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/grafana
+
+# Node Exporter
+- name: Start kubernetes node-exporter service
+  ansible.builtin.command: >
+    kubectl apply -f /homeserver/k8s/node-exporter
+
+# --------
 
 # Homepage
 
