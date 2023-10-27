@@ -23,6 +23,11 @@
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/node-exporter
 
+# Cadvisor
+- name: Start kubernetes cadvisor service
+  ansible.builtin.command: >
+    kubectl apply -f /homeserver/k8s/cadvisor
+
 # --------
 
 # Homepage

@@ -25,7 +25,7 @@ spec:
         - containerPort: 8080
         args:
           - --profiling
-          - --housekeeping_interval=1s
+          - --housekeeping_interval=10s
         env:
         - name: TZ
           value: America/Los_Angeles
