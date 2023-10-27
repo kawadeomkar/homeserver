@@ -28,7 +28,7 @@
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/cadvisor
 
-# --------
+# -------- End monitoring
 
 # Homepage
 
