@@ -23,13 +23,35 @@ spec:
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
+        args:
+          - --profiling
+          - --housekeeping_interval=1s
         env:
         - name: TZ
           value: America/Los_Angeles
         volumeMounts:
-        - mountPath: /config
-          name: cadvisor
+        - name: rootfs
+          mountPath: /rootfs
+          readOnly: true
+        - name: var-run
+          mountPath: /var/run
+          readOnly: false
+        - name: sys
+          mountPath: /sys
+          readOnly: true
+        - name: docker
+          mountPath: /var/lib/docker
+          readOnly: true
       volumes:
-      - name: cadvisor
+      - name: rootfs
         hostPath:
-          path: /opt/cadvisor/config
+          path: /
+      - name: var-run
+        hostPath:
+          path: /var/run
+      - name: sys
+        hostPath:
+          path: /sys
+      - name: docker
+        hostPath:
+          path: /var/lib/docker
