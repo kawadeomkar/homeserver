@@ -23,6 +23,9 @@ spec:
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
+        # TODO: add device
+        #devices:
+        #- /dev/kmsg:/dev/kmsg
         args:
           - --profiling
           - --housekeeping_interval=10s
