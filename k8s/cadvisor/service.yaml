@@ -1,17 +1,17 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: radarr
-  namespace: radarr
+  name: cadvisor
+  namespace: monitoring 
   labels:
-    app: radarr
-    kubernetes.io/name: "radarr"
+    app: cadvisor
+    kubernetes.io/name: "cadvisor"
 spec:
   type: NodePort
   ports:
-  - name: radarr
-    port: 7878
-    targetPort: 7878
-    nodePort: 30010
+  - name: cadvisor
+    port: 8080
+    targetPort: 8080
+    nodePort: 30011
   selector:
-    app: radarr
+    app: cadvisor
