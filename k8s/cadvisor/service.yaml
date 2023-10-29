@@ -12,6 +12,6 @@ spec:
   - name: cadvisor
     port: 8080
     targetPort: 8080
-    nodePort: 30011
+    nodePort: 30012
   selector:
     app: cadvisor

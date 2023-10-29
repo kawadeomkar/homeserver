@@ -6,7 +6,7 @@
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/homeassistant
 
-# Monitoring -----
+# ------ Monitoring ------
 
 # Prometheus
 - name: Start kubernetes prometheus service
@@ -28,7 +28,7 @@
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/cadvisor
 
-# -------- End monitoring
+# ------ End monitoring ------
 
 # Homepage
 
