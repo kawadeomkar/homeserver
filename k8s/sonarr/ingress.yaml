@@ -32,13 +32,13 @@ metadata:
     # kubernetes.io/tls-acme: "true"
 spec:
   rules:
-  - host: sonarr.homeserver.internal
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: sonarr
-            port:
-              number: 8989
+    - host: sonarr.homeserver.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sonarr
+                port:
+                  number: 8989

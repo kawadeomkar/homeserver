@@ -1,10 +1,7 @@
----
-
 - name: install fail2ban
   ansible.builtin.apt:
     name: fail2ban
     state: present
-
 # TODO: copy over j2 of fail2ban/jail.local from /templates
 # and set vars in /defaults
 
@@ -23,7 +20,6 @@
 #     owner: root
 #     group: root
 #     mode: 0644
-
 - name: start and enable fail2ban
   ansible.builtin.service:
     name: fail2ban

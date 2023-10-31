@@ -21,7 +21,7 @@ spec:
       port: 8920
       targetPort: 8920
       nodePort: 30007
-    - name: dlna-udp 
+    - name: dlna-udp
       protocol: UDP
       port: 1900
       targetPort: 1900

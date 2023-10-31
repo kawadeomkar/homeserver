@@ -18,22 +18,22 @@ spec:
         app: prowlarr
     spec:
       containers:
-      - name: prowlarr
-        image: linuxserver/prowlarr
-        imagePullPolicy: Always
-        ports:
-        - containerPort: 9696
-        env:
-        - name: PGID
-          value: "1000"
-        - name: PUID
-          value: "1000"
-        - name: TZ
-          value: America/Los_Angeles
-        volumeMounts:
-        - mountPath: /config
-          name: prowlarr
+        - name: prowlarr
+          image: linuxserver/prowlarr
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 9696
+          env:
+            - name: PGID
+              value: "1000"
+            - name: PUID
+              value: "1000"
+            - name: TZ
+              value: America/Los_Angeles
+          volumeMounts:
+            - mountPath: /config
+              name: prowlarr
       volumes:
-      - name: prowlarr
-        hostPath:
-          path: /opt/prowlarr/config
+        - name: prowlarr
+          hostPath:
+            path: /opt/prowlarr/config

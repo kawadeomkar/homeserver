@@ -26,19 +26,19 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: cadvisor-ingress
-  namespace: monitoring 
+  namespace: monitoring
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
     # kubernetes.io/tls-acme: "true"
 spec:
   rules:
-  - host: cadvisor.homeserver.internal
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: cadvisor
-            port:
-              number: 8080
+    - host: cadvisor.homeserver.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: cadvisor
+                port:
+                  number: 8080

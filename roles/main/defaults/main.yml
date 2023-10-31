@@ -1,6 +1,4 @@
----
 # setup.yml
-
 packages:
   - vim
   - htop
@@ -16,10 +14,8 @@ packages:
   - nmap
   # Minikube <1.23
   - conntrack
-
 # ssh.yml
 ssh_port: 22
-
 # debian
 # ubuntu-ufw.yml
 ufw_rules:

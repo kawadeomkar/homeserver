@@ -16,28 +16,28 @@ spec:
       labels:
         pod-label: nextcloud-db-pod
     spec:
-     terminationGracePeriodSeconds: 1800
-     containers:
-      - name: mariadb
-        image: linuxserver/mariadb
-        imagePullPolicy: Always
-        env:                              
-        - name: PGID
-          value: "100" 
-        - name: PUID                       
-          value: "1041"
-        - name: TZ
-          value: Europe/Amsterdam          
-        - name: MYSQL_DATABASE
-          value: nextcloud
-        envFrom:
-        - secretRef:
-            name: nextcloud-db-secret 
-        volumeMounts:
-         - name: nextcloud-db-storage 
-           mountPath: /config         
-           subPath: mariadb-config    
-     volumes:
-      - name: nextcloud-db-storage        
-        persistentVolumeClaim:            
-          claimName: nextcloud-opt-claim  
+      terminationGracePeriodSeconds: 1800
+      containers:
+        - name: mariadb
+          image: linuxserver/mariadb
+          imagePullPolicy: Always
+          env:
+            - name: PGID
+              value: "100"
+            - name: PUID
+              value: "1041"
+            - name: TZ
+              value: Europe/Amsterdam
+            - name: MYSQL_DATABASE
+              value: nextcloud
+          envFrom:
+            - secretRef:
+                name: nextcloud-db-secret
+          volumeMounts:
+            - name: nextcloud-db-storage
+              mountPath: /config
+              subPath: mariadb-config
+      volumes:
+        - name: nextcloud-db-storage
+          persistentVolumeClaim:
+            claimName: nextcloud-opt-claim

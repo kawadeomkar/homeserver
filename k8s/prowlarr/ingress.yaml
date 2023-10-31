@@ -15,7 +15,7 @@ spec:
   ports:
     - name: prowlarr
       protocol: TCP
-      port: 9696 
+      port: 9696
       targetPort: 9696
     - name: http
       protocol: TCP
@@ -32,13 +32,13 @@ metadata:
     # kubernetes.io/tls-acme: "true"
 spec:
   rules:
-  - host: prowlarr.homeserver.internal
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: prowlarr
-            port:
-              number: 9696
+    - host: prowlarr.homeserver.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: prowlarr
+                port:
+                  number: 9696

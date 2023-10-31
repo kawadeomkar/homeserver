@@ -32,13 +32,13 @@ metadata:
     # kubernetes.io/tls-acme: "true"
 spec:
   rules:
-  - host: radarr.homeserver.internal
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: radarr
-            port:
-              number: 7878
+    - host: radarr.homeserver.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: radarr
+                port:
+                  number: 7878

@@ -9,9 +9,9 @@ metadata:
 spec:
   type: NodePort
   ports:
-  - name: radarr
-    port: 7878
-    targetPort: 7878
-    nodePort: 30010
+    - name: radarr
+      port: 7878
+      targetPort: 7878
+      nodePort: 30010
   selector:
     app: radarr

@@ -43,23 +43,21 @@ data:
             icon: jellyfin
             href: http://jellyfin.homeserver.internal/
             ping: http://10.0.0.4:30006
-  
+
         - Sonarr:
             icon: sonarr
             href: http://sonarr.homeserver.internal/
             ping: http://10.0.0.4:30004
-   
+
         - Radarr:
             icon: radarr
             href: http://radarr.homeserver.internal/
             ping: http://10.0.0.4:30010
-  
+
         - Prowlarr:
             icon: prowlarr
             href: http://prowlarr.homeserver.internal/
             ping: http://10.0.0.4:30011
-
-
   widgets.yaml: |
     - kubernetes:
         cluster:

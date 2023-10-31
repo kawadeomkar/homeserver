@@ -25,20 +25,20 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: nextcloud-ingress      
-  namespace: nextcloud   
+  name: nextcloud-ingress
+  namespace: nextcloud
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
     nginx.ingress.kubernetes.io/proxy-body-size: 10240m # 10GB Max file size 
 spec:
   rules:
-  - host: nextcloud.homeserver.internal
-    http:
-      paths:
-      - path: /
-        pathType: Prefix 
-        backend:
-          service:
-            name: nextcloud-service   
-            port:
-              number: 80
+    - host: nextcloud.homeserver.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nextcloud-service
+                port:
+                  number: 80

@@ -18,24 +18,24 @@ spec:
         app: node-exporter
     spec:
       containers:
-      - name: node-exporter
-        image: quay.io/prometheus/node-exporter
-        imagePullPolicy: Always
-        ports:
-          - containerPort: 9100
-        securityContext:
-          privileged: true
-        args:
-        - --path.rootfs=/host
-        - --path.sysfs=/host/sys
-        - --collector.filesystem.ignored-mount-points=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/pods/.+)($|/)
-        - --collector.netclass.ignored-devices=^(veth.*)$
-        volumeMounts:
-        - mountPath: /host
-          mountPropagation: HostToContainer
-          name: root
-          readOnly: true
+        - name: node-exporter
+          image: quay.io/prometheus/node-exporter
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 9100
+          securityContext:
+            privileged: true
+          args:
+            - --path.rootfs=/host
+            - --path.sysfs=/host/sys
+            - --collector.filesystem.ignored-mount-points=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/pods/.+)($|/)
+            - --collector.netclass.ignored-devices=^(veth.*)$
+          volumeMounts:
+            - mountPath: /host
+              mountPropagation: HostToContainer
+              name: root
+              readOnly: true
       volumes:
-      - hostPath:
-          path: /
-        name: root
+        - hostPath:
+            path: /
+          name: root

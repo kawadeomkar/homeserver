@@ -9,9 +9,9 @@ metadata:
 spec:
   type: NodePort
   ports:
-  - name: prowlarr
-    port: 9696
-    targetPort: 9696
-    nodePort: 30011
+    - name: prowlarr
+      port: 9696
+      targetPort: 9696
+      nodePort: 30011
   selector:
     app: prowlarr

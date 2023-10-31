@@ -1,7 +1,4 @@
----
-
 # Home assistant
-
 - name: Start kubernetes homeassistant service
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/homeassistant
@@ -31,40 +28,35 @@
 # ------ End monitoring ------
 
 # Homepage
-
 - name: Start kubernetes homepage service
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/homepage
 
 # Jellyfin
-
 - name: Start kubernetes jellyfin service
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/jellyfin
 
 # Sonarr
-
 - name: Start kubernetes sonarr service
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/sonarr
 
 # Radarr
-
 - name: Start kubernetes radarr service
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/radarr
 
 # Prowlarr
-
 - name: Start kubernetes prowlarr service
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/prowlarr
 
 # Nextcloud
-
 - name: Start kubernetes nextcloud service
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/nextcloud
+
 
 # Wait for pods
 # - name: Wait for pods to be ready

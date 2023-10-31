@@ -16,10 +16,10 @@ spec:
       port: 8123
       targetPort: 8123
       nodePort: 30002
-#    - name: https
-#      port: 443
-#      protocol: TCP
-#      targetPort: 8123
-#      nodePort: 30003
+      #    - name: https
+      #      port: 443
+      #      protocol: TCP
+      #      targetPort: 8123
+      #      nodePort: 30003
   selector:
     app: homeassistant

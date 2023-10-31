@@ -1,4 +1,3 @@
----
 - name: Create .kube folder
   ansible.builtin.file:
     path: ~/.kube
@@ -6,14 +5,12 @@
     owner: "{{ username }}"
     group: "{{ username }}"
     mode: "0750"
-
 - name: Add bash completion for kubectl
   ansible.builtin.lineinfile:
     path: "$HOME/.bashrc"
     regexp: '^source <\(kubectl completion bash'
     line: "source <(kubectl completion bash)"
     state: present
-
 # TODO: The following corresponds with "local_addresses" in inventory file
 # ex:
 # [local_addresses]
@@ -31,13 +28,11 @@
 #   register: etchostsupdate
 #   when: inventory_hostname != "{{ item }}" or inventory_hostname == "{{ item }}"
 #   with_items: "{{groups['local_addresses']}}"
-
 - name: Allow privileged for kubelet
   ansible.builtin.lineinfile:
     dest: /var/snap/microk8s/current/args/kubelet
     line: "--allow-privileged=true"
     state: present
-
 - name: Allow privileged for kube-apiserver
   ansible.builtin.lineinfile:
     dest: /var/snap/microk8s/current/args/kube-apiserver

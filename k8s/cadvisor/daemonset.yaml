@@ -2,69 +2,66 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: cadvisor
-  namespace: monitoring 
+  namespace: monitoring
   labels:
     app: cadvisor
 spec:
-  replicas: 1
   selector:
     matchLabels:
       app: cadvisor
-  strategy:
-    type: Recreate
   template:
     metadata:
       labels:
         app: cadvisor
     spec:
       containers:
-      - name: cadvisor
-        image: gcr.io/cadvisor/cadvisor:v0.45.0
-        imagePullPolicy: Always
-        ports:
-        - containerPort: 8080
-        securityContext:
-          privileged: true
-        # TODO: add device
-        #devices:x
-        #- /dev/kmsg:/dev/kmsg
-        args:
-          - --profiling
-          - --housekeeping_interval=10s
-          - --whitelisted_container_labels=io.kubernetes.container.name, io.kubernetes.pod.name,io.kubernetes.pod.namespace 
-          - --docker_only=false 
-        env:
-        - name: TZ
-          value: America/Los_Angeles
-        volumeMounts:
-        - name: rootfs
-          mountPath: /rootfs
-          readOnly: true
-        - name: var-run
-          mountPath: /var/run
-          readOnly: false
-        - name: sys
-          mountPath: /sys
-          readOnly: true
-        - name: docker
-          mountPath: /var/lib/docker
-          readOnly: true
-        - name: disk
-          mountPath: /dev/disk
-          readOnly: true
+        - name: cadvisor
+          image: gcr.io/cadvisor/cadvisor:v0.45.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          securityContext:
+            privileged: true
+          # TODO: add device
+          #devices:
+          #- /dev/kmsg:/dev/kmsg
+          args:
+            - --profiling
+            - --housekeeping_interval=10s
+            - --whitelisted_container_labels=io.kubernetes.container.name, io.kubernetes.pod.name,io.kubernetes.pod.namespace
+            - --docker_only=false
+          env:
+            - name: TZ
+              value: America/Los_Angeles
+          volumeMounts:
+            - name: rootfs
+              mountPath: /rootfs
+              readOnly: true
+            - name: var-run
+              mountPath: /var/run
+              readOnly: false
+            - name: sys
+              mountPath: /sys
+              readOnly: true
+            - name: docker
+              mountPath: /var/lib/docker
+              readOnly: true
+            - name: disk
+              mountPath: /dev/disk
+              readOnly: true
       volumes:
-      - name: rootfs
-        hostPath:
-          path: /
-      - name: var-run
-        hostPath:
-          path: /var/run
-      - name: sys
-        hostPath:
-          path: /sys
-      - name: docker
-        hostPath:
-          path: /var/lib/docker
-      - name: disk
-        hostPath:
-          path: /dev/disk
+        - name: rootfs
+          hostPath:
+            path: /
+        - name: var-run
+          hostPath:
+            path: /var/run
+        - name: sys
+          hostPath:
+            path: /sys
+        - name: docker
+          hostPath:
+            path: /var/lib/docker
+        - name: disk
+          hostPath:
+            path: /dev/disk

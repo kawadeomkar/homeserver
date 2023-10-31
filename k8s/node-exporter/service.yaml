@@ -9,9 +9,9 @@ metadata:
 spec:
   type: NodePort
   ports:
-  - name: node-exporter
-    port: 9100
-    targetPort: 9100
-    nodePort: 30012
+    - name: node-exporter
+      port: 9100
+      targetPort: 9100
+      nodePort: 30012
   selector:
     app: node-exporter

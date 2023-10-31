@@ -2,16 +2,16 @@ apiVersion: v1
 kind: Service
 metadata:
   name: cadvisor
-  namespace: monitoring 
+  namespace: monitoring
   labels:
     app: cadvisor
     kubernetes.io/name: "cadvisor"
 spec:
   type: NodePort
   ports:
-  - name: cadvisor
-    port: 8080
-    targetPort: 8080
-    nodePort: 30013
+    - name: cadvisor
+      port: 8080
+      targetPort: 8080
+      nodePort: 30013
   selector:
     app: cadvisor

@@ -13,14 +13,14 @@ spec:
   loadBalancerIP: 192.168.1.5
   sessionAffinity: ClientIP
   ports:
-  - name: dlna-udp 
-    protocol: UDP
-    port: 1900
-    targetPort: 1900
-  - name: discovery-udp
-    protocol: UDP
-    port: 7359
-    targetPort: 7359
+    - name: dlna-udp
+      protocol: UDP
+      port: 1900
+      targetPort: 1900
+    - name: discovery-udp
+      protocol: UDP
+      port: 7359
+      targetPort: 7359
 ---
 kind: Service
 apiVersion: v1
@@ -34,16 +34,16 @@ spec:
     # name: nginx-ingress-microk8s
     app: jellyfin
   type: LoadBalancer
-  loadBalancerIP: 192.168.1.5 
-  sessionAffinity: ClientIP 
+  loadBalancerIP: 192.168.1.5
+  sessionAffinity: ClientIP
   ports:
-  - name: http-tcp 
-    protocol: TCP
-    port: 8096
-    targetPort: 8096
-  - name: https-tcp
-    port: 8920
-    targetPort: 8920
+    - name: http-tcp
+      protocol: TCP
+      port: 8096
+      targetPort: 8096
+    - name: https-tcp
+      port: 8920
+      targetPort: 8920
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -51,24 +51,24 @@ metadata:
   name: jellyfin-ingress
   namespace: jellyfin
   annotations:
-     #kubernetes.io/ingress.class: "nginx" 
+    #kubernetes.io/ingress.class: "nginx" 
     nginx.ingress.kubernetes.io/rewrite-target: /
 #    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS" 
 #    cert-manager.io/cluster-issuer: "letsencrypt-prod" 
 #    nginx.ingress.kubernetes.io/app-root:  
 spec:
   rules:
-  - host: jellyfin.homeserver.internal
-    http:
-      paths:
-      - path: /
-        pathType: Prefix 
-        backend:
-          service:
-            name: jellyfin
-            port: 
-              number: 8096
-#  tls:
-#  - hosts:
-#    - jellyfin.mydomain.com
-#    secretName: jellyfin.mydomain.com-tls # < cert-manager will store the created certificate in this secret.
+    - host: jellyfin.homeserver.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: jellyfin
+                port:
+                  number: 8096
+                  #  tls:
+                  #  - hosts:
+                  #    - jellyfin.mydomain.com
+                  #    secretName: jellyfin.mydomain.com-tls # < cert-manager will store the created certificate in this secret.

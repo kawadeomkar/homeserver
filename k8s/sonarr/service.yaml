@@ -9,9 +9,9 @@ metadata:
 spec:
   type: NodePort
   ports:
-  - name: sonarr
-    port: 8989
-    targetPort: 8989
-    nodePort: 30004
+    - name: sonarr
+      port: 8989
+      targetPort: 8989
+      nodePort: 30004
   selector:
     app: sonarr

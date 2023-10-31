@@ -32,13 +32,13 @@ metadata:
     # kubernetes.io/tls-acme: "true"
 spec:
   rules:
-  - host: node-exporter.homeserver.internal
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: node-exporter
-            port:
-              number: 7878
+    - host: node-exporter.homeserver.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: node-exporter
+                port:
+                  number: 7878
