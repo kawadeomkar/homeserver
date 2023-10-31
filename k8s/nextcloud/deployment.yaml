@@ -49,6 +49,3 @@ spec:
       - name: nextcloud        
         persistentVolumeClaim:
           claimName: nextcloud-opt-server-claim
-      - name: nextcloud-ssl
-        secret:
-          secretName: nextcloud-net-tls  
