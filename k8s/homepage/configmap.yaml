@@ -50,6 +50,11 @@ data:
             href: http://jellyfin.homeserver.internal/
             ping: http://10.0.0.4:30006
 
+        - Nextcloud:
+            icon: nextcloud
+            href: http://nextcloud.homeserver.internal/
+            ping: http://10.0.0.4:30014
+
         - Sonarr:
             icon: sonarr
             href: http://sonarr.homeserver.internal/
@@ -64,6 +69,8 @@ data:
             icon: prowlarr
             href: http://prowlarr.homeserver.internal/
             ping: http://10.0.0.4:30011
+
+
   widgets.yaml: |
     - kubernetes:
         cluster:
