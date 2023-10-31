@@ -1,5 +1,5 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: DaemonSet
 metadata:
   name: cadvisor
   namespace: monitoring 
@@ -26,11 +26,13 @@ spec:
         securityContext:
           privileged: true
         # TODO: add device
-        #devices:
+        #devices:x
         #- /dev/kmsg:/dev/kmsg
         args:
           - --profiling
           - --housekeeping_interval=10s
+          - --whitelisted_container_labels=io.kubernetes.container.name, io.kubernetes.pod.name,io.kubernetes.pod.namespace 
+          - --docker_only=false 
         env:
         - name: TZ
           value: America/Los_Angeles
