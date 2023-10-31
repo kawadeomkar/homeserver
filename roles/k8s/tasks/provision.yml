@@ -60,6 +60,12 @@
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/prowlarr
 
+# Nextcloud
+
+- name: Start kubernetes nextcloud service
+  ansible.builtin.command: >
+    kubectl apply -f /homeserver/k8s/nextcloud
+
 # Wait for pods
 # - name: Wait for pods to be ready
 #   ansible.builtin.command: >
