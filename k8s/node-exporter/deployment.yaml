@@ -23,10 +23,11 @@ spec:
         imagePullPolicy: Always
         ports:
           - containerPort: 9100
+        securityContext:
+          privileged: true
         args:
         - --path.rootfs=/host
         - --path.sysfs=/host/sys
-        - --collector.hwmon.chip-include
         - --collector.filesystem.ignored-mount-points=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/pods/.+)($|/)
         - --collector.netclass.ignored-devices=^(veth.*)$
         volumeMounts:

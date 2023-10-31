@@ -23,6 +23,8 @@ spec:
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
+        securityContext:
+          privileged: true
         # TODO: add device
         #devices:
         #- /dev/kmsg:/dev/kmsg
