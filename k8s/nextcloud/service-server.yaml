@@ -1,0 +1,18 @@
+kind: Service
+apiVersion: v1
+metadata:
+  name: nextcloud-service  
+  namespace: nextcloud    
+  labels:
+    app: nextcloud-service
+    kubernetes.io/name: "nextcloud-service"
+spec: 
+  selector:
+    app: nextcloud   
+  ports:
+    - name: https
+      protocol: TCP
+      port: 443
+    - name: http
+      protocol: TCP
+      port: 80

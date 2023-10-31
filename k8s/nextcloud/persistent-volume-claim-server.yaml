@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nextcloud-opt-server-claim
+  namespace: nextcloud
+spec:
+  storageClassName: "" 
+  volumeName: nextcloud-opt-server-volume
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  resources:
+    requests:
+      storage: 500Gi

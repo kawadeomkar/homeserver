@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: nextcloud-db-service
+  namespace: nextcloud
+  labels:
+    app: nextcloud-db-service
+    kubernetes.io/name: "nextcloud-db-service"
+spec:
+  selector:
+    pod-label: nextcloud-db-pod
+  ports:
+    - name: mysql
+      protocol: TCP
+      port: 3306
