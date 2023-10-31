@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
       - name: cadvisor
-        image: gcr.io/cadvisor/cadvisor
+        image: gcr.io/cadvisor/cadvisor:v0.45.0
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
@@ -49,6 +49,9 @@ spec:
         - name: docker
           mountPath: /var/lib/docker
           readOnly: true
+        - name: disk
+          mountPath: /dev/disk
+          readOnly: true
       volumes:
       - name: rootfs
         hostPath:
@@ -62,3 +65,6 @@ spec:
       - name: docker
         hostPath:
           path: /var/lib/docker
+      - name: disk
+        hostPath:
+          path: /dev/disk
