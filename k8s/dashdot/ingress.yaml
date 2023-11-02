@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashdot-lb
+  namespace: ingress
+  # namespace: dashdot
+  annotations:
+    metallb.universe.tf/allow-shared-ip: "dashdot-shared-ip"
+spec:
+  selector:
+    # app: dashdot
+    name: nginx-ingress-microk8s
+  type: LoadBalancer
+  loadBalancerIP: 192.168.1.9
+  ports:
+    - name: dashdot
+      protocol: TCP
+      port: 3001
+      targetPort: 3001
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dashdot-ingress
+  namespace: dashdot
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    # kubernetes.io/tls-acme: "true"
+spec:
+  rules:
+    - host: dashdot.homeserver.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dashdot
+                port:
+                  number: 3001

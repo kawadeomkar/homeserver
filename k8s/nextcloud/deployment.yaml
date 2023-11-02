@@ -37,7 +37,7 @@ spec:
             - name: MYSQL_HOST
               value: mariadb 
             - name: NEXTCLOUD_TRUSTED_DOMAINS 
-              value: homeserver.internal 10.0.0.4 
+              value: "homeserver.internal 10.0.0.4"
           envFrom:
             - secretRef:
                 name: nextcloud-db-secret
