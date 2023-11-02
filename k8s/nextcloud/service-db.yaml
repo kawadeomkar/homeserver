@@ -7,6 +7,7 @@ metadata:
     app: nextcloud-db-service
     kubernetes.io/name: "nextcloud-db-service"
 spec:
+  type: NodePort
   selector:
     pod-label: nextcloud-db-pod
   ports:
