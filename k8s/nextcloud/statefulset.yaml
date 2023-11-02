@@ -27,7 +27,7 @@ spec:
             - name: PUID
               value: "1041"
             - name: TZ
-              value: Europe/Amsterdam
+              value: America/Los_Angeles 
             - name: MYSQL_DATABASE
               value: nextcloud
           envFrom:
