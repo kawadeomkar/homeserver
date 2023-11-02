@@ -36,33 +36,11 @@ spec:
             #  value: redis
             - name: MYSQL_HOST
               value: mariadb 
-            - name: MYSQL_DATABASE
-              valueFrom:
-                secretKeyRef:
-                  key: MYSQL_DATABASE
-                  name: nextcloud-db-secret
-            - name: MYSQL_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  key: MYSQL_PASSWORD
-                  name: nextcloud-db-secret
-            - name: MYSQL_USER
-              valueFrom:
-                secretKeyRef:
-                  key: MYSQL_USER
-                  name: nextcloud-db-secret
-            - name: NEXTCLOUD_ADMIN
-              valueFrom:
-                secretKeyRef:
-                  key: NEXTCLOUD_ADMIN
-                  name: nextcloud-db-secret 
-            - name: NEXTCLOUD_ADMIN_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  key: NEXTCLOUD_ADMIN_PASSWORD
-                  name: nextcloud-db-secret 
             - name: NEXTCLOUD_TRUSTED_DOMAINS 
-              value: homeserver.interal 
+              value: homeserver.internal 
+          envFrom:
+            - secretRef:
+                name: nextcloud-db-secret
           ports:
             - containerPort: 443
               name: https
