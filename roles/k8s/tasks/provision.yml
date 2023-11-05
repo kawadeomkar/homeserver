@@ -25,6 +25,11 @@
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/cadvisor
 
+# Dash dot
+- name: Start kubernetes dash dot service
+  ansible.builtin.command: >
+    kubectl apply -f /homeserver/k8s/dashdot
+
 # ------ End monitoring ------
 
 # Homepage
@@ -51,6 +56,11 @@
 - name: Start kubernetes prowlarr service
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/prowlarr
+
+# jellyseerr
+- name: Start kubernetes jellyseerr service
+  ansible.builtin.command: >
+    kubectl apply -f /homeserver/k8s/jellyseerr
 
 # Nextcloud
 - name: Start kubernetes nextcloud service

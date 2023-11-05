@@ -1,25 +1,25 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: overseerr
-  namespace: overseerr
+  name: jellyseerr
+  namespace: jellyseerr
   labels:
-    app: overseerr
+    app: jellyseerr
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: overseerr
+      app: jellyseerr
   strategy:
     type: Recreate
   template:
     metadata:
       labels:
-        app: overseerr
+        app: jellyseerr
     spec:
       containers:
-        - name: overseerr
-          image: linuxserver/overseerr
+        - name: jellyseerr
+          image: fallenbagel/jellyseerr
           imagePullPolicy: Always
           ports:
             - containerPort: 5055
@@ -32,8 +32,8 @@ spec:
               value: America/Los_Angeles
           volumeMounts:
             - mountPath: /config
-              name: overseerr
+              name: jellyseerr
       volumes:
-        - name: overseerr
+        - name: jellyseerr
           hostPath:
-            path: /opt/overseerr/config
+            path: /opt/jellyseerr/config

@@ -15,6 +15,6 @@
     - /opt/radarr/downloads
     - /opt/radarr/movies
     - /opt/prowlarr/config
-    - /opt/overseerr/config
+    - /opt/jellyseerr/config
     - /opt/nextcloud/db
     - /opt/nextcloud/server
