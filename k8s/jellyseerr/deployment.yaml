@@ -31,7 +31,7 @@ spec:
             - name: TZ
               value: America/Los_Angeles
           volumeMounts:
-            - mountPath: /config
+            - mountPath: /app/config
               name: jellyseerr
       volumes:
         - name: jellyseerr
