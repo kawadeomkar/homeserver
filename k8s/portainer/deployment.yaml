@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portainer
+  namespace: portainer
+  labels:
+    app: portainer
+    io.portainer.kubernetes.application.stack: portainer
+    app.kubernetes.io/name: portainer
+    app.kubernetes.io/instance: portainer
+    app.kubernetes.io/version: "ce-latest-ee-2.19.1"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: portainer
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: portainer
+        app.kubernetes.io/name: portainer
+        app.kubernetes.io/instance: portainer
+    spec:
+      serviceAccountName: portainer-sa-clusteradmin
+      containers:
+        - name: portainer
+          image: portainer/portainer-ce
+          imagePullPolicy: Always
+          args:
+            - '--tunnel-port=30776'
+          ports:
+            - name: http
+              containerPort: 9000
+              protocol: TCP
+            - name: https
+              containerPort: 9443
+              protocol: TCP
+            - name: tcp-edge
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: TZ
+              value: America/Los_Angeles
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 9443
+              scheme: HTTPS
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 9443
+              scheme: HTTPS
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: "data"
+          persistentVolumeClaim:
+            claimName: portainer

@@ -32,6 +32,11 @@
 
 # ------ End monitoring ------
 
+# portainer
+- name: Start kubernetes portainer service
+  ansible.builtin.command: >
+    kubectl apply -f /homeserver/k8s/portainer
+
 # Homepage
 - name: Start kubernetes homepage service
   ansible.builtin.command: >

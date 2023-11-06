@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: portainer-lb
+  namespace: ingress
+  # namespace: portainer
+  annotations:
+    metallb.universe.tf/allow-shared-ip: "portainer-shared-ip"
+spec:
+  selector:
+    # app: portainer
+    name: nginx-ingress-microk8s
+  type: LoadBalancer
+  loadBalancerIP: 192.168.1.12
+  ports:
+    - name: portainer
+      protocol: TCP
+      port: 9443
+      targetPort: 9443
+    - name: http
+      protocol: TCP
+      port: 9000
+      targetPort: 9000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: portainer-ingress
+  namespace: portainer
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    # kubernetes.io/tls-acme: "true"
+spec:
+  rules:
+    - host: portainer.homeserver.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: portainer
+                port:
+                  number: 9000 
