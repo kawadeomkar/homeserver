@@ -42,6 +42,11 @@
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/homepage
 
+# homarr
+- name: Start kubernetes homarr service
+  ansible.builtin.command: >
+    kubectl apply -f /homeserver/k8s/homarr
+
 # Jellyfin
 - name: Start kubernetes jellyfin service
   ansible.builtin.command: >

@@ -18,3 +18,5 @@
     - /opt/jellyseerr/config
     - /opt/nextcloud/db
     - /opt/nextcloud/server
+    - /opt/homarr/configs
+    - /opt/homarr/icons
