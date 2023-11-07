@@ -47,6 +47,11 @@
   ansible.builtin.command: >
     kubectl apply -f /homeserver/k8s/homarr
 
+# dashy
+- name: Start kubernetes dashy service
+  ansible.builtin.command: >
+    kubectl apply -f /homeserver/k8s/dashy
+
 # Jellyfin
 - name: Start kubernetes jellyfin service
   ansible.builtin.command: >

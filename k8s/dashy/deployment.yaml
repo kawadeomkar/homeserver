@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashy
+  namespace: dashy
+  labels:
+    app: dashy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dashy
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: dashy
+    spec:
+      containers:
+        - env:
+            - name: NODE_ENV
+              value: production
+            - name: GID
+              value: "1000"
+            - name: UID
+              value: "1000"
+          image: lissy93/dashy
+          livenessProbe:
+            exec:
+              command:
+                - node
+                - /app/services/healthcheck
+            failureThreshold: 3
+            initialDelaySeconds: 40
+            periodSeconds: 90
+            timeoutSeconds: 10
+          name: dashy
+          ports:
+            - containerPort: 80
+          resources: {}
+          volumeMounts:
+            - mountPath: /app/public/conf.yml
+              name: dashy-config
+            - mountPath: /app/public/item-icons
+              name: dashy-icons
+      restartPolicy: Always
+      volumes:
+        - hostPath:
+            path: /opt/dashy/config.yml
+          name: dashy-config
+        - hostPath:
+            path: /opt/dashy/item-icons
+          name: dashy-icons
