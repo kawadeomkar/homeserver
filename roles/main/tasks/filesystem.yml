@@ -21,3 +21,15 @@
     - /opt/homarr/configs
     - /opt/homarr/icons
     - /opt/dashy/item-icons
+
+
+- name: Ensure container service files exist
+  ansible.builtin.copy:
+    content: ""
+    dest: "{{ item }}"
+    force: false
+    group: sys
+    owner: root
+    mode: 0555
+  loop:
+    - /opt/dashy/config.yml

@@ -40,7 +40,7 @@ spec:
             - containerPort: 80
           resources: {}
           volumeMounts:
-            - mountPath: /app/public/
+            - mountPath: /app/public/conf.yml
               name: dashy-config
               subPath: conf.yml
             - mountPath: /app/public/item-icons
