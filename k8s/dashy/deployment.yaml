@@ -48,7 +48,7 @@ spec:
       restartPolicy: Always
       volumes:
         - hostPath:
-            path: /opt/dashy/config.yml
+            path: /opt/dashy/
           name: dashy-config
         - hostPath:
             path: /opt/dashy/item-icons
