@@ -7,11 +7,11 @@ metadata:
     app: dashdot
     kubernetes.io/name: "dashdot"
 spec:
-  #type: NodePort
+  type: NodePort
   ports:
     - name: dashdot
       port: 3001
       targetPort: 3001
-      #nodePort: 30016
+      nodePort: 30016
   selector:
     app: dashdot
