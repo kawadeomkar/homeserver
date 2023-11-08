@@ -19,6 +19,13 @@ spec:
       containers:
         - name: grafana
           image: grafana/grafana:latest
+          env:
+            - name: PGID
+              value: "1000"
+            - name: PUID
+              value: "1000"
+            - name: TZ
+              value: America/Los_Angeles
           ports:
             - name: grafana
               containerPort: 3000
