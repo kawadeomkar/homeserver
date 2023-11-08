@@ -21,6 +21,7 @@
     - /opt/homarr/configs
     - /opt/homarr/icons
     - /opt/dashy/item-icons
+    - /opt/grafana/storage
 
 - name: Ensure container service files exist
   ansible.builtin.copy:
