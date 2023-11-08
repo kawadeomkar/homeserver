@@ -16,6 +16,10 @@ spec:
       labels:
         app: grafana
     spec:
+      securityContext:
+        fsGroup: 472
+        runAsGroup: 472
+        runAsUser: 472
       containers:
         - name: grafana
           image: grafana/grafana:latest
@@ -31,8 +35,6 @@ spec:
               containerPort: 3000
           securityContext:
             privileged: true
-            runAsUser: 472
-            runAsGroup: 472
           resources:
             limits:
               memory: "1Gi"
