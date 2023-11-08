@@ -16,10 +16,6 @@ spec:
       labels:
         app: grafana
     spec:
-      securityContext:
-        fsGroup: 472
-        runAsGroup: 472
-        runAsUser: 472
       containers:
         - name: grafana
           image: grafana/grafana:latest
@@ -50,8 +46,7 @@ spec:
               readOnly: false
       volumes:
         - name: grafana-storage
-          hostPath:
-            path: /opt/grafana/storage
+          emptyDir: {}
         - name: grafana-datasources
           configMap:
             defaultMode: 420
