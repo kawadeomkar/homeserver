@@ -22,6 +22,11 @@ spec:
           ports:
             - name: grafana
               containerPort: 3000
+          securityContext:
+            privileged: true
+            runAsUser: 472
+            runAsGroup: 472
+            fsGroup: 472
           resources:
             limits:
               memory: "1Gi"
