@@ -21,7 +21,7 @@ spec:
         - name: mariadb
           image: linuxserver/mariadb
           ports:
-            - containerPort: 3306 
+            - containerPort: 3306
           imagePullPolicy: Always
           env:
             - name: PGID
@@ -29,7 +29,7 @@ spec:
             - name: PUID
               value: "1000"
             - name: TZ
-              value: America/Los_Angeles 
+              value: America/Los_Angeles
           envFrom:
             - secretRef:
                 name: nextcloud-db-secret

@@ -2,9 +2,6 @@
   ansible.builtin.apt:
     name: fail2ban
     state: present
-# TODO: copy over j2 of fail2ban/jail.local from /templates
-# and set vars in /defaults
-
 # - name: Copy fail2ban custom configuration file into place.
 #   template:
 #     src: "{{ security_fail2ban_jail_local }}"
@@ -21,6 +18,9 @@
 #     group: root
 #     mode: 0644
 - name: start and enable fail2ban
+  # TODO: copy over j2 of fail2ban/jail.local from /templates
+  # and set vars in /defaults
+
   ansible.builtin.service:
     name: fail2ban
     state: started

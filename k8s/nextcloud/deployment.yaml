@@ -35,8 +35,8 @@ spec:
             #- name: REDIS_HOST
             #  value: redis
             - name: MYSQL_HOST
-              value: mariadb 
-            - name: NEXTCLOUD_TRUSTED_DOMAINS 
+              value: mariadb
+            - name: NEXTCLOUD_TRUSTED_DOMAINS
               value: "homeserver.internal 10.0.0.4"
           envFrom:
             - secretRef:

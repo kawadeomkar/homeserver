@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glances
+  namespace: glances
+  labels:
+    app: glances
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: glances
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: glances
+    spec:
+      containers:
+        - name: glances
+          image: nicolargo/glances:latest-full
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 61208
+            - containerPort: 61209
+          env:
+            - name: GLANCES_OPT
+              value: -w
+          volumeMounts:
+            - mountPath: /var/run/docker.sock
+              name: glances-hostpath0
+            - mountPath: /run/user/1000/podman/podman.sock
+              name: glances-hostpath1
+      restartPolicy: Always
+      volumes:
+        - hostPath:
+            path: /var/run/docker.sock
+          name: glances-hostpath0
+        - hostPath:
+            path: /run/user/1000/podman/podman.sock
+          name: glances-hostpath1
