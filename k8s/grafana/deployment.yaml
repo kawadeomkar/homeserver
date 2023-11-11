@@ -18,10 +18,10 @@ spec:
         app: grafana
     spec:
       securityContext:
-        fsGroup: 472
-        runAsGroup: 472
-        runAsNonRoot: true
-        runAsUser: 472
+        #fsGroup: 472
+        #runAsGroup: 472
+        #runAsNonRoot: true
+        runAsUser: 0
         supplementalGroups:
           - 0
       containers:
@@ -37,8 +37,6 @@ spec:
           ports:
             - name: grafana
               containerPort: 3000
-          securityContext:
-            privileged: true
           resources:
             limits:
               memory: "1Gi"
