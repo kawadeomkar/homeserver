@@ -83,6 +83,6 @@
     kubectl apply -f /homeserver/k8s/nextcloud
     
 # Wait for pods
-# - name: Wait for pods to be ready
-#   ansible.builtin.command: >
-#     kubectl wait pod --all --for=condition=Ready
+- name: Wait for pods to be ready
+  ansible.builtin.command: >
+    kubectl wait pod --all --for=condition=Ready
