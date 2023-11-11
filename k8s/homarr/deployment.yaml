@@ -28,6 +28,8 @@ spec:
               name: homarr-config
             - mountPath: /app/public/icons
               name: homarr-icons
+            - mountPath: /data
+              name: homarr-data
       restartPolicy: Always
       volumes:
         - hostPath:
@@ -36,3 +38,6 @@ spec:
         - hostPath:
             path: /opt/homarr/icons
           name: homarr-icons
+        - hostPath:
+            path: /opt/homarr/data
+          name: homarr-data
