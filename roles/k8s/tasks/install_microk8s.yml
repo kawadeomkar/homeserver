@@ -5,9 +5,11 @@
     state: present
     classic: true
     channel: 1.28/stable
+
 - name: Create kubectl config
   ansible.builtin.command: microk8s config > /home/{{ username }}/.kube/config
   # changed_when: "[ -f /home/{{ username }}/.kube/config ] && echo 1 || echo 0"
+
 - name: Create .kube folder
   ansible.builtin.file:
     path: ~/.kube
@@ -15,16 +17,19 @@
     owner: "{{ username }}"
     group: "{{ username }}"
     mode: "0750"
+
 - name: Add bash completion for kubectl
   ansible.builtin.lineinfile:
     path: "$HOME/.bashrc"
     regexp: '^source <\(kubectl completion bash'
     line: "source <(kubectl completion bash)"
     state: present
+
 - name: Create alias microk8s.kubectl=kubectl
   ansible.builtin.command: "snap alias microk8s.kubectl kubectl"
   register: "k8s_kastdout"
   changed_when: "k8s_kastdout.stdout is none"
+
 - name: Add user to docker and microk8s groups
   ansible.builtin.user:
     name: "{{ username }}"
@@ -33,6 +38,7 @@
       - docker
       - microk8s
     append: true
+
 - name: Wait for microk8s to start
   ansible.builtin.command: microk8s.status --wait-ready
   changed_when: false
@@ -40,8 +46,10 @@
   failed_when:
     - "'This MicroK8s deployment is acting as a node in a cluster.' not in k8s_microk8sstatus.stdout_lines"
     - k8s_microk8sstatus.rc > 0
+
 - name: Start microk8s
   ansible.builtin.command: microk8s start
+
 - name: Enable microk8s services
   ansible.builtin.command: "microk8s enable {{ item }}"
   with_items:

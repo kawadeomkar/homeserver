@@ -5,6 +5,7 @@
     name: ufw
     update_cache: true
     state: present
+
 # TODO: Allow certain ports
 # - name: UFW deny incoming
 #   ufw:
@@ -13,6 +14,7 @@
 #     policy: deny
 #   notify:
 #   - reload ufw
+
 - name: UFW allow outgoing
   community.general.ufw:
     direction: outgoing
@@ -20,6 +22,7 @@
     policy: allow
   notify:
     - reload ufw
+
 # TODO:
 # - name: UFW configure ports
 #   ufw:
@@ -36,12 +39,14 @@
 #     comment: "{{ item.comment | default(omit) }}"
 #   with_items: "{{ ufw_rules }}"
 #   notify: reload ufw
+
 - name: UFW allow ssh
   community.general.ufw:
     rule: allow
     name: OpenSSH
   notify:
     - reload ufw
+
 - name: Enable UFW
   community.general.ufw:
     state: enabled
