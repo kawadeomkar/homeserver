@@ -17,6 +17,11 @@ spec:
       labels:
         app: grafana
     spec:
+      securityContext:
+        fsGroup: 472
+        runAsGroup: 472
+        runAsNonRoot: true
+        runAsUser: 472
       containers:
         - name: grafana
           image: grafana/grafana:latest
@@ -40,14 +45,21 @@ spec:
               memory: 500M
               cpu: "500m"
           volumeMounts:
+            - name: grafana-config
+              mountPath: /etc/grafana/grafana.ini
+              subPath: grafana.ini
             - mountPath: /var/lib/grafana
               name: grafana-storage
             - mountPath: /etc/grafana/provisioning/datasources
               name: grafana-datasources
               readOnly: false
       volumes:
+        - name: grafana-config
+          configMap:
+            name: grafana-ini
         - name: grafana-storage
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: grafana-storage-claim
         - name: grafana-datasources
           configMap:
             defaultMode: 420

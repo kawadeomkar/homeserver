@@ -1,16 +1,25 @@
 ---
 - name: Setup environment
   ansible.builtin.include_tasks: "setup.yml"
+
 - name: Setup SSH configuration
   ansible.builtin.include_tasks: "ssh.yml"
+
 - name: Pull secrets from environment variables
   ansible.builtin.include_tasks: "env.yml"
+
 # Debian based tasks
 # TODO: depends on k8s ingress config
 # - include_tasks: "ubuntu-ufw.yml"
 #   when: ansible_os_family == "Debian"
+
 - name: Install fail2ban
   ansible.builtin.include_tasks: "fail2ban.yml"
   when: ansible_os_family == "Debian"
+
 - name: Setup filesystem directories
   ansible.builtin.include_tasks: "filesystem.yml"
+
+# TODO: Needs DNS configuration on router
+#- name: Setup pihole 
+#  ansible.builtin.include_tasks: "setup-pihole.yml"
