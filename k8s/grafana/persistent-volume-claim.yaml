@@ -25,7 +25,7 @@ spec:
   volumeName: grafana-opt-volume
   storageClassName: manual
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
   resources:
     requests:
       storage: 10Gi
