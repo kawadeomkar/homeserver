@@ -1,3 +1,4 @@
+---
 - name: Harden ssh
   ansible.builtin.lineinfile:
     dest: "/etc/ssh/sshd_config"
@@ -20,6 +21,7 @@
     - regexp: "^ChallengeResponseAuthentication"
       line: "ChallengeResponseAuthentication no"
   notify: restart ssh daemon
+
 - name: Add configured users allowed to connect over ssh
   ansible.builtin.lineinfile:
     dest: "/etc/ssh/sshd_config"

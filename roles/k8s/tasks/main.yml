@@ -1,3 +1,4 @@
+---
 - name: Install microk8s
   ansible.builtin.include_tasks: "install_microk8s.yml"
 #- name: Setup k8s

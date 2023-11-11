@@ -1,3 +1,4 @@
+---
 # TODO: Move state version to vars file
 - name: Install UFW
   ansible.builtin.apt:

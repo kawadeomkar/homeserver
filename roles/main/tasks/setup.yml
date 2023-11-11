@@ -1,3 +1,4 @@
+---
 - name: create groups
   ansible.builtin.group:
     name: "{{ item }}"

@@ -1,3 +1,4 @@
+---
 - name: homeserver
   hosts: all
   become: true

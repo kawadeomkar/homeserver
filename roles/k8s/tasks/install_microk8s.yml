@@ -1,3 +1,4 @@
+---
 - name: Install classic microk8s with snapd
   community.general.snap:
     name: microk8s
