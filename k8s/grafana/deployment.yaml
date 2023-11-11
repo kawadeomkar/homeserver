@@ -59,7 +59,7 @@ spec:
             name: grafana-ini
         - name: grafana-storage
           persistentVolumeClaim:
-            claimName: grafana-storage-claim
+            claimName: grafana-opt-claim
         - name: grafana-datasources
           configMap:
             defaultMode: 420
