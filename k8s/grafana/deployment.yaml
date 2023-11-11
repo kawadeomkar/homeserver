@@ -22,6 +22,8 @@ spec:
         runAsGroup: 472
         runAsNonRoot: true
         runAsUser: 472
+        supplementalGroups:
+          - 0
       containers:
         - name: grafana
           image: grafana/grafana:latest
