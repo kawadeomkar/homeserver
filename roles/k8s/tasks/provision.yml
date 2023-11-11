@@ -1,72 +1,87 @@
 ---
 # Home assistant
 - name: Start kubernetes homeassistant service
-  ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/homeassistant #magic___^_^___line
+  ansible.builtin.command: kubectl apply -f /homeserver/k8s/homeassistant
+
 # ------ Monitoring ------
 
 # Prometheus
 - name: Start kubernetes prometheus service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/prometheus #magic___^_^___line
+    kubectl apply -f /homeserver/k8s/prometheus
+
 # Grafana
 - name: Start kubernetes grafana service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/grafana #magic___^_^___line
+    kubectl apply -f /homeserver/k8s/grafana
+
 # Node Exporter
 - name: Start kubernetes node-exporter service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/node-exporter #magic___^_^___line
+    kubectl apply -f /homeserver/k8s/node-exporter
+
 # Cadvisor
 - name: Start kubernetes cadvisor service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/cadvisor #magic___^_^___line
+    kubectl apply -f /homeserver/k8s/cadvisor
+
 # Dash dot
 - name: Start kubernetes dash dot service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/dashdot #magic___^_^___line
+    kubectl apply -f /homeserver/k8s/dashdot
+
 # ------ End monitoring ------
 
 # portainer
 - name: Start kubernetes portainer service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/portainer #magic___^_^___line
+    kubectl apply -f /homeserver/k8s/portainer
+
 # Homepage
 - name: Start kubernetes homepage service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/homepage #magic___^_^___line
+    kubectl apply -f /homeserver/k8s/homepage
+
 # homarr
 - name: Start kubernetes homarr service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/homarr #magic___^_^___line
+    kubectl apply -f /homeserver/k8s/homarr
+
 # dashy
 - name: Start kubernetes dashy service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/dashy #magic___^_^___line
+    kubectl apply -f /homeserver/k8s/dashy
+
 # Jellyfin
 - name: Start kubernetes jellyfin service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/jellyfin #magic___^_^___line
+    kubectl apply -f /homeserver/k8s/jellyfin
+
 # Sonarr
 - name: Start kubernetes sonarr service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/sonarr #magic___^_^___line
+    kubectl apply -f /homeserver/k8s/sonarr
+
 # Radarr
 - name: Start kubernetes radarr service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/radarr #magic___^_^___line
+    kubectl apply -f /homeserver/k8s/radarr
+
 # Prowlarr
 - name: Start kubernetes prowlarr service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/prowlarr #magic___^_^___line
+    kubectl apply -f /homeserver/k8s/prowlarr
+
 # jellyseerr
 - name: Start kubernetes jellyseerr service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/jellyseerr #magic___^_^___line
+    kubectl apply -f /homeserver/k8s/jellyseerr
+
 # Nextcloud
 - name: Start kubernetes nextcloud service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/nextcloud #magic___^_^___line #magic___^_^___line
+    kubectl apply -f /homeserver/k8s/nextcloud
+    
 # Wait for pods
 # - name: Wait for pods to be ready
 #   ansible.builtin.command: >

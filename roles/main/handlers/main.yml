@@ -3,7 +3,7 @@
   ansible.builtin.service:
     name: ssh
     state: restarted
-    
+
 # Debian based
 - name: reload ufw
   community.general.ufw:
