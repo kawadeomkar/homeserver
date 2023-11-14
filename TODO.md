@@ -8,4 +8,4 @@
 # use package instead of apt
 # microk8s custom certificates
 # change username default var to usernames list
-# update /etc/hosts config in k8s setup
+# add domain instead of mdns
