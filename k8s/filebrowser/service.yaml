@@ -11,8 +11,8 @@ spec:
   type: NodePort
   ports:
     - name: filebrowser
-      port: 8383
-      targetPort: 8383
+      port: 8080
+      targetPort: 80
       nodePort: 30020
   selector:
     app: filebrowser
