@@ -1,0 +1,45 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: filebrowser-lb
+  namespace: ingress
+  # namespace: filebrowser
+  annotations:
+    metallb.universe.tf/allow-shared-ip: "filebrowser-shared-ip"
+spec:
+  selector:
+    # app: filebrowser
+    name: nginx-ingress-microk8s
+  type: LoadBalancer
+  loadBalancerIP: 192.168.1.21
+  ports:
+    - name: filebrowser
+      protocol: TCP
+      port: 8383
+      targetPort: 8383
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: filebrowser-ingress
+  namespace: filebrowser
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    # kubernetes.io/tls-acme: "true"
+spec:
+  rules:
+    - host: filebrowser.homeserver.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: filebrowser
+                port:
+                  number: 8383

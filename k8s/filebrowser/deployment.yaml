@@ -1,0 +1,38 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: filebrowser
+  labels:
+    app: filebrowser
+  name: filebrowser
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: filebrowser
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: filebrowser
+    spec:
+      containers:
+        - name: filebrowser
+          image: filebrowser/filebrowser:latest
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - mountPath: /srv
+              name: filebrowser
+            - mountPath: /database.db
+              name: filebrowser-db
+      restartPolicy: Always
+      volumes:
+        - hostPath:
+            path: /
+          name: filebrowser
+        - hostPath:
+            path: /opt/filebrowser/filebrowser.db
+          name: filebrowser-db
