@@ -26,7 +26,7 @@ spec:
           volumeMounts:
             - mountPath: /srv
               name: filebrowser
-            - mountPath: /database.db
+            - mountPath: /database/filebrowser.db
               name: filebrowser-db
       restartPolicy: Always
       volumes:
