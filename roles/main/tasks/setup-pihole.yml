@@ -4,7 +4,7 @@
     path: /etc/systemd/resolved.conf
     regexp: '^#?DNSStubListener=yes'
     line: 'DNSStubListener=no'
-    backup: yes
+    backup: true
 
 - name: Remove /etc/resolv.conf
   ansible.builtin.file:
@@ -15,7 +15,7 @@
   ansible.builtin.link:
     src: /run/systemd/resolve/resolv.conf
     dest: /etc/resolv.conf
-    force: yes
+    force: true
 
 - name: Restart systemd-resolved service
   ansible.builtin.systemd:
