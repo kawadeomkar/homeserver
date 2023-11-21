@@ -6,10 +6,6 @@
     classic: true
     channel: 1.28/stable
 
-- name: Create kubectl config
-  ansible.builtin.command: microk8s config > /home/{{ username }}/.kube/config
-  # changed_when: "[ -f /home/{{ username }}/.kube/config ] && echo 1 || echo 0"
-
 - name: Create .kube folder
   ansible.builtin.file:
     path: ~/.kube
@@ -17,6 +13,10 @@
     owner: "{{ username }}"
     group: "{{ username }}"
     mode: "0750"
+  
+- name: Create kubectl config
+  ansible.builtin.command: microk8s config > /home/{{ username }}/.kube/config
+  # changed_when: "[ -f /home/{{ username }}/.kube/config ] && echo 1 || echo 0"
 
 - name: Add bash completion for kubectl
   ansible.builtin.lineinfile:
@@ -61,3 +61,5 @@
     - metrics-server
     - cert-manager
     - metallb:192.168.1.0/24
+  register: addon_stdout
+  changed_when: "'already enabled' not in addon_stdout.stdout"

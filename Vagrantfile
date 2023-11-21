@@ -7,8 +7,6 @@ Vagrant.configure("2") do |config|
   config.vm.box = "generic/ubuntu2204"
 
   config.ssh.insert_key = false
-  config.ssh.username = "vagrant"
-  config.ssh.password = "vagrant"
 
   config.vbguest.auto_update = true
 
@@ -18,7 +16,6 @@ Vagrant.configure("2") do |config|
   config.vm.provider "virtualbox" do |v|
     v.memory = 4096
     v.cpus = 2
-    v.gui = true
   end
 
   config.vm.provision "ansible" do |ansible|

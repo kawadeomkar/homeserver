@@ -33,10 +33,17 @@
     upgrade: true
     cache_valid_time: "3600"
 
-- name: Install core packages
+- name: Install core apt packages
   ansible.builtin.apt:
     name: "{{ packages }}"
     state: present
+
+- name: Install pip `community.kubernetes` pre-requisites
+  ansible.builtin.pip:
+    name:
+      - openshift
+      - pyyaml
+      - kubernetes
 
 - name: Copy kubernetes manifest files to homeserver
   ansible.builtin.copy:

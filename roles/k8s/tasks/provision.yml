@@ -1,93 +1,135 @@
 ---
 # Home assistant
+
+#- name: Create a Deployment by reading the definition from a local file
+#  kubernetes.core.k8s:
+#    state: present
+#    src: /k8s/homeassistant
+#    kubeconfig: ~/.kube/config
+
 - name: Start kubernetes homeassistant service
-  ansible.builtin.command: kubectl apply -f /homeserver/k8s/homeassistant
+  ansible.builtin.command: kubectl apply -f /k8s/homeassistant
+  register: k8s_apply
+  changed_when: "'configured' in k8s_apply.stdout" 
 
 # ------ Monitoring ------
 
 # Prometheus
 - name: Start kubernetes prometheus service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/prometheus
+    kubectl apply -f /k8s/prometheus
+  register: k8s_apply
+  changed_when: "'configured' in k8s_apply.stdout" 
 
 # Grafana
 - name: Start kubernetes grafana service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/grafana
+    kubectl apply -f /k8s/grafana
+  register: k8s_apply
+  changed_when: "'configured' in k8s_apply.stdout" 
 
 # Node Exporter
 - name: Start kubernetes node-exporter service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/node-exporter
+    kubectl apply -f /k8s/node-exporter
+  register: k8s_apply
+  changed_when: "'configured' in k8s_apply.stdout" 
 
 # Cadvisor
 - name: Start kubernetes cadvisor service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/cadvisor
+    kubectl apply -f /k8s/cadvisor
+  register: k8s_apply
+  changed_when: "'configured' in k8s_apply.stdout" 
 
 # Dash dot
 - name: Start kubernetes dash dot service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/dashdot
+    kubectl apply -f /k8s/dashdot
+  register: k8s_apply
+  changed_when: "'configured' in k8s_apply.stdout" 
 
 # ------ End monitoring ------
 
 # portainer
 - name: Start kubernetes portainer service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/portainer
+    kubectl apply -f /k8s/portainer
+  register: k8s_apply
+  changed_when: "'configured' in k8s_apply.stdout" 
 
 # Homepage
 - name: Start kubernetes homepage service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/homepage
+    kubectl apply -f /k8s/homepage
+  register: k8s_apply
+  changed_when: "'configured' in k8s_apply.stdout" 
 
 # homarr
 - name: Start kubernetes homarr service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/homarr
+    kubectl apply -f /k8s/homarr
+  register: k8s_apply
+  changed_when: "'configured' in k8s_apply.stdout" 
 
 # dashy
 - name: Start kubernetes dashy service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/dashy
+    kubectl apply -f /k8s/dashy
+  register: k8s_apply
+  changed_when: "'configured' in k8s_apply.stdout" 
 
 # Jellyfin
 - name: Start kubernetes jellyfin service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/jellyfin
+    kubectl apply -f /k8s/jellyfin
+  register: k8s_apply
+  changed_when: "'configured' in k8s_apply.stdout" 
 
 # Sonarr
 - name: Start kubernetes sonarr service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/sonarr
+    kubectl apply -f /k8s/sonarr
+  register: k8s_apply
+  changed_when: "'configured' in k8s_apply.stdout" 
 
 # Radarr
 - name: Start kubernetes radarr service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/radarr
+    kubectl apply -f /k8s/radarr
+  register: k8s_apply
+  changed_when: "'configured' in k8s_apply.stdout" 
 
 # Prowlarr
 - name: Start kubernetes prowlarr service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/prowlarr
+    kubectl apply -f /k8s/prowlarr
+  register: k8s_apply
+  changed_when: "'configured' in k8s_apply.stdout" 
 
 # jellyseerr
 - name: Start kubernetes jellyseerr service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/jellyseerr
+    kubectl apply -f /k8s/jellyseerr
+  register: k8s_apply
+  changed_when: "'configured' in k8s_apply.stdout" 
 
 # Nextcloud
 - name: Start kubernetes nextcloud service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/nextcloud
+    kubectl apply -f /k8s/nextcloud
+  register: k8s_apply
+  changed_when: "'configured' in k8s_apply.stdout" 
 
 # filebrowser
 - name: Start kubernetes filebrowser service
   ansible.builtin.command: >
-    kubectl apply -f /homeserver/k8s/filebrowser
+    kubectl apply -f /k8s/filebrowser
+  register: k8s_apply
+  changed_when: "'configured' in k8s_apply.stdout" 
 
 # Wait for pods
 - name: Wait for pods to be ready
   ansible.builtin.command: >
     kubectl wait --for=condition=ready pods --all --all-namespaces
+
