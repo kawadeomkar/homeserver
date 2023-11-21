@@ -38,9 +38,8 @@
     name: "{{ packages }}"
     state: present
 
-- name: Clone homeserver repository
-  ansible.builtin.git:
-    repo: https://github.com/kawadeomkar/homeserver.git
-    dest: /homeserver
-    clone: true
-    update: true
+- name: Copy kubernetes manifest files to homeserver
+  ansible.builtin.copy:
+    src: ./k8s
+    dest: /
+    mode: "0644"

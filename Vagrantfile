@@ -5,19 +5,20 @@
 Vagrant.configure("2") do |config|
 
   config.vm.box = "generic/ubuntu2204"
+
   config.ssh.insert_key = false
+  config.ssh.username = "vagrant"
+  config.ssh.password = "vagrant"
 
   config.vbguest.auto_update = true
 
   config.vm.network "private_network", ip: "10.0.2.15"
   config.vm.network 'forwarded_port', host: 8000, guest: 8001, host_ip: '127.0.0.1'
-  #config.vm.network 'forwarded_port', host: 80,   guest: 80,   host_ip: '127.0.0.1'
-  #config.vm.network 'forwarded_port', host: 443, guest:  443,  host_ip: '127.0.0.1'
-  
 
   config.vm.provider "virtualbox" do |v|
     v.memory = 4096
     v.cpus = 2
+    v.gui = true
   end
 
   config.vm.provision "ansible" do |ansible|
