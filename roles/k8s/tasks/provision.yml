@@ -129,7 +129,7 @@
   changed_when: "'configured' in k8s_apply.stdout" 
 
 # Wait for pods
-- name: Wait for pods to be ready
+- name: Wait for pods to be ready (5m timeout)  
   ansible.builtin.command: >
-    kubectl wait --for=condition=ready pods --all --all-namespaces
+    kubectl wait --for=condition=ready pods --all --all-namespaces --timeout=300s
 
