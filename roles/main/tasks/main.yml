@@ -23,3 +23,6 @@
 # TODO: Needs DNS configuration on router
 #- name: Setup pihole 
 #  ansible.builtin.include_tasks: "setup-pihole.yml"
+
+- name: Setup tailscale
+  ansible.builtin.include_tasks: "tailscale.yml"
