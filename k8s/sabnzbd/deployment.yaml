@@ -1,0 +1,50 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sabnzbd
+  namespace: sabnzbd
+  labels:
+    app: sabnzbd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sabnzbd
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: sabnzbd
+    spec:
+      containers:
+        - name: sabnzbd
+          image: lscr.io/linuxserver/sabnzbd:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PGID
+              value: "1000"
+            - name: PUID
+              value: "1000"
+            - name: TZ
+              value: Etc/UTC
+          volumeMounts:
+            - mountPath: /config
+              name: sabnzbd-config
+            - mountPath: /data
+              name: sabnzbd-data
+            - mountPath: /incomplete-downloads
+              name: sabnzbd-incomplete
+      restartPolicy: Always
+      volumes:
+        - hostPath:
+            path: /opt/sabnzbd/config
+          name: sabnzbd-config
+        - hostPath:
+            path: /opt/media/data
+          name: sabnzbd-data
+        - hostPath:
+            path: /opt/media/data/incomplete
+          name: sabnzbd-incomplete
