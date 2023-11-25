@@ -4,18 +4,16 @@
   ansible.builtin.apt: name=curl state=present
 
 - name: Add tailscale GPG key
-  ansible.builtin.shell: >
-    curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+  ansible.builtin.shell: "curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/{{ ansible_distribution_release }}.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null"
   changed_when: false
 
 - name: Add tailscale GPG key
-  ansible.builtin.shell: >
-    curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+  ansible.builtin.shell: "curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/{{ ansible_distribution_release }}.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null"
   changed_when: false
 
 - name: Add tailscale package repository
   ansible.builtin.shell: >
-    curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+    curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/{{ ansible_distribution_release }}.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
   changed_when: false
 
 - name: Run apt-get update to update with tailscale pkg repo list

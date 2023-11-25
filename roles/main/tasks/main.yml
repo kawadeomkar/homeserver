@@ -26,3 +26,4 @@
 
 - name: Setup tailscale
   ansible.builtin.include_tasks: "tailscale.yml"
+  when: tailscale_auth_key is defined
