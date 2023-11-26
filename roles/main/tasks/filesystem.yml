@@ -7,14 +7,11 @@
   loop:
     - /opt/hass
     - /opt/portainer
+    - /opt/media/data
+    - /opt/sabnzbd/config
     - /opt/jellyfin/config
-    - /opt/jellyfin/data
     - /opt/sonarr/config
-    - /opt/sonarr/downloads
-    - /opt/sonarr/tv
     - /opt/radarr/config
-    - /opt/radarr/downloads
-    - /opt/radarr/movies
     - /opt/prowlarr/config
     - /opt/jellyseerr/config
     - /opt/nextcloud/db
