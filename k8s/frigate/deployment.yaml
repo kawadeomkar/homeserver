@@ -1,0 +1,58 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frigate
+  namespace: frigate
+  labels:
+    app: frigate
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frigate
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: frigate
+    spec:
+      containers:
+        - env:
+            - name: FRIGATE_RTSP_PASSWORD
+              value: password
+          image: ghcr.io/blakeblackshear/frigate:stable
+          name: frigate
+          ports:
+            - containerPort: 5000
+            - containerPort: 8554
+            - containerPort: 8555
+            - containerPort: 8555
+              protocol: UDP
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /etc/localtime
+              name: frigate-hostpath0
+              readOnly: true
+            - mountPath: /config/config.yml
+              name: frigate-hostpath1
+            - mountPath: /media/frigate
+              name: frigate-hostpath2
+            - mountPath: /tmp/cache
+              name: frigate-hostpath3
+      restartPolicy: Always
+      volumes:
+        - hostPath:
+            path: /etc/localtime
+          name: frigate-hostpath0
+        - hostPath:
+            path: /opt/frigate/config.yml
+          name: frigate-hostpath1
+        - hostPath:
+            path: /opt/frigate/storage
+          name: frigate-hostpath2
+        - hostPath:
+            path: /Users/omkar/komposer/frigate
+          name: frigate-hostpath3
