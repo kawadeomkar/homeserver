@@ -12,7 +12,7 @@ spec:
     # app: frigate
     name: nginx-ingress-microk8s
   type: LoadBalancer
-  loadBalancerIP: 192.168.1.19
+  loadBalancerIP: 192.168.1.22
   ports:
     - name: frigate
       protocol: TCP

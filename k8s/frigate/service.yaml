@@ -8,12 +8,12 @@ metadata:
     app: frigate
     kubernetes.io/name: "frigate"
 spec:
-  # TODO: Add nodeport to web gui
-  # type: NodePort
+  type: NodePort
   ports:
     - name: "5000"
       port: 5000
       targetPort: 5000
+      nodePort: 30022
     - name: "8554"
       port: 8554
       targetPort: 8554
