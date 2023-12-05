@@ -8,7 +8,6 @@
 - name: Pull secrets from environment variables
   ansible.builtin.include_tasks: "env.yml"
 
-# Debian based tasks
 # TODO: depends on k8s ingress config
 # - include_tasks: "ubuntu-ufw.yml"
 #   when: ansible_os_family == "Debian"
