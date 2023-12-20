@@ -13,7 +13,7 @@
     owner: "{{ username }}"
     group: "{{ username }}"
     mode: "0750"
-  
+
 - name: Create kubectl config
   ansible.builtin.command: microk8s config > /home/{{ username }}/.kube/config
   # changed_when: "[ -f /home/{{ username }}/.kube/config ] && echo 1 || echo 0"
