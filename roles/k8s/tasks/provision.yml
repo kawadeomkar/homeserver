@@ -1,12 +1,6 @@
 ---
 # Home assistant
 
-#- name: Create a Deployment by reading the definition from a local file
-#  kubernetes.core.k8s:
-#    state: present
-#    src: /k8s/homeassistant
-#    kubeconfig: ~/.kube/config
-
 - name: Start kubernetes homeassistant service
   ansible.builtin.command: kubectl apply -f /k8s/homeassistant
   register: k8s_apply

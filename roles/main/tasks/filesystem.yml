@@ -21,7 +21,10 @@
     - /opt/dashy/item-icons
     - /opt/grafana/storage
     - /opt/filebrowser
+    - /opt/frigate
+    - /opt/frigate-db
 
+# TODO: Add all config files
 - name: Ensure container service files exist
   ansible.builtin.copy:
     content: ""

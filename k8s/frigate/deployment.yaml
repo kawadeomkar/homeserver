@@ -34,25 +34,42 @@ spec:
             privileged: true
           volumeMounts:
             - mountPath: /etc/localtime
-              name: frigate-hostpath0
+              name: localtime
               readOnly: true
             - mountPath: /config/config.yml
-              name: frigate-hostpath1
+              name: frigate-config
             - mountPath: /media/frigate
-              name: frigate-hostpath2
+              name: frigate-media
             - mountPath: /tmp/cache
-              name: frigate-hostpath3
+              name: frigate-tmpcache
+            - mountPath: /dev/shm
+              name: frigate-dshm
+            - mountPath: /dev/dri
+              name: frigate-drivers
+            - mountPath: /db
+              name: frigate-db
       restartPolicy: Always
       volumes:
         - hostPath:
             path: /etc/localtime
-          name: frigate-hostpath0
+          name: localtime
         - hostPath:
             path: /opt/frigate/config.yml
-          name: frigate-hostpath1
+          name: frigate-config
         - hostPath:
             path: /opt/frigate/storage
-          name: frigate-hostpath2
+          name: frigate-media
+        - emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+          name: frigate-tmpcache
+        - emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+          name: frigate-dshm
         - hostPath:
-            path: /Users/omkar/komposer/frigate
-          name: frigate-hostpath3
+            path: /dev/dri
+          name: frigate-drivers
+        - hostPath:
+            path: /opt/frigate-db
+          name: frigate-db

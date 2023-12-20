@@ -20,7 +20,7 @@ spec:
     - name: "8555"
       port: 8555
       targetPort: 8555
-    - name: 8555-udp
+    - name: "8555-udp"
       port: 8555
       protocol: UDP
       targetPort: 8555
