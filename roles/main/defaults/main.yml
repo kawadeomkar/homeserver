@@ -16,6 +16,7 @@ packages:
   # Minikube <1.23
   - conntrack
   - lm-sensors
+  - vainfo
 
 # ssh.yml
 ssh_port: 22
