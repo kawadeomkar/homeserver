@@ -2,5 +2,5 @@
 
 set -ex
 
-ansible-playbook -e @vault.enc -K playbook.yaml
+ansible-playbook -i inventory -e @vault.enc -K playbook.yaml
 
