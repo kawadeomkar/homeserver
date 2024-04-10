@@ -39,6 +39,24 @@
       - microk8s
     append: true
 
+#- name: Allow privileged for kubelet
+#  ansible.builtin.lineinfile:
+#    dest: /var/snap/microk8s/current/args/kubelet
+#    line: "--allow-privileged=true"
+#    state: present
+#
+#- name: Allow privileged for kube-apiserver
+#  ansible.builtin.lineinfile:
+#    dest: /var/snap/microk8s/current/args/kube-apiserver
+#    line: "--allow-privileged=true"
+#    state: present
+#
+#- name: Restart microk8s daemon api server
+#  ansible.builtin.command: systemctl restart snap.microk8s.daemon-apiserver
+
+- name: Start microk8s
+  ansible.builtin.command: microk8s start
+
 - name: Wait for microk8s to start
   ansible.builtin.command: microk8s.status --wait-ready
   changed_when: false
@@ -46,6 +64,13 @@
   failed_when:
     - "'This MicroK8s deployment is acting as a node in a cluster.' not in k8s_microk8sstatus.stdout_lines"
     - k8s_microk8sstatus.rc > 0
+
+
+# single node cluster
+- name: disable microk8s services
+  ansible.builtin.command: "microk8s disable {{ item }}"
+  with_items:
+    - ha-cluster --force # optimize cpu usage on single-node
 
 - name: Start microk8s
   ansible.builtin.command: microk8s start

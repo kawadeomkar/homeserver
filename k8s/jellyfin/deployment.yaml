@@ -22,6 +22,11 @@ spec:
       labels:
         app: jellyfin
     spec:
+      securityContext:
+        runAsUser: 1000 
+        runAsGroup: 1000
+        supplementalGroups:
+          - 122
       volumes:
         - name: fs-jellyfin-config
           persistentVolumeClaim:
@@ -29,6 +34,9 @@ spec:
         - name: fs-jellyfin-data
           persistentVolumeClaim:
             claimName: jellyfin-pvc-data
+        - name: dev-dri-render
+          hostPath:
+            path: "/dev/dri/renderD128"
       containers:
         - env:
             - name: JELLYFIN_PublishedServerUrl
@@ -61,5 +69,7 @@ spec:
               name: fs-jellyfin-config
             - mountPath: /data
               name: fs-jellyfin-data
+            - mountPath: /dev/dri/renderD128
+              name: dev-dri-render
       dnsPolicy: ClusterFirst
       restartPolicy: Always

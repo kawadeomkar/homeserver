@@ -32,14 +32,3 @@
 #   when: inventory_hostname != "{{ item }}" or inventory_hostname == "{{ item }}"
 #   with_items: "{{groups['local_addresses']}}"
 
-- name: Allow privileged for kubelet
-  ansible.builtin.lineinfile:
-    dest: /var/snap/microk8s/current/args/kubelet
-    line: "--allow-privileged=true"
-    state: present
-
-- name: Allow privileged for kube-apiserver
-  ansible.builtin.lineinfile:
-    dest: /var/snap/microk8s/current/args/kube-apiserver
-    line: "--allow-privileged=true"
-    state: present
