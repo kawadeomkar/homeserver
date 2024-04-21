@@ -23,10 +23,9 @@ spec:
         app: jellyfin
     spec:
       securityContext:
-        runAsUser: 1000 
-        runAsGroup: 1000
         supplementalGroups:
           - 122
+          - 123
       volumes:
         - name: fs-jellyfin-config
           persistentVolumeClaim:
@@ -45,7 +44,7 @@ spec:
               value: America/Los_Angeles
           securityContext:
             privileged: true
-          image: ghcr.io/linuxserver/jellyfin
+          image: lscr.io/linuxserver/jellyfin:latest
           imagePullPolicy: Always
           name: jellyfin
           ports:

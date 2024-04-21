@@ -13,6 +13,10 @@ spec:
   accessModes:
     - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
+  nfs:
+    path: /mnt/nvme/store2
+    server: 10.0.0.64
+    readOnly: false
   hostPath:
     path: "/opt/jellyfin/config"
 ---
@@ -28,5 +32,7 @@ spec:
   accessModes:
     - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
-  hostPath:
-    path: "/opt/media/data"
+  nfs:
+    path: /mnt/nvme/store2
+    server: 10.0.0.64
+    readOnly: false

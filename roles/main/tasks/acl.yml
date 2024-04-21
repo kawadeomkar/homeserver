@@ -1,0 +1,9 @@
+---
+- name: Set ACL for user on /opt directory
+  acl:
+    path: /opt
+    entity: "{{ username }}"
+    etype: user
+    permissions: rwx
+    recursive: yes
+    state: present
