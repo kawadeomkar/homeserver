@@ -4,7 +4,7 @@ kind: Deployment
 metadata:
   labels:
     app: jellyfin
-  name: jellyfin # TODO rename
+  name: jellyfin
   namespace: jellyfin
 spec:
   progressDeadlineSeconds: 600
@@ -22,10 +22,11 @@ spec:
       labels:
         app: jellyfin
     spec:
-      securityContext:
-        supplementalGroups:
-          - 122
-          - 123
+      #securityContext:
+      #runAsUser: 1000
+      #  runAsGroup: 1000
+          #supplementalGroups:
+          #- 110 # getent group render | cut -d: -f3
       volumes:
         - name: fs-jellyfin-config
           persistentVolumeClaim:
@@ -40,6 +41,10 @@ spec:
         - env:
             - name: JELLYFIN_PublishedServerUrl
               value: 192.168.1.5
+            - name: PGID
+              value: "1000"
+            - name: PUID
+              value: "1000"
             - name: TZ
               value: America/Los_Angeles
           securityContext:
@@ -60,9 +65,9 @@ spec:
             - containerPort: 7359
               name: discovery-udp
               protocol: UDP
-          resources: {}
           stdin: true
           tty: true
+          resources: {}
           volumeMounts:
             - mountPath: /config
               name: fs-jellyfin-config

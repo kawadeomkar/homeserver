@@ -7,18 +7,16 @@ metadata:
   labels:
     type: local
 spec:
-  storageClassName: manual
+  storageClassName: nfs
   capacity:
-    storage: 1Gi
+    storage: 100Gi
   accessModes:
     - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
   nfs:
-    path: /mnt/nvme/store2
+    path: /mnt/nvme/store/jellyfin/config
     server: 10.0.0.64
     readOnly: false
-  hostPath:
-    path: "/opt/jellyfin/config"
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -26,13 +24,13 @@ metadata:
   name: jellyfin-opt-data
   namespace: jellyfin
 spec:
-  storageClassName: manual
+  storageClassName: nfs
   capacity:
-    storage: 1Ti
+    storage: 2T
   accessModes:
     - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
   nfs:
-    path: /mnt/nvme/store2
+    path: /mnt/nvme/store/jellyfin/data
     server: 10.0.0.64
     readOnly: false

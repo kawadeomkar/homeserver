@@ -5,7 +5,7 @@ metadata:
   name: jellyfin-pvc-config
   namespace: jellyfin
 spec:
-  storageClassName: manual
+  storageClassName: nfs
   volumeName: jellyfin-opt-volume
   accessModes:
     - ReadWriteMany
@@ -13,7 +13,7 @@ spec:
   volumeMode: Filesystem
   resources:
     requests:
-      storage: 1Gi
+      storage: 100Gi
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -21,11 +21,11 @@ metadata:
   name: jellyfin-pvc-data
   namespace: jellyfin
 spec:
-  storageClassName: manual
+  storageClassName: nfs
   volumeName: jellyfin-opt-data
   accessModes:
     - ReadWriteMany
   volumeMode: Filesystem
   resources:
     requests:
-      storage: 1T
+      storage: 2T
