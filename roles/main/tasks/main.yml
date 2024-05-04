@@ -8,6 +8,9 @@
 - name: Pull secrets from environment variables
   ansible.builtin.include_tasks: "env.yml"
 
+- name: Setup NFS share from NAS
+  ansible.builtin.include_tasks: "nfs.yml"
+
 # TODO: depends on k8s ingress config
 # - include_tasks: "ubuntu-ufw.yml"
 #   when: ansible_os_family == "Debian"

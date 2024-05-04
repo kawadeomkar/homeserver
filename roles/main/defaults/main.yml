@@ -17,6 +17,7 @@ packages:
   - conntrack
   - lm-sensors
   - vainfo
+  - nfs-common
 
 # ssh.yml
 ssh_port: 22
