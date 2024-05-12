@@ -4,14 +4,16 @@ kind: PersistentVolume
 metadata:
   name: nextcloud-opt-server-volume
   namespace: nextcloud
-  labels:
-    type: local
 spec:
-  storageClassName: manual
+  storageClassName: nfs
   capacity:
     storage: 1Ti
   accessModes:
     - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
-  hostPath:
-    path: "/opt/nextcloud/server"
+  #hostPath:
+  #  path: "/opt/nextcloud/server"
+  nfs:
+    path: /mnt/nvme/store/nextcloud/server
+    server: 10.0.0.64
+    readOnly: false

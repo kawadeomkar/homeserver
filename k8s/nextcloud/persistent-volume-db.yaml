@@ -7,11 +7,15 @@ metadata:
   labels:
     type: local
 spec:
-  storageClassName: manual
+  storageClassName: nfs
   capacity:
     storage: 1Gi
   accessModes:
     - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
-  hostPath:
-    path: "/opt/nextcloud/db"
+  #hostPath:
+  #  path: "/opt/nextcloud/db"
+  nfs:
+    path: /mnt/nvme/store/nextcloud/db
+    server: 10.0.0.64
+    readOnly: false

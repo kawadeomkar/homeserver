@@ -5,11 +5,11 @@ metadata:
   name: nextcloud-opt-server-claim
   namespace: nextcloud
 spec:
-  storageClassName: manual
+  storageClassName: nfs
   volumeName: nextcloud-opt-server-volume
   accessModes:
     - ReadWriteMany
   volumeMode: Filesystem
   resources:
     requests:
-      storage: 500Gi
+      storage: 1Ti

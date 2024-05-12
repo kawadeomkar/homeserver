@@ -22,7 +22,7 @@ spec:
         app: nextcloud
     spec:
       containers:
-        - image: ghcr.io/linuxserver/nextcloud
+        - image: lscr.io/linuxserver/nextcloud:latest
           name: nextcloud
           imagePullPolicy: Always
           env:
@@ -38,7 +38,9 @@ spec:
             - name: MYSQL_HOST
               value: mariadb
             - name: NEXTCLOUD_TRUSTED_DOMAINS
-              value: "homeserver.internal 10.0.0.36"
+              value: "homeserver.internal 10.0.0.107"
+          securityContext:
+            privileged: true
           envFrom:
             - secretRef:
                 name: nextcloud-db-secret
@@ -49,6 +51,7 @@ spec:
             - containerPort: 80
               name: http
               protocol: TCP
+          resources: {}
           volumeMounts:
             - mountPath: /config
               name: nextcloud

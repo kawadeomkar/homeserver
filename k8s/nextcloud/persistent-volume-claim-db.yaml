@@ -5,7 +5,7 @@ metadata:
   name: nextcloud-opt-claim
   namespace: nextcloud
 spec:
-  storageClassName: manual
+  storageClassName: nfs
   volumeName: nextcloud-opt-volume
   accessModes:
     - ReadWriteMany
