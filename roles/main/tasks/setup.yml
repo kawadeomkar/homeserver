@@ -38,6 +38,11 @@
     name: "{{ packages }}"
     state: present
 
+- name: Ignore PEP 668 - temporary for ubuntu 24
+  ansible.builtin.file:
+    path: /usr/lib/python3.12/EXTERNALLY-MANAGED
+    state: absent
+
 - name: Install pip `community.kubernetes` pre-requisites
   ansible.builtin.pip:
     name:

@@ -21,8 +21,11 @@
     - /opt/dashy/item-icons
     - /opt/grafana/storage
     - /opt/filebrowser
-    - /opt/frigate
+    - /opt/frigate/storage
     - /opt/frigate-db
+    - /photoprism/originals
+    - /photoprism/import
+    - /photoprism/storage
 
 # TODO: Add all config files
 - name: Ensure container service files exist

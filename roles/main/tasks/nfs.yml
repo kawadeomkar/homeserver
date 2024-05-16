@@ -1,0 +1,49 @@
+---
+- name: Create local directory for nfs mount "/mnt/nfs"
+  ansible.builtin.file:
+    path: /mnt/nfs
+    state: directory
+    recurse: true
+
+- name: Add New server to /etc/exports
+  lineinfile:
+    path: /etc/exports
+    create: true
+    insertafter: EOF
+    line: "/mnt/nfs {{ nfs_ip }}(rw,sync,no_root_squash)"
+
+- name: Mount share from nfs
+  ansible.posix.mount:
+    src: "{{ nfs_ip }}:/mnt/nvme/store"
+    path: /mnt/nfs
+    state: mounted
+    fstype: nfs
+
+- name: Create local directory for nfs mount "/mnt/nfs"
+  ansible.builtin.file:
+    path: "/mnt/nfs{{ item }}"
+    state: directory
+    recurse: true
+  loop:
+    - /jellyfin/config
+    - /jellyfin/data
+    - /nextcloud/server
+    - /nextcloud/db
+    - /hass
+    - /portainer
+    - /sabnzbd/config
+    - /sonarr/config
+    - /radarr/config
+    - /prowlarr/config
+    - /jellyseerr/config
+    - /homarr/configs
+    - /homarr/icons
+    - /dashy/item-icons
+    - /grafana/storage
+    - /filebrowser
+    - /frigate/storage
+    - /frigate-db
+    - /photoprism/originals
+    - /photoprism/import
+    - /photoprism/storage
+    - /media/data
