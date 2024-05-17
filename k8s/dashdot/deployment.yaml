@@ -34,7 +34,7 @@ spec:
             - name: DASHDOT_ENABLE_CPU_TEMPS
               value: "true"
             - name: DASHDOT_USE_IMPERIAL
-              value: "true"
+              value: "false"
             - name: DASHDOT_ALWAYS_SHOW_PERCENTAGES
               value: "true"
             - name: DASHDOT_WIDGET_LIST
@@ -43,6 +43,7 @@ spec:
               value: "true"
           securityContext:
             privileged: true
+          resources: {}
           volumeMounts:
             - mountPath: /mnt/host
               name: dash-claim0

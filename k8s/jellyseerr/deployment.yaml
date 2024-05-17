@@ -31,6 +31,7 @@ spec:
               value: "1000"
             - name: TZ
               value: America/Los_Angeles
+          resources: {}
           volumeMounts:
             - mountPath: /app/config
               name: jellyseerr

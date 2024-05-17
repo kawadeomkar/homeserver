@@ -54,6 +54,7 @@ spec:
               path: /
               port: 9443
               scheme: HTTPS
+          resources: {}
           volumeMounts:
             - name: data
               mountPath: /data

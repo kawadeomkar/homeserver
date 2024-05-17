@@ -32,6 +32,7 @@ spec:
               protocol: UDP
           securityContext:
             privileged: true
+          resources: {}
           volumeMounts:
             - mountPath: /etc/localtime
               name: localtime
