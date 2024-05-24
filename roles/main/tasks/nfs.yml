@@ -4,6 +4,9 @@
     path: /mnt/nfs
     state: directory
     recurse: true
+    #owner: "{{ username }}"
+    #group: "{{ username }}"
+    #mode: "0644"
 
 - name: Add New server to /etc/exports
   lineinfile:
@@ -19,14 +22,15 @@
     state: mounted
     fstype: nfs
 
-- name: Create local directory for nfs mount "/mnt/nfs"
+- name: Create package directory for nfs mount "/mnt/nfs"
   ansible.builtin.file:
     path: "/mnt/nfs{{ item }}"
     state: directory
     recurse: true
+    #owner: "{{ username }}"
+    #group: "{{ username }}"
+    #mode: "0644"
   loop:
-    - /jellyfin/config
-    - /jellyfin/data
     - /nextcloud/server
     - /nextcloud/db
     - /hass

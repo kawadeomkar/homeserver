@@ -3,6 +3,9 @@
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
+    owner: "{{ username }}"
+    group: "{{ username }}"
+    mode: "0644"
     recurse: true
   loop:
     - /opt/hass
