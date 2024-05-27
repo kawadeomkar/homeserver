@@ -6,13 +6,11 @@ metadata:
   namespace: nextcloud
   labels:
     app: nextcloud-db-service
-    kubernetes.io/name: "nextcloud-db-service"
 spec:
-  type: NodePort
+  type: ClusterIP
   selector:
-    pod-label: nextcloud-db-pod
+    app: nextcloud-db
   ports:
     - name: mysql
       protocol: TCP
       port: 3306
-      nodePort: 30015

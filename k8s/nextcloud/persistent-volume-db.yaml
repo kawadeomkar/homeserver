@@ -9,7 +9,7 @@ metadata:
 spec:
   storageClassName: nfs
   capacity:
-    storage: 1Gi
+    storage: 5Gi
   accessModes:
     - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
@@ -17,5 +17,5 @@ spec:
   #  path: "/opt/nextcloud/db"
   nfs:
     path: /mnt/nvme/store/nextcloud/db
-    server: 10.0.0.64
+    server: truenas.local
     readOnly: false

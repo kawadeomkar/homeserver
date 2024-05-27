@@ -11,18 +11,24 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      pod-label: nextcloud-db-pod
+      app: nextcloud-db
+  strategy:
+    type: Recreate
   template:
     metadata:
-      labels:
-        pod-label: nextcloud-db-pod
+      labels: 
+        app: nextcloud-db
     spec:
       terminationGracePeriodSeconds: 1800
       containers:
-        - name: mariadb
-          image: linuxserver/mariadb
+        - name: nextcloud-mariadb
+          image: linuxserver/mariadb:latest
           ports:
             - containerPort: 3306
+          #args:
+          #  - --transaction-isolation=READ-COMMITTED
+          #  - --binlog-format=ROW
+          #  - --max-connections=1000
           imagePullPolicy: Always
           env:
             - name: PGID
@@ -34,6 +40,8 @@ spec:
           envFrom:
             - secretRef:
                 name: nextcloud-db-secret
+          securityContext:
+            privileged: true
           volumeMounts:
             - name: nextcloud-db-storage
               mountPath: /config
