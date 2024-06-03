@@ -26,12 +26,18 @@
 
 # Setup subnet routing
 
+- name: Check if /etc/sysctl.d directory exists
+  stat:
+    path: /etc/sysctl.d
+  register: tailscale_conf
+
 - name: Ensure net.ipv4.ip_forward is set to 1 in /etc/sysctl.d/99-tailscale.conf
   lineinfile:
     path: /etc/sysctl.d/99-tailscale.conf
     line: 'net.ipv4.ip_forward = 1'
     state: present
-    create: yes 
+    create: yes
+  when: tailscale_conf.stat.exists 
   
 - name: Ensure net.ipv6.conf.all.forwarding is set to 1 in /etc/sysctl.d/99-tailscale.conf
   lineinfile:
@@ -39,6 +45,11 @@
     line: 'net.ipv6.conf.all.forwarding = 1'
     state: present
     create: yes
+  when: tailscale_conf.stat.exists
+
+- name: Apply sysctl settings from /etc/sysctl.d/99-tailscale.conf
+  command: sysctl -p /etc/sysctl.d/99-tailscale.conf
+  when: tailscale_conf.stat.exists
 
 # Rerun the commands above for `sysctl.conf` if file exists
 
@@ -46,7 +57,6 @@
   stat:
     path: /etc/sysctl.conf
   register: sysctl_conf
-
 
 - name: Ensure net.ipv4.ip_forward IP forwarding is enabled in sysctl conf
   lineinfile:
@@ -56,7 +66,6 @@
     state: present
   when: sysctl_conf.stat.exists
 
-
 - name: Ensure IPv6 forwarding is enabled in sysctl conf
   lineinfile:
     path: /etc/sysctl.conf
@@ -65,8 +74,11 @@
     state: present
   when: sysctl_conf.stat.exists
 
-- name: Apply sysctl settings from /etc/sysctl.d/99-tailscale.conf
-  command: sysctl -p /etc/sysctl.d/99-tailscale.conf
+- name: Apply sysctl settings from /etc/sysctl.conf
+  command: sysctl -p /etc/sysctl.conf
+  when: sysctl_conf.stat.exists
+
+# Start tailscale client
 
 - name: Connect, authenticate machine to tailnet and advertise routes with tailscale
   ansible.builtin.command: >
