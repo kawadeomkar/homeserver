@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: photoprism-mariadb-service
+  namespace: photoprism
+  labels:
+    app: photoprism-mariadb-service
+spec:
+  type: ClusterIP
+  selector:
+    app: photoprism-mariadb
+  ports:
+    - name: mysql
+      protocol: TCP
+      port: 3306

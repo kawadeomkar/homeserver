@@ -37,25 +37,19 @@ spec:
           name: http
         volumeMounts:
         - mountPath: /photoprism/originals
-          name: originals
+          name: photoprism
+          subPath: /originals
         - mountPath: /photoprism/import
-          name: import
+          name: photoprism
+          subPath: /import
         - mountPath: /photoprism/storage
-          name: storage
+          name: photoprism
+          subPath: /storage
         readinessProbe:
           httpGet:
             path: /api/v1/status
             port: http
       volumes:
-      - name: originals
-        nfs:
-          path: /originals
-          server: my.nas.host
-      - name: import
-        nfs:
-          path: /import
-          server: my.nas.host
-      - name: storage
-        nfs:
-          path: /storage
-          server: my.nas.host
+        - name: photoprism
+          persistentVolumeClaim:
+            claimName: photoprism-opt-server-claim

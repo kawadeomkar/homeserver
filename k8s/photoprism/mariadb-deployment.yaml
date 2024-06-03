@@ -1,0 +1,45 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: photoprism-mariadb
+  namespace: photoprism
+  labels:
+    app: photoprism-mariadb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: photoprism-mariadb
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: photoprism-mariadb
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: photoprism-mariadb
+          image: mariadb:latest
+          ports:
+            - containerPort: 3306
+          args:
+            - --transaction-isolation=READ-COMMITTED
+            - --binlog-format=ROW
+            - --max-connections=1000
+          envFrom:
+            - secretRef:
+                name: photoprism-db-secret
+          resources: {}
+          volumeMounts:
+            - mountPath: /var/lib/mysql
+              name: photoprism-db-storage
+      restartPolicy: Always
+      volumes:
+        - name: photoprism-db-storage
+          persistentVolumeClaim:
+            claimName: photoprism-opt-claim

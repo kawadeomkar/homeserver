@@ -1,0 +1,19 @@
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: photoprism-opt-server-volume
+  namespace: photoprism
+spec:
+  storageClassName: nfs
+  capacity:
+    storage: 1Ti
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  #hostPath:
+  #  path: "/opt/nextcloud/server"
+  nfs:
+    path: /mnt/nvme/store/photoprism/
+    server: 10.0.0.64
+    readOnly: false
