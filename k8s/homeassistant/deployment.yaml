@@ -18,15 +18,25 @@ spec:
       labels:
         app: homeassistant
     spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
         - image: ghcr.io/home-assistant/home-assistant:stable
           name: homeassistant
+          resources: {}
           ports:
             - name: http
               containerPort: 8123
               protocol: TCP
           securityContext:
             privileged: true
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_RAW
+                - NET_BROADCAST
           volumeMounts:
             - mountPath: /config
               name: homeassistant-opt-volume

@@ -7,14 +7,19 @@ metadata:
   labels:
     type: local
 spec:
-  storageClassName: manual
+  storageClassName: nfs
   capacity:
     storage: 10Gi
   accessModes:
     - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
-  hostPath:
-    path: "/opt/hass"
+#  hostPath:
+#    path: "/opt/hass"
+  nfs:
+    path: /mnt/nvme/store/hass
+    server: truenas.local
+    readOnly: false
+
 
 # TODO: Add DNS hostnames 
 #  nodeAffinity:
@@ -35,10 +40,10 @@ metadata:
     io.kompose.service: homeassistant-opt-claim
 spec:
   volumeName: homeassistant-opt-volume
-  storageClassName: manual
+  storageClassName: nfs
   accessModes:
     - ReadWriteMany
   resources:
     requests:
-      storage: 1Gi
+      storage: 10Gi
 status: {}
