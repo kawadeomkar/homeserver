@@ -58,7 +58,7 @@
     path: /etc/sysctl.conf
   register: sysctl_conf
 
-- name: Ensure net.ipv4.ip_forward IP forwarding is enabled in sysctl conf
+- name: Ensure net.ipv4.ip_forward is set to 1 in /etc/sysctl.conf
   lineinfile:
     path: /etc/sysctl.conf
     regexp: '^net.ipv4.ip_forward'
@@ -66,7 +66,7 @@
     state: present
   when: sysctl_conf.stat.exists
 
-- name: Ensure IPv6 forwarding is enabled in sysctl conf
+- name: Ensure net.ipv6.conf.all.forwarding is set to 1 in /etc/sysctl.conf
   lineinfile:
     path: /etc/sysctl.conf
     regexp: '^net.ipv6.conf.all.forwarding'
