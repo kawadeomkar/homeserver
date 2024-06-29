@@ -50,8 +50,3 @@
       - pyyaml
       - kubernetes
 
-- name: Copy kubernetes manifest files to homeserver
-  ansible.builtin.copy:
-    src: ./k8s
-    dest: /
-    mode: "0644"
