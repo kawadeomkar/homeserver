@@ -4,8 +4,7 @@
     path: "{{ item }}"
     state: directory
     owner: "{{ username }}"
-    group: "{{ username }}"
-    mode: "0644"
+    mode: "0755"
     recurse: true
   loop:
     - /opt/hass
@@ -26,18 +25,19 @@
     - /opt/filebrowser
     - /opt/frigate/storage
     - /opt/frigate-db
-    - /photoprism/originals
-    - /photoprism/import
-    - /photoprism/storage
+    - /opt/photoprism/originals
+    - /opt/photoprism/import
+    - /opt/photoprism/storage
+    - /opt/photoprism/db
 
 # TODO: Add all config files
-- name: Ensure container service files exist
-  ansible.builtin.copy:
-    content: ""
-    dest: "{{ item }}"
-    force: false
-    group: sys
-    owner: root
-    mode: 0555
-  loop:
-    - /opt/dashy/config.yml
+# - name: Ensure container service files exist
+#   ansible.builtin.copy:
+#     content: ""
+#     dest: "{{ item }}"
+#     force: false
+#     group: sys
+#     owner: root
+#     mode: 0555
+#   loop:
+#     - /opt/dashy/config.yml
