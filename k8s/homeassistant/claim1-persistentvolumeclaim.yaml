@@ -1,16 +1,2 @@
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  namespace: homeassistant
-  creationTimestamp: null
-  labels:
-    io.kompose.service: homeassistant-claim1
-  name: homeassistant-claim1
-spec:
-  accessModes:
-    - ReadWriteMany
-  resources:
-    requests:
-      storage: 10Mi
-status: {}
+# Deprecated: this PVC was a kompose artifact used to mount /etc/localtime.
+# Replaced by a hostPath volume in deployment.yaml.

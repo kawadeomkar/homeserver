@@ -54,7 +54,7 @@ homeserver_repo_path: /homeserver
 python_externally_managed_path: /usr/lib/python3.12/EXTERNALLY-MANAGED
 
 # Kubernetes
-k8s_manifests_path: /k8s
+k8s_manifests_path: "{{ homeserver_repo_path }}/k8s"
 k8s_wait_timeout: 300s
 k3s_version: ""  # empty string installs latest stable
 metallb_cidr: 192.168.1.0/24

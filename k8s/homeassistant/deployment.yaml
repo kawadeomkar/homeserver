@@ -41,15 +41,14 @@ spec:
             - mountPath: /config
               name: homeassistant-opt-volume
             - mountPath: /etc/localtime
-              name: homeassistant-claim1
+              name: localtime
               readOnly: true
       restartPolicy: Always
       volumes:
         - name: homeassistant-opt-volume
           persistentVolumeClaim:
             claimName: homeassistant-opt-claim
-        - name: homeassistant-claim1
-          persistentVolumeClaim:
-            claimName: homeassistant-claim1
-            readOnly: true
-status: {}
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+            type: File

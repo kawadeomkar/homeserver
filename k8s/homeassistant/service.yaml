@@ -8,19 +8,11 @@ metadata:
     app: homeassistant
     kubernetes.io/name: "homeassistant"
 spec:
-  # TODO: Currently the only way to expose service with IP
-  # Using NodePort to access with IP Address
-  type: NodePort
+  type: ClusterIP
   ports:
     - name: http
       protocol: TCP
       port: 8123
       targetPort: 8123
-      nodePort: 30002
-      #    - name: https
-      #      port: 443
-      #      protocol: TCP
-      #      targetPort: 8123
-      #      nodePort: 30003
   selector:
     app: homeassistant
