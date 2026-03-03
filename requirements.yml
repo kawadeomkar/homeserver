@@ -2,8 +2,13 @@
 roles:
   - name: geerlingguy.docker
     version: 7.0.2
+
 collections:
   - name: community.general
     version: 6.6.0
+
+  - name: ansible.posix
+    version: 2.1.0
+
   - name: kubernetes.core
     version: 2.4.0

@@ -7,20 +7,20 @@
     state: present
     validate: "sshd -T -f %s"
     mode: "0644"
-  with_items:
-    - regexp: "^#PasswordAuthentication"
+  loop:
+    - regexp: "^#?PasswordAuthentication"
       line: "PasswordAuthentication no"
-    - regexp: "^PermitRootLogin"
+    - regexp: "^#?PermitRootLogin"
       line: "PermitRootLogin no"
-    - regexp: "^Port"
+    - regexp: "^#?Port"
       line: "Port {{ ssh_port }}"
-    - regexp: "^UseDNS"
+    - regexp: "^#?UseDNS"
       line: "UseDNS no"
-    - regexp: "^PermitEmptyPasswords"
+    - regexp: "^#?PermitEmptyPasswords"
       line: "PermitEmptyPasswords no"
-    - regexp: "^ChallengeResponseAuthentication"
-      line: "ChallengeResponseAuthentication no"
-  notify: restart ssh daemon
+    - regexp: "^#?KbdInteractiveAuthentication"
+      line: "KbdInteractiveAuthentication no"
+  notify: restart_ssh_daemon
 
 - name: Add configured users allowed to connect over ssh
   ansible.builtin.lineinfile:
@@ -32,4 +32,4 @@
     validate: "sshd -T -f %s"
     mode: "0644"
   when: security_ssh_allowed_users | length > 0
-  notify: restart ssh daemon
+  notify: restart_ssh_daemon

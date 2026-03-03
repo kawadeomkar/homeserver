@@ -1,7 +1,7 @@
 ---
 - name: Create .kube folder
   ansible.builtin.file:
-    path: ~/.kube
+    path: "/home/{{ username }}/.kube"
     state: directory
     owner: "{{ username }}"
     group: "{{ username }}"
@@ -9,7 +9,7 @@
 
 - name: Add bash completion for kubectl
   ansible.builtin.lineinfile:
-    path: "$HOME/.bashrc"
+    path: "/home/{{ username }}/.bashrc"
     regexp: '^source <\(kubectl completion bash'
     line: "source <(kubectl completion bash)"
     state: present
@@ -31,4 +31,3 @@
 #   register: etchostsupdate
 #   when: inventory_hostname != "{{ item }}" or inventory_hostname == "{{ item }}"
 #   with_items: "{{groups['local_addresses']}}"
-

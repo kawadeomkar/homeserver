@@ -13,7 +13,7 @@
 #     proto: any
 #     policy: deny
 #   notify:
-#   - reload ufw
+#   - reload_ufw
 
 - name: UFW allow outgoing
   community.general.ufw:
@@ -21,7 +21,7 @@
     proto: any
     policy: allow
   notify:
-    - reload ufw
+    - reload_ufw
 
 # TODO:
 # - name: UFW configure ports
@@ -38,14 +38,14 @@
 #     log: "{{ item.log | default(false) }}"
 #     comment: "{{ item.comment | default(omit) }}"
 #   with_items: "{{ ufw_rules }}"
-#   notify: reload ufw
+#   notify: reload_ufw
 
 - name: UFW allow ssh
   community.general.ufw:
     rule: allow
     name: OpenSSH
   notify:
-    - reload ufw
+    - reload_ufw
 
 - name: Enable UFW
   community.general.ufw:

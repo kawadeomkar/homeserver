@@ -20,10 +20,16 @@
     # only on initial user create
     update_password: on_create
 
+- name: Add authorized SSH key for "{{ username }}"
+  ansible.posix.authorized_key:
+    user: "{{ username }}"
+    state: present
+    key: "{{ lookup('file', ssh_public_key_file) }}"
+
 - name: passwordless sudo for "{{ username }}"
   ansible.builtin.lineinfile:
     dest: "/etc/sudoers"
-    regexp: "^%wheel"
+    regexp: "^{{ username }}"
     line: "{{ username }} ALL=(ALL) NOPASSWD: ALL"
     validate: "/usr/sbin/visudo -cf %s"
 

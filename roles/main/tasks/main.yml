@@ -5,7 +5,7 @@
 - name: Setup SSH configuration
   ansible.builtin.include_tasks: "ssh.yml"
 
-- name: Pull secrets from environment variables
+- name: Write secrets to system environment
   ansible.builtin.include_tasks: "env.yml"
 
 - name: Setup tailscale

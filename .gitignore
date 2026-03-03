@@ -20,6 +20,12 @@ k8s/cert-manager/cert-manager-1.4.0.yaml
 roles/geerlingguy.docker
 .vagrant
 
+# Ansible Vault password files - never commit these
+.vault_pass
+.vault_pass*
+vault_password
+vault_password_file
+
 # Try tyo avoid any plain-text passwords 
 *pwd*
 *pass*
