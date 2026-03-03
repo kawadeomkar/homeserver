@@ -22,6 +22,9 @@ packages:
 # env.yml
 is_hosting_music_bot: false
 
+# nfs.yml
+is_nfs: false
+
 # ssh.yml
 ssh_port: 22
 ssh_public_key_file: "~/.ssh/hs.pub"

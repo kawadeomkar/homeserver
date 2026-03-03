@@ -2,5 +2,5 @@
 
 - name: start containers
   ansible.builtin.command: >
-    docker compose -f /homeserver/docker/docker-compose.yml up -d
+    docker compose -f {{ homeserver_repo_path }}/docker/docker-compose.yml up -d
   changed_when: false

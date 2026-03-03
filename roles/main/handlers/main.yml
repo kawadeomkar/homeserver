@@ -1,10 +1,10 @@
 ---
-- name: restart ssh daemon
+- name: restart_ssh_daemon
   ansible.builtin.service:
     name: ssh
     state: restarted
 
 # Debian based
-- name: reload ufw
+- name: reload_ufw
   community.general.ufw:
     state: reloaded

@@ -6,29 +6,7 @@
     owner: "{{ username }}"
     mode: "0755"
     recurse: true
-  loop:
-    - /opt/hass
-    - /opt/portainer
-    - /opt/media/data
-    - /opt/sabnzbd/config
-    - /opt/jellyfin/config
-    - /opt/sonarr/config
-    - /opt/radarr/config
-    - /opt/prowlarr/config
-    - /opt/jellyseerr/config
-    - /opt/nextcloud/db
-    - /opt/nextcloud/server
-    - /opt/homarr/configs
-    - /opt/homarr/icons
-    - /opt/dashy/item-icons
-    - /opt/grafana/storage
-    - /opt/filebrowser
-    - /opt/frigate/storage
-    - /opt/frigate-db
-    - /opt/photoprism/originals
-    - /opt/photoprism/import
-    - /opt/photoprism/storage
-    - /opt/photoprism/db
+  loop: "{{ service_dirs | map('regex_replace', '^', services_base_dir + '/') | list }}"
 
 # TODO: Add all config files
 # - name: Ensure container service files exist
@@ -40,4 +18,4 @@
 #     owner: root
 #     mode: 0555
 #   loop:
-#     - /opt/dashy/config.yml
+#     - "{{ services_base_dir }}/dashy/config.yml"

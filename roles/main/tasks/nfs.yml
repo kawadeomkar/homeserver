@@ -1,7 +1,7 @@
 ---
-- name: Create local directory for nfs mount "/mnt/nfs"
+- name: Create local directory for nfs mount "{{ nfs_path }}"
   ansible.builtin.file:
-    path: /mnt/nfs
+    path: "{{ nfs_path }}"
     state: directory
     recurse: true
     #owner: "{{ username }}"
@@ -13,43 +13,22 @@
     path: /etc/exports
     create: true
     insertafter: EOF
-    line: "/mnt/nfs {{ nfs_ip }}(rw,sync,no_root_squash)"
+    line: "{{ nfs_path }} {{ nfs_ip }}(rw,sync,no_root_squash)"
 
 - name: Mount share from nfs
   ansible.posix.mount:
-    src: "{{ nfs_ip }}:/mnt/nvme/store"
-    path: /mnt/nfs
+    src: "{{ nfs_ip }}:{{ nfs_src_path }}"
+    path: "{{ nfs_path }}"
     opts: rw,vers=4.1
     fstype: nfs
     state: mounted
 
-- name: Create package directory for nfs mount "/mnt/nfs"
+- name: Create package directory for nfs mount "{{ nfs_path }}"
   ansible.builtin.file:
-    path: "/mnt/nfs{{ item }}"
+    path: "{{ nfs_path }}{{ item }}"
     state: directory
     recurse: true
-    owner: 1000
-    group: 1000
+    owner: "{{ nfs_owner_uid }}"
+    group: "{{ nfs_owner_gid }}"
     mode: "0755"
-  loop:
-    - /nextcloud/server
-    - /nextcloud/db
-    - /hass
-    - /portainer
-    - /sabnzbd/config
-    - /sonarr/config
-    - /radarr/config
-    - /prowlarr/config
-    - /jellyseerr/config
-    - /homarr/configs
-    - /homarr/icons
-    - /dashy/item-icons
-    - /grafana/storage
-    - /filebrowser
-    - /frigate/storage
-    - /frigate-db
-    - /photoprism/originals
-    - /photoprism/import
-    - /photoprism/storage
-    - /photoprism/db
-    - /media/data
+  loop: "{{ service_dirs | map('regex_replace', '^', '/') | list }}"

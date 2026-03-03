@@ -20,6 +20,7 @@
 
 - name: Setup NFS share from NAS
   ansible.builtin.include_tasks: "nfs.yml"
+  when: is_nfs
 
 
 - name: Install fail2ban

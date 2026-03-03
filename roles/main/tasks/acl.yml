@@ -1,7 +1,7 @@
 ---
 - name: Set ACL for user on /opt directory
   acl:
-    path: /opt
+    path: "{{ services_base_dir }}"
     entity: "{{ username }}"
     etype: user
     permissions: rwx
