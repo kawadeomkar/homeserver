@@ -1,23 +1,32 @@
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: DaemonSet
 metadata:
   name: node-exporter
   namespace: monitoring
   labels:
     app: node-exporter
 spec:
-  replicas: 1
   selector:
     matchLabels:
       app: node-exporter
-  strategy:
-    type: Recreate
+  updateStrategy:
+    type: RollingUpdate
   template:
     metadata:
       labels:
         app: node-exporter
     spec:
+      # Control-plane nodes are tainted by default (Talos included), so without
+      # these a per-node exporter silently skips them — and `kubectl get ds`
+      # still looks healthy, because DESIRED counts only schedulable nodes.
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
       containers:
         - name: node-exporter
           image: quay.io/prometheus/node-exporter
