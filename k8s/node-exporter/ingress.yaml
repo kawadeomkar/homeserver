@@ -3,7 +3,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: node-exporter-ingress
-  namespace: monitoring
+  namespace: kube-system
 spec:
   rules:
     - host: node-exporter.homeserver.internal
