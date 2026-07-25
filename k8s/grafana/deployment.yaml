@@ -18,20 +18,18 @@ spec:
         app: grafana
     spec:
       securityContext:
-        #fsGroup: 472
-        #runAsGroup: 472
-        #runAsNonRoot: true
-        runAsUser: 0
-        supplementalGroups:
-          - 0
+        # grafana/grafana ships as uid 472; fsGroup lets it write the hostPath PV
+        # without running as root. The values below were already here, commented out.
+        fsGroup: 472
+        runAsGroup: 472
+        runAsUser: 472
+        runAsNonRoot: true
       containers:
         - name: grafana
           image: grafana/grafana:latest
           env:
-            - name: PGID
-              value: "1000"
-            - name: PUID
-              value: "1000"
+            # NOTE: PUID/PGID were removed — those are a LinuxServer.io convention and
+            # grafana/grafana is not an lsio image, so they were never read.
             - name: TZ
               value: America/Los_Angeles
           ports:

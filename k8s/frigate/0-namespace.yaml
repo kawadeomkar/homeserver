@@ -4,4 +4,5 @@ kind: Namespace
 metadata:
   name: frigate
   labels:
+    pod-security.kubernetes.io/enforce: privileged
     name: frigate
