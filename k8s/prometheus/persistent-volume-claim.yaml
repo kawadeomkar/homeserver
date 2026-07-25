@@ -1,0 +1,35 @@
+---
+# Prometheus kept its TSDB in an emptyDir, so every metric was lost on pod
+# restart while Grafana's dashboards had a 10Gi PersistentVolume — durability
+# exactly inverted. `storageClassName: manual` + hostPath matches how grafana's
+# PV is declared in this repo; on Talos this becomes a CSI-provisioned claim
+# (K8S-4/K8S-9), which is why the size is modest.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: prometheus-storage-volume
+  labels:
+    type: local
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 20Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: "/opt/prometheus"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-storage-claim
+  namespace: monitoring
+spec:
+  volumeName: prometheus-storage-volume
+  storageClassName: manual
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
