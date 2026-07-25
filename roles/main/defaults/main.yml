@@ -13,7 +13,9 @@ packages:
   - net-tools
   - wireshark
   - nmap
-  # Minikube <1.23
+  # conntrack: required by kube-proxy. The comment here used to attribute it to
+  # "Minikube <1.23" — two migrations out of date, and misleading enough that it
+  # invites deleting the package as minikube residue and breaking k3s networking.
   - conntrack
   - lm-sensors
   - vainfo

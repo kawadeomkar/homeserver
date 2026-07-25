@@ -1,189 +1,140 @@
 # homeserver
 
-Ansible playbook for provisioning and configuring a personal homeserver running Ubuntu. Manages system setup, SSH hardening, Docker, Kubernetes (k3s), and optional services.
+Ansible control-node repo that provisions one Ubuntu homeserver and runs ~20 self-hosted services on
+single-node k3s. Two layers: Ansible for host configuration, hand-maintained Kubernetes manifests for the
+workloads. Bulk storage lives on a separate TrueNAS box over NFS; the host is reached over Tailscale.
+
+> **Status: nothing here is currently deployed.** The cluster has been through minikube → microk8s → k3s
+> and is heading to **Proxmox + Talos Linux** next, so the Ansible layer is expected to be replaced rather
+> than extended. See `CLAUDE.md` for the detailed architecture, the known landmines, and what survives
+> that migration.
 
 ## Requirements
 
-- Ansible >= 2.12
-- Python 3
-- SSH key at `~/.ssh/hs` with access to the target host
-- Ansible Vault password (for secrets)
+- Ansible >= 2.12 and Python 3
+- SSH key at `~/.ssh/hs` (public half installed by the `main` role from `~/.ssh/hs.pub`)
+- The Ansible Vault password in `./.vault_pass` — `ansible.cfg` points at it, so `--ask-vault-pass` is
+  never needed locally
+- An `inventory` file. It is **gitignored** (it holds a Tailscale address, and this repo is public), so a
+  fresh clone must recreate it:
 
-Install role and collection dependencies:
+  ```ini
+  [homeserver]
+  <tailscale-ip>
+  ```
 
 ```bash
-ansible-galaxy install -r requirements.yml
+ansible-galaxy install -r requirements.yml   # geerlingguy.docker + community.general, ansible.posix, kubernetes.core
 ```
 
-## Project Structure
+## Usage
+
+```bash
+ansible-playbook playbook.yaml                 # full run: main → geerlingguy.docker → k8s
+ansible-playbook playbook.yaml --tags setup    # base system + docker only
+ansible-playbook playbook.yaml --tags k8s      # k3s install + provision only
+ansible-playbook playbook.yaml --check         # dry run
+ansible-playbook playbook.yaml --syntax-check
+ansible-playbook setup-playbook.yml            # the k8s role on its own
+```
+
+`setup` and `k8s` are the only tags that exist (`playbook.yaml:6-12`). There is no per-task tagging, so a
+narrower run needs `--start-at-task` or a temporary playbook.
+
+Secrets: `ansible-vault edit group_vars/all/vault.yml`. Kubernetes Secrets are **not** kept there — see
+`k8s/README-secrets.md`.
+
+### Linting
+
+```bash
+yamllint .
+ansible-lint playbook.yaml
+kubeconform -summary -ignore-missing-schemas $(find k8s -name '*.yaml')
+```
+
+There is no CI, so none of this runs automatically. `kubeconform` is the only one of the three that
+currently works on a typical checkout — see the toolchain note in `CLAUDE.md`.
+
+The helper scripts (`run_tests.sh`, `run_vagrant.sh`, `run_homeserver.sh`) are **broken**: they reference
+`playbook.yml` (the file is `playbook.yaml`), and `run_tests.sh` passes `--check-syntax` rather than
+`--syntax-check`. Use the commands above instead.
+
+## Layout
 
 ```
-.
-├── ansible.cfg
-├── inventory
-├── playbook.yml
-├── requirements.yml
-├── group_vars/
-│   └── all/
-│       ├── vars.yml        # plain variables
-│       └── vault.yml       # ansible-vault encrypted secrets
-├── roles/
-│   ├── main/               # base system configuration
-│   ├── containers/         # docker container management
-│   └── k8s/                # k3s + kubectl setup
-├── docker/
-│   └── docker-compose.yml  # Home Assistant
-└── k8s/                    # kubernetes manifests
+playbook.yaml            main → geerlingguy.docker → k8s
+setup-playbook.yml       k8s role alone
+group_vars/all/          vars.yml (plain) + vault.yml (encrypted)
+roles/main/              host configuration — one task file per concern
+roles/k8s/               k3s install + `kubectl apply` of the manifests
+roles/geerlingguy.docker galaxy-installed, gitignored — never edit
+roles/containers/        legacy docker-compose, unreferenced by playbook.yaml
+k8s/                     one directory per service (+ 00-namespaces/ for shared ones)
+docker/certbot/          leftover; the docker-compose.yml it belonged to is gone
 ```
 
 ## Roles
 
-### `main`
+### `main` — host configuration
 
-Base system provisioning. Runs on all hosts.
+`tasks/main.yml` dispatches one include per concern, gated on variables rather than tags:
 
-| Task file        | Description                                      |
-|------------------|--------------------------------------------------|
-| `setup.yml`      | Creates user, installs packages, clones repo     |
-| `ssh.yml`        | Hardens sshd\_config, restricts allowed users    |
-| `env.yml`        | Writes secrets to `/etc/environment`             |
-| `fail2ban.yml`   | Installs and enables fail2ban (Debian only)      |
-| `ubuntu-ufw.yml` | Configures UFW firewall (currently disabled)     |
+| Task file | Gate | Notes |
+|---|---|---|
+| `setup.yml` | always | user + groups, passwordless sudo, apt upgrade, packages, pip k8s libs |
+| `ssh.yml` | always | hardens `sshd_config`, `AllowUsers`, validates with `sshd -T` |
+| `env.yml` | `is_hosting_music_bot` | writes `DISCORD_TOKEN` to `/etc/environment` |
+| `tailscale.yml` | `tailscale_auth_key is defined` | subnet router + exit node; IP forwarding sysctls |
+| `filesystem.yml` | always | creates `/opt/<service_dirs>` |
+| `nfs.yml` | `is_nfs` (default false) | mounts the NAS and mirrors `service_dirs` onto it |
+| `fail2ban.yml` | Debian | installs only; jail config is a TODO |
+
+Not wired in: `ubuntu-ufw.yml` (deferred until ingress ports settle), `setup-pihole.yml` (needs router
+DNS), `acl.yml` (unreferenced).
+
+`tailscale_auth_key` and `tailscale_advertise_routes` are undefined in plain vars — they must come from
+vault or `-e`, and the whole include is skipped silently if the key is absent.
+
+**This role does not clone the repo onto the target.** Nothing does; see below.
+
+### `k8s` — workloads
+
+`install_k3s` → `setup` → `provision`. `provision.yml` applies `k8s/00-namespaces/` first, then one
+`kubectl apply -f` per service directory, then waits for all pods.
+
+**`k8s_manifests_path` is `/homeserver/k8s` on the target host, not this working copy**, and no task syncs
+it. Local manifest edits therefore have no effect until that server-side checkout is updated by hand. This
+is the most common reason a manifest change appears to do nothing.
+
+Adding a directory under `k8s/` does not deploy it — it needs a `provision.yml` entry too.
+`install_helm.yml` and `teardown.yml` exist but are deliberately not included by `main.yml`.
 
 ### `containers`
 
-Manages Docker container filesystem layout and starts services via `docker-compose`.
-
-> **Note:** This role is currently commented out in `playbook.yml`.
-
-### `k8s`
-
-Installs k3s and configures `kubectl` for the provisioned user. Also adds bash completion.
+Legacy docker-compose role, unreferenced by `playbook.yaml`. The `docker-compose.yml` it invokes no longer
+exists.
 
 ## Configuration
 
-All configurable variables are listed below, grouped by their source file.
+Variables live in three places, deliberately:
 
----
+- `group_vars/all/vars.yml` — cross-role values: paths, NFS settings, `service_dirs`, k8s settings
+- `group_vars/all/vault.yml` — encrypted secrets, surfaced by indirection
+  (`discord_token: "{{ vault_discord_token }}"`)
+- `roles/<role>/defaults/main.yml` — role tunables (`packages`, `ssh_port`, `is_nfs`, `ufw_rules`, …)
 
-### `ansible.cfg`
+Rather than duplicating those tables here (they drifted last time), read the files — they are short and
+commented. `ansible.cfg` pins `ansible_user = omkar`, `private_key_file = ~/.ssh/hs`, and
+`vault_password_file = ./.vault_pass`.
 
-| Setting              | Section          | Value              | Description                                          |
-|----------------------|------------------|--------------------|------------------------------------------------------|
-| `INVENTORY`          | `[defaults]`     | `inventory`        | Path to the inventory file                           |
-| `roles_path`         | `[defaults]`     | `./roles`          | Directory Ansible looks for roles in                 |
-| `private_key_file`   | `[defaults]`     | `~/.ssh/hs`        | SSH private key used to connect to hosts             |
-| `ansible_user`       | `[defaults]`     | `omkar`            | Remote user for SSH connections                      |
-| `pipelining`         | `[ssh_connections]` | `true`          | Reduces SSH operations by reusing connections        |
+Note several declared variables are inert: `metallb_cidr`, `lan_subnet`/`lan_base`, and `is_prod_run` are
+referenced by no task.
 
----
-
-### `group_vars/all/vars.yml`
-
-Plain variables applied to all hosts. Override per-host in `host_vars/<host>/` or per-group in additional `group_vars/` files.
-
-| Variable                    | Default                            | Description                                        |
-|-----------------------------|------------------------------------|----------------------------------------------------|
-| `shell`                     | `/usr/bin/bash`                    | Login shell for the created user                   |
-| `username`                  | `omkar`                            | Non-root user to create                            |
-| `password`                  | `TODO`                             | User password (hashed with sha512 at apply time)   |
-| `security_ssh_allowed_users`| `["omkar", "vagrant"]`             | Users permitted to connect over SSH                |
-| `lan_subnet`                | `10.0.0.0/24`                      | LAN subnet CIDR                                    |
-| `lan_base`                  | Derived from `lan_subnet`          | Base IP address, computed via regex (do not set manually) |
-| `discord_token`             | `"{{ vault_discord_token }}"`      | Discord bot token, sourced from vault              |
-
----
-
-### `group_vars/all/vault.yml` — Ansible Vault
-
-Encrypted secrets. Edit with `ansible-vault edit group_vars/all/vault.yml`.
-
-| Variable              | Description                                           |
-|-----------------------|-------------------------------------------------------|
-| `vault_discord_token` | Discord bot token, referenced as `discord_token`      |
-
-To encrypt a new vault file:
+## Local testing
 
 ```bash
-ansible-vault encrypt group_vars/all/vault.yml
+vagrant up    # Ubuntu 22.04, provisioned with playbook.yaml
 ```
 
-Optionally, store your vault password in a file and reference it in `ansible.cfg`:
-
-```ini
-vault_password_file = ~/.vault_pass
-```
-
----
-
-### `roles/main/defaults/main.yml`
-
-Defaults for the `main` role. Override in `group_vars/`, `host_vars/`, or by passing `-e` at runtime.
-
-**`setup.yml`**
-
-| Variable   | Default                                                                                         | Description              |
-|------------|-------------------------------------------------------------------------------------------------|--------------------------|
-| `packages` | `vim`, `htop`, `curl`, `tmux`, `neofetch`, `speedtest-cli`, `git-all`, `snapd`, `python3-pip`, `net-tools`, `wireshark`, `nmap` | APT packages to install |
-
-**`env.yml`**
-
-| Variable               | Default | Description                                           |
-|------------------------|---------|-------------------------------------------------------|
-| `is_hosting_music_bot` | `false` | Set to `true` to write `DISCORD_TOKEN` to `/etc/environment` |
-
-**`ssh.yml`**
-
-| Variable   | Default | Description |
-|------------|---------|-------------|
-| `ssh_port` | `22`    | Port sshd listens on |
-
-**`ubuntu-ufw.yml`**
-
-| Variable    | Default                                  | Description                  |
-|-------------|------------------------------------------|------------------------------|
-| `ufw_rules` | Allow TCP port 22 on default interface   | List of UFW rules to apply   |
-
-## Usage
-
-Run the full playbook:
-
-```bash
-ansible-playbook playbook.yml --ask-vault-pass
-```
-
-Run against a specific host:
-
-```bash
-ansible-playbook playbook.yml -l homeserver --ask-vault-pass
-```
-
-Run with a specific tag (if defined):
-
-```bash
-ansible-playbook playbook.yml --tags ssh --ask-vault-pass
-```
-
-Dry run (check mode):
-
-```bash
-ansible-playbook playbook.yml --check --ask-vault-pass
-```
-
-## Local Testing (Vagrant)
-
-A `Vagrantfile` is included for local testing against an Ubuntu 22.04 VM:
-
-```bash
-vagrant up
-```
-
-This provisions the VM using the same `playbook.yml`.
-
-## Linting
-
-```bash
-./run_tests.sh
-```
-
-This runs `yamllint`, `ansible-lint`, and a syntax check. The [geerlingguy.docker](roles/geerlingguy.docker/) role and cert-manager manifests are excluded from linting (see [.ansible-lint](.ansible-lint)).
+`Vagrantfile` expects an extra vault file `@vm-vault.enc` that is gitignored and not present in a fresh
+clone, so this needs setup before it will run.
