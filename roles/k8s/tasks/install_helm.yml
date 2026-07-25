@@ -1,0 +1,18 @@
+---
+- name: Download Helm install script
+  ansible.builtin.get_url:
+    url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+    dest: /tmp/get_helm.sh
+    mode: "0755"
+
+- name: Install Helm
+  ansible.builtin.command: /tmp/get_helm.sh
+  args:
+    creates: /usr/local/bin/helm
+
+- name: Add bash completion for helm
+  ansible.builtin.lineinfile:
+    path: "/home/{{ username }}/.bashrc"
+    regexp: '^source <\(helm completion bash'
+    line: "source <(helm completion bash)"
+    state: present
