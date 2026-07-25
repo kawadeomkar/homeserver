@@ -39,8 +39,6 @@ spec:
               value: mariadb
             - name: NEXTCLOUD_TRUSTED_DOMAINS
               value: "homeserver.internal 10.0.0.107"
-          securityContext:
-            privileged: true
           envFrom:
             - secretRef:
                 name: nextcloud-db-secret
