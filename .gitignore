@@ -6,9 +6,6 @@ inventory
 # local notes / audits
 docs/*
 
-# downloaded file
-k8s/cert-manager/cert-manager-1.4.0.yaml
-
 # VSCODE
 .vscode/settings.json
 
