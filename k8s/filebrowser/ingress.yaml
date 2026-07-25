@@ -15,4 +15,4 @@ spec:
               service:
                 name: filebrowser
                 port:
-                  number: 8383
+                  number: 8080
