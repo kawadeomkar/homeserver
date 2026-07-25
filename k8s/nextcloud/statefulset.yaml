@@ -40,8 +40,6 @@ spec:
           envFrom:
             - secretRef:
                 name: nextcloud-db-secret
-          securityContext:
-            privileged: true
           volumeMounts:
             - name: nextcloud-db-storage
               mountPath: /config
