@@ -22,7 +22,7 @@ spec:
         - env:
             - name: FRIGATE_RTSP_PASSWORD
               value: password
-          image: ghcr.io/blakeblackshear/frigate:stable
+          image: ghcr.io/blakeblackshear/frigate:0.17.2
           name: frigate
           ports:
             - containerPort: 5000
@@ -32,7 +32,15 @@ spec:
               protocol: UDP
           securityContext:
             privileged: true
-          resources: {}
+          resources:
+            # +2Gi over the process budget: the two memory-backed emptyDirs
+            # (/tmp/cache, /dev/shm, 1Gi each) are charged to this cgroup.
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: "4"
+              memory: 6Gi
           volumeMounts:
             - mountPath: /etc/localtime
               name: localtime

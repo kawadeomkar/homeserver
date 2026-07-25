@@ -23,6 +23,10 @@ spec:
       automountServiceAccountToken: true
       containers:
         - image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.10.0
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
           livenessProbe:
             httpGet:
               path: /healthz

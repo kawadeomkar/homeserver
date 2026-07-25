@@ -17,7 +17,14 @@ spec:
     spec:
       containers:
       - name: photoprism
-        image: photoprism/photoprism:latest
+        image: photoprism/photoprism:260601
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: "4"
+            memory: 4Gi
         env:
         - name: PHOTOPRISM_DEBUG
           value: "true"
