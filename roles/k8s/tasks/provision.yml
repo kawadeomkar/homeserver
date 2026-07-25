@@ -45,13 +45,6 @@
 
 # ------ End monitoring ------
 
-# portainer
-- name: Start kubernetes portainer service
-  ansible.builtin.command: >
-    kubectl apply -f {{ k8s_manifests_path }}/portainer
-  register: k8s_apply
-  changed_when: "'configured' in k8s_apply.stdout"
-
 # Homepage
 - name: Start kubernetes homepage service
   ansible.builtin.command: >
