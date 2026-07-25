@@ -22,14 +22,20 @@ spec:
       terminationGracePeriodSeconds: 1800
       containers:
         - name: nextcloud-mariadb
-          image: linuxserver/mariadb:latest
+          image: linuxserver/mariadb:11.4.12-r0-ls224
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
           ports:
             - containerPort: 3306
           #args:
           #  - --transaction-isolation=READ-COMMITTED
           #  - --binlog-format=ROW
           #  - --max-connections=1000
-          imagePullPolicy: Always
           env:
             - name: PGID
               value: "1000"

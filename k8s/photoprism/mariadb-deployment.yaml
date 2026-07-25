@@ -24,7 +24,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: photoprism-mariadb
-          image: mariadb:latest
+          image: mariadb:11.4.12
           ports:
             - containerPort: 3306
           args:
@@ -34,7 +34,13 @@ spec:
           envFrom:
             - secretRef:
                 name: photoprism-db-secret
-          resources: {}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
           volumeMounts:
             - mountPath: /var/lib/mysql
               name: photoprism-db-storage

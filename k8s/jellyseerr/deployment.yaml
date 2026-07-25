@@ -20,8 +20,7 @@ spec:
     spec:
       containers:
         - name: jellyseerr
-          image: fallenbagel/jellyseerr
-          imagePullPolicy: Always
+          image: fallenbagel/jellyseerr:2.7.3
           ports:
             - containerPort: 5055
           env:
@@ -31,7 +30,10 @@ spec:
               value: "1000"
             - name: TZ
               value: America/Los_Angeles
-          resources: {}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
           volumeMounts:
             - mountPath: /app/config
               name: jellyseerr

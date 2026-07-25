@@ -19,8 +19,7 @@ spec:
         app: dashdot
     spec:
       containers:
-        - image: mauricenino/dashdot:latest
-          imagePullPolicy: Always
+        - image: mauricenino/dashdot:6.3.4
           name: dash
           ports:
             - containerPort: 3001
@@ -43,7 +42,10 @@ spec:
               value: "true"
           securityContext:
             privileged: true
-          resources: {}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
           volumeMounts:
             - mountPath: /mnt/host
               name: dash-claim0

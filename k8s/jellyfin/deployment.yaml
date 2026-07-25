@@ -49,8 +49,7 @@ spec:
               value: America/Los_Angeles
           securityContext:
             privileged: true
-          image: lscr.io/linuxserver/jellyfin:latest
-          imagePullPolicy: Always
+          image: lscr.io/linuxserver/jellyfin:10.11.11ubu2404-ls42
           name: jellyfin
           ports:
             - containerPort: 8096
@@ -67,7 +66,13 @@ spec:
               protocol: UDP
           stdin: true
           tty: true
-          resources: {}
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "4"
+              memory: 4Gi
           volumeMounts:
             - mountPath: /config
               name: fs-jellyfin-config
