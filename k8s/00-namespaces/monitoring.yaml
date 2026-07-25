@@ -1,0 +1,28 @@
+---
+# Single owner of the `monitoring` namespace.
+#
+# Five sibling directories (prometheus, grafana, dashdot, and formerly
+# node-exporter and cadvisor) share this namespace, which is the one place the
+# repo's "one directory, one namespace" convention does not hold. Declaring it
+# in each of them made every directory self-sufficient for `kubectl apply -f
+# <dir>`, but broke the tools this repo is heading towards:
+#   - `kubectl kustomize` errors on duplicate resource ids ("may not add
+#     resource with an already registered id")
+#   - under Flux, five Kustomizations owning one cluster-scoped Namespace means
+#     pruning any one of them cascade-deletes the whole namespace, taking
+#     Grafana's PersistentVolume data with it
+#
+# One owner, applied first by provision.yml, avoids both without restructuring
+# the five directories. If this tree is ever collapsed into a single
+# k8s/monitoring/ Kustomization, this file folds into it.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    # dashdot is the only privileged workload left in this namespace; Talos
+    # enforces Pod Security Admission at `baseline`, which would reject it.
+    # node-exporter and cadvisor previously drove this exemption — the former
+    # moved to kube-system, the latter was deleted.
+    pod-security.kubernetes.io/enforce: privileged
+    name: monitoring

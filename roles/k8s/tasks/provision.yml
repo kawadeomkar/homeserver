@@ -1,4 +1,11 @@
 ---
+# Namespaces shared by more than one service directory must exist first.
+- name: Create shared kubernetes namespaces
+  ansible.builtin.command: >
+    kubectl apply -f {{ k8s_manifests_path }}/00-namespaces
+  register: k8s_apply
+  changed_when: "'configured' in k8s_apply.stdout"
+
 # Home assistant
 
 - name: Start kubernetes homeassistant service
@@ -26,13 +33,6 @@
 - name: Start kubernetes node-exporter service
   ansible.builtin.command: >
     kubectl apply -f {{ k8s_manifests_path }}/node-exporter
-  register: k8s_apply
-  changed_when: "'configured' in k8s_apply.stdout"
-
-# Cadvisor
-- name: Start kubernetes cadvisor service
-  ansible.builtin.command: >
-    kubectl apply -f {{ k8s_manifests_path }}/cadvisor
   register: k8s_apply
   changed_when: "'configured' in k8s_apply.stdout"
 
