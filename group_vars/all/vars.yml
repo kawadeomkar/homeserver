@@ -39,6 +39,7 @@ service_dirs:
   - homarr/icons
   - dashy/item-icons
   - grafana/storage
+  - prometheus
   - filebrowser
   - frigate/storage
   - frigate-db

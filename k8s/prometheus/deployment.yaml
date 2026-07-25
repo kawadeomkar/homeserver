@@ -17,6 +17,14 @@ spec:
         app: prometheus
     spec:
       serviceAccountName: prometheus
+      # /opt/prometheus is created by roles/main/tasks/filesystem.yml owned by
+      # uid 1000, and hostPath volumes do not honour fsGroup, so the pod has to
+      # run as 1000 to write its TSDB. Same uid alignment the LinuxServer.io
+      # PUID/PGID 1000 convention relies on elsewhere in this repo.
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
         - name: prometheus
           image: prom/prometheus:v3.13.1
@@ -30,6 +38,8 @@ spec:
           args:
             - "--config.file=/etc/prometheus/prometheus.yml"
             - "--storage.tsdb.path=/prometheus/"
+            - "--storage.tsdb.retention.time=15d"
+            - "--storage.tsdb.retention.size=15GB"
           ports:
             - containerPort: 9090
           volumeMounts:
@@ -43,4 +53,5 @@ spec:
             defaultMode: 420
             name: prometheus-server-conf
         - name: prometheus-storage-volume
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: prometheus-storage-claim
