@@ -27,8 +27,7 @@ spec:
       serviceAccountName: portainer-sa-clusteradmin
       containers:
         - name: portainer
-          image: portainer/portainer-ce
-          imagePullPolicy: Always
+          image: portainer/portainer-ce:2.39.5
           args:
             - '--tunnel-port=30776'
           ports:
@@ -54,7 +53,10 @@ spec:
               path: /
               port: 9443
               scheme: HTTPS
-          resources: {}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
           volumeMounts:
             - name: data
               mountPath: /data

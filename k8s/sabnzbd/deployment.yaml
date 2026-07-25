@@ -20,7 +20,11 @@ spec:
     spec:
       containers:
         - name: sabnzbd
-          image: lscr.io/linuxserver/sabnzbd:latest
+          image: lscr.io/linuxserver/sabnzbd:5.0.4-ls263
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
           ports:
             - containerPort: 8080
           env:

@@ -20,8 +20,11 @@ spec:
     spec:
       containers:
         - name: radarr
-          image: linuxserver/radarr
-          imagePullPolicy: Always
+          image: linuxserver/radarr:6.3.0.10514-ls312
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
           ports:
             - containerPort: 7878
           env:

@@ -22,9 +22,8 @@ spec:
         app: nextcloud
     spec:
       containers:
-        - image: lscr.io/linuxserver/nextcloud:latest
+        - image: lscr.io/linuxserver/nextcloud:34.0.2-ls444
           name: nextcloud
-          imagePullPolicy: Always
           env:
             - name: PGID
               value: "1000"
@@ -49,7 +48,13 @@ spec:
             - containerPort: 80
               name: http
               protocol: TCP
-          resources: {}
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
           volumeMounts:
             - mountPath: /config
               name: nextcloud

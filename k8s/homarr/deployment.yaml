@@ -19,7 +19,11 @@ spec:
         app: homarr
     spec:
       containers:
-        - image: ghcr.io/ajnart/homarr:latest
+        - image: ghcr.io/ajnart/homarr:0.16.1
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
           name: homarr
           ports:
             - containerPort: 7575
