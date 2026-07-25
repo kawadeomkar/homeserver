@@ -34,9 +34,17 @@ spec:
               name: filebrowser-db
       restartPolicy: Always
       volumes:
+        # Was `path: /` — the entire node filesystem, writable, served over an
+        # unauthenticated Ingress. Scoped to the media tree, which is what this
+        # service exists to browse. /opt/media/data is the same single mount
+        # sonarr/radarr/sabnzbd share, so hardlinks stay intact.
         - hostPath:
-            path: /
+            path: /opt/media/data
+            type: Directory
           name: filebrowser
+        # `type:` was absent, so containerd would create filebrowser.db as a
+        # DIRECTORY and the container could not open its database (part of K8S-4).
         - hostPath:
             path: /opt/filebrowser/filebrowser.db
+            type: FileOrCreate
           name: filebrowser-db
