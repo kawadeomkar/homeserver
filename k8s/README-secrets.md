@@ -81,7 +81,7 @@ supply all three or none of them.
 
 ### `photoprism-db-secret` — namespace `photoprism`
 
-Consumed by `mariadb-deployment.yaml` (image `mariadb:latest`). The deleted file carried all four of these
+Consumed by `mariadb-deployment.yaml` (image `mariadb:11.4.12`). The deleted file carried all four of these
 plus two `NEXTCLOUD_*` leftovers copied from nextcloud — a real copy-paste, but a harmless one, since the
 MariaDB entrypoint simply ignores the extras. (An earlier version of this document and of PR #3 claimed
 the database "would never have initialised"; that was wrong.) It needs the standard four:

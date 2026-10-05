@@ -17,10 +17,11 @@ spec:
         app: prometheus
     spec:
       serviceAccountName: prometheus
-      # /opt/prometheus is created by roles/main/tasks/filesystem.yml owned by
-      # uid 1000, and hostPath volumes do not honour fsGroup, so the pod has to
-      # run as 1000 to write its TSDB. Same uid alignment the LinuxServer.io
-      # PUID/PGID 1000 convention relies on elsewhere in this repo.
+      # hostPath volumes do not honour fsGroup, so the pod has to run as the uid
+      # that owns /opt/prometheus to write its TSDB. That was uid 1000 while the
+      # since-deleted Ansible host role created the directory; nothing creates
+      # it now, so whatever provisions the node has to. Same uid alignment the
+      # LinuxServer.io PUID/PGID 1000 convention relies on elsewhere in this repo.
       securityContext:
         runAsUser: 1000
         runAsGroup: 1000

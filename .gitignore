@@ -16,10 +16,6 @@ docs/*
 *.retry
 *.*~
 
-# ansible runtime
-roles/geerlingguy.docker
-.vagrant
-
 # Ansible Vault password files - never commit these
 .vault_pass
 .vault_pass*
