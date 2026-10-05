@@ -26,11 +26,43 @@ roles/geerlingguy.docker
 vault_password
 vault_password_file
 
-# Try tyo avoid any plain-text passwords 
-*pwd*
-*pass*
-*password*
-*.txt
+# Kubernetes Secret manifests must never be committed in plaintext.
+# Both cases are listed because git globs are case-SENSITIVE: `Secret.yaml`
+# would slip through on Linux/CI even though macOS ignores it via core.ignorecase.
+k8s/**/*secret*.yaml
+k8s/**/*secret*.yml
+k8s/**/*Secret*.yaml
+k8s/**/*Secret*.yml
+# Exceptions — these carry no plaintext credential by construction, so they are
+# safe (and useful) to commit. Negations must come AFTER the block rules above.
+!k8s/**/*.sops.yaml
+!k8s/**/*sealed*.yaml
+!k8s/**/*.example.yaml
+!k8s/**/*.template.yaml
+!k8s/**/externalsecret*.yaml
+!k8s/**/secretstore*.yaml
+!k8s/**/clustersecretstore*.yaml
+
+# Secret material, wherever it lands. `*.txt` used to catch some of this by
+# accident; it was removed for being over-broad, so the real formats are named.
+*.agekey
+*.age
+age.key
+key.txt
+keys.txt
+vault_password*
+kubeconfig
+k3s.yaml
+*.pem
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+.env
+.env.*
+*.sql
+*.sqlite
+*.sqlite3
 
 # Exclude all binaries
 *.bin
