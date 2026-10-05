@@ -23,9 +23,12 @@ spec:
         runAsGroup: 1000
         fsGroup: 1000
       containers:
-        - image: ghcr.io/home-assistant/home-assistant:stable
+        - image: ghcr.io/home-assistant/home-assistant:2026.7.4
           name: homeassistant
-          resources: {}
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
           ports:
             - name: http
               containerPort: 8123

@@ -20,8 +20,11 @@ spec:
     spec:
       containers:
         - name: prowlarr
-          image: linuxserver/prowlarr
-          imagePullPolicy: Always
+          image: linuxserver/prowlarr:2.5.2.5491-ls155
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
           ports:
             - containerPort: 9696
           env:
