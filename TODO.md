@@ -7,8 +7,6 @@ the full audit with file/line references; the finding ids below refer to it.
 
 - [ ] Correct the two Ingress backends that target ports their Service does not serve: filebrowser
       8383→8080, node-exporter 7878→9100 (K8S-24)
-- [ ] Drop `portainer`, or replace its `cluster-admin` binding with a scoped Role and put it behind auth.
-      While it stands, every Pod Security Admission label in the tree is advisory (SEC-2)
 - [ ] Stop `filebrowser` mounting host `/` writable behind an unauthenticated Ingress (SEC-3)
 - [ ] Give Prometheus a ServiceAccount that actually exists — its ClusterRoleBinding names a namespace no
       manifest creates, so all Kubernetes service discovery 403s and it collects nothing (K8S-20)

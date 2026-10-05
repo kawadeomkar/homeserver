@@ -25,7 +25,6 @@ nfs_owner_gid: 1000
 services_base_dir: /opt
 service_dirs:
   - hass
-  - portainer
   - media/data
   - sabnzbd/config
   - jellyfin/config
