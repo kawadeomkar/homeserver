@@ -12,7 +12,7 @@
 #     pruning any one of them cascade-deletes the whole namespace, taking
 #     Grafana's PersistentVolume data with it
 #
-# One owner, applied first by provision.yml, avoids both without restructuring
+# One owner, applied before any of them, avoids both without restructuring
 # the five directories. If this tree is ever collapsed into a single
 # k8s/monitoring/ Kustomization, this file folds into it.
 apiVersion: v1
