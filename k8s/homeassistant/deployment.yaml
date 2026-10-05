@@ -31,7 +31,6 @@ spec:
               containerPort: 8123
               protocol: TCP
           securityContext:
-            privileged: true
             capabilities:
               add:
                 - NET_ADMIN
