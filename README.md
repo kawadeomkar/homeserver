@@ -24,10 +24,13 @@ addresses and serial numbers), so it is absent from a fresh clone.
 ```
 k8s/                     one directory per service (+ 00-namespaces/ for shared ones)
 group_vars/all/vault.yml Ansible Vault file, kept for the roles that will replace the old ones
+group_vars/all/local.yml.example  template for local.yml, which holds every address
 ansible.cfg              inventory path and vault password file
 ```
 
-`inventory` and `./.vault_pass` are gitignored and must be created locally. Kubernetes Secrets are **not**
+`inventory`, `group_vars/all/local.yml` and `./.vault_pass` are gitignored and must be created locally.
+No address is ever written in a tracked file: tasks and role defaults read them from variables whose real
+values live only in `local.yml`. Kubernetes Secrets are **not**
 kept in the vault — see `k8s/README-secrets.md`.
 
 ## Manifests

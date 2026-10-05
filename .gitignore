@@ -3,6 +3,11 @@
 inventory
 *.enc
 
+# Environment-specific Ansible variables: addresses and anything else that
+# identifies this network. This repo is public, so they live only in a local
+# file. The committed counterpart, with placeholder values, is local.yml.example.
+group_vars/**/local.yml
+
 # local notes / audits
 docs/*
 

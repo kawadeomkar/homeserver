@@ -22,6 +22,15 @@ the full audit with file/line references; the finding ids below refer to it.
 - [ ] Real domain instead of `*.homeserver.internal`, which public ACME cannot validate. Prerequisite for
       any TLS at all (K8S-14)
 
+## TrueNAS
+
+The NAS was reinstalled on TrueNAS Community Edition and is to be configured only through Ansible.
+
+- [ ] Set up email alerts. Nothing is configured, so a degraded pool is silent. Needs SMTP credentials in
+      the vault
+- [ ] Decide which host, if any, mounts the `ephemeral/jellyfin` media dataset, then export it to that
+      host only. Until then it stays unexported
+
 ## Manifest defects found in review
 
 From a review of the change stack in October 2026. Read from the manifests and the upstream images; none
@@ -66,6 +75,7 @@ Blocked on the per-server hardware inventory.
 - [ ] Home Assistant's placement — it needs device access and host networking, and is the workload least
       suited to Talos
 - [ ] Control-plane count, and where etcd snapshots go
-- [ ] Whether to adopt `kube-prometheus-stack`, which would replace most of `k8s/prometheus`,
-      `k8s/grafana`, `k8s/node-exporter` and `k8s/kube-state-metrics` outright
+- [ ] Replace `k8s/prometheus`, `k8s/grafana`, `k8s/node-exporter` and `k8s/kube-state-metrics` with
+      `kube-prometheus-stack` once the cluster is built. Decided in October 2026; until then the
+      hand-written tree is left as it is, including its two open defects listed above
 - [ ] dashdot's placement — inside a VM it reports the VM's virtual disk, not real hardware (K8S-10)
