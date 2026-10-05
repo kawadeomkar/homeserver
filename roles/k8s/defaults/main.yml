@@ -1,0 +1,8 @@
+---
+# setup.yml
+# UNIMPLEMENTED: documented as the dev-sync vs prod-pull switch, but referenced by no task —
+# `provision.yml` always applies from {{ k8s_manifests_path }} on the target, and nothing syncs
+# that path. Slated for deletion rather than implementation: the Proxmox/Talos migration replaces
+# this with GitOps. Kept here only so the intent is recorded alongside the rest of the role.
+# false: sync local repo files to server (dev). true: pull latest from GitHub (prod).
+is_prod_run: false

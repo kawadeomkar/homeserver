@@ -1,0 +1,22 @@
+---
+# DESTRUCTIVE: drains every node, then runs k3s-killall.sh — stops all containers and
+# resets containerd state. Not included by tasks/main.yml; invoke explicitly only.
+# k3s-specific: superseded by `talosctl reset` once the cluster moves to Talos.
+- name: Get all nodes
+  ansible.builtin.command: kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'
+  register: all_nodes
+  changed_when: false
+
+- name: Drain all nodes
+  ansible.builtin.command: >
+    kubectl drain {{ item }}
+    --ignore-daemonsets
+    --delete-emptydir-data
+    --force
+    --timeout=120s
+  loop: "{{ all_nodes.stdout_lines }}"
+  changed_when: true
+
+- name: Stop all containers and reset containerd state
+  ansible.builtin.command: /usr/local/bin/k3s-killall.sh
+  changed_when: true

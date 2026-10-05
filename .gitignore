@@ -3,6 +3,9 @@
 inventory
 *.enc
 
+# local notes / audits
+docs/*
+
 # downloaded file
 k8s/cert-manager/cert-manager-1.4.0.yaml
 
@@ -204,3 +207,8 @@ cython_debug/
 #.idea/
 
 **/.DS_Store
+
+# Claude Code local config. Never commit: settings.local.json holds
+# machine-specific permission rules that embed the Tailscale host address
+# this repo deliberately withholds by gitignoring `inventory`.
+.claude/
