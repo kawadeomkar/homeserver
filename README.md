@@ -33,6 +33,7 @@ group_vars/nas/, group_vars/proxmox/  connection and per-machine configuration
 inventory.example        template for inventory (no addresses in it)
 tests/unit/              tests for the TrueNAS modules' comparison logic
 tests/integration/       idempotence tests against fake TrueNAS and Proxmox
+REBUILD.md               what to do before re-running the playbooks after a hardware failure
 ```
 
 `inventory`, `group_vars/all/local.yml` and `./.vault_pass` are gitignored and must be created locally
@@ -59,6 +60,12 @@ either machine.
 The roles are generic and change nothing by default; this setup's configuration is in `group_vars/`
 (`all/storage.yml`, `nas/truenas.yml`, `proxmox/storage.yml`), with addresses and serials in the git-ignored
 `all/local.yml`. Each role's `README.md` describes its variables.
+
+### After a hardware failure
+
+`REBUILD.md` is the recovery procedure. A reinstalled NAS needs a new API user and key and an updated certificate
+pin before Ansible can reach it, and a reinstalled Proxmox host needs root SSH access. Keep a copy of
+`group_vars/all/local.yml` and `.vault_pass` in your password manager: they are the only files not in this repo.
 
 ## Manifests
 
