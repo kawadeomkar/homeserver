@@ -6,8 +6,9 @@ the full audit with file/line references; the finding ids below refer to it.
 ## Do before migrating — these survive it
 
 - [ ] Delete the placeholder alerting rule that always fires at a nonexistent Alertmanager (K8S-26)
-- [ ] Add Renovate or equivalent — 23 image tags are now pinned by hand, and the repo's two oldest pins
-      have sat unbumped since 2022 (REPO-3)
+- [ ] Add Renovate for the 21 container image tags, which are pinned and bumped by hand. Wait until the
+      cluster exists, and split the ruleset first so an app with write access cannot merge on its own
+      (REPO-3). Dependabot covers the SHA-pinned actions and the Python lock, not image tags
 - [ ] Implement the SOPS + age decision for Kubernetes Secrets, and write down where the age key lives and
       how it is backed up. Until then nextcloud and photoprism cannot deploy (see `k8s/README-secrets.md`)
 - [ ] Decide whether to rewrite git history for the credentials that were committed and later deleted.
@@ -18,12 +19,15 @@ the full audit with file/line references; the finding ids below refer to it.
 ## CI
 
 `.github/workflows/ci.yml` gates pull requests through one check, `ci-success`. `docs/CI-PLAN.md`
-(gitignored) is the full plan.
+(gitignored) is the full plan, and `CLAUDE.md` lists the pins Dependabot cannot see, bumped by hand.
 
 - [ ] On the first CI run, check that every job is green on `ubuntu-26.04`, the Python 3.12 and 3.13 legs
       included
 - [ ] Once the workflow is on `main`, check that CodeQL's default setup scans `actions` as well as `python`
       (`gh api repos/kawadeomkar/homeserver/code-scanning/default-setup`), and add it if not
+- [ ] Check Dependabot's first pull requests: titles of the form `[dependencies] Bump …`, the `actions`,
+      `ansible` and `tooling` groups, and whether the ruleset's undocumented
+      `require_extra_approval_for_unattributed_changes` holds them back
 - [ ] Drop the Python 3.12 leg when ansible-core stops supporting 3.12 on the controller
 - [ ] The rest of the CI plan: leak checks with gitleaks rules and pre-commit, pre-push and commit-msg
       hooks (PR 2); ruff and the roles' convention tests (PR 3); kube-linter and the manifest convention

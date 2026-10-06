@@ -35,10 +35,10 @@ KUBE_SCHEMAS := https://raw.githubusercontent.com/yannh/kubernetes-json-schema/$
 KUBE_CACHE   ?= .cache/kubeconform
 # Every role's custom modules, as paths.
 MODULES := $(wildcard roles/*/library/*.py)
-# The lock takes only releases at least 7 days old (pip's --uploaded-prior-to, passed through
-# pip-compile), so a bad release has a week to be found out before it reaches this toolchain.
-# pip-tools writes this command into the lock's header for people to re-run; under click 8.5 it adds
-# a --no-index that was never passed, so the header is set here.
+# The lock takes only releases at least 7 days old, the cooldown Dependabot keeps too (pip's
+# --uploaded-prior-to, passed through pip-compile). pip-tools writes this command into the lock's header
+# for people to re-run; under click 8.5 it adds a --no-index that was never passed, so the header is set
+# here. Dependabot ignores the header's command and infers the flags it needs from the file.
 LOCK_COMMAND := pip-compile --allow-unsafe --generate-hashes --output-file=requirements.txt --strip-extras --pip-args='--uploaded-prior-to=P7D' requirements.in
 
 .DEFAULT_GOAL := help

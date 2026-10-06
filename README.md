@@ -93,4 +93,6 @@ Every pull request and every push to `main` runs `.github/workflows/ci.yml`: eve
 and idempotence tests on Python 3.12, 3.13 and 3.14, `make lint-kubeconform`, and actionlint and zizmor over the
 workflows. `ci-success` aggregates the jobs, so a branch ruleset needs to require only that one check. No job
 gets a secret, and none reaches the home network: the roles are tested only against the fakes in
-`tests/integration`.
+`tests/integration`. Dependabot proposes weekly updates to the SHA-pinned actions and every package in the
+Python lock. The actionlint and kubeconform versions and the schema pins are bumped by hand; CLAUDE.md lists
+them.
