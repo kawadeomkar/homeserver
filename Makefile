@@ -67,7 +67,7 @@ init: venv ## One-time setup: venv, plus inventory and local.yml from their exam
 	@echo "Now fill in group_vars/all/local.yml (git-ignored) and make sure .vault_pass exists."
 
 .PHONY: lint linters lint-yaml lint-ansible lint-module-docs test
-lint: linters test ## Every linter, then the unit tests
+lint: linters test ## Every linter, then the unit and policy tests
 
 linters: lint-yaml lint-ansible lint-module-docs ## yamllint, ansible-lint, module docs (no tests)
 
@@ -75,7 +75,8 @@ lint-yaml: ## yamllint; warnings fail too
 	$(BIN)/yamllint --strict .
 
 # ansible-lint needs a vault password file for its syntax check. Without the real one (a fresh clone)
-# it gets a placeholder, and it then skips the vault's contents.
+# it gets a placeholder, and it then skips the vault's contents; tests/policy checks that the vault
+# stays encrypted.
 lint-ansible: ## ansible-lint at the production profile
 	@if [ -z "$$ANSIBLE_VAULT_PASSWORD_FILE" ] && [ ! -f .vault_pass ]; then \
 	  mkdir -p .cache && echo placeholder > .cache/vault-placeholder; \
@@ -88,8 +89,8 @@ lint-module-docs: ## Every custom module's DOCUMENTATION parses (each failure is
 	  $(BIN)/ansible-doc -t module -M $$(dirname $$m) --json $$(basename $$m .py) </dev/null >/dev/null || rc=1; \
 	done; exit $$rc
 
-test: ## The unit tests
-	$(BIN)/pytest -q tests/unit
+test: ## The unit tests, and the policy tests that check the repo's own rules (the lock matches requirements.in)
+	$(BIN)/pytest -q tests/unit tests/policy
 
 .PHONY: test-idempotence
 test-idempotence: ## Run each role repeatedly against local fakes of TrueNAS and Proxmox

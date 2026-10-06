@@ -33,6 +33,7 @@ group_vars/nas/, group_vars/proxmox/  connection and per-machine configuration
 inventory.example        template for inventory (no addresses in it)
 requirements.in          the Python tooling's pins; requirements.txt is its hash-locked lock (make lock)
 tests/unit/              tests for the TrueNAS modules' comparison logic
+tests/policy/            tests of the repo's own rules: the lock, the vault
 tests/integration/       idempotence tests against fake TrueNAS and Proxmox
 REBUILD.md               what to do before re-running the playbooks after a hardware failure
 ```
