@@ -11,8 +11,6 @@ the full audit with file/line references; the finding ids below refer to it.
       (REPO-3). Dependabot covers the SHA-pinned actions and the Python lock, not image tags
 - [ ] Implement the SOPS + age decision for Kubernetes Secrets, and write down where the age key lives and
       how it is backed up. Until then nextcloud and photoprism cannot deploy (see `k8s/README-secrets.md`)
-- [ ] Decide whether to rewrite git history for the credentials that were committed and later deleted.
-      They were never deployed, but this repo is public
 - [ ] Real domain instead of `*.homeserver.internal`, which public ACME cannot validate. Prerequisite for
       any TLS at all (K8S-14)
 
@@ -72,6 +70,12 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       relock; if that recurs, build a wheel from the commit and keep it outside the repo instead.
       Only the connection layer changes; the modules keep their logic. Also raise
       `truenas_supported_version` and re-check the API calls the modules make against the new release
+- [ ] At that upgrade, decide whether to hold `tests/integration/fake_truenas.py` to the real API. Dump the
+      `accepts`/`returns` schemas of the methods the role calls with `core.get_methods` (a read-only query,
+      run once from a reviewed `main` checkout with the existing key), diff 25.10 against 26 to see which
+      calls and fake handlers change, and have the fake validate requests and replies against them.
+      Deferred from the CI plan (decision D6): the real NAS already accepted every 25.10 request the
+      configuration sends. Note that `pool.create` is exercised by neither the fake nor a real run
 
 ## Proxmox
 

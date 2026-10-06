@@ -58,8 +58,8 @@ make check-proxmox && make proxmox
 ```
 
 Each TrueNAS stage can be run on its own with `TAGS=truenas_network`, `truenas_pools`, `truenas_system`,
-`truenas_datasets`, `truenas_nfs` or `truenas_services`. Always run the check first: there is no test double for
-either machine.
+`truenas_datasets`, `truenas_nfs` or `truenas_services`. Always run the check first: the idempotence tests use
+fakes, which cannot prove the real machines behave the same.
 
 The roles are generic and change nothing by default; this setup's configuration is in `group_vars/`
 (`all/storage.yml`, `nas/truenas.yml`, `proxmox/storage.yml`), with addresses and serials in the git-ignored
