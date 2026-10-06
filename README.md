@@ -48,8 +48,8 @@ kept in the vault — see `k8s/README-secrets.md`.
 ```bash
 make venv PYTHON=<python 3.12+>   # hash-locked tooling in .venv (requirements.txt, from requirements.in)
 make init                         # inventory and local.yml from their examples
-make lint                         # yamllint, ansible-lint, unit tests
-make test-idempotence             # each role run twice against local fakes
+make lint                         # yamllint, ansible-lint, module docs, tests
+make test-idempotence             # each role run repeatedly against local fakes
 make check-truenas && make truenas
 make check-proxmox && make proxmox
 ```
@@ -82,7 +82,7 @@ still go first: it owns the namespaces that more than one service directory shar
 ### Linting
 
 ```bash
-kubeconform -summary -ignore-missing-schemas $(find k8s -name '*.yaml')
+make lint-kubeconform   # kubeconform -strict against Kubernetes 1.37.1, the version Talos ships
 ```
 
 There is no CI, so this does not run automatically.

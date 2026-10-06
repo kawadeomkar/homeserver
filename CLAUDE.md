@@ -37,19 +37,20 @@ moot, their manifest findings still apply. Some fixes that would be correct for 
 ```bash
 make venv PYTHON=<python 3.12+>   # .venv from the hash-locked requirements.txt (--require-hashes)
 make init                         # also copies inventory and group_vars/all/local.yml from their examples
-make lint                         # yamllint, ansible-lint (production profile), module unit tests
+make lint                         # make linters, then the unit tests (make test)
+make linters                      # yamllint --strict, ansible-lint (production profile), module docs
 make test-idempotence             # each role run repeatedly against local fakes (about 30 s)
+make lint-kubeconform             # kubeconform -strict against Kubernetes 1.37.1 (Talos's), pinned schemas
 make lock                         # regenerate requirements.txt, with hashes, after editing requirements.in
 make check-truenas                # dry run of roles/truenas against the NAS, with --diff
 make truenas                      # apply it; TAGS=truenas_network (or _pools, _system, _datasets, _nfs) for one stage
 make check-proxmox / make proxmox # the same for roles/proxmox_storage on the Proxmox host
 make vault-edit                   # secrets
-kubeconform -summary -ignore-missing-schemas $(find k8s -name '*.yaml')   # offline schema validation
 ```
 
 Always run tools from the project's virtualenv, never from `PATH`. On this machine that is the pyenv virtualenv `homeserver` (Python 3.14.6, under pyenv's `versions/3.14.6/envs/`); `make` uses the active virtualenv (`VIRTUAL_ENV`) and otherwise `./.venv`, and `VENV=<path>` overrides both. `python3` itself resolves to a broken pyenv build (3.13.1, `libintl` dyld error), and `~/.local/bin/ansible-playbook` and `~/.local/bin/yamllint` have a dead shebang. ansible-core 2.21 treats a non-boolean conditional as a fatal error. When the shell's standard handles are non-blocking, ansible commands exit with "Ansible requires blocking IO"; redirect stdin from `/dev/null` and stdout/stderr to a file.
 
-`kubeconform` is the usable gate for manifests — `kubectl --dry-run=client` is not, since it needs a live API server for OpenAPI validation. `kubectl` v1.36.2 (with Kustomize v5.8.1 embedded) and `kubeconform` v0.8.0 are what works locally.
+`kubeconform` is the usable gate for manifests — `kubectl --dry-run=client` is not, since it needs a live API server for OpenAPI validation. `kubectl` v1.36.2 (with Kustomize v5.8.1 embedded) and `kubeconform` v0.8.0 are what works locally. `make lint-kubeconform` runs it strictly against the Kubernetes version Talos ships, with the schemas pinned to one commit and cached in `.cache/kubeconform`; it is the one target whose tool comes from `PATH` (Homebrew here). The idempotence tests also take `openssl` from `PATH`, for the fake NAS's certificate.
 
 Vault: `ansible.cfg` sets `vault_password_file = ./.vault_pass`, so `--ask-vault-pass` is unnecessary locally. It holds `vault_truenas_api_key` (read by `group_vars/nas/connection.yml`) and `vault_discord_token`, left over from the deleted roles. Never print its contents; check it by listing variable names only.
 
@@ -155,7 +156,7 @@ gitignored, none of it reaches a clone, so the findings referenced below may hav
 - **Image tags are pinned, and the pin must be immutable.** LinuxServer.io re-points its plain `x.y.z` tags at every build revision, so those images use the `x.y.z-lsNNN` form (`linuxserver/sonarr:4.0.19.2979-ls320`). Do not add `imagePullPolicy: Always` — on a pinned tag it is redundant, and on a mutable one it is what silently defeats the pin. There is no Renovate, so bumps are manual.
 - **Resource requests on every workload**, with limits only where a runaway can starve the node (nextcloud, jellyfin, frigate, photoprism, both MariaDBs, prometheus). All values are un-measured guesses — nothing has ever run. Aggregate: ~3.3 vCPU / ~9.6 GiB of requests, so a node needs ~4 vCPU and ~11 GiB before system overhead.
 - `inventory`, `.claude/` and `docs/` are gitignored because **this repo is public** — they would otherwise publish host addresses, and `docs/MACHINES.md` also lists MAC addresses and drive serials. A fresh clone recreates `inventory` from the committed, address-free `inventory.example` (`make init` copies it).
-- YAML style comes from `.yamlfmt` (basic, `---` document start, line breaks retained). `.yamllint` (160-column lines) and `.ansible-lint` (production profile) exist and `make lint` runs both plus the unit tests, but **nothing runs them automatically**: there is no CI and no pre-commit hook. Both skip `k8s/`, which `kubeconform` covers. ansible-lint warns that it cannot import the custom modules' `module_utils`; that warning is expected.
+- YAML style comes from `.yamlfmt` (basic, `---` document start, line breaks retained). `.yamllint` (160-column lines, run with `--strict`) and `.ansible-lint` (production profile) both skip `k8s/`, which `kubeconform` covers. ansible-lint warns that it cannot import the custom modules' `module_utils`; that warning is expected. `make lint` runs both, plus `ansible-doc` on every custom module (ansible-lint does not check `DOCUMENTATION`) and the unit tests. **Nothing runs them automatically** yet: there is no CI and no pre-commit hook.
 - **Python dependencies** are hash-locked: direct pins live in `requirements.in`, `make lock` regenerates `requirements.txt` (pip-compile, with a hash for every package, pip included, taking only releases at least 7 days old), and `make venv` installs with `--require-hashes`. In an existing environment `make venv` removes nothing and does not re-check packages already at their pinned version, so recreate the environment when it may hold anything else. Packages only older Pythons need are pinned in `requirements.in` without markers (see its comment), because pip-compile resolves for the Python it runs on.
 - `TODO.md` is the running backlog. Its Ansible-layer items went with the Ubuntu host layer; what remains is manifest work and open migration decisions.
 - `REBUILD.md` is the recovery procedure after a hardware failure: the manual prerequisites (a fresh install's API user and key, the certificate pin, root SSH to Proxmox, DHCP reservations) and the run order. When a role gains or loses a prerequisite, or the run order changes, update it in the same change.

@@ -1,6 +1,13 @@
 ---
 extends: default
 
+# The defaults, plus the committed example of the git-ignored local.yml.
+yaml-files:
+  - "*.yaml"
+  - "*.yml"
+  - .yamllint
+  - "*.yml.example"
+
 ignore: |
   .venv/
   .ansible/
