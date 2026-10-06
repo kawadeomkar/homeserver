@@ -51,7 +51,7 @@ kept in the vault — see `k8s/README-secrets.md`.
 
 ```bash
 make venv PYTHON=<python 3.12+>   # hash-locked tooling in .venv (requirements.txt, from requirements.in)
-make init                         # inventory and local.yml from their examples
+make init                         # git hooks, plus inventory and local.yml from their examples
 make lint                         # yamllint, ansible-lint, module docs, GitHub config schemas, tests
 make test-idempotence             # each role run repeatedly against local fakes
 make ci                           # what the CI gate runs, on one Python, apart from the workflow linters

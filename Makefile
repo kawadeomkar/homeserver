@@ -62,7 +62,8 @@ lock: ## Re-resolve requirements.txt, with hashes, from requirements.in
 	CUSTOM_COMPILE_COMMAND="$(LOCK_COMMAND)" $(BIN)/$(LOCK_COMMAND)
 
 .PHONY: init
-init: venv ## One-time setup: venv, plus inventory and local.yml from their examples
+init: venv ## One-time setup: venv, the git hooks, plus inventory and local.yml from their examples
+	$(BIN)/pre-commit install
 	@test -f inventory || cp inventory.example inventory
 	@test -f group_vars/all/local.yml || cp group_vars/all/local.yml.example group_vars/all/local.yml
 	@echo "Now fill in group_vars/all/local.yml (git-ignored) and make sure .vault_pass exists."
@@ -100,6 +101,18 @@ test: ## The unit tests, and the policy tests that check the repo's own rules (t
 .PHONY: test-gitleaks-rules
 test-gitleaks-rules: ## .gitleaks.toml against generated fixtures (gitleaks from PATH)
 	$(BIN)/pytest -q -m gitleaks tests/policy
+
+# The leak checks the git hooks run (.pre-commit-config.yaml), with gitleaks from PATH.
+GITLEAKS_FOUND = @command -v gitleaks >/dev/null || { echo "gitleaks is not on PATH (brew install gitleaks)"; exit 1; }
+
+.PHONY: secrets-staged secrets-push
+secrets-staged: ## gitleaks over the staged changes (the pre-commit hook)
+	$(GITLEAKS_FOUND)
+	gitleaks git --pre-commit --staged --config .gitleaks.toml --ignore-gitleaks-allow --redact --verbose --no-banner
+
+secrets-push: ## Secrets and identifiers in the commits being pushed (the pre-push hook)
+	$(GITLEAKS_FOUND)
+	BASE="$${PRE_COMMIT_FROM_REF:-}" HEAD="$${PRE_COMMIT_TO_REF:-HEAD}" scripts/ci/check-range.sh
 
 .PHONY: test-idempotence
 test-idempotence: ## Run each role repeatedly against local fakes of TrueNAS and Proxmox

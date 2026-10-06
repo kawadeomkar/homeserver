@@ -1,0 +1,21 @@
+---
+# Git hooks for leaks, installed by `make init`. Each runs through make and needs only bash
+# and gitleaks (Homebrew), so it works in any shell, whether or not the project's virtualenv is active.
+# The linters stay in `make lint` and CI.
+default_install_hook_types: [pre-commit, pre-push]
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks-staged
+        name: gitleaks (staged changes)
+        entry: make -s secrets-staged
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: leaks-push
+        name: secrets and identifiers in the commits being pushed
+        entry: make -s secrets-push
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
