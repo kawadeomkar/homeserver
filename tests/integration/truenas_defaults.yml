@@ -1,0 +1,7 @@
+---
+# roles/truenas with nothing but a connection, as a new user would start: it must change nothing.
+- name: Run the role with only its defaults
+  hosts: nas
+  gather_facts: false
+  roles:
+    - role: truenas

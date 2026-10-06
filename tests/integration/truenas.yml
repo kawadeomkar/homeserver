@@ -1,0 +1,11 @@
+---
+# roles/truenas with this repo's own NAS configuration, pointed at fake_truenas.py. Addresses and
+# the API key come from the test as extra vars.
+- name: Configure the fake NAS
+  hosts: nas
+  gather_facts: false
+  vars_files:
+    - ../../group_vars/all/storage.yml
+    - ../../group_vars/nas/truenas.yml
+  roles:
+    - role: truenas

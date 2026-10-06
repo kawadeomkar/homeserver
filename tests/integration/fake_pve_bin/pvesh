@@ -1,0 +1,2 @@
+#!/bin/sh
+exec "$FAKE_PVE_PYTHON" "$(dirname "$0")/../fake_pve.py" pvesh "$@"
