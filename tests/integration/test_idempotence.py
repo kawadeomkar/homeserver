@@ -40,7 +40,9 @@ def free_port():
 
 def run(playbook, extra, check=False):
     """Run a test playbook; return (return code, {host: stats}, combined output)."""
-    env = {**os.environ, "ANSIBLE_CONFIG": str(HERE / "ansible.cfg"), "ANSIBLE_NOCOLOR": "1"}
+    # ANSIBLE_FORCE_COLOR overrides ANSIBLE_NOCOLOR, and a coloured PLAY RECAP does not match RECAP.
+    env = {k: v for k, v in os.environ.items() if k != "ANSIBLE_FORCE_COLOR"}
+    env |= {"ANSIBLE_CONFIG": str(HERE / "ansible.cfg"), "ANSIBLE_NOCOLOR": "1"}
     cmd = [PLAYBOOK, str(HERE / playbook), "--diff", "-e", json.dumps({"ansible_python_interpreter": sys.executable, **extra})]
     if check:
         cmd.append("--check")
@@ -53,8 +55,9 @@ def run(playbook, extra, check=False):
 def expect(result, host, changed=None, note=""):
     """Assert a run succeeded, and how much it changed (None: anything; True: something; or a number)."""
     rc, stats, out = result
+    problem = "run failed" if rc else f"no PLAY RECAP line for {host}"
     assert rc == 0 and host in stats and stats[host]["failed"] == 0 and stats[host]["unreachable"] == 0, (
-        f"{note}: run failed (rc {rc})\n{out[-6000:]}"
+        f"{note}: {problem} (rc {rc})\n{out[-6000:]}"
     )
     got = stats[host]["changed"]
     if changed is True:
