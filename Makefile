@@ -1,7 +1,7 @@
 # Entry points. Every Python tool comes from the project virtualenv, so the versions locked in
-# requirements.txt are the ones that run, here and in CI (.github/workflows/ci.yml). kubeconform is
-# the exception: it comes from PATH (Homebrew locally; CI pins its version and checksum), as does the
-# openssl the idempotence tests use.
+# requirements.txt are the ones that run, here and in CI (.github/workflows/ci.yml). kubeconform and
+# gitleaks are the exceptions: they come from PATH (Homebrew locally; CI pins each version and checksum),
+# as does the openssl the idempotence tests use.
 # The Python environment: the active virtualenv if there is one (VIRTUAL_ENV, set by
 # `pyenv activate <env>` or `source <env>/bin/activate`), otherwise ./.venv. Override with VENV=<path>.
 VENV    ?= $(if $(VIRTUAL_ENV),$(VIRTUAL_ENV),.venv)
@@ -95,7 +95,11 @@ lint-github: ## dependabot.yml and the workflows against their published schemas
 	$(BIN)/check-jsonschema --builtin-schema vendor.github-workflows .github/workflows/*.yml
 
 test: ## The unit tests, and the policy tests that check the repo's own rules (the lock matches requirements.in)
-	$(BIN)/pytest -q tests/unit tests/policy
+	$(BIN)/pytest -q -m "not gitleaks" tests/unit tests/policy
+
+.PHONY: test-gitleaks-rules
+test-gitleaks-rules: ## .gitleaks.toml against generated fixtures (gitleaks from PATH)
+	$(BIN)/pytest -q -m gitleaks tests/policy
 
 .PHONY: test-idempotence
 test-idempotence: ## Run each role repeatedly against local fakes of TrueNAS and Proxmox

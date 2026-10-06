@@ -31,6 +31,7 @@ group_vars/all/local.yml.example  template for local.yml, which holds every addr
 group_vars/all/storage.yml        VM storage layout shared by both plays
 group_vars/nas/, group_vars/proxmox/  connection and per-machine configuration
 inventory.example        template for inventory (no addresses in it)
+.gitleaks.toml           gitleaks rules for the identifiers this public repo must never hold
 requirements.in          the Python tooling's pins; requirements.txt is its hash-locked lock (make lock)
 .github/                 CI (workflows/ci.yml), Dependabot, and the reviewed body of the main-branch ruleset
 tests/unit/              tests for the TrueNAS modules' comparison logic
