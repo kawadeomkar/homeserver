@@ -45,7 +45,12 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       (`roles/truenas/module_utils/truenas_api.py`) with iXsystems' official library,
       [`truenas/api_client`](https://github.com/truenas/api_client). Its README says TrueNAS 26 changes
       the default login method, and the library is maintained alongside each release. It is not on
-      PyPI: pin it in `requirements.txt` to the git tag of the installed release (e.g. `TS-25.10.7`).
+      PyPI, publishes no release assets (only tags such as `TS-25.10.7`), and pip cannot hash a git
+      requirement: pin it in `requirements.in` as the tag's commit archive URL
+      (`https://github.com/truenas/api_client/archive/<commit>.tar.gz`), check that `make lock` writes
+      a hash for it, and bump it by hand (Dependabot will not). GitHub keeps generated archives
+      byte-stable only with advance notice, so a hash failure there means re-check the commit and
+      relock; if that recurs, build a wheel from the commit and keep it outside the repo instead.
       Only the connection layer changes; the modules keep their logic. Also raise
       `truenas_supported_version` and re-check the API calls the modules make against the new release
 

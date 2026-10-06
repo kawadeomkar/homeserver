@@ -35,10 +35,11 @@ moot, their manifest findings still apply. Some fixes that would be correct for 
 ## Commands
 
 ```bash
-make venv PYTHON=<python 3.12+>   # .venv with the versions pinned in requirements.txt
+make venv PYTHON=<python 3.12+>   # .venv from the hash-locked requirements.txt (--require-hashes)
 make init                         # also copies inventory and group_vars/all/local.yml from their examples
 make lint                         # yamllint, ansible-lint (production profile), module unit tests
 make test-idempotence             # each role run repeatedly against local fakes (about 30 s)
+make lock                         # regenerate requirements.txt, with hashes, after editing requirements.in
 make check-truenas                # dry run of roles/truenas against the NAS, with --diff
 make truenas                      # apply it; TAGS=truenas_network (or _pools, _system, _datasets, _nfs) for one stage
 make check-proxmox / make proxmox # the same for roles/proxmox_storage on the Proxmox host
@@ -155,6 +156,7 @@ gitignored, none of it reaches a clone, so the findings referenced below may hav
 - **Resource requests on every workload**, with limits only where a runaway can starve the node (nextcloud, jellyfin, frigate, photoprism, both MariaDBs, prometheus). All values are un-measured guesses — nothing has ever run. Aggregate: ~3.3 vCPU / ~9.6 GiB of requests, so a node needs ~4 vCPU and ~11 GiB before system overhead.
 - `inventory`, `.claude/` and `docs/` are gitignored because **this repo is public** — they would otherwise publish host addresses, and `docs/MACHINES.md` also lists MAC addresses and drive serials. A fresh clone recreates `inventory` from the committed, address-free `inventory.example` (`make init` copies it).
 - YAML style comes from `.yamlfmt` (basic, `---` document start, line breaks retained). `.yamllint` (160-column lines) and `.ansible-lint` (production profile) exist and `make lint` runs both plus the unit tests, but **nothing runs them automatically**: there is no CI and no pre-commit hook. Both skip `k8s/`, which `kubeconform` covers. ansible-lint warns that it cannot import the custom modules' `module_utils`; that warning is expected.
+- **Python dependencies** are hash-locked: direct pins live in `requirements.in`, `make lock` regenerates `requirements.txt` (pip-compile, with a hash for every package, pip included, taking only releases at least 7 days old), and `make venv` installs with `--require-hashes`. In an existing environment `make venv` removes nothing and does not re-check packages already at their pinned version, so recreate the environment when it may hold anything else. Packages only older Pythons need are pinned in `requirements.in` without markers (see its comment), because pip-compile resolves for the Python it runs on.
 - `TODO.md` is the running backlog. Its Ansible-layer items went with the Ubuntu host layer; what remains is manifest work and open migration decisions.
 - `REBUILD.md` is the recovery procedure after a hardware failure: the manual prerequisites (a fresh install's API user and key, the certificate pin, root SSH to Proxmox, DHCP reservations) and the run order. When a role gains or loses a prerequisite, or the run order changes, update it in the same change.
 - **Commit style**: history before the current change stack used short lowercase subjects with no body; the stack uses Conventional Commits with an explanatory body. Follow the latter.

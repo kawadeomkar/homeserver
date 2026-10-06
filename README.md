@@ -31,6 +31,7 @@ group_vars/all/local.yml.example  template for local.yml, which holds every addr
 group_vars/all/storage.yml        VM storage layout shared by both plays
 group_vars/nas/, group_vars/proxmox/  connection and per-machine configuration
 inventory.example        template for inventory (no addresses in it)
+requirements.in          the Python tooling's pins; requirements.txt is its hash-locked lock (make lock)
 tests/unit/              tests for the TrueNAS modules' comparison logic
 tests/integration/       idempotence tests against fake TrueNAS and Proxmox
 REBUILD.md               what to do before re-running the playbooks after a hardware failure
@@ -45,7 +46,7 @@ kept in the vault — see `k8s/README-secrets.md`.
 ## Ansible
 
 ```bash
-make venv PYTHON=<python 3.12+>   # pinned tooling in .venv (requirements.txt)
+make venv PYTHON=<python 3.12+>   # hash-locked tooling in .venv (requirements.txt, from requirements.in)
 make init                         # inventory and local.yml from their examples
 make lint                         # yamllint, ansible-lint, unit tests
 make test-idempotence             # each role run twice against local fakes

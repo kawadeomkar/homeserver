@@ -21,6 +21,11 @@ comma   := ,
 RUN_LOG  = $(LOG_DIR)/$(STAMP)-$@$(if $(TAGS),-$(subst $(comma),+,$(TAGS))).log
 RUN      = @umask 077 && mkdir -p $(LOG_DIR) && ln -sf $(notdir $(RUN_LOG)) $(LOG_DIR)/latest.log \
            && echo "Logging to $(RUN_LOG) (Python environment: $(VENV))" && ANSIBLE_LOG_PATH=$(RUN_LOG) $(PLAYBOOK)
+# The lock takes only releases at least 7 days old (pip's --uploaded-prior-to, passed through
+# pip-compile), so a bad release has a week to be found out before it reaches this toolchain.
+# pip-tools writes this command into the lock's header for people to re-run; under click 8.5 it adds
+# a --no-index that was never passed, so the header is set here.
+LOCK_COMMAND := pip-compile --allow-unsafe --generate-hashes --output-file=requirements.txt --strip-extras --pip-args='--uploaded-prior-to=P7D' requirements.in
 
 .DEFAULT_GOAL := help
 
@@ -30,11 +35,17 @@ help: ## Show this help
 
 $(BIN)/activate:
 	$(PYTHON) -m venv $(VENV)
-	$(BIN)/pip install --upgrade pip
 
 .PHONY: venv
-venv: $(BIN)/activate ## Create the virtualenv and install the pinned tooling
-	$(BIN)/pip install -r requirements.txt
+# In an existing environment this installs and upgrades to the lock but removes nothing, and pip does not
+# re-check the hashes of packages already at their pinned version. Recreate the environment to start clean.
+venv: $(BIN)/activate ## Create the virtualenv and install the hash-locked tooling (pip included)
+	$(BIN)/pip install --require-hashes -r requirements.txt
+
+.PHONY: lock
+lock: ## Re-resolve requirements.txt, with hashes, from requirements.in
+	@test -x $(BIN)/pip-compile || { echo "pip-compile is not in $(VENV): run make venv first"; exit 1; }
+	CUSTOM_COMPILE_COMMAND="$(LOCK_COMMAND)" $(BIN)/$(LOCK_COMMAND)
 
 .PHONY: init
 init: venv ## One-time setup: venv, plus inventory and local.yml from their examples

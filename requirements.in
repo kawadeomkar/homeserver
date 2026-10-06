@@ -1,0 +1,23 @@
+# The Python tooling this repo pins. requirements.txt is generated from this file, with hashes for
+# every package, by `make lock` (pip-compile); edit this file, never requirements.txt, then run it.
+# `make lock` takes only releases at least 7 days old, so a pin here that is younger than that
+# fails to resolve until it has aged.
+ansible-core==2.21.4
+ansible-lint==26.9.0
+yamllint==1.38.0
+pytest==9.1.1
+# Used by tests/integration/fake_truenas.py, the stand-in NAS for the idempotence tests.
+websockets==17.1
+# Used on the controller by roles/truenas to talk to the TrueNAS WebSocket API.
+websocket-client==1.9.2
+# Generates requirements.txt (make lock).
+pip-tools==7.6.1
+# pip itself, so every virtualenv installs with the same, hash-checked version.
+pip==26.2.1
+# Dependencies that only older Pythons need: ansible-lint wants ruamel.yaml.clib below 3.14, and
+# referencing wants typing-extensions below 3.13. pip-compile resolves for the Python it runs on, so a
+# lock made on 3.14 would leave them out and the 3.12/3.13 CI legs could not install it. Pinned here
+# without markers, every Python installs them (both have wheels up to 3.14). If CI's older legs ever
+# fail with "hashes are required", add the missing package here the same way.
+ruamel.yaml.clib==0.2.15
+typing-extensions==4.16.0
