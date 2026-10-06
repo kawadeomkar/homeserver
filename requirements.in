@@ -10,6 +10,8 @@ pytest==9.1.1
 websockets==17.1
 # Used on the controller by roles/truenas to talk to the TrueNAS WebSocket API.
 websocket-client==1.9.2
+# Validates .github/dependabot.yml and the workflows against SchemaStore's schemas, which it bundles.
+check-jsonschema==0.38.2
 # Generates requirements.txt (make lock).
 pip-tools==7.6.1
 # pip itself, so every virtualenv installs with the same, hash-checked version.

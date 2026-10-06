@@ -67,10 +67,10 @@ init: venv ## One-time setup: venv, plus inventory and local.yml from their exam
 	@test -f group_vars/all/local.yml || cp group_vars/all/local.yml.example group_vars/all/local.yml
 	@echo "Now fill in group_vars/all/local.yml (git-ignored) and make sure .vault_pass exists."
 
-.PHONY: lint linters lint-yaml lint-ansible lint-module-docs test
+.PHONY: lint linters lint-yaml lint-ansible lint-module-docs lint-github test
 lint: linters test ## Every linter, then the unit and policy tests
 
-linters: lint-yaml lint-ansible lint-module-docs ## yamllint, ansible-lint, module docs (no tests)
+linters: lint-yaml lint-ansible lint-module-docs lint-github ## yamllint, ansible-lint, module docs, GitHub config schemas (no tests)
 
 lint-yaml: ## yamllint; warnings fail too
 	$(BIN)/yamllint --strict .
@@ -89,6 +89,10 @@ lint-module-docs: ## Every custom module's DOCUMENTATION parses (each failure is
 	@rc=0; for m in $(MODULES); do \
 	  $(BIN)/ansible-doc -t module -M $$(dirname $$m) --json $$(basename $$m .py) </dev/null >/dev/null || rc=1; \
 	done; exit $$rc
+
+lint-github: ## dependabot.yml and the workflows against their published schemas (bundled, so offline)
+	$(BIN)/check-jsonschema --builtin-schema vendor.dependabot .github/dependabot.yml
+	$(BIN)/check-jsonschema --builtin-schema vendor.github-workflows .github/workflows/*.yml
 
 test: ## The unit tests, and the policy tests that check the repo's own rules (the lock matches requirements.in)
 	$(BIN)/pytest -q tests/unit tests/policy
