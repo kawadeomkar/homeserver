@@ -1,6 +1,7 @@
 # Entry points. Every Python tool comes from the project virtualenv, so the versions locked in
-# requirements.txt are the ones that run. kubeconform is the exception: it comes from PATH, as does
-# the openssl the idempotence tests use.
+# requirements.txt are the ones that run, here and in CI (.github/workflows/ci.yml). kubeconform is
+# the exception: it comes from PATH (Homebrew locally; CI pins its version and checksum), as does the
+# openssl the idempotence tests use.
 # The Python environment: the active virtualenv if there is one (VIRTUAL_ENV, set by
 # `pyenv activate <env>` or `source <env>/bin/activate`), otherwise ./.venv. Override with VENV=<path>.
 VENV    ?= $(if $(VIRTUAL_ENV),$(VIRTUAL_ENV),.venv)
@@ -74,8 +75,8 @@ linters: lint-yaml lint-ansible lint-module-docs ## yamllint, ansible-lint, modu
 lint-yaml: ## yamllint; warnings fail too
 	$(BIN)/yamllint --strict .
 
-# ansible-lint needs a vault password file for its syntax check. Without the real one (a fresh clone)
-# it gets a placeholder, and it then skips the vault's contents; tests/policy checks that the vault
+# ansible-lint needs a vault password file for its syntax check. Without the real one (a fresh clone, or
+# CI) it gets a placeholder, and it then skips the vault's contents; tests/policy checks that the vault
 # stays encrypted.
 lint-ansible: ## ansible-lint at the production profile
 	@if [ -z "$$ANSIBLE_VAULT_PASSWORD_FILE" ] && [ ! -f .vault_pass ]; then \
@@ -103,6 +104,9 @@ lint-kubeconform: ## kubeconform, strict, against Talos's Kubernetes version (ku
 	@mkdir -p $(KUBE_CACHE)
 	kubeconform -strict -summary -cache $(KUBE_CACHE) -kubernetes-version $(KUBERNETES_VERSION) \
 	  -schema-location '$(KUBE_SCHEMAS)' k8s
+
+.PHONY: ci
+ci: lint test-idempotence lint-kubeconform ## Everything the CI gate runs, apart from linting the workflows
 
 .PHONY: check-truenas
 check-truenas: ## Dry-run the NAS configuration and show what would change

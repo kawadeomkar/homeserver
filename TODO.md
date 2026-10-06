@@ -6,17 +6,28 @@ the full audit with file/line references; the finding ids below refer to it.
 ## Do before migrating — these survive it
 
 - [ ] Delete the placeholder alerting rule that always fires at a nonexistent Alertmanager (K8S-26)
-- [ ] Add CI running `make lint` (yamllint, ansible-lint at the production profile, the module unit
-      tests), `make test-idempotence` and `kubeconform -strict`. The configs exist; nothing runs them automatically (REPO-3)
 - [ ] Add Renovate or equivalent — 23 image tags are now pinned by hand, and the repo's two oldest pins
       have sat unbumped since 2022 (REPO-3)
 - [ ] Implement the SOPS + age decision for Kubernetes Secrets, and write down where the age key lives and
       how it is backed up. Until then nextcloud and photoprism cannot deploy (see `k8s/README-secrets.md`)
-- [ ] Add a `gitleaks` pre-commit hook. Filename-based ignores cannot catch an extensionless private key
 - [ ] Decide whether to rewrite git history for the credentials that were committed and later deleted.
       They were never deployed, but this repo is public
 - [ ] Real domain instead of `*.homeserver.internal`, which public ACME cannot validate. Prerequisite for
       any TLS at all (K8S-14)
+
+## CI
+
+`.github/workflows/ci.yml` gates pull requests through one check, `ci-success`. `docs/CI-PLAN.md`
+(gitignored) is the full plan.
+
+- [ ] On the first CI run, check that every job is green on `ubuntu-26.04`, the Python 3.12 and 3.13 legs
+      included
+- [ ] Once the workflow is on `main`, check that CodeQL's default setup scans `actions` as well as `python`
+      (`gh api repos/kawadeomkar/homeserver/code-scanning/default-setup`), and add it if not
+- [ ] Drop the Python 3.12 leg when ansible-core stops supporting 3.12 on the controller
+- [ ] The rest of the CI plan: leak checks with gitleaks rules and pre-commit, pre-push and commit-msg
+      hooks (PR 2); ruff and the roles' convention tests (PR 3); kube-linter and the manifest convention
+      tests (PR 4); TrueNAS client tests (PR 5); OpenSSF Scorecard and dependency review (PR 6)
 
 ## TrueNAS
 

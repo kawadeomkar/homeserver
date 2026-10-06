@@ -51,6 +51,7 @@ make venv PYTHON=<python 3.12+>   # hash-locked tooling in .venv (requirements.t
 make init                         # inventory and local.yml from their examples
 make lint                         # yamllint, ansible-lint, module docs, tests
 make test-idempotence             # each role run repeatedly against local fakes
+make ci                           # what the CI gate runs, on one Python, apart from the workflow linters
 make check-truenas && make truenas
 make check-proxmox && make proxmox
 ```
@@ -86,4 +87,10 @@ still go first: it owns the namespaces that more than one service directory shar
 make lint-kubeconform   # kubeconform -strict against Kubernetes 1.37.1, the version Talos ships
 ```
 
-There is no CI, so this does not run automatically.
+## CI
+
+Every pull request and every push to `main` runs `.github/workflows/ci.yml`: every linter, the unit, policy
+and idempotence tests on Python 3.12, 3.13 and 3.14, `make lint-kubeconform`, and actionlint and zizmor over the
+workflows. `ci-success` aggregates the jobs, so a branch ruleset needs to require only that one check. No job
+gets a secret, and none reaches the home network: the roles are tested only against the fakes in
+`tests/integration`.

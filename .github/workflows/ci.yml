@@ -1,0 +1,147 @@
+---
+# The pull-request gate. The lint, test and kubernetes jobs run the make targets a local `make ci` runs,
+# from the hash-locked toolchain, and ci-success aggregates them into the one check a branch ruleset
+# needs to require. No job holds a secret, and nothing here can reach the home network: the roles are
+# tested against local fakes.
+name: CI
+
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  # Pull-request runs supersede each other; every push to main keeps its own group, so none is cancelled.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_COLOR: "1"
+  PY_COLORS: "1"
+  # No ANSIBLE_FORCE_COLOR: it overrides the ANSIBLE_NOCOLOR the idempotence tests run ansible-playbook with.
+  # Binary tools are pinned by version and checksum; bump each version with its checksum.
+  ACTIONLINT_VERSION: "1.7.12"
+  ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+  KUBECONFORM_VERSION: "0.8.0"
+  KUBECONFORM_SHA256: "9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883"
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install the hash-locked tooling
+        run: make venv PYTHON=python
+      # The real vault password never reaches CI: without .vault_pass, make gives ansible-lint a
+      # placeholder, and the vault's contents go unlinted (tests/policy checks it stays encrypted).
+      # -k: report every failing linter, not only the first. The tests run in the test job.
+      - name: yamllint, ansible-lint, module documentation, GitHub config schemas
+        run: make -k linters
+
+  test:
+    name: test (python ${{ matrix.python }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # ansible-core 2.21's controller range. The modules run under this Python in the idempotence suite.
+        python: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install the hash-locked tooling
+        run: make venv PYTHON=python
+      - name: Unit tests
+        run: make test
+      # Runs both roles against fake_truenas.py and fake_pve_bin; needs openssl, which the image has.
+      - name: Idempotence against the TrueNAS and Proxmox fakes
+        run: make test-idempotence
+
+  kubernetes:
+    name: kubernetes
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install kubeconform (checksum verified)
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSLo kubeconform.tgz \
+            "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  kubeconform.tgz" | sha256sum -c -
+          tar -xzf kubeconform.tgz kubeconform
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: kubeconform, strict, against Talos's Kubernetes version
+        run: make lint-kubeconform
+
+  workflows:
+    name: workflows
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # A download, not a docker:// step: the repository's actions allow-list rejects container steps.
+      # actionlint runs shellcheck, which the runner image has, on every `run:` script.
+      - name: Install actionlint (checksum verified)
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSLo actionlint.tgz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tgz" | sha256sum -c -
+          tar -xzf actionlint.tgz actionlint
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: actionlint (reads .github/actionlint.yaml)
+        run: actionlint -color
+      # advanced-security false: findings fail the job instead of only uploading SARIF. The pedantic
+      # persona is what flags an image without a digest, or a missing permissions or concurrency block.
+      # No version input: the action pulls the zizmor its release pins by digest, so bumping the action
+      # bumps zizmor.
+      - name: zizmor
+        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          advanced-security: false
+          persona: pedantic
+
+  ci-success:
+    name: ci-success
+    if: always()
+    needs: [lint, test, kubernetes, workflows]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
+        with:
+          jobs: ${{ toJSON(needs) }}
