@@ -21,7 +21,11 @@ the full audit with file/line references; the finding ids below refer to it.
 `.github/workflows/ci.yml` gates pull requests through one check, `ci-success`. `docs/CI-PLAN.md`
 (gitignored) is the full plan, and `CLAUDE.md` lists the pins Dependabot cannot see, bumped by hand.
 
-- [ ] On the first CI run, check that every job is green on `ubuntu-26.04`, the Python 3.12 and 3.13 legs
+- [ ] Make `ci-success` a required check as soon as the pull request that adds CI has a green run, before
+      merging it; until then a red pull request can still merge:
+      `gh api -X PUT repos/kawadeomkar/homeserver/rulesets/24555579 --input .github/rulesets/main.json`.
+      Then confirm on a throwaway pull request that a failing check blocks the merge
+- [ ] On that first run, check that every job is green on `ubuntu-26.04`, the Python 3.12 and 3.13 legs
       included
 - [ ] Once the workflow is on `main`, check that CodeQL's default setup scans `actions` as well as `python`
       (`gh api repos/kawadeomkar/homeserver/code-scanning/default-setup`), and add it if not

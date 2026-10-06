@@ -1,8 +1,8 @@
 ---
 # The pull-request gate. The lint, test and kubernetes jobs run the make targets a local `make ci` runs,
-# from the hash-locked toolchain, and ci-success aggregates them into the one check a branch ruleset
-# needs to require. No job holds a secret, and nothing here can reach the home network: the roles are
-# tested against local fakes.
+# from the hash-locked toolchain, and ci-success is the one check for the "Protect main" ruleset to
+# require (its body is .github/rulesets/main.json, applied through the API). No job holds a secret, and
+# nothing here can reach the home network: the roles are tested against local fakes.
 name: CI
 
 'on':
