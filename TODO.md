@@ -29,8 +29,9 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       `TAGS=truenas_network` and so on), then `make check-proxmox` and `make proxmox`. A second run of each
       must report no changes. TrueNAS allows 20 logins a minute and a full check uses about 13, so leave a
       minute between a full check and the network stage
-- [ ] Reserve the NAS's static address on the router for its MAC, or move the DHCP pool off it. The address
-      may sit inside the pool, where DHCP could hand it to another device
+- [ ] Move the router's DHCP dynamic range off the addresses the servers use. The NAS and the Proxmox host
+      are now reserved in DHCP (OPNsense Dnsmasq host entries), but the range still overlaps server
+      addresses, which is how the NAS's first-choice static address turned out to be taken
 - [ ] Decide whether persistent VMs are backed up (a `backup` dataset with 1M records and a Proxmox
       backup storage) or simply recreated after a Proxmox wipe
 - [ ] Measure synchronous write speed on the persistent storage (`fio` with `fsync=1`). The pool's
