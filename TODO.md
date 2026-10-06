@@ -6,19 +6,28 @@ the full audit with file/line references; the finding ids below refer to it.
 ## Do before migrating — these survive it
 
 - [ ] Delete the placeholder alerting rule that always fires at a nonexistent Alertmanager (K8S-26)
-- [ ] Remove `spec.strategy` from `nextcloud/statefulset.yaml` (a Deployment-only field) so
-      `kubeconform -strict` passes tree-wide and can gate CI (K8S-27)
-- [ ] Add CI running `make lint` (yamllint, ansible-lint at the production profile, the module unit
-      tests), `make test-idempotence` and `kubeconform -strict`. The configs exist; nothing runs them automatically (REPO-3)
-- [ ] Add Renovate or equivalent — 23 image tags are now pinned by hand, and the repo's two oldest pins
-      have sat unbumped since 2022 (REPO-3)
+- [ ] Add Renovate for the 21 container image tags, which are pinned and bumped by hand. Wait until the
+      cluster exists, and split the ruleset first so an app with write access cannot merge on its own
+      (REPO-3). Dependabot covers the SHA-pinned actions and the Python lock, not image tags
 - [ ] Implement the SOPS + age decision for Kubernetes Secrets, and write down where the age key lives and
       how it is backed up. Until then nextcloud and photoprism cannot deploy (see `k8s/README-secrets.md`)
-- [ ] Add a `gitleaks` pre-commit hook. Filename-based ignores cannot catch an extensionless private key
-- [ ] Decide whether to rewrite git history for the credentials that were committed and later deleted.
-      They were never deployed, but this repo is public
 - [ ] Real domain instead of `*.homeserver.internal`, which public ACME cannot validate. Prerequisite for
       any TLS at all (K8S-14)
+
+## CI
+
+`.github/workflows/ci.yml` gates pull requests through one check, `ci-success`. `docs/CI-PLAN.md`
+(gitignored) is the full plan, and `CLAUDE.md` lists the pins Dependabot cannot see, bumped by hand.
+
+- [ ] Once the workflow is on `main`, check that CodeQL's default setup scans `actions` as well as `python`
+      (`gh api repos/kawadeomkar/homeserver/code-scanning/default-setup`), and add it if not
+- [ ] Check Dependabot's first pull requests: titles of the form `[dependencies] Bump …`, the `actions`,
+      `ansible` and `tooling` groups, and whether the ruleset's undocumented
+      `require_extra_approval_for_unattributed_changes` holds them back
+- [ ] Drop the Python 3.12 leg when ansible-core stops supporting 3.12 on the controller
+- [ ] The rest of the CI plan: leak checks with gitleaks rules and pre-commit, pre-push and commit-msg
+      hooks (PR 2); ruff and the roles' convention tests (PR 3); kube-linter and the manifest convention
+      tests (PR 4); TrueNAS client tests (PR 5); OpenSSF Scorecard and dependency review (PR 6)
 
 ## TrueNAS
 
@@ -47,9 +56,20 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       (`roles/truenas/module_utils/truenas_api.py`) with iXsystems' official library,
       [`truenas/api_client`](https://github.com/truenas/api_client). Its README says TrueNAS 26 changes
       the default login method, and the library is maintained alongside each release. It is not on
-      PyPI: pin it in `requirements.txt` to the git tag of the installed release (e.g. `TS-25.10.7`).
+      PyPI, publishes no release assets (only tags such as `TS-25.10.7`), and pip cannot hash a git
+      requirement: pin it in `requirements.in` as the tag's commit archive URL
+      (`https://github.com/truenas/api_client/archive/<commit>.tar.gz`), check that `make lock` writes
+      a hash for it, and bump it by hand (Dependabot will not). GitHub keeps generated archives
+      byte-stable only with advance notice, so a hash failure there means re-check the commit and
+      relock; if that recurs, build a wheel from the commit and keep it outside the repo instead.
       Only the connection layer changes; the modules keep their logic. Also raise
       `truenas_supported_version` and re-check the API calls the modules make against the new release
+- [ ] At that upgrade, decide whether to hold `tests/integration/fake_truenas.py` to the real API. Dump the
+      `accepts`/`returns` schemas of the methods the role calls with `core.get_methods` (a read-only query,
+      run once from a reviewed `main` checkout with the existing key), diff 25.10 against 26 to see which
+      calls and fake handlers change, and have the fake validate requests and replies against them.
+      Deferred from the CI plan (decision D6): the real NAS already accepted every 25.10 request the
+      configuration sends. Note that `pool.create` is exercised by neither the fake nor a real run
 
 ## Proxmox
 

@@ -12,7 +12,8 @@ description:
 options:
   services:
     description:
-      - Service name, as C(service.query) reports it (C(nfs), C(cifs), C(ssh), ...), mapped to
+      - >-
+        Service name, as C(service.query) reports it (C(nfs), C(cifs), C(ssh), ...), mapped to
         C({enabled: <bool>, state: started|stopped}).
     type: dict
     required: true

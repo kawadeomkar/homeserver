@@ -46,7 +46,8 @@ re-applied, since TrueNAS keeps those on the boot drive. This repo's full proced
 | `truenas_services` | Enables, disables, starts and stops services, last | `truenas_services` |
 
 `defaults/main.yml` and `meta/argument_specs.yml` describe every variable. Run with `--check --diff`
-first; there is no test double.
+first: `tests/integration` runs the role against a fake NAS, which cannot prove the real one behaves the
+same.
 
 ## Example
 

@@ -31,7 +31,10 @@ group_vars/all/local.yml.example  template for local.yml, which holds every addr
 group_vars/all/storage.yml        VM storage layout shared by both plays
 group_vars/nas/, group_vars/proxmox/  connection and per-machine configuration
 inventory.example        template for inventory (no addresses in it)
+requirements.in          the Python tooling's pins; requirements.txt is its hash-locked lock (make lock)
+.github/                 CI (workflows/ci.yml), Dependabot, and the reviewed body of the main-branch ruleset
 tests/unit/              tests for the TrueNAS modules' comparison logic
+tests/policy/            tests of the repo's own rules: the lock, the vault, the ruleset
 tests/integration/       idempotence tests against fake TrueNAS and Proxmox
 REBUILD.md               what to do before re-running the playbooks after a hardware failure
 ```
@@ -45,17 +48,18 @@ kept in the vault — see `k8s/README-secrets.md`.
 ## Ansible
 
 ```bash
-make venv PYTHON=<python 3.12+>   # pinned tooling in .venv (requirements.txt)
+make venv PYTHON=<python 3.12+>   # hash-locked tooling in .venv (requirements.txt, from requirements.in)
 make init                         # inventory and local.yml from their examples
-make lint                         # yamllint, ansible-lint, unit tests
-make test-idempotence             # each role run twice against local fakes
+make lint                         # yamllint, ansible-lint, module docs, GitHub config schemas, tests
+make test-idempotence             # each role run repeatedly against local fakes
+make ci                           # what the CI gate runs, on one Python, apart from the workflow linters
 make check-truenas && make truenas
 make check-proxmox && make proxmox
 ```
 
 Each TrueNAS stage can be run on its own with `TAGS=truenas_network`, `truenas_pools`, `truenas_system`,
-`truenas_datasets`, `truenas_nfs` or `truenas_services`. Always run the check first: there is no test double for
-either machine.
+`truenas_datasets`, `truenas_nfs` or `truenas_services`. Always run the check first: the idempotence tests use
+fakes, which cannot prove the real machines behave the same.
 
 The roles are generic and change nothing by default; this setup's configuration is in `group_vars/`
 (`all/storage.yml`, `nas/truenas.yml`, `proxmox/storage.yml`), with addresses and serials in the git-ignored
@@ -81,7 +85,15 @@ still go first: it owns the namespaces that more than one service directory shar
 ### Linting
 
 ```bash
-kubeconform -summary -ignore-missing-schemas $(find k8s -name '*.yaml')
+make lint-kubeconform   # kubeconform -strict against Kubernetes 1.37.1, the version Talos ships
 ```
 
-There is no CI, so this does not run automatically.
+## CI
+
+Every pull request and every push to `main` runs `.github/workflows/ci.yml`: every linter, the unit, policy
+and idempotence tests on Python 3.12, 3.13 and 3.14, `make lint-kubeconform`, and actionlint and zizmor over the
+workflows. `ci-success` aggregates the jobs and is the one check for the "Protect main" ruleset to require;
+`.github/rulesets/main.json` holds that ruleset's body, applied through the GitHub API. No job gets a secret,
+and none reaches the home network: the roles are tested only against the fakes in `tests/integration`.
+Dependabot proposes weekly updates to the SHA-pinned actions and every package in the Python lock. The
+actionlint and kubeconform versions and the schema pins are bumped by hand; CLAUDE.md lists them.

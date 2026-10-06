@@ -21,7 +21,8 @@ options:
       - The pools. Each has C(name) and optionally C(guid) (the pool found or imported must have it),
         C(layout) (data vdev type for creation, C(STRIPE) for one disk), C(disk_serials) (resolved
         to device names at run time), C(autotrim) (C(ON) or C(OFF)) and C(scrub).
-      - C(scrub) is the pool's scrub task as C(pool.scrub.create) takes it minus C(pool), for example
+      - >-
+        C(scrub) is the pool's scrub task as C(pool.scrub.create) takes it minus C(pool), for example
         C({threshold: 35, schedule: {minute: "00", hour: "00", dom: "*", month: "*", dow: "7"}}).
         TrueNAS creates a default task when it imports or creates a pool; this corrects it.
     type: list
