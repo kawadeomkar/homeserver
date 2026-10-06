@@ -6,8 +6,6 @@ the full audit with file/line references; the finding ids below refer to it.
 ## Do before migrating — these survive it
 
 - [ ] Delete the placeholder alerting rule that always fires at a nonexistent Alertmanager (K8S-26)
-- [ ] Remove `spec.strategy` from `nextcloud/statefulset.yaml` (a Deployment-only field) so
-      `kubeconform -strict` passes tree-wide and can gate CI (K8S-27)
 - [ ] Add CI running `make lint` (yamllint, ansible-lint at the production profile, the module unit
       tests), `make test-idempotence` and `kubeconform -strict`. The configs exist; nothing runs them automatically (REPO-3)
 - [ ] Add Renovate or equivalent — 23 image tags are now pinned by hand, and the repo's two oldest pins

@@ -12,8 +12,6 @@ spec:
   selector:
     matchLabels:
       app: nextcloud-db
-  strategy:
-    type: Recreate
   template:
     metadata:
       labels: 
