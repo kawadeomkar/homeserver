@@ -1,0 +1,12 @@
+---
+# How roles/truenas reaches this NAS: through its API from the controller. SSH stays off on it.
+ansible_connection: local
+# The modules need websocket-client, which is installed in the controller's virtualenv.
+ansible_python_interpreter: "{{ ansible_playbook_python }}"
+
+truenas_api_key: "{{ vault_truenas_api_key }}"
+# The static address first, then the one a freshly installed NAS answers on. Both are set in
+# group_vars/all/local.yml.
+truenas_api_hosts:
+  - "{{ truenas_static_address | default('') | split('/') | first }}"
+  - "{{ truenas_bootstrap_address | default('') }}"

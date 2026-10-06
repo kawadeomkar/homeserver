@@ -1,0 +1,32 @@
+---
+# Allowed values and types are checked by meta/argument_specs.yml before this runs.
+
+- name: validate | Check the connection settings
+  ansible.builtin.assert:
+    that:
+      - truenas_api_key | length > 0
+      - truenas_api_hosts | select | list | length > 0
+    fail_msg: Set truenas_api_key and at least one address in truenas_api_hosts.
+    quiet: true
+
+- name: validate | Check a static address has what it needs
+  ansible.builtin.assert:
+    that: truenas_static_address | length > 0 and truenas_gateway | length > 0
+    fail_msg: truenas_network_mode static needs truenas_static_address (CIDR form) and truenas_gateway.
+    quiet: true
+  when: truenas_network_mode == 'static'
+
+- name: validate | Refuse an NFS share open to every host
+  ansible.builtin.assert:
+    that: >-
+      (_share.hosts | default([]) | select | list | length > 0)
+      or (_share.networks | default([]) | select | list | length > 0)
+    fail_msg: >-
+      {{ item.path }} has no hosts or networks, so any device on the network could mount it and
+      write to it. Give it hosts or networks.
+    quiet: true
+  loop: "{{ truenas_nfs_shares }}"
+  loop_control:
+    label: "{{ item.path }}"
+  vars:
+    _share: "{{ truenas_nfs_share_defaults | combine(item) }}"

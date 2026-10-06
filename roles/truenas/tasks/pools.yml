@@ -1,0 +1,31 @@
+---
+# On a fresh install the system dataset sits on the boot pool without having been chosen, and
+# TrueNAS moves it onto the first data pool it imports. Choosing it explicitly (pool_set) stops that.
+# Only done when the role manages pools, since that is what it protects.
+- name: pools | Pin the system dataset before any pool is imported
+  truenas_config: &truenas_system_dataset
+    namespace: systemdataset
+    settings:
+      pool: "{{ truenas_system_dataset_pool }}"
+    match:
+      pool_set: true
+    job: true
+  when:
+    - truenas_system_dataset_pool | default('', true) | length > 0
+    - truenas_pools | length > 0
+
+- name: pools | Import or create the pools
+  truenas_pool:
+    pools: "{{ truenas_pools }}"
+    allow_create: "{{ truenas_pool_allow_create }}"
+    disk_serials: "{{ truenas_pool_disks }}"
+    guids: "{{ truenas_pool_guids }}"
+    autotrim: "{{ truenas_pool_autotrim | default(omit, true) }}"
+    scrub: "{{ truenas_pool_scrub | default(omit, true) }}"
+  when: truenas_pools | length > 0
+
+- name: pools | Check the system dataset is still where it was pinned
+  truenas_config: *truenas_system_dataset
+  when:
+    - truenas_system_dataset_pool | default('', true) | length > 0
+    - truenas_pools | length > 0

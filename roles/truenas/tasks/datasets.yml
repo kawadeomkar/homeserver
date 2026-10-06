@@ -1,0 +1,6 @@
+---
+# Never deletes a dataset, and never touches one that is not listed.
+- name: datasets | Create the datasets and set their properties
+  truenas_dataset:
+    datasets: "{{ truenas_datasets }}"
+  when: truenas_datasets | length > 0

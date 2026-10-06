@@ -1,0 +1,27 @@
+---
+# UI settings only apply when the web server restarts; ui_restart_delay restarts it that many
+# seconds after the update answers.
+- name: system | Apply the general settings
+  truenas_config:
+    namespace: system.general
+    settings: "{{ truenas_general_settings }}"
+    update_options:
+      ui_restart_delay: "{{ truenas_ui_restart_delay }}"
+  register: truenas_general
+  when: truenas_general_settings | length > 0
+
+- name: system | Wait for the web server to restart
+  ansible.builtin.pause:
+    seconds: "{{ truenas_ui_restart_wait }}"
+  when:
+    - truenas_general is changed
+    - not ansible_check_mode
+    - truenas_ui_restart_wait | int > 0
+
+- name: system | Set the NTP servers
+  truenas_resource:
+    namespace: system.ntpserver
+    key: [address]
+    entries: "{{ truenas_ntp_servers }}"
+    defaults: "{{ truenas_ntp_server_defaults }}"
+  when: truenas_ntp_servers | length > 0

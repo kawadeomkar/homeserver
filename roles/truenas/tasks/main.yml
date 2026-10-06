@@ -1,0 +1,57 @@
+---
+# Each stage has its own tag, so one stage can be checked or applied at a time:
+#   truenas_network, truenas_pools, truenas_system, truenas_datasets, truenas_nfs, truenas_services
+# Validation and the read-only connection (also tagged truenas_info) run under every tag.
+# A stage whose configuration is empty does nothing.
+
+- name: Check the role's inputs
+  ansible.builtin.import_tasks: validate.yml
+  tags: [always]
+
+- name: Configure the NAS through its API
+  module_defaults:
+    truenas_info: &truenas_api_common
+      api_port: "{{ truenas_api_port }}"
+      api_key: "{{ truenas_api_key }}"
+      validate_certs: "{{ truenas_validate_certs }}"
+      api_cert_sha256: "{{ truenas_api_cert_sha256 }}"
+      api_timeout: "{{ truenas_api_timeout }}"
+      api_connect_wait: "{{ truenas_api_connect_wait }}"
+      api_job_timeout: "{{ truenas_api_job_timeout }}"
+      api_login_wait: "{{ truenas_api_login_wait }}"
+    truenas_config: &truenas_api
+      <<: *truenas_api_common
+      api_host: "{{ truenas_api_host | default('') }}"
+    truenas_dataset: *truenas_api
+    truenas_interface: *truenas_api
+    truenas_pool: *truenas_api
+    truenas_resource: *truenas_api
+    truenas_service: *truenas_api
+  block:
+    - name: Connect and report the NAS's state
+      ansible.builtin.import_tasks: connect.yml
+      tags: [always, truenas_info]
+
+    - name: Network settings and static address
+      ansible.builtin.import_tasks: network.yml
+      tags: [truenas_network]
+
+    - name: Data pools
+      ansible.builtin.import_tasks: pools.yml
+      tags: [truenas_pools]
+
+    - name: System settings
+      ansible.builtin.import_tasks: system.yml
+      tags: [truenas_system]
+
+    - name: Datasets
+      ansible.builtin.import_tasks: datasets.yml
+      tags: [truenas_datasets]
+
+    - name: NFS settings and shares
+      ansible.builtin.import_tasks: nfs.yml
+      tags: [truenas_nfs]
+
+    - name: Services
+      ansible.builtin.import_tasks: services.yml
+      tags: [truenas_services]
