@@ -1,0 +1,14 @@
+---
+galaxy_info:
+  author: homeserver contributors
+  namespace: homeserver
+  role_name: proxmox_storage
+  description: Add the NAS's NFS shares to Proxmox VE as qcow2 VM-disk storage
+  # The repo has no licence file; the role is not published.
+  license: none
+  min_ansible_version: "2.21"
+  platforms:
+    - name: Debian
+      versions:
+        - all
+dependencies: []

@@ -1,0 +1,43 @@
+---
+argument_specs:
+  main:
+    short_description: Add NFS shares to Proxmox VE as VM-disk storage
+    description:
+      - Adds one NFS storage per entry of proxmox_storage_nfs with pvesm, and corrects the content,
+        format, mount options and enabled state of one that already exists.
+      - Refuses a storage id that exists with another type, server or export, rather than
+        replacing it.
+      - Optionally sets the node's start-on-boot delay so VMs wait for the NFS server after a power cut.
+      - The defaults change nothing.
+    options:
+      proxmox_storage_nfs_server:
+        type: str
+        default: ""
+        description: NFS server for entries that do not name their own.
+      proxmox_storage_nfs:
+        type: list
+        elements: dict
+        default: []
+        description: Storages, each with id and export; optional server, content, format, nfs_options, enabled.
+      proxmox_storage_nfs_options:
+        type: str
+        default: ""
+        description: NFS mount options for entries that do not set their own. Empty leaves Proxmox's defaults.
+      proxmox_storage_format:
+        type: str
+        choices: [qcow2, raw]
+        default: qcow2
+      proxmox_storage_content:
+        type: list
+        elements: str
+        default: [images]
+      proxmox_storage_enabled:
+        type: bool
+        default: true
+      proxmox_storage_node:
+        type: str
+        default: ""
+        description: The node's name in Proxmox. Empty means the host's short hostname.
+      proxmox_storage_startall_delay:
+        type: int
+        description: Start-on-boot delay in seconds (0-300). Unset or null leaves the node's setting alone.

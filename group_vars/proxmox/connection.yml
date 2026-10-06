@@ -1,0 +1,5 @@
+---
+# How roles/proxmox_storage reaches the Proxmox host: root SSH. The address is set in
+# group_vars/all/local.yml.
+ansible_host: "{{ proxmox_address }}"
+ansible_user: root

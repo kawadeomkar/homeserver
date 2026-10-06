@@ -1,0 +1,24 @@
+---
+# Neutral defaults: with nothing else set, the role changes nothing. The storages to add are
+# configuration, set in inventory group_vars; see README.md.
+
+# NFS server for every storage that does not name its own (server).
+proxmox_storage_nfs_server: ""
+# Each entry: id and export; optional server, content, format, nfs_options, enabled.
+proxmox_storage_nfs: []
+
+# Applied to entries that do not set their own.
+# Mount options as `man nfs` takes them, e.g. vers=4.2. Empty leaves Proxmox's defaults.
+proxmox_storage_nfs_options: ""
+# qcow2 gives snapshots and linked clones on NFS. A disk imported with import-from keeps the source
+# image's format whatever this says, so whatever imports images must ask for qcow2 itself.
+proxmox_storage_format: qcow2
+proxmox_storage_content: [images]
+proxmox_storage_enabled: true
+
+# The Proxmox node's name. Empty means the host's short hostname, which is what Proxmox uses.
+proxmox_storage_node: ""
+
+# Seconds the node waits at boot before starting VMs marked start-on-boot (0-300). null leaves the
+# node's setting alone.
+proxmox_storage_startall_delay: null

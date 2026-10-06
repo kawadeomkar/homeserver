@@ -1,0 +1,15 @@
+---
+# This Proxmox host's storage, applied by roles/proxmox_storage. The NAS's address comes from
+# group_vars/all/local.yml, the VM storage layout from group_vars/all/storage.yml.
+
+proxmox_storage_nfs_server: "{{ truenas_static_address | split('/') | first }}"
+proxmox_storage_nfs:
+  - id: "{{ vm_storage.persistent.proxmox_id }}"
+    export: "{{ vm_storage_mount_root }}/{{ vm_storage.persistent.dataset }}"
+  - id: "{{ vm_storage.ephemeral.proxmox_id }}"
+    export: "{{ vm_storage_mount_root }}/{{ vm_storage.ephemeral.dataset }}"
+# Pinned so an upgrade on either side cannot silently change the protocol version. nconnect is
+# left out until it has been measured.
+proxmox_storage_nfs_options: vers=4.2
+# The NAS boots more slowly than Proxmox; VMs marked start-on-boot wait this long after a power cut.
+proxmox_storage_startall_delay: 120

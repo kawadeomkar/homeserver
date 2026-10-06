@@ -1,0 +1,164 @@
+---
+# Uses pvesm over root SSH. community.proxmox's proxmox_storage module only creates storage,
+# never corrects it, and has no format option.
+
+- name: Check the role's inputs
+  ansible.builtin.assert:
+    that:
+      - proxmox_storage_nfs | map(attribute='id') | unique | list | length == proxmox_storage_nfs | length
+      - proxmox_storage_nfs | rejectattr('server', 'defined') | list | length == 0 or proxmox_storage_nfs_server | length > 0
+    fail_msg: >-
+      Storage ids must be unique, and every storage needs an NFS server: its own server, or
+      proxmox_storage_nfs_server.
+    quiet: true
+
+- name: Read the storage configuration
+  ansible.builtin.command:
+    argv: [pvesh, get, /storage, --output-format, json]
+  register: proxmox_storage_config
+  changed_when: false
+  check_mode: false
+  when: proxmox_storage_nfs | length > 0
+
+- name: Work out the wanted settings and what each storage needs
+  ansible.builtin.set_fact:
+    proxmox_storage_wanted: "{{ _wanted }}"
+    proxmox_storage_plan: "{{ _plan }}"
+  when: proxmox_storage_nfs | length > 0
+  vars:
+    _existing: "{{ proxmox_storage_config.stdout | from_json }}"
+    # Each entry with the role-wide settings filled in.
+    _wanted: >-
+      {%- set out = [] -%}
+      {%- for s in proxmox_storage_nfs -%}
+      {%-   set _ = out.append({
+              'id': s.id,
+              'server': s.server | default(proxmox_storage_nfs_server),
+              'export': s.export,
+              'content': s.content | default(proxmox_storage_content) | sort | join(','),
+              'format': s.format | default(proxmox_storage_format),
+              'options': s.nfs_options | default(proxmox_storage_nfs_options),
+              'disable': 0 if s.enabled | default(proxmox_storage_enabled) else 1}) -%}
+      {%- endfor -%}
+      {{ out }}
+    # add, correct, ok, or conflict (same id, different type, server or export).
+    _plan: >-
+      {%- set have = dict(_existing | map(attribute='storage') | zip(_existing)) -%}
+      {%- set plan = {} -%}
+      {%- for s in _wanted -%}
+      {%-   if s.id not in have -%}
+      {%-     set _ = plan.update({s.id: 'add'}) -%}
+      {%-   else -%}
+      {%-     set h = have[s.id] -%}
+      {%-     if h.type != 'nfs' or h.server | default('') != s.server or h.export | default('') != s.export -%}
+      {%-       set _ = plan.update({s.id: 'conflict'}) -%}
+      {%-     elif (h.content.split(',') | sort | join(',')) != s.content
+                or h.format | default('') != s.format
+                or h.options | default('') != s.options
+                or (h.disable | default(0) | int) != s.disable -%}
+      {%-       set _ = plan.update({s.id: 'correct'}) -%}
+      {%-     else -%}
+      {%-       set _ = plan.update({s.id: 'ok'}) -%}
+      {%-     endif -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ plan }}
+
+# A storage's type, server and export cannot be changed in place, and replacing a storage that
+# holds disks is not something to do implicitly.
+- name: Refuse a storage id that already points somewhere else
+  ansible.builtin.assert:
+    that: proxmox_storage_plan.values() | select('eq', 'conflict') | list | length == 0
+    fail_msg: >-
+      These storage ids exist with another type, server or export:
+      {{ proxmox_storage_plan | dict2items | selectattr('value', 'eq', 'conflict') | map(attribute='key') | join(', ') }}.
+      Remove or rename them by hand first.
+    quiet: true
+  when: proxmox_storage_nfs | length > 0
+
+# Commands do not run in check mode, so this is what a dry run shows.
+- name: Show what will be added or corrected
+  ansible.builtin.debug:
+    var: proxmox_storage_plan
+  when: proxmox_storage_nfs | length > 0
+
+- name: Add the NFS storages
+  ansible.builtin.command:
+    argv: >-
+      {{ ['pvesm', 'add', 'nfs', item.id, '--server', item.server, '--export', item.export,
+          '--content', item.content, '--format', item.format, '--disable', item.disable | string]
+         + (['--options', item.options] if item.options else []) }}
+  loop: "{{ proxmox_storage_wanted | default([]) }}"
+  loop_control:
+    label: "{{ item.id }}"
+  when: proxmox_storage_plan[item.id] == 'add'
+  changed_when: true
+
+# An empty options setting removes options that were set before.
+- name: Correct storage settings that drifted
+  ansible.builtin.command:
+    argv: >-
+      {{ ['pvesm', 'set', item.id, '--content', item.content, '--format', item.format,
+          '--disable', item.disable | string]
+         + (['--options', item.options] if item.options else ['--delete', 'options']) }}
+  loop: "{{ proxmox_storage_wanted | default([]) }}"
+  loop_control:
+    label: "{{ item.id }}"
+  when: proxmox_storage_plan[item.id] == 'correct'
+  changed_when: true
+
+# Proxmox names a node after its short hostname. The API's "localhost" alias is not enough: it
+# works for storage status, but /nodes/localhost/config answers {} even when settings exist.
+- name: Find the node's name
+  ansible.builtin.command:
+    argv: [hostname, -s]
+  register: proxmox_storage_hostname
+  changed_when: false
+  check_mode: false
+  when: proxmox_storage_node | length == 0
+
+- name: Use the node's name
+  ansible.builtin.set_fact:
+    proxmox_storage_node_name: "{{ proxmox_storage_node if proxmox_storage_node | length > 0 else proxmox_storage_hostname.stdout | trim }}"
+
+- name: Read the node configuration
+  ansible.builtin.command:
+    argv: [pvesh, get, "/nodes/{{ proxmox_storage_node_name }}/config", --output-format, json]
+  register: proxmox_storage_node_config
+  changed_when: false
+  check_mode: false
+  when: proxmox_storage_startall_delay is not none
+
+- name: Show the start-on-boot delay, current and wanted
+  ansible.builtin.debug:
+    msg: >-
+      startall-onboot-delay on {{ proxmox_storage_node_name }}:
+      {{ _current }} -> {{ proxmox_storage_startall_delay }}{{ '' if _current | int != proxmox_storage_startall_delay | int else ' (no change)' }}
+  when: proxmox_storage_startall_delay is not none
+  vars:
+    _current: "{{ (proxmox_storage_node_config.stdout | from_json).get('startall-onboot-delay', 0) }}"
+
+- name: Set the node's start-on-boot delay
+  ansible.builtin.command:
+    argv: [pvenode, config, set, --startall-onboot-delay, "{{ proxmox_storage_startall_delay }}"]
+  when:
+    - proxmox_storage_startall_delay is not none
+    - >-
+      (proxmox_storage_node_config.stdout | from_json).get('startall-onboot-delay', 0) | int
+      != proxmox_storage_startall_delay | int
+  changed_when: true
+
+- name: Check each enabled storage is mounted and active
+  ansible.builtin.command:
+    argv: [pvesh, get, "/nodes/{{ proxmox_storage_node_name }}/storage/{{ item.id }}/status", --output-format, json]
+  register: proxmox_storage_status
+  changed_when: false
+  failed_when: >-
+    proxmox_storage_status.rc != 0
+    or (proxmox_storage_status.stdout | from_json).active | default(0) | int != 1
+  loop: "{{ proxmox_storage_wanted | default([]) }}"
+  loop_control:
+    label: "{{ item.id }}"
+  when:
+    - not ansible_check_mode
+    - item.disable == 0
