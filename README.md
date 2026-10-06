@@ -39,6 +39,7 @@ tests/policy/            tests of the repo's own rules: the lock, the vault, the
 scripts/                 the leak checks CI and the git hooks run
 tests/integration/       idempotence tests against fake TrueNAS and Proxmox
 REBUILD.md               what to do before re-running the playbooks after a hardware failure
+SECURITY.md              how to report a vulnerability privately
 ```
 
 `inventory`, `group_vars/all/local.yml` and `./.vault_pass` are gitignored and must be created locally
