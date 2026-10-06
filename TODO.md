@@ -25,10 +25,9 @@ the full audit with file/line references; the finding ids below refer to it.
 The NAS was reinstalled on TrueNAS Community Edition and is configured only through Ansible:
 `roles/truenas` (`truenas.yml`) and, on the Proxmox side, `roles/proxmox_storage` (`proxmox.yml`).
 
-- [ ] First real run: `make check-truenas`, then `make truenas` (or one stage at a time with
-      `TAGS=truenas_network` and so on), then `make check-proxmox` and `make proxmox`. A second run of each
-      must report no changes. TrueNAS allows 20 logins a minute and a full check uses about 13, so leave a
-      minute between a full check and the network stage
+- [ ] Automate recovery of a degraded pool. `roles/truenas` imports only ONLINE pools, so after a disk
+      failure in the RAIDZ1 pool it stops, and replacing the disk and resilvering has no Ansible path yet
+      (see `REBUILD.md`)
 - [ ] Move the router's DHCP dynamic range off the addresses the servers use. The NAS and the Proxmox host
       are now reserved in DHCP (OPNsense Dnsmasq host entries), but the range still overlaps server
       addresses, which is how the NAS's first-choice static address turned out to be taken

@@ -18,6 +18,21 @@ share that names no hosts or networks, since NFS with `sec=sys` has no authentic
   certificate validation off (the default certificate is self-signed), it is what stops the API key
   being sent to another device that answers on one of the addresses.
 
+## On a fresh install
+
+The role cannot create its own way in. After installing TrueNAS, and before the first run:
+
+1. Create a local user in the `builtin_administrators` group (the Full Admin role) and an API key for it with no
+   expiry, over HTTPS. Put the key where `truenas_api_key` reads it, ideally a vault.
+2. If you pin the certificate, read the new install's fingerprint and update `truenas_api_cert_sha256`; a
+   reinstall generates a new self-signed certificate.
+3. Make sure one of `truenas_api_hosts` reaches the NAS: a DHCP reservation for its MAC makes the install come up
+   on the expected address.
+
+Then run with `--check` first. Pools are imported with their datasets; shares, services and settings are
+re-applied, since TrueNAS keeps those on the boot drive. This repo's full procedure, for both machines, is in
+`REBUILD.md` at the repo root.
+
 ## Stages and tags
 
 | Tag | Does | Driven by |
