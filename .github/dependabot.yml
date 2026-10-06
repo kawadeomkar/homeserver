@@ -1,8 +1,8 @@
 ---
 # Weekly updates for the SHA-pinned actions and every package in the hash-locked Python toolchain.
 # Dependabot bumps a pin in requirements.in, or re-resolves a package only the lock names, with
-# pip-compile. It cannot see the actionlint and kubeconform versions and checksums in ci.yml, or the
-# Makefile's schema pins; CLAUDE.md lists those, which are bumped by hand.
+# pip-compile. It cannot see the actionlint, kubeconform and gitleaks versions and checksums in ci.yml, or
+# the Makefile's schema pins; CLAUDE.md lists those, which are bumped by hand.
 # Every Dependabot PR is read before it is merged, never merged only because CI is green.
 version: 2
 updates:
