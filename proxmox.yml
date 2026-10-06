@@ -1,0 +1,8 @@
+---
+# Add the NAS's NFS shares to Proxmox as VM-disk storage, over root SSH. Run truenas.yml first:
+# the shares must exist and be exported to this host.
+- name: Add the NAS's shares as Proxmox storage
+  hosts: proxmox
+  gather_facts: false
+  roles:
+    - role: proxmox_storage

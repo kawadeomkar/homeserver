@@ -1,0 +1,163 @@
+---
+argument_specs:
+  main:
+    short_description: Configure TrueNAS Community Edition through its API
+    description:
+      - Runs on the controller and talks to the NAS's JSON-RPC WebSocket API with an API key;
+        nothing goes over SSH.
+      - Stages, each under its own tag - truenas_network (network settings, static address),
+        truenas_pools (import or create, auto-trim, scrub), truenas_system (general settings, NTP),
+        truenas_datasets, truenas_nfs (service settings, shares), truenas_services.
+      - The defaults change nothing. Every stage acts only on what its variables declare, and an
+        empty list or dict (or a null value) leaves that part of the NAS alone.
+      - Never destroys, wipes, exports or upgrades a pool, never deletes a dataset, and refuses an
+        NFS share without a host or network restriction.
+    options:
+      truenas_api_hosts:
+        type: list
+        elements: str
+        default: []
+        description: Addresses to try in order; the first that answers is used.
+      truenas_api_port:
+        type: int
+        default: 443
+        description: HTTPS port of the TrueNAS web server.
+      truenas_api_key:
+        type: str
+        default: ""
+        no_log: true
+        description: API key. Keep it in an ansible-vault file.
+      truenas_validate_certs:
+        type: bool
+        default: false
+      truenas_api_cert_sha256:
+        type: str
+        default: ""
+        description: SHA-256 fingerprint of the NAS's certificate; when set, the API key goes only to that server.
+      truenas_api_timeout:
+        type: int
+        default: 120
+        description: Seconds to wait for one API answer.
+      truenas_api_connect_wait:
+        type: int
+        default: 60
+        description: Seconds to keep retrying a refused connection.
+      truenas_api_job_timeout:
+        type: int
+        default: 1800
+        description: Seconds to wait for a job such as a pool import.
+      truenas_api_login_wait:
+        type: int
+        default: 75
+        description: Seconds to wait out TrueNAS's login rate limit (20 logins per 60 s per client).
+      truenas_supported_version:
+        type: str
+        default: "25.10"
+        description: Major.minor release the role was written against.
+      truenas_network_mode:
+        type: str
+        choices: [static, dhcp]
+        default: dhcp
+        description: static gives the interface truenas_static_address; dhcp leaves it alone.
+      truenas_static_address:
+        type: str
+        default: ""
+        description: Static IPv4 address in CIDR form.
+      truenas_gateway:
+        type: str
+        default: ""
+      truenas_nameservers:
+        type: list
+        elements: str
+        default: []
+        description: Up to three.
+      truenas_interface:
+        type: str
+        default: ""
+        description: Interface to configure. Empty means the one carrying the API connection.
+      truenas_ipv6_auto:
+        type: bool
+        description: IPv6 autoconfiguration on the interface. Unset or null leaves it alone.
+      truenas_checkin_timeout:
+        type: int
+        default: 90
+        description: Seconds TrueNAS waits for the new address to be confirmed before rolling back.
+      truenas_static_address_conflict_check:
+        type: bool
+        default: true
+        description: Refuse a static address that another device already answers on.
+      truenas_network_settings:
+        type: dict
+        default: {}
+        description: Fields for network.configuration.update, e.g. hostname and domain.
+      truenas_pools:
+        type: list
+        elements: dict
+        default: []
+        description: Pools, each with name and (for creation) layout; optional autotrim, scrub, guid.
+      truenas_pool_allow_create:
+        type: bool
+        default: false
+      truenas_pool_disks:
+        type: dict
+        default: {}
+        description: Pool name to list of disk serials, used only to create a pool.
+      truenas_pool_guids:
+        type: dict
+        default: {}
+        description: Pool name to GUID; a pool with another GUID is refused.
+      truenas_pool_autotrim:
+        type: str
+        choices: ["", "ON", "OFF"]
+        default: ""
+        description: Auto-trim for pools that do not set their own. Empty leaves it alone.
+      truenas_pool_scrub:
+        type: dict
+        description: Scrub task for pools that do not set their own. Unset or null leaves it alone.
+      truenas_system_dataset_pool:
+        type: str
+        default: boot-pool
+        description: Pool to pin the system dataset to before importing pools (only when truenas_pools is set). Empty disables the pin.
+      truenas_general_settings:
+        type: dict
+        default: {}
+        description: Fields for system.general.update, e.g. ui_httpsredirect and timezone.
+      truenas_ui_restart_delay:
+        type: int
+        default: 3
+        description: Seconds after a general-settings update before the web server restarts.
+      truenas_ui_restart_wait:
+        type: int
+        default: 10
+        description: Seconds to wait for that restart before the next call.
+      truenas_ntp_servers:
+        type: list
+        elements: dict
+        default: []
+        description: NTP servers, each with address and optionally iburst, burst, prefer, minpoll, maxpoll.
+      truenas_ntp_server_defaults:
+        type: dict
+        default: {}
+        description: Fields laid under every NTP server entry.
+      truenas_datasets:
+        type: list
+        elements: dict
+        default: []
+        description: Datasets, each with name and properties as pool.dataset.create takes them.
+      truenas_nfs_settings:
+        type: dict
+        default: {}
+        description: Fields for nfs.update, e.g. protocols.
+      truenas_nfs_shares:
+        type: list
+        elements: dict
+        default: []
+        description: Shares, each with path and the fields of sharing.nfs.create.
+      truenas_nfs_share_defaults:
+        type: dict
+        default: {}
+        description: Fields laid under every share.
+      truenas_services:
+        type: dict
+        default: {}
+        description: Service name to {enabled, state}; state is started or stopped.

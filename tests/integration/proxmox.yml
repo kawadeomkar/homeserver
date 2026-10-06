@@ -1,0 +1,15 @@
+---
+# roles/proxmox_storage with this repo's own Proxmox configuration, run against the fake pvesh,
+# pvesm and pvenode in fake_pve_bin/.
+- name: Configure the fake Proxmox host
+  hosts: proxmox
+  gather_facts: false
+  vars_files:
+    - ../../group_vars/all/storage.yml
+    - ../../group_vars/proxmox/storage.yml
+  environment:
+    PATH: "{{ playbook_dir }}/fake_pve_bin:{{ lookup('ansible.builtin.env', 'PATH') }}"
+    FAKE_PVE_STATE: "{{ fake_pve_state }}"
+    FAKE_PVE_PYTHON: "{{ ansible_playbook_python }}"
+  roles:
+    - role: proxmox_storage

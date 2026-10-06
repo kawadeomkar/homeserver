@@ -1,0 +1,25 @@
+---
+- name: network | Apply the network settings
+  truenas_config:
+    namespace: network.configuration
+    settings: "{{ truenas_network_settings }}"
+  when: truenas_network_settings | length > 0
+
+# The interface change is committed with a check-in timeout: the module reconnects on the new
+# address and confirms it, and if it cannot, TrueNAS rolls the change back by itself.
+- name: network | Give the NAS its static address
+  truenas_interface:
+    interface: "{{ truenas_interface | default(omit, true) }}"
+    address: "{{ truenas_static_address }}"
+    gateway: "{{ truenas_gateway }}"
+    nameservers: "{{ truenas_nameservers }}"
+    ipv6_auto: "{{ omit if truenas_ipv6_auto is none else truenas_ipv6_auto }}"
+    checkin_timeout: "{{ truenas_checkin_timeout }}"
+    conflict_check: "{{ truenas_static_address_conflict_check }}"
+  register: truenas_network
+  when: truenas_network_mode == 'static'
+
+- name: network | Use the static address from here on
+  ansible.builtin.set_fact:
+    truenas_api_host: "{{ truenas_network.api_host }}"
+  when: truenas_network is not skipped

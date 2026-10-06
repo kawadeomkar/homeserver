@@ -1,0 +1,6 @@
+---
+# Last, so a sharing service starts only once its shares exist.
+- name: services | Enable, disable, start or stop services
+  truenas_service:
+    services: "{{ truenas_services }}"
+  when: truenas_services | length > 0

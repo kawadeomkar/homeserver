@@ -1,0 +1,43 @@
+---
+# Read-only. Finds the address the NAS answers on and checks it is the release this role targets.
+
+- name: connect | Connect to the NAS and read its state
+  truenas_info:
+    api_hosts: "{{ truenas_api_hosts }}"
+  register: truenas_state
+
+- name: connect | Use the address that answered
+  ansible.builtin.set_fact:
+    truenas_api_host: "{{ truenas_state.api_host }}"
+
+- name: connect | Check the NAS is ready and on the supported release
+  ansible.builtin.assert:
+    that:
+      - truenas_state.ready
+      - (truenas_state.version.split('.')[:2] | join('.')) == truenas_supported_version
+    fail_msg: >-
+      The NAS runs TrueNAS {{ truenas_state.version }} (ready: {{ truenas_state.ready }}); this role
+      was written against {{ truenas_supported_version }}. Check the API changes before raising
+      truenas_supported_version.
+    quiet: true
+
+- name: connect | Check no interface change is waiting to be committed
+  ansible.builtin.assert:
+    that: not truenas_state.network_pending_changes
+    fail_msg: >-
+      TrueNAS has uncommitted interface changes, perhaps from an interrupted run. Commit or roll them
+      back in the UI (Network page) before running this role.
+    quiet: true
+
+- name: connect | Report the NAS's state
+  ansible.builtin.debug:
+    msg:
+      address: "{{ truenas_state.api_host }}"
+      version: "{{ truenas_state.version }}"
+      interface: "{{ truenas_state.interfaces | selectattr('name', 'eq', truenas_state.websocket_interface) | first | default({}) }}"
+      pools: "{{ truenas_state.pools | map(attribute='name') }}"
+      importable_pools: "{{ truenas_state.importable_pools | map(attribute='name') }}"
+      system_dataset: "{{ truenas_state.system_dataset }}"
+      datasets: "{{ truenas_state.datasets }}"
+      nfs_shares: "{{ truenas_state.nfs_shares | map(attribute='path') }}"
+      services: "{{ truenas_state.services }}"

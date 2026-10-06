@@ -1,18 +1,42 @@
 ---
 # Copy to group_vars/all/local.yml (git-ignored) and fill in your environment.
 #
-#   cp group_vars/all/local.yml.example group_vars/all/local.yml
+#   cp group_vars/all/local.yml.example group_vars/all/local.yml     (or: make init)
 #
 # This repo is public, so no address is ever written in a task, a role default
 # or any other tracked file. Roles read them from the variables below, and the
 # real values exist only in local.yml. The values here are documentation
-# placeholders (RFC 5737), not real hosts.
+# placeholders (RFC 5737 addresses, made-up serials), not real hosts.
 
 # ------------------------------------------------------------------ TrueNAS ---
-# The address the NAS should end up on, in CIDR form. A fresh install comes up
-# on whatever DHCP hands out; the address Ansible reaches it on today goes in
-# the git-ignored `inventory`, not here.
+# The address the NAS should end up on, in CIDR form, and the gateway and name
+# servers it should use once DHCP is off.
 truenas_static_address: 192.0.2.10/24
 truenas_gateway: 192.0.2.1
 truenas_nameservers:
   - 192.0.2.1
+# SHA-256 fingerprint of the NAS's web certificate. With it set, the API key is
+# sent only to a server presenting that certificate, even at the bootstrap
+# address after DHCP has handed it to another device. Read it with:
+#   openssl s_client -connect <nas>:443 </dev/null | openssl x509 -noout -fingerprint -sha256
+# Update it whenever the certificate is replaced. Empty disables the check.
+truenas_api_cert_sha256: "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
+# The address a freshly installed NAS answers on before the role has given it
+# the static one (whatever DHCP handed out). Tried after the static address.
+truenas_bootstrap_address: 192.0.2.50
+# Disk serials per pool. Only read when a pool has to be created on blank
+# disks (truenas_pool_allow_create); importing an existing pool ignores them.
+truenas_pool_disks:
+  nvme_gen3:
+    - SERIAL-0001
+    - SERIAL-0002
+    - SERIAL-0003
+    - SERIAL-0004
+    - SERIAL-0005
+  ephemeral:
+    - SERIAL-0006
+
+# ------------------------------------------------------------------ Proxmox ---
+# The Proxmox host: reached over root SSH, and the only host allowed to mount
+# the NAS's VM shares.
+proxmox_address: 192.0.2.20

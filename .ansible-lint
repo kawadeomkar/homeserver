@@ -1,0 +1,30 @@
+---
+# ansible-lint configuration. "production" is the strictest built-in profile.
+profile: production
+
+exclude_paths:
+  - .venv/
+  - .ansible/
+  - .cache/
+  - .claude/
+  - docs/
+  # Kubernetes manifests, not Ansible. kubeconform validates them (see CLAUDE.md).
+  - k8s/
+
+# Roles here are used from this repo, never published to Galaxy.
+offline: true
+
+kinds:
+  - yaml: "**/*.yml.example"
+
+enable_list:
+  - args
+  - empty-string-compare
+  - no-log-password
+  - no-same-owner
+  - name[prefix]
+  - yaml
+
+skip_list:
+  - galaxy[no-changelog]
+  - galaxy[version-incorrect]

@@ -1,0 +1,7 @@
+---
+# Everything, in dependency order.
+- name: Configure the NAS
+  ansible.builtin.import_playbook: truenas.yml
+
+- name: Configure Proxmox storage
+  ansible.builtin.import_playbook: proxmox.yml

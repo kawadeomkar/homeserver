@@ -1,0 +1,10 @@
+# Copy to `inventory` (git-ignored); `make init` does it. No host here carries an address: the
+# addresses are variables in group_vars/all/local.yml, which group_vars/<group>/main.yml reads.
+
+# Configured through its API from this machine (ansible_connection: local).
+[nas]
+truenas
+
+# Configured over root SSH.
+[proxmox]
+homeserver

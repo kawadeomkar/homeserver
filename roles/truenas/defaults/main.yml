@@ -1,0 +1,89 @@
+---
+# Neutral defaults: with nothing else set, the role connects, reports, and changes nothing.
+# Everything that describes a particular NAS (pools, datasets, shares, services, addresses) is
+# configuration, set in inventory group_vars. Setting a list or dict to empty, or a value to null,
+# leaves that part of the NAS alone. See README.md for an example.
+
+# ------------------------------------------------------------------ connection ---
+# Addresses to try, in order; the first that accepts the API key is used.
+truenas_api_hosts: []
+# HTTPS port of the TrueNAS web server.
+truenas_api_port: 443
+truenas_api_key: ""
+truenas_validate_certs: false
+# SHA-256 fingerprint of the NAS's web certificate (colons optional). When set, the API key is sent
+# only to a server presenting that certificate, which matters while truenas_validate_certs is off.
+# Update it if the certificate is replaced.
+truenas_api_cert_sha256: ""
+# Seconds to wait for one API answer, to keep retrying a refused connection, for a job to finish,
+# and for TrueNAS's login rate limit (20 logins per 60 s per client) to reset.
+truenas_api_timeout: 120
+truenas_api_connect_wait: 60
+truenas_api_job_timeout: 1800
+truenas_api_login_wait: 75
+# Major.minor release the role was written and verified against. Another release fails the run.
+truenas_supported_version: "25.10"
+
+# --------------------------------------------------------------------- network ---
+# dhcp leaves the interface alone; static gives it truenas_static_address.
+truenas_network_mode: dhcp
+truenas_static_address: ""
+truenas_gateway: ""
+truenas_nameservers: []
+# Empty means the interface carrying the API connection.
+truenas_interface: ""
+# null leaves IPv6 autoconfiguration as it is.
+truenas_ipv6_auto: null
+# Seconds TrueNAS waits for the role to confirm a new address before rolling it back (45 or more).
+truenas_checkin_timeout: 90
+# Before moving the NAS, refuse an address another device already answers on (probed from the
+# controller with TCP, ping and ARP; runs in check mode too).
+truenas_static_address_conflict_check: true
+# Fields for network.configuration.update, e.g. {hostname: nas, domain: local}.
+truenas_network_settings: {}
+
+# ----------------------------------------------------------------------- pools ---
+# Each entry: name, and for creation a layout (STRIPE, MIRROR, RAIDZ1-3). Optional per pool:
+# autotrim, scrub, guid. A pool that exists is imported; one is created only when
+# truenas_pool_allow_create is true and its disks are blank. None is ever destroyed.
+truenas_pools: []
+truenas_pool_allow_create: false
+# Pool name -> disk serials (creation only) and pool name -> GUID (refuse a different pool).
+truenas_pool_disks: {}
+truenas_pool_guids: {}
+# Applied to pools that do not set their own. "" / null leave TrueNAS's setting alone.
+truenas_pool_autotrim: ""
+truenas_pool_scrub: null
+# Pinned before any import, because TrueNAS otherwise moves the system dataset onto the first data
+# pool it imports. Only applied when truenas_pools is set. boot-pool is TrueNAS's own name for its
+# boot pool; "" disables the pin.
+truenas_system_dataset_pool: boot-pool
+
+# ---------------------------------------------------------------------- system ---
+# Fields for system.general.update, e.g. {ui_httpsredirect: true, timezone: Etc/UTC}.
+truenas_general_settings: {}
+# A UI setting applies when the web server restarts: this many seconds after the update answers,
+# then the role waits this long before its next call.
+truenas_ui_restart_delay: 3
+truenas_ui_restart_wait: 10
+# NTP servers, each {address: ...}, plus fields laid under every entry (iburst, prefer, ...).
+truenas_ntp_servers: []
+truenas_ntp_server_defaults: {}
+
+# -------------------------------------------------------------------- datasets ---
+# Each entry: name, properties (as pool.dataset.create takes them), and optionally share_type,
+# create_ancestors, allow_acl_change. Listed parents first. None is ever deleted.
+truenas_datasets: []
+
+# ------------------------------------------------------------------------- NFS ---
+# Fields for nfs.update, e.g. {protocols: [NFSV3, NFSV4]}.
+truenas_nfs_settings: {}
+# Each entry: path, and hosts or networks. A share without either is refused: NFS with sec=sys
+# has no authentication, so it would be open to every device on the network.
+truenas_nfs_shares: []
+# Fields laid under every share; a share's own value wins.
+truenas_nfs_share_defaults: {}
+
+# -------------------------------------------------------------------- services ---
+# Service name -> {enabled: bool, state: started|stopped}. Applied last, after the shares exist.
+truenas_services: {}

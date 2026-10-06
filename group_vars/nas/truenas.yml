@@ -1,0 +1,88 @@
+---
+# This NAS's configuration, applied by roles/truenas. Names and settings only: addresses and disk
+# serials come from group_vars/all/local.yml, the VM storage layout from group_vars/all/storage.yml.
+
+# ------------------------------------------------------------------- network ---
+truenas_network_mode: static
+truenas_network_settings:
+  hostname: truenas
+  domain: local
+# truenas_static_address, truenas_gateway and truenas_nameservers are set in local.yml.
+
+# --------------------------------------------------------------------- pools ---
+# Both pools already exist and are imported. Their disks, for creation on blank disks only, are
+# listed by serial in local.yml (truenas_pool_disks).
+truenas_pools:
+  - name: nvme_gen3
+    layout: RAIDZ1
+  - name: ephemeral
+    layout: STRIPE
+# Both pools are SSDs.
+truenas_pool_autotrim: "ON"
+# TrueNAS's own default, made explicit so a rebuild matches: Sundays at 00:00, at most every 35 days.
+truenas_pool_scrub:
+  threshold: 35
+  schedule: {minute: "00", hour: "00", dom: "*", month: "*", dow: "7"}
+  enabled: true
+# Keeps the system dataset off the single-disk ephemeral pool.
+truenas_system_dataset_pool: boot-pool
+
+# -------------------------------------------------------------------- system ---
+truenas_general_settings:
+  # Plain HTTP on port 80 would otherwise stay open.
+  ui_httpsredirect: true
+  timezone: America/Los_Angeles
+# The installer's servers.
+truenas_ntp_servers:
+  - address: 0.debian.pool.ntp.org
+  - address: 1.debian.pool.ntp.org
+  - address: 2.debian.pool.ntp.org
+truenas_ntp_server_defaults: {iburst: true, burst: false, prefer: false, minpoll: 6, maxpoll: 10}
+
+# ------------------------------------------------------------------ datasets ---
+# 64K records match qcow2's cluster size and waste no padding on a five-wide RAIDZ1 at ashift 12.
+# POSIX ACLs (which TrueNAS pairs with aclmode DISCARD) suit root-owned disk images served to a
+# Linux client; the pools' roots carry NFSv4 ACLs from TrueNAS CORE.
+truenas_datasets:
+  - name: "{{ vm_storage.persistent.dataset | dirname }}"
+    properties: {compression: LZ4, atime: "OFF", acltype: POSIX, aclmode: DISCARD}
+  - name: "{{ vm_storage.persistent.dataset }}"
+    # There is no UPS, so persistent VMs keep synchronous writes synchronous.
+    properties: {sync: STANDARD, recordsize: 64K}
+  - name: "{{ vm_storage.ephemeral.dataset | dirname }}"
+    # 1 TiB. The pool also holds the media dataset and has no redundancy; the quota stops a
+    # runaway VM filling it.
+    properties: {compression: LZ4, atime: "OFF", acltype: POSIX, aclmode: DISCARD, quota: 1099511627776}
+  - name: "{{ vm_storage.ephemeral.dataset }}"
+    # A crash can lose the last seconds of writes, accepted for throwaway VMs. Never give this
+    # dataset a snapshot task: snapshots would keep deleted VMs' data.
+    properties: {sync: DISABLED, recordsize: 64K}
+
+# ----------------------------------------------------------------------- NFS ---
+truenas_nfs_settings:
+  # Proxmox checks an NFSv4 storage with rpcinfo, which needs the port mapper NFSv3 brings.
+  protocols: [NFSV3, NFSV4]
+truenas_nfs_shares:
+  - path: "{{ vm_storage_mount_root }}/{{ vm_storage.persistent.dataset }}"
+    comment: Proxmox disks, persistent VMs
+  - path: "{{ vm_storage_mount_root }}/{{ vm_storage.ephemeral.dataset }}"
+    comment: Proxmox disks, ephemeral VMs
+# Only the Proxmox host may mount them, and it writes disk images as root.
+truenas_nfs_share_defaults:
+  hosts: ["{{ proxmox_address }}"]
+  networks: []
+  ro: false
+  maproot_user: root
+  maproot_group: root
+  enabled: true
+
+# ------------------------------------------------------------------ services ---
+truenas_services:
+  nfs: {enabled: true, state: started}
+  cifs: {enabled: false, state: stopped}
+  ftp: {enabled: false, state: stopped}
+  iscsitarget: {enabled: false, state: stopped}
+  nvmet: {enabled: false, state: stopped}
+  snmp: {enabled: false, state: stopped}
+  ssh: {enabled: false, state: stopped}
+  ups: {enabled: false, state: stopped}
