@@ -16,26 +16,6 @@ options:
     type: list
     elements: str
     required: true
-  api_port:
-    description: HTTPS port of the TrueNAS web server.
-    type: int
-    default: 443
-  api_cert_sha256:
-    description: SHA-256 fingerprint of the NAS's certificate. When set, an address whose server presents
-      another certificate is skipped before the API key is sent.
-    type: str
-    default: ""
-  api_key:
-    description: TrueNAS API key.
-    type: str
-  validate_certs:
-    description: Verify the NAS's TLS certificate. The default install uses a self-signed one.
-    type: bool
-    default: false
-  api_timeout:
-    description: Seconds to wait for each API answer.
-    type: int
-    default: 120
   api_connect_wait:
     description: Seconds to keep retrying the list of addresses before giving up.
     type: int
@@ -44,14 +24,20 @@ options:
     description: Seconds to wait for the pool scan job.
     type: int
     default: 1800
-  api_login_wait:
-    description: Seconds to wait out TrueNAS's login rate limit.
-    type: int
-    default: 75
   importable:
     description: Also scan for pools that can be imported. Takes a few seconds.
     type: bool
     default: true
+attributes:
+  check_mode:
+    support: full
+  diff_mode:
+    support: none
+  platform:
+    platforms: posix
+extends_documentation_fragment:
+  - ansible.builtin.action_common_attributes
+  - truenas_api
 """
 
 RETURN = r"""
