@@ -2,7 +2,8 @@
 
 They are module_utils/truenas_api.py's api_argument_spec(). A module lists the fragment in
 extends_documentation_fragment: truenas_api for the options all modules share, and truenas_api.host for
-api_host, which truenas_info replaces with a list of addresses.
+api_host, which truenas_info replaces with a list of addresses. tests/policy/test_roles.py checks that
+each module's documentation, with these merged in, matches its argument spec.
 """
 
 
