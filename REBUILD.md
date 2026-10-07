@@ -19,8 +19,9 @@ by their variable in `group_vars/all/local.yml`; the real values live only there
 
 Everything runs from a checkout of this repo.
 
-1. Clone the repo and create the Python environment:
-   `pyenv virtualenv 3.14.6 homeserver && pyenv activate homeserver && pip install -r requirements.txt`
+1. Install Poetry outside any project environment (`pipx install poetry`; see
+   https://python-poetry.org/docs/#installation), then clone the repo and create the Python environment:
+   `pyenv virtualenv 3.14.6 homeserver && pyenv activate homeserver && make venv`
    (or any Python 3.12+: `make venv PYTHON=/path/to/python3`).
 2. `make init`, which creates `inventory` and `group_vars/all/local.yml` from their examples.
 3. Restore the two files only you have:

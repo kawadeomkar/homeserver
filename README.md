@@ -32,7 +32,8 @@ group_vars/all/storage.yml        VM storage layout shared by both plays
 group_vars/nas/, group_vars/proxmox/  connection and per-machine configuration
 inventory.example        template for inventory (no addresses in it)
 .gitleaks.toml           gitleaks rules for the identifiers this public repo must never hold
-requirements.in          the Python tooling's pins; requirements.txt is its hash-locked lock (make lock)
+pyproject.toml           the Python tooling's pins, for Poetry; poetry.lock is its lock (make lock)
+poetry.toml              Poetry's settings: a 7-day cooldown on new releases, wheels only, ./.venv
 .github/                 CI (workflows/ci.yml), Dependabot, and the reviewed body of the main-branch ruleset
 tests/unit/              tests for the TrueNAS modules' comparison logic
 tests/policy/            tests of the repo's own rules: the lock, the vault, the ruleset, the leak checks
@@ -51,9 +52,10 @@ kept in the vault — see `k8s/README-secrets.md`.
 ## Ansible
 
 ```bash
-make venv PYTHON=<python 3.12+>   # hash-locked tooling in .venv (requirements.txt, from requirements.in)
+make venv PYTHON=<python 3.12+>   # the tooling in .venv, synced from poetry.lock (needs Poetry: pipx install poetry)
 make init                         # git hooks, plus inventory and local.yml from their examples
-make lint                         # yamllint, ansible-lint, ruff, module docs, GitHub config schemas, tests
+make lint                         # the lock, yamllint, ansible-lint, ruff, module docs, GitHub config schemas, tests
+make lock                         # update poetry.lock after editing pyproject.toml
 make test-idempotence             # each role run repeatedly against local fakes
 make ci                           # what the CI gate runs, on one Python, apart from the workflow linters
 make check-truenas && make truenas

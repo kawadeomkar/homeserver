@@ -20,9 +20,11 @@ the full audit with file/line references; the finding ids below refer to it.
 (gitignored) is the full plan, and `CLAUDE.md` lists the pins Dependabot cannot see, bumped by hand.
 
 - [ ] Check Dependabot's first pull requests: titles of the form `[dependencies] Bump …`, the `actions`,
-      `ansible` and `tooling` groups, and whether the ruleset's undocumented
-      `require_extra_approval_for_unattributed_changes` holds them back
-- [ ] Drop the Python 3.12 leg when ansible-core stops supporting 3.12 on the controller
+      `ansible` and `tooling` groups, that it re-locks `poetry.lock` with a Poetry inside
+      `requires-poetry` (2.5.1 in dependabot-core since 2026-09-29; production may lag), and whether the
+      ruleset's undocumented `require_extra_approval_for_unattributed_changes` holds them back
+- [ ] Drop the Python 3.12 leg when ansible-core stops supporting 3.12 on the controller, and raise
+      `requires-python` in `pyproject.toml` with it (likewise its upper bound when a 3.15 leg is added)
 - [ ] The rest of the CI plan: kube-linter and the manifest convention tests (PR 4); TrueNAS client tests
       (PR 5); OpenSSF Scorecard and dependency review (PR 6)
 
@@ -53,12 +55,14 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       (`roles/truenas/module_utils/truenas_api.py`) with iXsystems' official library,
       [`truenas/api_client`](https://github.com/truenas/api_client). Its README says TrueNAS 26 changes
       the default login method, and the library is maintained alongside each release. It is not on
-      PyPI, publishes no release assets (only tags such as `TS-25.10.7`), and pip cannot hash a git
-      requirement: pin it in `requirements.in` as the tag's commit archive URL
+      PyPI, publishes no release assets (only tags such as `TS-25.10.7`), and Poetry records no hash
+      for a git dependency: pin it in `pyproject.toml` as the tag's commit archive URL
       (`https://github.com/truenas/api_client/archive/<commit>.tar.gz`), check that `make lock` writes
       a hash for it, and bump it by hand (Dependabot will not). GitHub keeps generated archives
       byte-stable only with advance notice, so a hash failure there means re-check the commit and
-      relock; if that recurs, build a wheel from the commit and keep it outside the repo instead.
+      relock. The archive is a source distribution, which `installer.only-binary` (`poetry.toml`)
+      forbids and whose build would fetch unhashed build dependencies, so building a wheel from the
+      commit and keeping it outside the repo is likely the better route.
       Only the connection layer changes; the modules keep their logic. Also raise
       `truenas_supported_version` and re-check the API calls the modules make against the new release
 - [ ] At that upgrade, decide whether to hold `tests/integration/fake_truenas.py` to the real API. Dump the
