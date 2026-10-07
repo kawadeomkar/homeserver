@@ -53,7 +53,7 @@ jobs:
       # The real vault password never reaches CI: without .vault_pass, make gives ansible-lint a
       # placeholder, and the vault's contents go unlinted (tests/policy checks it stays encrypted).
       # -k: report every failing linter, not only the first. The tests run in the test job.
-      - name: yamllint, ansible-lint, module documentation, GitHub config schemas
+      - name: yamllint, ansible-lint, ruff, module documentation, GitHub config schemas
         run: make -k linters
 
   test:

@@ -64,14 +64,15 @@ lock: ## Re-resolve requirements.txt, with hashes, from requirements.in
 .PHONY: init
 init: venv ## One-time setup: venv, the git hooks, plus inventory and local.yml from their examples
 	$(BIN)/pre-commit install
+	git config blame.ignoreRevsFile .git-blame-ignore-revs
 	@test -f inventory || cp inventory.example inventory
 	@test -f group_vars/all/local.yml || cp group_vars/all/local.yml.example group_vars/all/local.yml
 	@echo "Now fill in group_vars/all/local.yml (git-ignored) and make sure .vault_pass exists."
 
-.PHONY: lint linters lint-yaml lint-ansible lint-module-docs lint-github test
+.PHONY: lint linters lint-yaml lint-ansible lint-python lint-module-docs lint-github test
 lint: linters test ## Every linter, then the unit and policy tests
 
-linters: lint-yaml lint-ansible lint-module-docs lint-github ## yamllint, ansible-lint, module docs, GitHub config schemas (no tests)
+linters: lint-yaml lint-ansible lint-python lint-module-docs lint-github ## yamllint, ansible-lint, ruff, module docs, GitHub config schemas (no tests)
 
 lint-yaml: ## yamllint; warnings fail too
 	$(BIN)/yamllint --strict .
@@ -84,6 +85,9 @@ lint-ansible: ## ansible-lint at the production profile
 	  mkdir -p .cache && echo placeholder > .cache/vault-placeholder; \
 	  export ANSIBLE_VAULT_PASSWORD_FILE="$$PWD/.cache/vault-placeholder"; \
 	fi; $(BIN)/ansible-lint
+
+lint-python: ## ruff: lint the Python and check its formatting (ruff format fixes that); both always run
+	@rc=0; $(BIN)/ruff check . || rc=1; $(BIN)/ruff format --check . || rc=1; exit $$rc
 
 lint-module-docs: ## Every custom module's DOCUMENTATION parses (each failure is reported)
 	@test -n "$(MODULES)" || { echo "No module found under roles/*/library: run make from the repository root"; exit 1; }
