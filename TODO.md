@@ -92,8 +92,6 @@ was reproduced on a cluster, because there is none.
       host it is reached by; the Deployment sets no env at all
 - [ ] `prometheus` Deployment has no `strategy: Recreate` although it now holds a hostPath PV, so a rollout
       starts a second pod against the same TSDB and hangs
-- [ ] Say why in a comment on the `pod-security.kubernetes.io/enforce: privileged` label of the `frigate`,
-      `jellyfin` and `homeassistant` namespaces, as the convention in `CLAUDE.md` asks
 
 ## Removed with the Ubuntu host layer
 
