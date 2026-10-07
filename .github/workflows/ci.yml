@@ -29,6 +29,8 @@ env:
   ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
   KUBECONFORM_VERSION: "0.8.0"
   KUBECONFORM_SHA256: "9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883"
+  KUBE_LINTER_VERSION: "0.8.3"
+  KUBE_LINTER_SHA256: "1a6d8419b11971372971fdbc22682b684ebfb7cf1c39591662d1b6ca736c41df"
   GITLEAKS_VERSION: "8.30.1"
   GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
 
@@ -94,16 +96,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install kubeconform (checksum verified)
+      - name: Install kubeconform and kube-linter (checksums verified)
         run: |
           cd "$RUNNER_TEMP"
           curl -fsSLo kubeconform.tgz \
             "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
           echo "${KUBECONFORM_SHA256}  kubeconform.tgz" | sha256sum -c -
           tar -xzf kubeconform.tgz kubeconform
+          curl -fsSLo kube-linter.tgz \
+            "https://github.com/stackrox/kube-linter/releases/download/v${KUBE_LINTER_VERSION}/kube-linter-linux.tar.gz"
+          echo "${KUBE_LINTER_SHA256}  kube-linter.tgz" | sha256sum -c -
+          tar -xzf kube-linter.tgz kube-linter
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-      - name: kubeconform, strict, against Talos's Kubernetes version
-        run: make lint-kubeconform
+      # -k: report both tools' findings, not only the first's.
+      - name: kubeconform, strict, against Talos's Kubernetes version; kube-linter
+        run: make -k lint-k8s
 
   leaks:
     name: leaks

@@ -1,7 +1,7 @@
 # Entry points. Every Python tool comes from the project virtualenv, so the versions locked in
-# requirements.txt are the ones that run, here and in CI (.github/workflows/ci.yml). kubeconform and
-# gitleaks are the exceptions: they come from PATH (Homebrew locally; CI pins each version and checksum),
-# as does the openssl the idempotence tests use.
+# requirements.txt are the ones that run, here and in CI (.github/workflows/ci.yml). kubeconform,
+# kube-linter and gitleaks are the exceptions: they come from PATH (Homebrew locally; CI pins each version
+# and checksum), as does the openssl the idempotence tests use.
 # The Python environment: the active virtualenv if there is one (VIRTUAL_ENV, set by
 # `pyenv activate <env>` or `source <env>/bin/activate`), otherwise ./.venv. Override with VENV=<path>.
 VENV    ?= $(if $(VIRTUAL_ENV),$(VIRTUAL_ENV),.venv)
@@ -130,8 +130,14 @@ lint-kubeconform: ## kubeconform, strict, against Talos's Kubernetes version (ku
 	kubeconform -strict -summary -cache $(KUBE_CACHE) -kubernetes-version $(KUBERNETES_VERSION) \
 	  -schema-location '$(KUBE_SCHEMAS)' k8s
 
+.PHONY: lint-kube-linter lint-k8s
+lint-kube-linter: ## kube-linter with the repo's checks, .kube-linter.yaml (kube-linter from PATH)
+	kube-linter lint --config .kube-linter.yaml --fail-if-no-objects-found k8s
+
+lint-k8s: lint-kubeconform lint-kube-linter ## Both manifest checks
+
 .PHONY: ci
-ci: lint test-idempotence lint-kubeconform ## Everything the CI gate runs, apart from linting the workflows
+ci: lint test-idempotence lint-k8s ## Everything the CI gate runs, apart from linting the workflows
 
 .PHONY: check-truenas
 check-truenas: ## Dry-run the NAS configuration and show what would change
