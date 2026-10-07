@@ -9,6 +9,9 @@
   with only the always-tagged validation, against inventory.example and local.yml.example.
 - Every task that calls a custom module passes only options the module accepts. ansible-lint's args rule
   cannot load these modules, so nothing else checks it.
+- Every option whose name looks like a secret is no_log, in the modules and in the roles' argument specs.
+  The idempotence tests cannot see a missing no_log: at default verbosity Ansible prints neither a
+  module's arguments nor its results.
 
 What a module passes to AnsibleModule is captured by running its main() with AnsibleModule replaced, so
 nothing connects anywhere.
@@ -17,6 +20,7 @@ nothing connects anywhere.
 import contextlib
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -33,6 +37,13 @@ from ansible.utils.plugin_docs import get_docstring
 ROOT = Path(__file__).resolve().parents[2]
 ROLES = sorted(path.parents[1] for path in ROOT.glob("roles/*/meta/argument_specs.yml"))
 MODULES = sorted(ROOT.glob("roles/*/library/*.py"))
+
+# ansible-test's no-log-needed pattern: option names that look like secrets.
+SECRET_NAME = re.compile(r"pass(?!ive)|secret|token|key", re.IGNORECASE)
+# Options whose names match it but hold nothing secret, as (module or role, option): why.
+NOT_SECRET = {
+    ("truenas_resource", "key"): "the names of the fields that identify an entry",
+}
 
 # The modules import their role's module_utils as ansible.module_utils.<name>, as Ansible ships them.
 for _utils in sorted(ROOT.glob("roles/*/module_utils")):
@@ -107,6 +118,13 @@ def mismatches(documented, spec, where=""):
         if doc.get("suboptions") or arg.get("options"):
             problems += mismatches(doc.get("suboptions") or {}, arg.get("options") or {}, f"{where}{name}.")
     return problems
+
+
+def options_in(spec, prefix=""):
+    """(dotted name, name, option) for every option in an argument spec, suboptions included."""
+    for name, option in spec.items():
+        yield f"{prefix}{name}", name, option
+        yield from options_in(option.get("options") or {}, f"{prefix}{name}.")
 
 
 def tasks_in(tasks):
@@ -200,3 +218,22 @@ def test_task_arguments_match_module_specs():
                     problems.append(f"{where}: {context}: {module} has no option {option!r}")
     assert problems == []
     assert called == set(specs), f"modules no task calls: {sorted(set(specs) - called)}"
+
+
+def test_secret_options_are_no_log():
+    """An option that looks like a secret is no_log, so Ansible masks its value wherever it would print it."""
+    specs = [(path.stem, module_spec(path)) for path in MODULES]
+    for role in ROLES:
+        argument_specs = yaml.safe_load((role / "meta" / "argument_specs.yml").read_text())["argument_specs"]
+        specs += [(role.name, entry.get("options") or {}) for entry in argument_specs.values()]
+    flagged, excepted = [], set()
+    for owner, spec in specs:
+        for dotted, name, option in options_in(spec):
+            if not SECRET_NAME.search(name) or option.get("no_log") is True:
+                continue
+            if (owner, dotted) in NOT_SECRET:
+                excepted.add((owner, dotted))
+            else:
+                flagged.append(f"{owner}: {dotted}")
+    assert flagged == [], "options that look like secrets but are not no_log"
+    assert excepted == set(NOT_SECRET), "NOT_SECRET names an option that no longer exists or is now no_log"
