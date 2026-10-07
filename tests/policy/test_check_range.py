@@ -28,10 +28,19 @@ class Repo:
         self.git("update-ref", "refs/remotes/origin/main", "main")
 
     def git(self, *args, check=True):
-        identity = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
-                    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
-        result = subprocess.run(["git", "-c", "commit.gpgsign=false", *args], cwd=self.path,
-                                env={**os.environ, **identity}, capture_output=True, text=True)
+        identity = {
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@example.invalid",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@example.invalid",
+        }
+        result = subprocess.run(
+            ["git", "-c", "commit.gpgsign=false", *args],
+            cwd=self.path,
+            env={**os.environ, **identity},
+            capture_output=True,
+            text=True,
+        )
         if check and result.returncode:
             raise AssertionError(result.stderr)
         return result.stdout.strip()
@@ -50,8 +59,9 @@ class Repo:
 
     def check(self, base, head="HEAD", first_parent=False, require=True, ci=True):
         env = {k: v for k, v in os.environ.items() if k != "CI"}
-        env.update(BASE=base, HEAD=head, FIRST_PARENT="1" if first_parent else "0",
-                   REQUIRE_COMMITS="1" if require else "0")
+        env.update(
+            BASE=base, HEAD=head, FIRST_PARENT="1" if first_parent else "0", REQUIRE_COMMITS="1" if require else "0"
+        )
         if ci:
             env["CI"] = "true"
         return subprocess.run(["bash", str(SCRIPT)], cwd=self.path, env=env, capture_output=True, text=True)
@@ -130,7 +140,7 @@ def test_a_committed_gitleaksignore_is_ignored_in_ci(repo):
     repo.write(".gitleaksignore", f"{commit}:nas.md:private-ipv4:1\n")
     repo.commit("ignore it")
     assert repo.check(main, ci=False).returncode == 0  # the ignore file works where it is honoured...
-    assert caught(repo.check(main))                     # ...and CI deletes it before scanning
+    assert caught(repo.check(main))  # ...and CI deletes it before scanning
 
 
 def test_a_no_diff_attribute_does_not_hide_a_file(repo):

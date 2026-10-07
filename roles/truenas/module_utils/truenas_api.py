@@ -70,7 +70,7 @@ def normalise_fingerprint(value):
 
 
 def format_fingerprint(hexdigest):
-    return ":".join(hexdigest[i:i + 2] for i in range(0, len(hexdigest), 2)).upper()
+    return ":".join(hexdigest[i : i + 2] for i in range(0, len(hexdigest), 2)).upper()
 
 
 def is_rate_limited(exc):

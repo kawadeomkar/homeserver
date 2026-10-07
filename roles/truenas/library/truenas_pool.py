@@ -83,7 +83,9 @@ def find_blank_disks(api, serials):
                 problems.append(f"{serial} ({other['name']}): in use by {pool}")
             continue
         if disk.get("exported_zpool") or disk.get("imported_zpool"):
-            problems.append(f"{serial} ({disk['name']}): carries pool {disk.get('exported_zpool') or disk.get('imported_zpool')}")
+            problems.append(
+                f"{serial} ({disk['name']}): carries pool {disk.get('exported_zpool') or disk.get('imported_zpool')}"
+            )
         elif disk.get("partitions"):
             problems.append(f"{serial} ({disk['name']}): has {len(disk['partitions'])} partition(s)")
         elif disk.get("duplicate_serial"):
@@ -179,11 +181,15 @@ def ensure(api, module, spec, allow_create):
         pool = api.call("pool.query", [["name", "=", name]])[0]
     if not pool.get("healthy", True):
         module.warn(f"pool {name} reports status {pool.get('status')}")
-    return actions, before, {
-        **pick(pool, ["id", "name", "guid", "status", "healthy", "path"]),
-        "autotrim": (pool.get("autotrim") or {}).get("rawvalue"),
-        "scrub": pick(scrub or {}, ["id", "threshold", "schedule", "enabled"]),
-    }
+    return (
+        actions,
+        before,
+        {
+            **pick(pool, ["id", "name", "guid", "status", "healthy", "path"]),
+            "autotrim": (pool.get("autotrim") or {}).get("rawvalue"),
+            "scrub": pick(scrub or {}, ["id", "threshold", "schedule", "enabled"]),
+        },
+    )
 
 
 def main():
@@ -228,9 +234,7 @@ def main():
                         after[name]["scrub"] = entry["scrub"]
         except TrueNASError as exc:
             module.fail_json(msg=str(exc), actions=actions)
-    module.exit_json(
-        changed=bool(actions), actions=actions, pools=summary, diff={"before": before, "after": after}
-    )
+    module.exit_json(changed=bool(actions), actions=actions, pools=summary, diff={"before": before, "after": after})
 
 
 if __name__ == "__main__":
