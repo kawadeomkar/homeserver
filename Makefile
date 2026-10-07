@@ -99,8 +99,8 @@ lint-github: ## dependabot.yml and the workflows against their published schemas
 	$(BIN)/check-jsonschema --builtin-schema vendor.dependabot .github/dependabot.yml
 	$(BIN)/check-jsonschema --builtin-schema vendor.github-workflows .github/workflows/*.yml
 
-test: ## The unit tests, and the policy tests that check the repo's own rules (the lock matches requirements.in)
-	$(BIN)/pytest -q -m "not gitleaks" tests/unit tests/policy
+test: ## The unit tests, and the policy tests that check the repo's own rules, with a coverage report
+	$(BIN)/pytest -q -m "not gitleaks" --cov --cov-report=term tests/unit tests/policy
 
 .PHONY: test-gitleaks-rules
 test-gitleaks-rules: ## .gitleaks.toml against generated fixtures (gitleaks from PATH)
