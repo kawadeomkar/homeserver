@@ -23,8 +23,8 @@ the full audit with file/line references; the finding ids below refer to it.
       `ansible` and `tooling` groups, and whether the ruleset's undocumented
       `require_extra_approval_for_unattributed_changes` holds them back
 - [ ] Drop the Python 3.12 leg when ansible-core stops supporting 3.12 on the controller
-- [ ] The rest of the CI plan: kube-linter and the manifest convention tests (PR 4); TrueNAS client tests
-      (PR 5); OpenSSF Scorecard and dependency review (PR 6)
+- [ ] The rest of the CI plan: kube-linter and the manifest convention tests (PR 4); OpenSSF Scorecard and
+      dependency review (PR 6)
 
 ## TrueNAS
 
