@@ -1,12 +1,23 @@
 # homeserver repo
 
+# The inventory holds addresses; inventory.example is its committed, address-free model. Backups and
+# variants of it are ignored too.
 inventory
+/inventory.*
+!/inventory.example
 *.enc
 
 # Environment-specific Ansible variables: addresses and anything else that
 # identifies this network. This repo is public, so they live only in a local
-# file. The committed counterpart, with placeholder values, is local.yml.example.
-group_vars/**/local.yml
+# file. The committed counterpart, with placeholder values, is local.yml.example. Backups and editor
+# copies (local.yml.bak, local.yml.orig, ...) are ignored as well.
+group_vars/**/local.yml*
+group_vars/**/local.yaml*
+!group_vars/all/local.yml.example
+
+# Hardware notes (addresses, MACs, serials) and Talos's client config, wherever they are written.
+/MACHINES*
+talosconfig
 
 # local notes / audits
 docs/*
@@ -29,6 +40,7 @@ logs/
 .vault_pass*
 vault_password
 vault_password_file
+vault[-_]pass*
 
 # Kubernetes Secret manifests must never be committed in plaintext.
 # Both cases are listed because git globs are case-SENSITIVE: `Secret.yaml`

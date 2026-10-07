@@ -1,7 +1,7 @@
 # Entry points. Every Python tool comes from the project virtualenv, so the versions locked in
-# requirements.txt are the ones that run, here and in CI (.github/workflows/ci.yml). kubeconform is
-# the exception: it comes from PATH (Homebrew locally; CI pins its version and checksum), as does the
-# openssl the idempotence tests use.
+# requirements.txt are the ones that run, here and in CI (.github/workflows/ci.yml). kubeconform and
+# gitleaks are the exceptions: they come from PATH (Homebrew locally; CI pins each version and checksum),
+# as does the openssl the idempotence tests use.
 # The Python environment: the active virtualenv if there is one (VIRTUAL_ENV, set by
 # `pyenv activate <env>` or `source <env>/bin/activate`), otherwise ./.venv. Override with VENV=<path>.
 VENV    ?= $(if $(VIRTUAL_ENV),$(VIRTUAL_ENV),.venv)
@@ -62,7 +62,8 @@ lock: ## Re-resolve requirements.txt, with hashes, from requirements.in
 	CUSTOM_COMPILE_COMMAND="$(LOCK_COMMAND)" $(BIN)/$(LOCK_COMMAND)
 
 .PHONY: init
-init: venv ## One-time setup: venv, plus inventory and local.yml from their examples
+init: venv ## One-time setup: venv, the git hooks, plus inventory and local.yml from their examples
+	$(BIN)/pre-commit install
 	@test -f inventory || cp inventory.example inventory
 	@test -f group_vars/all/local.yml || cp group_vars/all/local.yml.example group_vars/all/local.yml
 	@echo "Now fill in group_vars/all/local.yml (git-ignored) and make sure .vault_pass exists."
@@ -95,7 +96,23 @@ lint-github: ## dependabot.yml and the workflows against their published schemas
 	$(BIN)/check-jsonschema --builtin-schema vendor.github-workflows .github/workflows/*.yml
 
 test: ## The unit tests, and the policy tests that check the repo's own rules (the lock matches requirements.in)
-	$(BIN)/pytest -q tests/unit tests/policy
+	$(BIN)/pytest -q -m "not gitleaks" tests/unit tests/policy
+
+.PHONY: test-gitleaks-rules
+test-gitleaks-rules: ## .gitleaks.toml against generated fixtures (gitleaks from PATH)
+	$(BIN)/pytest -q -m gitleaks tests/policy
+
+# The leak checks the git hooks run (.pre-commit-config.yaml), with gitleaks from PATH.
+GITLEAKS_FOUND = @command -v gitleaks >/dev/null || { echo "gitleaks is not on PATH (brew install gitleaks)"; exit 1; }
+
+.PHONY: secrets-staged secrets-push
+secrets-staged: ## gitleaks over the staged changes (the pre-commit hook)
+	$(GITLEAKS_FOUND)
+	gitleaks git --pre-commit --staged --config .gitleaks.toml --ignore-gitleaks-allow --redact --verbose --no-banner
+
+secrets-push: ## Secrets and identifiers in the commits being pushed (the pre-push hook)
+	$(GITLEAKS_FOUND)
+	BASE="$${PRE_COMMIT_FROM_REF:-}" HEAD="$${PRE_COMMIT_TO_REF:-HEAD}" scripts/ci/check-range.sh
 
 .PHONY: test-idempotence
 test-idempotence: ## Run each role repeatedly against local fakes of TrueNAS and Proxmox

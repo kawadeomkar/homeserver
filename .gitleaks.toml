@@ -1,0 +1,61 @@
+title = "homeserver"
+
+[extend]
+useDefault = true
+
+# CLAUDE.md: no address, and nothing else that identifies this network, in any tracked file.
+# tests/policy/test_gitleaks_rules.py proves every rule on generated fixtures.
+
+[[rules]]
+id = "private-ipv4"
+description = "Private, CGNAT or link-local IPv4 address"
+regex = '''\b((?:10\.(?:25[0-5]|2[0-4]\d|1?\d?\d)|172\.(?:1[6-9]|2\d|3[01])|192\.168|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])|169\.254)\.(?:25[0-5]|2[0-4]\d|1?\d?\d)\.(?:25[0-5]|2[0-4]\d|1?\d?\d))\b'''
+secretGroup = 1
+keywords = ["10.", "172.", "192.168.", "100.", "169.254."]
+
+[[rules]]
+id = "ipv4-literal"
+description = "IPv4 literal in code, tests or manifests: use a variable, and RFC 5737 in examples"
+# molecule/ and .config/molecule/ are where Molecule role tests will go. CI scans a change with its
+# target's rules, so they must be covered before the first one is added.
+path = '''^(roles/|group_vars/|tests/|molecule/|\.config/molecule/|k8s/|inventory\.example$|[^/]+\.ya?ml$|ansible\.cfg$|Makefile$)'''
+regex = '''\b((?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3})\b'''
+secretGroup = 1
+  [[rules.allowlists]]
+  regexTarget = "match"
+  regexes = ['''^(192\.0\.2|198\.51\.100|203\.0\.113)\.''', '''^0\.0\.0\.0$''', '''^127\.''']
+
+[[rules]]
+id = "ipv6-private"
+description = "IPv6 unique-local (incl. Tailscale) or link-local address"
+regex = '''(?i)\b((?:fd[0-9a-f]{2}|fe80):[0-9a-f:]{2,})'''
+secretGroup = 1
+keywords = ["fd", "fe80"]
+
+[[rules]]
+id = "mac-address"
+description = "MAC address; a longer colon-hex run (a certificate fingerprint) does not match"
+regex = '''(?i)(?:^|[^0-9a-f:])((?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2})(?:[^0-9a-f:]|$)'''
+secretGroup = 1
+
+[[rules]]
+id = "tailnet-name"
+description = "Tailscale MagicDNS name"
+regex = '''(?i)\b([a-z0-9-]+\.[a-z0-9-]+\.ts\.net)\b'''
+secretGroup = 1
+keywords = [".ts.net"]
+
+[[rules]]
+id = "k8s-plaintext-secret"
+description = "Plaintext Kubernetes Secret manifest"
+path = '''(?i)^k8s/.*\.ya?ml$'''
+regex = '''(?m)^[ \t]*(?:-[ \t]+)?kind:[ \t]*["']?Secret["']?[ \t]*(?:#.*)?$'''
+keywords = ["kind"]
+  [[rules.allowlists]]
+  # The homepage file is a service-account-token stub with no data (tests/policy checks that shape).
+  paths = ['''\.sops\.ya?ml$''', '''(?i)sealed[^/]*\.ya?ml$''', '''\.(example|template)\.ya?ml$''', '''^k8s/homepage/secret\.yaml$''']
+
+[[rules]]
+id = "sensitive-file"
+description = "A file that is never committed: vault password, local vars, inventory, machine notes, run logs, talosconfig"
+path = '''(?i)(^|/)(\.?vault[-_.]?pass[^/]*|local\.ya?ml(\.(bak|orig|old|save|swp|tmp))?|MACHINES[^/]*|talosconfig|logs/[^/]+\.log)$|^inventory(\.(bak|orig|old|ini))?$'''

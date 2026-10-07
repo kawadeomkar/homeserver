@@ -12,6 +12,8 @@ websockets==17.1
 websocket-client==1.9.2
 # Validates .github/dependabot.yml and the workflows against SchemaStore's schemas, which it bundles.
 check-jsonschema==0.38.2
+# Runs the git hooks in .pre-commit-config.yaml, which `make init` installs.
+pre-commit==4.6.2
 # Generates requirements.txt (make lock).
 pip-tools==7.6.1
 # pip itself, so every virtualenv installs with the same, hash-checked version.

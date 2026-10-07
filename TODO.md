@@ -19,15 +19,12 @@ the full audit with file/line references; the finding ids below refer to it.
 `.github/workflows/ci.yml` gates pull requests through one check, `ci-success`. `docs/CI-PLAN.md`
 (gitignored) is the full plan, and `CLAUDE.md` lists the pins Dependabot cannot see, bumped by hand.
 
-- [ ] Once the workflow is on `main`, check that CodeQL's default setup scans `actions` as well as `python`
-      (`gh api repos/kawadeomkar/homeserver/code-scanning/default-setup`), and add it if not
 - [ ] Check Dependabot's first pull requests: titles of the form `[dependencies] Bump …`, the `actions`,
       `ansible` and `tooling` groups, and whether the ruleset's undocumented
       `require_extra_approval_for_unattributed_changes` holds them back
 - [ ] Drop the Python 3.12 leg when ansible-core stops supporting 3.12 on the controller
-- [ ] The rest of the CI plan: leak checks with gitleaks rules and pre-commit, pre-push and commit-msg
-      hooks (PR 2); ruff and the roles' convention tests (PR 3); kube-linter and the manifest convention
-      tests (PR 4); TrueNAS client tests (PR 5); OpenSSF Scorecard and dependency review (PR 6)
+- [ ] The rest of the CI plan: ruff and the roles' convention tests (PR 3); kube-linter and the manifest
+      convention tests (PR 4); TrueNAS client tests (PR 5); OpenSSF Scorecard and dependency review (PR 6)
 
 ## TrueNAS
 

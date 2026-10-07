@@ -31,12 +31,15 @@ group_vars/all/local.yml.example  template for local.yml, which holds every addr
 group_vars/all/storage.yml        VM storage layout shared by both plays
 group_vars/nas/, group_vars/proxmox/  connection and per-machine configuration
 inventory.example        template for inventory (no addresses in it)
+.gitleaks.toml           gitleaks rules for the identifiers this public repo must never hold
 requirements.in          the Python tooling's pins; requirements.txt is its hash-locked lock (make lock)
 .github/                 CI (workflows/ci.yml), Dependabot, and the reviewed body of the main-branch ruleset
 tests/unit/              tests for the TrueNAS modules' comparison logic
-tests/policy/            tests of the repo's own rules: the lock, the vault, the ruleset
+tests/policy/            tests of the repo's own rules: the lock, the vault, the ruleset, the leak checks
+scripts/                 the leak checks CI and the git hooks run
 tests/integration/       idempotence tests against fake TrueNAS and Proxmox
 REBUILD.md               what to do before re-running the playbooks after a hardware failure
+SECURITY.md              how to report a vulnerability privately
 ```
 
 `inventory`, `group_vars/all/local.yml` and `./.vault_pass` are gitignored and must be created locally
@@ -49,7 +52,7 @@ kept in the vault — see `k8s/README-secrets.md`.
 
 ```bash
 make venv PYTHON=<python 3.12+>   # hash-locked tooling in .venv (requirements.txt, from requirements.in)
-make init                         # inventory and local.yml from their examples
+make init                         # git hooks, plus inventory and local.yml from their examples
 make lint                         # yamllint, ansible-lint, module docs, GitHub config schemas, tests
 make test-idempotence             # each role run repeatedly against local fakes
 make ci                           # what the CI gate runs, on one Python, apart from the workflow linters
@@ -91,9 +94,11 @@ make lint-kubeconform   # kubeconform -strict against Kubernetes 1.37.1, the ver
 ## CI
 
 Every pull request and every push to `main` runs `.github/workflows/ci.yml`: every linter, the unit, policy
-and idempotence tests on Python 3.12, 3.13 and 3.14, `make lint-kubeconform`, and actionlint and zizmor over the
-workflows. `ci-success` aggregates the jobs and is the one check for the "Protect main" ruleset to require;
-`.github/rulesets/main.json` holds that ruleset's body, applied through the GitHub API. No job gets a secret,
-and none reaches the home network: the roles are tested only against the fakes in `tests/integration`.
-Dependabot proposes weekly updates to the SHA-pinned actions and every package in the Python lock. The
-actionlint and kubeconform versions and the schema pins are bumped by hand; CLAUDE.md lists them.
+and idempotence tests on Python 3.12, 3.13 and 3.14, `make lint-kubeconform`, a gitleaks scan of the commits
+the change adds (secrets and network identifiers), and actionlint, zizmor and shellcheck
+over the workflows and scripts. `ci-success` aggregates the jobs and is the one check for the "Protect main"
+ruleset to require; `.github/rulesets/main.json` holds that ruleset's body, applied through the GitHub API. No
+job gets a secret, and none reaches the home network: the roles are tested only against the fakes in
+`tests/integration`. Dependabot proposes weekly updates to the SHA-pinned actions and every package in the
+Python lock. The actionlint, kubeconform and gitleaks versions and the schema pins are bumped by hand;
+CLAUDE.md lists them.
