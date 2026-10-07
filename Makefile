@@ -80,7 +80,7 @@ lint-yaml: ## yamllint; warnings fail too
 # ansible-lint needs a vault password file for its syntax check. Without the real one (a fresh clone, or
 # CI) it gets a placeholder, and it then skips the vault's contents; tests/policy checks that the vault
 # stays encrypted.
-lint-ansible: ## ansible-lint at the production profile
+lint-ansible: ## ansible-lint at the production profile, strict
 	@if [ -z "$$ANSIBLE_VAULT_PASSWORD_FILE" ] && [ ! -f .vault_pass ]; then \
 	  mkdir -p .cache && echo placeholder > .cache/vault-placeholder; \
 	  export ANSIBLE_VAULT_PASSWORD_FILE="$$PWD/.cache/vault-placeholder"; \

@@ -1,6 +1,8 @@
 ---
-# ansible-lint configuration. "production" is the strictest built-in profile.
+# ansible-lint configuration. "production" is the strictest built-in profile, and strict makes its
+# warnings fail the run too.
 profile: production
+strict: true
 
 exclude_paths:
   - .venv/
