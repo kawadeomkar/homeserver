@@ -2,7 +2,8 @@
 
 The idempotence suite runs every module against tests/integration/fake_truenas.py, which always answers. Here
 websocket.create_connection is replaced by a scripted NAS, and the clock by one whose sleep() returns at once,
-to cover the client's retries, its error handling and failed jobs.
+to cover the client's retries and error handling, a failed job, and the interface commit's refusal, rollback
+and check-in.
 """
 
 import importlib.util
@@ -12,6 +13,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from ansible.module_utils.testing import patch_module_args
 
 ROLE = Path(__file__).resolve().parents[2] / "roles" / "truenas"
 
@@ -26,6 +28,7 @@ def load(name, path):
 
 # The modules import their client as ansible.module_utils.truenas_api, as Ansible ships it.
 api = load("ansible.module_utils.truenas_api", ROLE / "module_utils" / "truenas_api.py")
+interface = load("truenas_interface", ROLE / "library" / "truenas_interface.py")
 
 NAS = "nas.invalid"
 
@@ -137,6 +140,7 @@ class Clock:
 def clock(monkeypatch):
     clock = Clock()
     monkeypatch.setattr(api, "time", clock)
+    monkeypatch.setattr(interface, "time", clock)
     return clock
 
 
@@ -249,3 +253,119 @@ class TestJobs:
         nas({"auth.login_with_api_key": True, "pool.import_pool": 7, "core.get_jobs": [[]]})
         with pytest.raises(api.TrueNASError, match=re.escape("job 7 disappeared")):
             client().job("pool.import_pool", {})
+
+
+@pytest.fixture
+def run(capsys):
+    """Run a module's main() in process and return its JSON result."""
+
+    def run(module, args, check_mode=False):
+        # _ansible_no_log keeps AnsibleModule from writing the run to this machine's syslog.
+        arguments = {**args, "_ansible_check_mode": check_mode, "_ansible_no_log": True}
+        with patch_module_args(arguments), pytest.raises(SystemExit):
+            module.main()
+        return json.loads(capsys.readouterr().out)
+
+    return run
+
+
+OLD, NEW, GATEWAY = "192.0.2.50", "192.0.2.10", "192.0.2.1"
+
+
+def interface_nas(nas, commit, login=True, pending=(False, False), waiting=(None, 60), rollback=None, unreachable=()):
+    """A NAS on OLD, with DHCP, being moved to NEW.
+
+    `pending` and `waiting` answer interface.has_pending_changes and interface.checkin_waiting in turn: first the
+    module's check for unfinished changes, then the commit's clean-up or the check-in on NEW.
+    """
+    iface = {
+        "name": "eno1",
+        "ipv4_dhcp": True,
+        "ipv6_auto": False,
+        "aliases": [{"type": "INET", "address": OLD, "netmask": 24}],
+        "state": {"aliases": [{"type": "INET", "address": OLD, "netmask": 24}]},
+    }
+    moved = {**iface, "ipv4_dhcp": False, "aliases": [{"type": "INET", "address": NEW, "netmask": 24}]}
+    return nas(
+        {
+            "auth.login_with_api_key": login,
+            "interface.query": [[iface], [moved]],
+            "network.configuration.config": {
+                "ipv4gateway": GATEWAY,
+                "nameserver1": GATEWAY,
+                "nameserver2": "",
+                "nameserver3": "",
+            },
+            "interface.has_pending_changes": list(pending),
+            "interface.checkin_waiting": list(waiting),
+            "interface.update": None,
+            "interface.commit": commit,
+            "interface.rollback": rollback,
+            "interface.checkin": None,
+        },
+        unreachable=unreachable,
+    )
+
+
+INTERFACE_ARGS = {
+    "api_host": OLD,
+    "api_key": "a-key",
+    "interface": "eno1",
+    "address": f"{NEW}/24",
+    "gateway": GATEWAY,
+    "nameservers": [GATEWAY],
+    "checkin_timeout": 60,
+    "conflict_check": False,
+}
+
+
+class TestInterfaceCommit:
+    def test_a_commit_and_check_in_move_the_nas(self, nas, run):
+        fake = interface_nas(nas, commit=DROP)
+        result = run(interface, INTERFACE_ARGS)
+        assert not result.get("failed"), result
+        assert result["changed"] and result["api_host"] == NEW
+        assert [host for host, method, _ in fake.calls if method == "interface.checkin"] == [NEW]
+
+    def test_a_refused_commit_discards_the_saved_change(self, nas, run):
+        fake = interface_nas(nas, commit=Refuse("[EINVAL] the gateway is unreachable"), pending=(False, True))
+        result = run(interface, INTERFACE_ARGS)
+        assert result["failed"] and "interface.commit: [EINVAL] the gateway is unreachable" in result["msg"]
+        assert len(fake.called("interface.rollback")) == 1
+        assert fake.called("interface.checkin") == []
+
+    def test_a_refused_commit_whose_clean_up_fails_reports_both(self, nas, run):
+        interface_nas(
+            nas,
+            commit=Refuse("[EINVAL] the gateway is unreachable"),
+            pending=(False, True),
+            rollback=Refuse("[EFAULT] busy"),
+        )
+        result = run(interface, INTERFACE_ARGS)
+        assert result["failed"]
+        assert (
+            "the gateway is unreachable; discarding the saved change also failed: interface.rollback: [EFAULT] busy"
+            in (result["msg"])
+        )
+
+    def test_no_check_in_before_the_deadline_leaves_the_rollback_to_truenas(self, nas, run, clock):
+        fake = interface_nas(nas, commit=DROP, unreachable={NEW})
+        result = run(interface, INTERFACE_ARGS)
+        assert result["failed"] and f"could not check in on {NEW} before the deadline" in result["msg"]
+        assert "TrueNAS rolls the interface back by itself" in result["msg"]
+        assert fake.called("interface.checkin") == [] and fake.called("interface.rollback") == []
+        # The deadline is checkin_timeout less a 5-second margin, counted from the commit.
+        assert 53 <= sum(clock.slept) <= 57
+
+    def test_the_check_in_waits_out_the_login_rate_limit(self, nas, run):
+        fake = interface_nas(nas, commit=DROP, login=[True, Refuse("Rate Limit Exceeded"), True])
+        result = run(interface, INTERFACE_ARGS)
+        assert not result.get("failed"), result
+        assert [host for host, method, _ in fake.calls if method == "interface.checkin"] == [NEW]
+
+    def test_the_check_in_waits_for_the_commit_to_finish(self, nas, run, clock):
+        # Pending changes but no rollback timer yet: the commit is still applying them.
+        fake = interface_nas(nas, commit=DROP, pending=(False, True, False), waiting=(None, None, 60))
+        result = run(interface, INTERFACE_ARGS)
+        assert not result.get("failed"), result
+        assert len(fake.called("interface.checkin")) == 1 and clock.slept == [2]
