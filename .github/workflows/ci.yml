@@ -184,10 +184,24 @@ jobs:
           advanced-security: false
           persona: pedantic
 
+  # Fails a pull request that adds a pip package with a known vulnerability, from the dependency graph of its
+  # base and head. It cannot judge the actions: pinned to commit SHAs, they have no version to look up, so
+  # zizmor's online known-vulnerable-actions audit (the workflows job) covers them. On a push there is no
+  # pull request to compare, so the job is skipped, and ci-success allows that.
+  dependency-review:
+    name: dependency-review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+
   ci-success:
     name: ci-success
     if: always()
-    needs: [lint, test, kubernetes, leaks, workflows]
+    needs: [lint, test, kubernetes, leaks, workflows, dependency-review]
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions: {}
@@ -195,3 +209,4 @@ jobs:
       - uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
         with:
           jobs: ${{ toJSON(needs) }}
+          allowed-skips: dependency-review
