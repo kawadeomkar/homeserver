@@ -1,8 +1,10 @@
 ---
 # Weekly updates for the SHA-pinned actions and every package in the hash-locked Python toolchain.
-# Dependabot bumps a pin in requirements.in, or re-resolves a package only the lock names, with
-# pip-compile. It cannot see the actionlint, kubeconform and gitleaks versions and checksums in ci.yml, or
-# the Makefile's schema pins; CLAUDE.md lists those, which are bumped by hand.
+# Dependabot bumps a pin in pyproject.toml, or a package only poetry.lock names, and re-locks with a
+# Poetry of its own (which must satisfy requires-poetry, or it opens no PR). It does not read poetry.toml,
+# so its cooldown below, not solver.min-release-age, decides how old a bumped release must be. It cannot
+# see the actionlint, kubeconform and gitleaks versions and checksums in ci.yml, or the Makefile's schema
+# pins, or the Poetry version CI installs; CLAUDE.md lists those, which are bumped by hand.
 # Every Dependabot PR is read before it is merged, never merged only because CI is green.
 version: 2
 updates:
@@ -20,6 +22,7 @@ updates:
       # PR titles follow the repo's "[tag] Statement" form; the trailing space stops Dependabot
       # appending a colon after the bracket. The prefix starts Dependabot's commit subjects too.
       prefix: "[dependencies] "
+  # The pip ecosystem covers Poetry: Dependabot finds pyproject.toml and poetry.lock here.
   - package-ecosystem: pip
     directory: /
     schedule:
@@ -27,7 +30,7 @@ updates:
       day: monday
     cooldown:
       default-days: 7
-    # By default only the packages requirements.in names get version updates, and the other packages
+    # By default only the packages pyproject.toml names get version updates, and the other packages
     # in the lock would move only for a security advisory.
     allow:
       - dependency-type: all

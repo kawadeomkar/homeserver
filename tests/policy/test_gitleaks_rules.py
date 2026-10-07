@@ -115,7 +115,11 @@ FIXTURES = [
         + "\n",
         set(),
     ),
-    ("requirements.txt", "ansible-core==2.21.4\nkubernetes 1.37.1\n", set()),
+    (
+        "pyproject.toml",
+        'dependencies = ["ansible-core==2.21.4", "trove-classifiers==2026.9.21.13"]\n# kubernetes 1.37.1\n',
+        set(),
+    ),
     # Must not match: a certificate fingerprint is a longer colon-hex run than a MAC address
     (
         "group_vars/all/local.yml.example",

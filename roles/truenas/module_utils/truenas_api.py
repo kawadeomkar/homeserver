@@ -15,7 +15,7 @@ import time
 import traceback
 
 try:
-    import websocket  # websocket-client, installed from requirements.txt
+    import websocket  # websocket-client, installed from poetry.lock
 
     WEBSOCKET_IMPORT_ERROR = None
 except ImportError:

@@ -1,7 +1,7 @@
 # Entry points. Every Python tool comes from the project virtualenv, so the versions locked in
-# requirements.txt are the ones that run, here and in CI (.github/workflows/ci.yml). kubeconform and
-# gitleaks are the exceptions: they come from PATH (Homebrew locally; CI pins each version and checksum),
-# as does the openssl the idempotence tests use.
+# poetry.lock are the ones that run, here and in CI (.github/workflows/ci.yml). Poetry, kubeconform and
+# gitleaks are the exceptions: they come from PATH (installed by you locally; CI pins each version), as
+# does the openssl the idempotence tests use.
 # The Python environment: the active virtualenv if there is one (VIRTUAL_ENV, set by
 # `pyenv activate <env>` or `source <env>/bin/activate`), otherwise ./.venv. Override with VENV=<path>.
 VENV    ?= $(if $(VIRTUAL_ENV),$(VIRTUAL_ENV),.venv)
@@ -13,6 +13,13 @@ export PIP_DISABLE_PIP_VERSION_CHECK := 1
 # Any Python 3.12+ works. In a shell where `python3` is broken, pass one explicitly:
 #   make venv PYTHON=/path/to/python3.14
 PYTHON  ?= python3
+# Poetry installs the project virtualenv from poetry.lock. Install it yourself, outside that virtualenv
+# (https://python-poetry.org/docs/#installation, e.g. `pipx install poetry`); pyproject.toml's
+# requires-poetry says which versions work. Override with POETRY=<path>. Every Poetry command gets the
+# project virtualenv as VIRTUAL_ENV, so it uses the one make does and never looks for a Python of its own.
+POETRY  ?= poetry
+POETRY_RUN   = VIRTUAL_ENV=$(abspath $(VENV)) $(POETRY) --no-interaction
+POETRY_FOUND = @command -v $(POETRY) >/dev/null || { echo "Poetry is not on PATH: install it (pipx install poetry)"; exit 1; }
 # Narrow a run to stages, e.g. make check-truenas TAGS=truenas_pools
 TAGS    ?=
 TAG_ARGS := $(if $(TAGS),--tags $(TAGS),)
@@ -35,11 +42,6 @@ KUBE_SCHEMAS := https://raw.githubusercontent.com/yannh/kubernetes-json-schema/$
 KUBE_CACHE   ?= .cache/kubeconform
 # Every role's custom modules, as paths.
 MODULES := $(wildcard roles/*/library/*.py)
-# The lock takes only releases at least 7 days old, the cooldown Dependabot keeps too (pip's
-# --uploaded-prior-to, passed through pip-compile). pip-tools writes this command into the lock's header
-# for people to re-run; under click 8.5 it adds a --no-index that was never passed, so the header is set
-# here. Dependabot ignores the header's command and infers the flags it needs from the file.
-LOCK_COMMAND := pip-compile --allow-unsafe --generate-hashes --output-file=requirements.txt --strip-extras --pip-args='--uploaded-prior-to=P7D' requirements.in
 
 .DEFAULT_GOAL := help
 
@@ -51,15 +53,19 @@ $(BIN)/activate:
 	$(PYTHON) -m venv $(VENV)
 
 .PHONY: venv
-# In an existing environment this installs and upgrades to the lock but removes nothing, and pip does not
-# re-check the hashes of packages already at their pinned version. Recreate the environment to start clean.
-venv: $(BIN)/activate ## Create the virtualenv and install the hash-locked tooling (pip included)
-	$(BIN)/pip install --require-hashes -r requirements.txt
+# Poetry's sync installs exactly the lock (the main and dev groups) and removes anything else, apart from pip.
+venv: $(BIN)/activate ## Create the virtualenv and sync it to poetry.lock (Poetry from PATH)
+	$(POETRY_FOUND)
+	$(POETRY_RUN) sync
 
 .PHONY: lock
-lock: ## Re-resolve requirements.txt, with hashes, from requirements.in
-	@test -x $(BIN)/pip-compile || { echo "pip-compile is not in $(VENV): run make venv first"; exit 1; }
-	CUSTOM_COMPILE_COMMAND="$(LOCK_COMMAND)" $(BIN)/$(LOCK_COMMAND)
+# Re-resolves only what pyproject.toml changed, keeping every other locked version; UPDATE="<package> ..."
+# moves those packages to their newest allowed versions too. Either way, only releases at least 7 days old
+# (poetry.toml).
+UPDATE ?=
+lock: $(BIN)/activate ## Update poetry.lock after editing pyproject.toml (UPDATE=<packages>)
+	$(POETRY_FOUND)
+	$(POETRY_RUN) $(if $(UPDATE),update --lock $(UPDATE),lock)
 
 .PHONY: init
 init: venv ## One-time setup: venv, the git hooks, plus inventory and local.yml from their examples
@@ -69,10 +75,16 @@ init: venv ## One-time setup: venv, the git hooks, plus inventory and local.yml 
 	@test -f group_vars/all/local.yml || cp group_vars/all/local.yml.example group_vars/all/local.yml
 	@echo "Now fill in group_vars/all/local.yml (git-ignored) and make sure .vault_pass exists."
 
-.PHONY: lint linters lint-yaml lint-ansible lint-python lint-module-docs lint-github test
+.PHONY: lint linters lint-lock lint-yaml lint-ansible lint-python lint-module-docs lint-github test
 lint: linters test ## Every linter, then the unit and policy tests
 
-linters: lint-yaml lint-ansible lint-python lint-module-docs lint-github ## yamllint, ansible-lint, ruff, module docs, GitHub config schemas (no tests)
+linters: lint-lock lint-yaml lint-ansible lint-python lint-module-docs lint-github ## The lock, yamllint, ansible-lint, ruff, module docs, GitHub config schemas (no tests)
+
+# Poetry checks that pyproject.toml is valid and that the lock was made from it (its content-hash), and
+# --strict fails on warnings too. tests/policy checks what Poetry does not: the pins and the hashes.
+lint-lock: ## pyproject.toml is valid, and poetry.lock is up to date with it
+	$(POETRY_FOUND)
+	$(POETRY_RUN) check --lock --strict
 
 lint-yaml: ## yamllint; warnings fail too
 	$(BIN)/yamllint --strict .
