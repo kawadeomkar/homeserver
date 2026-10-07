@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Client for the TrueNAS JSON-RPC 2.0 WebSocket API, shared by this role's modules.
 
 The modules run on the controller and talk to ``wss://<host>/api/current`` with an API key.
@@ -8,6 +7,7 @@ plain HTTP is revoked by TrueNAS, which is why there is no ``ws://`` fallback.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import ssl
@@ -166,10 +166,9 @@ class TrueNASClient:
 
     def close(self):
         if self.ws is not None:
-            try:
+            # Closing a dead socket must not mask the real error.
+            with contextlib.suppress(Exception):
                 self.ws.close()
-            except Exception:  # noqa: BLE001 - closing a dead socket must not mask the real error
-                pass
             self.ws = None
 
     def __enter__(self):

@@ -332,7 +332,7 @@ def test_proxmox_storage_role_is_idempotent(tmp_path):
     s = read(state)
     next(e for e in s["storage"] if e["storage"] == "truenas-ephemeral")["export"] = "/mnt/elsewhere"
     write(state, s)
-    rc, stats, out = run("proxmox.yml", extra)
+    rc, _, out = run("proxmox.yml", extra)
     assert rc != 0 and "truenas-ephemeral" in out and "Remove or rename them by hand" in out, out[-3000:]
     assert next(e for e in read(state)["storage"] if e["storage"] == "truenas-ephemeral")["export"] == "/mnt/elsewhere"
 
@@ -343,6 +343,6 @@ def test_truenas_role_refuses_an_unpinned_certificate(nas):
     extra["truenas_api_cert_sha256"] = "00" * 32
     extra["truenas_api_connect_wait"] = 0
     logins_before = Path(nas["calls"]).read_text().count("auth.login_with_api_key")
-    rc, stats, out = run("truenas_defaults.yml", extra)
+    rc, _, out = run("truenas_defaults.yml", extra)
     assert rc != 0 and "not the pinned one" in out and "the API key was not sent" in out, out[-3000:]
     assert Path(nas["calls"]).read_text().count("auth.login_with_api_key") == logins_before, "a login was attempted"

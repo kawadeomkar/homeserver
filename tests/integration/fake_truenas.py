@@ -17,6 +17,7 @@ import asyncio
 import copy
 import json
 import ssl
+import types
 from pathlib import Path
 
 from websockets.asyncio.server import serve
@@ -504,21 +505,23 @@ class FakeTrueNAS:
     def m_sharing_nfs_query(self, filters=None, options=None):
         return [copy.deepcopy(s) for s in self.s["shares"] if matches(s, filters)]
 
-    SHARE_FIELDS = {
-        "path",
-        "aliases",
-        "comment",
-        "networks",
-        "hosts",
-        "ro",
-        "maproot_user",
-        "maproot_group",
-        "mapall_user",
-        "mapall_group",
-        "security",
-        "enabled",
-        "expose_snapshots",
-    }
+    SHARE_FIELDS = frozenset(
+        {
+            "path",
+            "aliases",
+            "comment",
+            "networks",
+            "hosts",
+            "ro",
+            "maproot_user",
+            "maproot_group",
+            "mapall_user",
+            "mapall_group",
+            "security",
+            "enabled",
+            "expose_snapshots",
+        }
+    )
 
     def m_sharing_nfs_create(self, data):
         unknown = set(data) - self.SHARE_FIELDS
@@ -577,23 +580,25 @@ class FakeTrueNAS:
         "deduplication",
         "copies",
     )
-    DEFAULTS = {
-        "sync": "standard",
-        "compression": "lz4",
-        "atime": "on",
-        "recordsize": "131072",
-        "acltype": "posix",
-        "aclmode": "discard",
-        "exec": "on",
-        "readonly": "off",
-        "snapdir": "hidden",
-        "deduplication": "off",
-        "copies": "1",
-        "quota": "0",
-        "refquota": "0",
-        "reservation": "0",
-        "refreservation": "0",
-    }
+    DEFAULTS = types.MappingProxyType(
+        {
+            "sync": "standard",
+            "compression": "lz4",
+            "atime": "on",
+            "recordsize": "131072",
+            "acltype": "posix",
+            "aclmode": "discard",
+            "exec": "on",
+            "readonly": "off",
+            "snapdir": "hidden",
+            "deduplication": "off",
+            "copies": "1",
+            "quota": "0",
+            "refquota": "0",
+            "reservation": "0",
+            "refreservation": "0",
+        }
+    )
 
     def new_dataset(self, name, local, source="LOCAL"):
         parent = self.s["datasets"].get(name.rsplit("/", 1)[0]) if "/" in name else None
@@ -637,7 +642,7 @@ class FakeTrueNAS:
                 "aclmode: Must be set to DISCARD when acltype is POSIX or OFF", [["aclmode", "Must be DISCARD", 22]]
             )
 
-    PROPERTY_FIELDS = set(DEFAULTS) | {"comments"}
+    PROPERTY_FIELDS = frozenset(DEFAULTS) | {"comments"}
 
     def m_pool_dataset_query(self, filters=None, options=None):
         return [copy.deepcopy(d) for d in self.s["datasets"].values() if matches(d, filters)]

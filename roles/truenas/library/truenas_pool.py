@@ -1,5 +1,4 @@
 #!/usr/bin/python
-# -*- coding: utf-8 -*-
 
 DOCUMENTATION = r"""
 ---
@@ -61,7 +60,6 @@ from ansible.module_utils.truenas_api import (
     differences,
     pick,
 )
-
 
 LAYOUTS = ["STRIPE", "MIRROR", "RAIDZ1", "RAIDZ2", "RAIDZ3"]
 
