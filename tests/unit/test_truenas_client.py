@@ -3,7 +3,8 @@
 The idempotence suite runs every module against tests/integration/fake_truenas.py, which always answers. Here
 websocket.create_connection is replaced by a scripted NAS, and the clock by one whose sleep() returns at once,
 to cover the client's retries and error handling, a failed job, and the interface commit's refusal, rollback
-and check-in.
+and check-in. It also shows that truenas_config never returns the UI certificate's private key, which no test
+that only reads Ansible's output can see.
 """
 
 import importlib.util
@@ -29,6 +30,7 @@ def load(name, path):
 # The modules import their client as ansible.module_utils.truenas_api, as Ansible ships it.
 api = load("ansible.module_utils.truenas_api", ROLE / "module_utils" / "truenas_api.py")
 interface = load("truenas_interface", ROLE / "library" / "truenas_interface.py")
+config = load("truenas_config", ROLE / "library" / "truenas_config.py")
 
 NAS = "nas.invalid"
 
@@ -369,3 +371,48 @@ class TestInterfaceCommit:
         result = run(interface, INTERFACE_ARGS)
         assert not result.get("failed"), result
         assert len(fake.called("interface.checkin")) == 1 and clock.slept == [2]
+
+
+# system.general.config carries the UI certificate, private key included (CLAUDE.md: modules return only the
+# fields they manage).
+PRIVATE_KEY = "FAKE-UI-PRIVATE-KEY"
+GENERAL = {
+    "ui_httpsredirect": False,
+    "ui_port": 80,
+    "ui_certificate": {"id": 1, "name": "truenas_default", "certificate": "FAKE-CERT", "privatekey": PRIVATE_KEY},
+}
+CONFIG_ARGS = {
+    "api_host": NAS,
+    "api_key": "a-key",
+    "namespace": "system.general",
+    "settings": {"ui_httpsredirect": True, "ui_certificate": 1},
+}
+
+
+class TestConfigNeverReturnsThePrivateKey:
+    # Each test asserts what the run returned as well, so a run that failed early cannot pass for keeping the
+    # key out.
+
+    @pytest.mark.parametrize("check_mode", [True, False], ids=["check", "apply"])
+    def test_a_run_returns_only_the_managed_fields(self, nas, run, check_mode):
+        applied = {**GENERAL, "ui_httpsredirect": True}
+        fake = nas(
+            {
+                "auth.login_with_api_key": True,
+                "system.general.config": [GENERAL, applied],
+                "system.general.update": None,
+            }
+        )
+        result = run(config, CONFIG_ARGS, check_mode=check_mode)
+        assert not result.get("failed"), result
+        assert result["changed"]
+        assert result["config"] == {"ui_httpsredirect": not check_mode, "ui_certificate": 1}
+        assert len(fake.called("system.general.update")) == (0 if check_mode else 1)
+        assert PRIVATE_KEY not in json.dumps(result)
+
+    def test_a_setting_that_does_not_take_is_reported_without_the_key(self, nas, run):
+        nas({"auth.login_with_api_key": True, "system.general.config": GENERAL, "system.general.update": None})
+        result = run(config, CONFIG_ARGS)
+        assert result["failed"] and "these fields did not take: ['ui_httpsredirect']" in result["msg"]
+        assert result["config"] == {"ui_httpsredirect": False, "ui_certificate": 1}
+        assert PRIVATE_KEY not in json.dumps(result)

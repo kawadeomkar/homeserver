@@ -82,7 +82,7 @@ A new setting goes in one of these files, with a neutral default in the role and
 - **The static address uses TrueNAS's commit-and-check-in.** `truenas_interface` commits with a rollback timer, reconnects on the new address and checks in; if it cannot, the NAS reverts by itself. The play reaches the NAS on the static address first and falls back to `truenas_bootstrap_address`.
 - **The system dataset is pinned before any pool import.** On a fresh install it reads as `boot-pool` but counts as unset, and importing a pool would move it onto that pool.
 - **Pools are imported or created, never destroyed, wiped, exported or upgraded.** Creation needs `truenas_pool_allow_create` and blank disks (by serial), and is untested.
-- **Modules return only the fields they manage.** `system.general.config` includes the UI certificate's private key.
+- **Modules return only the fields they manage.** `system.general.config` includes the UI certificate's private key; `tests/unit/test_truenas_client.py` checks that `truenas_config` never returns it, in check mode, applying, or failing.
 - **The API key goes only to the NAS's own certificate.** Certificate validation is off (self-signed), so `truenas_api_cert_sha256` pins the certificate's SHA-256 (in `local.yml`); a server presenting anything else gets no login. Replacing the certificate means updating the pin.
 - **An NFS share must name its hosts or networks.** NFS with `sec=sys` has no authentication.
 
