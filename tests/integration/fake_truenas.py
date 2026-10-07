@@ -17,6 +17,7 @@ import asyncio
 import copy
 import json
 import ssl
+import types
 from pathlib import Path
 
 from websockets.asyncio.server import serve
@@ -54,14 +55,29 @@ def initial_state(address):
         "interface_snapshot": None,
         "checkin_waiting": None,
         "network": {
-            "id": 1, "hostname": "truenas", "domain": "local", "ipv4gateway": "", "ipv6gateway": "",
-            "nameserver1": "", "nameserver2": "", "nameserver3": "", "httpproxy": "", "hosts": [],
-            "domains": [], "service_announcement": {"netbios": True, "mdns": True, "wsd": True},
+            "id": 1,
+            "hostname": "truenas",
+            "domain": "local",
+            "ipv4gateway": "",
+            "ipv6gateway": "",
+            "nameserver1": "",
+            "nameserver2": "",
+            "nameserver3": "",
+            "httpproxy": "",
+            "hosts": [],
+            "domains": [],
+            "service_announcement": {"netbios": True, "mdns": True, "wsd": True},
             "activity": {"type": "DENY", "activities": []},
         },
         "exported_pools": [
             {"name": "nvme_gen3", "guid": "1001", "status": "ONLINE", "hostname": "", "children": []},
-            {"name": "ephemeral", "guid": "1002", "status": "ONLINE", "hostname": "", "children": ["ephemeral/jellyfin"]},
+            {
+                "name": "ephemeral",
+                "guid": "1002",
+                "status": "ONLINE",
+                "hostname": "",
+                "children": ["ephemeral/jellyfin"],
+            },
         ],
         "pools": [],
         "datasets": {},
@@ -70,20 +86,50 @@ def initial_state(address):
         "sysds_pool": "",
         "general": {
             "id": 1,
-            "ui_certificate": {"id": 1, "name": "truenas_default", "certificate": "FAKE-CERT", "privatekey": PRIVATE_KEY},
-            "ui_httpsredirect": False, "ui_port": 80, "ui_httpsport": 443, "ui_address": ["0.0.0.0"],
-            "timezone": "America/Los_Angeles", "kbdmap": "us", "usage_collection": None,
+            "ui_certificate": {
+                "id": 1,
+                "name": "truenas_default",
+                "certificate": "FAKE-CERT",
+                "privatekey": PRIVATE_KEY,
+            },
+            "ui_httpsredirect": False,
+            "ui_port": 80,
+            "ui_httpsport": 443,
+            "ui_address": ["0.0.0.0"],
+            "timezone": "America/Los_Angeles",
+            "kbdmap": "us",
+            "usage_collection": None,
         },
         "ntp": [
-            {"id": i + 1, "address": f"{i}.debian.pool.ntp.org", "burst": False, "iburst": True,
-             "prefer": False, "minpoll": 6, "maxpoll": 10}
+            {
+                "id": i + 1,
+                "address": f"{i}.debian.pool.ntp.org",
+                "burst": False,
+                "iburst": True,
+                "prefer": False,
+                "minpoll": 6,
+                "maxpoll": 10,
+            }
             for i in range(3)
         ],
-        "services": [{"id": i + 1, "service": s, "enable": False, "state": "STOPPED", "pids": []} for i, s in enumerate(services)],
+        "services": [
+            {"id": i + 1, "service": s, "enable": False, "state": "STOPPED", "pids": []} for i, s in enumerate(services)
+        ],
         "nfs": {
-            "id": 1, "servers": 12, "allow_nonroot": False, "protocols": ["NFSV3", "NFSV4"], "v4_krb": False,
-            "v4_domain": "", "bindip": [], "mountd_port": None, "rpcstatd_port": None, "rpclockd_port": None,
-            "mountd_log": False, "statd_lockd_log": False, "userd_manage_gids": False, "rdma": False,
+            "id": 1,
+            "servers": 12,
+            "allow_nonroot": False,
+            "protocols": ["NFSV3", "NFSV4"],
+            "v4_krb": False,
+            "v4_domain": "",
+            "bindip": [],
+            "mountd_port": None,
+            "rpcstatd_port": None,
+            "rpclockd_port": None,
+            "mountd_log": False,
+            "statd_lockd_log": False,
+            "userd_manage_gids": False,
+            "rdma": False,
         },
         "shares": [],
         "mutations": 0,
@@ -125,8 +171,14 @@ class FakeTrueNAS:
         try:
             job = {"id": job_id, "method": method, "state": "SUCCESS", "result": func(*args), "error": None}
         except CallError as exc:
-            job = {"id": job_id, "method": method, "state": "FAILED", "result": None, "error": exc.reason,
-                   "exc_info": {"type": "VALIDATION" if exc.extra else "CallError", "extra": exc.extra}}
+            job = {
+                "id": job_id,
+                "method": method,
+                "state": "FAILED",
+                "result": None,
+                "error": exc.reason,
+                "exc_info": {"type": "VALIDATION" if exc.extra else "CallError", "extra": exc.extra},
+            }
         self.s["jobs"][str(job_id)] = job
         return job_id
 
@@ -146,11 +198,19 @@ class FakeTrueNAS:
     # --------------------------------------------------------------- interfaces
     def iface(self, name):
         cfg = self.s["interfaces"][name]
-        live = [{"type": "INET", "address": a.split("/")[0], "netmask": int(a.split("/")[1]) if "/" in a else 24}
-                for a in cfg["live"]]
+        live = [
+            {"type": "INET", "address": a.split("/")[0], "netmask": int(a.split("/")[1]) if "/" in a else 24}
+            for a in cfg["live"]
+        ]
         return {
-            "id": name, "name": name, "type": "PHYSICAL", "fake": False, "description": "", "mtu": None,
-            "ipv4_dhcp": cfg["ipv4_dhcp"], "ipv6_auto": cfg["ipv6_auto"],
+            "id": name,
+            "name": name,
+            "type": "PHYSICAL",
+            "fake": False,
+            "description": "",
+            "mtu": None,
+            "ipv4_dhcp": cfg["ipv4_dhcp"],
+            "ipv6_auto": cfg["ipv6_auto"],
             "aliases": [] if cfg["ipv4_dhcp"] else copy.deepcopy(cfg["aliases"]),
             "state": {"name": name, "aliases": live, "link_state": "LINK_STATE_UP"},
         }
@@ -180,8 +240,10 @@ class FakeTrueNAS:
             if not isinstance(alias.get("netmask"), int) or "address" not in alias:
                 raise CallError("interface_update.aliases: each alias needs address and an integer netmask")
         if self.s["interface_snapshot"] is None:
-            self.s["interface_snapshot"] = {"interfaces": copy.deepcopy(self.s["interfaces"]),
-                                            "ipv4gateway": self.s["network"]["ipv4gateway"]}
+            self.s["interface_snapshot"] = {
+                "interfaces": copy.deepcopy(self.s["interfaces"]),
+                "ipv4gateway": self.s["network"]["ipv4gateway"],
+            }
         self.s["interfaces"][name].update({k: v for k, v in data.items() if k in ("ipv4_dhcp", "ipv6_auto", "aliases")})
         self.mutated()
         return self.iface(name)
@@ -191,7 +253,9 @@ class FakeTrueNAS:
             raise CallError("At least one interface must be configured with IPv4 DHCP or a static IP.")
         for cfg in self.s["interfaces"].values():
             if not cfg["ipv4_dhcp"]:
-                cfg["live"] = [f"{a['address']}/{a['netmask']}" for a in cfg["aliases"] if a.get("type", "INET") == "INET"]
+                cfg["live"] = [
+                    f"{a['address']}/{a['netmask']}" for a in cfg["aliases"] if a.get("type", "INET") == "INET"
+                ]
         if options.get("rollback", True) and options.get("checkin_timeout", 60):
             self.s["checkin_waiting"] = options.get("checkin_timeout", 60)
         else:
@@ -235,9 +299,10 @@ class FakeTrueNAS:
         return [self.pool_obj(p) for p in self.s["pools"] if matches(p, filters)]
 
     def m_pool_import_find(self):
-        return self.start_job("pool.import_find", lambda: [
-            {k: p[k] for k in ("name", "guid", "status", "hostname")} for p in self.s["exported_pools"]
-        ])
+        return self.start_job(
+            "pool.import_find",
+            lambda: [{k: p[k] for k in ("name", "guid", "status", "hostname")} for p in self.s["exported_pools"]],
+        )
 
     def m_pool_import_pool(self, data):
         return self.start_job("pool.import_pool", self._import_pool, data)
@@ -253,15 +318,33 @@ class FakeTrueNAS:
         self.s["exported_pools"].remove(exported)
         pool_id = self.new_id()
         name = exported["name"]
-        self.s["pools"].append({"id": pool_id, "name": name, "guid": guid, "status": "ONLINE", "healthy": True,
-                                "path": f"/mnt/{name}", "autotrim": prop("off")})
+        self.s["pools"].append(
+            {
+                "id": pool_id,
+                "name": name,
+                "guid": guid,
+                "status": "ONLINE",
+                "healthy": True,
+                "path": f"/mnt/{name}",
+                "autotrim": prop("off"),
+            }
+        )
         for ds in [name, *exported["children"]]:
-            self.s["datasets"][ds] = self.new_dataset(ds, {"compression": "lz4", "atime": "off", "acltype": "nfsv4",
-                                                           "aclmode": "passthrough"}, source="LOCAL")
+            self.s["datasets"][ds] = self.new_dataset(
+                ds, {"compression": "lz4", "atime": "off", "acltype": "nfsv4", "aclmode": "passthrough"}, source="LOCAL"
+            )
         # The real import creates a default scrub task...
-        self.s["scrubs"].append({"id": self.new_id(), "pool": pool_id, "pool_name": name, "threshold": 35,
-                                 "description": "", "enabled": True,
-                                 "schedule": {"minute": "00", "hour": "00", "dom": "*", "month": "*", "dow": "7"}})
+        self.s["scrubs"].append(
+            {
+                "id": self.new_id(),
+                "pool": pool_id,
+                "pool_name": name,
+                "threshold": 35,
+                "description": "",
+                "enabled": True,
+                "schedule": {"minute": "00", "hour": "00", "dom": "*", "month": "*", "dow": "7"},
+            }
+        )
         # ...and its post-import hook moves an unchosen system dataset onto the pool.
         if not self.s["sysds_pool"]:
             self.s["sysds_pool"] = name
@@ -292,8 +375,15 @@ class FakeTrueNAS:
         pool = next((p for p in self.s["pools"] if p["id"] == data["pool"]), None)
         if pool is None:
             raise CallError("pool_scrub_create.pool: no such pool")
-        task = {"id": self.new_id(), "pool_name": pool["name"], "threshold": 35, "description": "", "enabled": True,
-                "schedule": {"minute": "00", "hour": "00", "dom": "*", "month": "*", "dow": "7"}, **data}
+        task = {
+            "id": self.new_id(),
+            "pool_name": pool["name"],
+            "threshold": 35,
+            "description": "",
+            "enabled": True,
+            "schedule": {"minute": "00", "hour": "00", "dom": "*", "month": "*", "dow": "7"},
+            **data,
+        }
         self.s["scrubs"].append(task)
         self.mutated()
         return copy.deepcopy(task)
@@ -312,8 +402,14 @@ class FakeTrueNAS:
     # ----------------------------------------------------------- system dataset
     def m_systemdataset_config(self):
         pool = self.s["sysds_pool"] or BOOT_POOL
-        return {"id": 1, "pool": pool, "pool_set": bool(self.s["sysds_pool"]), "uuid": "fake",
-                "basename": f"{pool}/.system", "path": "/var/db/system"}
+        return {
+            "id": 1,
+            "pool": pool,
+            "pool_set": bool(self.s["sysds_pool"]),
+            "uuid": "fake",
+            "basename": f"{pool}/.system",
+            "path": "/var/db/system",
+        }
 
     def m_systemdataset_update(self, data):
         return self.start_job("systemdataset.update", self._sysds_update, data)
@@ -348,8 +444,15 @@ class FakeTrueNAS:
     def m_system_ntpserver_create(self, data):
         if any(n["address"] == data["address"] for n in self.s["ntp"]):
             raise CallError("ntp_server_create.address: this server already exists", errname="EEXIST")
-        server = {"id": self.new_id(), "burst": False, "iburst": True, "prefer": False, "minpoll": 6,
-                  "maxpoll": 10, **data}
+        server = {
+            "id": self.new_id(),
+            "burst": False,
+            "iburst": True,
+            "prefer": False,
+            "minpoll": 6,
+            "maxpoll": 10,
+            **data,
+        }
         self.s["ntp"].append(server)
         self.mutated()
         return copy.deepcopy(server)
@@ -402,8 +505,23 @@ class FakeTrueNAS:
     def m_sharing_nfs_query(self, filters=None, options=None):
         return [copy.deepcopy(s) for s in self.s["shares"] if matches(s, filters)]
 
-    SHARE_FIELDS = {"path", "aliases", "comment", "networks", "hosts", "ro", "maproot_user", "maproot_group",
-                    "mapall_user", "mapall_group", "security", "enabled", "expose_snapshots"}
+    SHARE_FIELDS = frozenset(
+        {
+            "path",
+            "aliases",
+            "comment",
+            "networks",
+            "hosts",
+            "ro",
+            "maproot_user",
+            "maproot_group",
+            "mapall_user",
+            "mapall_group",
+            "security",
+            "enabled",
+            "expose_snapshots",
+        }
+    )
 
     def m_sharing_nfs_create(self, data):
         unknown = set(data) - self.SHARE_FIELDS
@@ -413,10 +531,26 @@ class FakeTrueNAS:
         if not path.startswith("/mnt/") or path[5:] not in self.s["datasets"]:
             raise CallError(f"sharing_nfs_create.path: {path}: export path is not the root directory of a dataset.")
         if any(s["path"] == path for s in self.s["shares"]):
-            raise CallError(f"sharing_nfs_create.path: ERROR - Export conflict. Another share exports {path}", errname="EEXIST")
-        share = {"id": self.new_id(), "aliases": [], "comment": "", "networks": [], "hosts": [], "ro": False,
-                 "maproot_user": None, "maproot_group": None, "mapall_user": None, "mapall_group": None,
-                 "security": [], "enabled": True, "expose_snapshots": False, "locked": False, **data}
+            raise CallError(
+                f"sharing_nfs_create.path: ERROR - Export conflict. Another share exports {path}", errname="EEXIST"
+            )
+        share = {
+            "id": self.new_id(),
+            "aliases": [],
+            "comment": "",
+            "networks": [],
+            "hosts": [],
+            "ro": False,
+            "maproot_user": None,
+            "maproot_group": None,
+            "mapall_user": None,
+            "mapall_group": None,
+            "security": [],
+            "enabled": True,
+            "expose_snapshots": False,
+            "locked": False,
+            **data,
+        }
         self.s["shares"].append(share)
         self.mutated()
         return copy.deepcopy(share)
@@ -433,17 +567,50 @@ class FakeTrueNAS:
         return copy.deepcopy(share)
 
     # ---------------------------------------------------------------- datasets
-    INHERITED = ("sync", "compression", "atime", "recordsize", "acltype", "aclmode", "exec", "readonly",
-                 "snapdir", "deduplication", "copies")
-    DEFAULTS = {"sync": "standard", "compression": "lz4", "atime": "on", "recordsize": "131072",
-                "acltype": "posix", "aclmode": "discard", "exec": "on", "readonly": "off", "snapdir": "hidden",
-                "deduplication": "off", "copies": "1", "quota": "0", "refquota": "0", "reservation": "0",
-                "refreservation": "0"}
+    INHERITED = (
+        "sync",
+        "compression",
+        "atime",
+        "recordsize",
+        "acltype",
+        "aclmode",
+        "exec",
+        "readonly",
+        "snapdir",
+        "deduplication",
+        "copies",
+    )
+    DEFAULTS = types.MappingProxyType(
+        {
+            "sync": "standard",
+            "compression": "lz4",
+            "atime": "on",
+            "recordsize": "131072",
+            "acltype": "posix",
+            "aclmode": "discard",
+            "exec": "on",
+            "readonly": "off",
+            "snapdir": "hidden",
+            "deduplication": "off",
+            "copies": "1",
+            "quota": "0",
+            "refquota": "0",
+            "reservation": "0",
+            "refreservation": "0",
+        }
+    )
 
     def new_dataset(self, name, local, source="LOCAL"):
         parent = self.s["datasets"].get(name.rsplit("/", 1)[0]) if "/" in name else None
-        ds = {"id": name, "name": name, "pool": name.split("/")[0], "type": "FILESYSTEM",
-              "mountpoint": f"/mnt/{name}", "encrypted": False, "locked": False}
+        ds = {
+            "id": name,
+            "name": name,
+            "pool": name.split("/")[0],
+            "type": "FILESYSTEM",
+            "mountpoint": f"/mnt/{name}",
+            "encrypted": False,
+            "locked": False,
+        }
         for key, default in self.DEFAULTS.items():
             if key in local:
                 ds[key] = prop(local[key], source)
@@ -459,7 +626,7 @@ class FakeTrueNAS:
         out = {}
         for key, value in data.items():
             if key == "recordsize":
-                units = {"K": 1024, "M": 1024 ** 2}
+                units = {"K": 1024, "M": 1024**2}
                 out[key] = str(int(value[:-1]) * units[value[-1].upper()]) if value[-1].upper() in units else str(value)
             elif key in ("quota", "refquota", "reservation", "refreservation"):
                 out[key] = str(value or 0)
@@ -471,9 +638,11 @@ class FakeTrueNAS:
         acltype = props.get("acltype") or self.s["datasets"].get(name, {}).get("acltype", {}).get("rawvalue")
         aclmode = props.get("aclmode") or self.s["datasets"].get(name, {}).get("aclmode", {}).get("rawvalue")
         if acltype in ("posix", "off") and aclmode and aclmode != "discard":
-            raise CallError("aclmode: Must be set to DISCARD when acltype is POSIX or OFF", [["aclmode", "Must be DISCARD", 22]])
+            raise CallError(
+                "aclmode: Must be set to DISCARD when acltype is POSIX or OFF", [["aclmode", "Must be DISCARD", 22]]
+            )
 
-    PROPERTY_FIELDS = set(DEFAULTS) | {"comments"}
+    PROPERTY_FIELDS = frozenset(DEFAULTS) | {"comments"}
 
     def m_pool_dataset_query(self, filters=None, options=None):
         return [copy.deepcopy(d) for d in self.s["datasets"].values() if matches(d, filters)]
@@ -557,9 +726,11 @@ async def serve_forever(args):
             try:
                 reply["result"] = fake.handle(request, session)
             except CallError as exc:
-                reply["error"] = {"code": -32001, "message": "Method call error",
-                                  "data": {"errname": exc.errname, "reason": f"[{exc.errname}] {exc.reason}",
-                                           "extra": exc.extra}}
+                reply["error"] = {
+                    "code": -32001,
+                    "message": "Method call error",
+                    "data": {"errname": exc.errname, "reason": f"[{exc.errname}] {exc.reason}", "extra": exc.extra},
+                }
             except Exception as exc:  # noqa: BLE001 - a fake bug must surface as a call error, not a hang
                 reply["error"] = {"code": -32603, "message": "Internal error", "data": {"reason": repr(exc)}}
             await ws.send(json.dumps(reply))

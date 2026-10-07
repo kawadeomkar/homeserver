@@ -43,12 +43,21 @@ def run(playbook, extra, check=False):
     # ANSIBLE_FORCE_COLOR overrides ANSIBLE_NOCOLOR, and a coloured PLAY RECAP does not match RECAP.
     env = {k: v for k, v in os.environ.items() if k != "ANSIBLE_FORCE_COLOR"}
     env |= {"ANSIBLE_CONFIG": str(HERE / "ansible.cfg"), "ANSIBLE_NOCOLOR": "1"}
-    cmd = [PLAYBOOK, str(HERE / playbook), "--diff", "-e", json.dumps({"ansible_python_interpreter": sys.executable, **extra})]
+    cmd = [
+        PLAYBOOK,
+        str(HERE / playbook),
+        "--diff",
+        "-e",
+        json.dumps({"ansible_python_interpreter": sys.executable, **extra}),
+    ]
     if check:
         cmd.append("--check")
     proc = subprocess.run(cmd, env=env, cwd=HERE, capture_output=True, text=True, stdin=subprocess.DEVNULL)
     out = proc.stdout + proc.stderr
-    stats = {h: {"ok": int(o), "changed": int(c), "unreachable": int(u), "failed": int(f)} for h, o, c, u, f in RECAP.findall(out)}
+    stats = {
+        h: {"ok": int(o), "changed": int(c), "unreachable": int(u), "failed": int(f)}
+        for h, o, c, u, f in RECAP.findall(out)
+    }
     return proc.returncode, stats, out
 
 
@@ -79,26 +88,63 @@ def changed_tasks(out):
 
 # ---------------------------------------------------------------------------------- TrueNAS ---
 
+
 @pytest.fixture(scope="module")
 def nas(tmp_path_factory):
     work = tmp_path_factory.mktemp("nas")
     cert, key, state = work / "cert.pem", work / "key.pem", work / "state.json"
     subprocess.run(
-        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert,
-         "-days", "1", "-subj", "/CN=localhost"],
-        check=True, capture_output=True,
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            key,
+            "-out",
+            cert,
+            "-days",
+            "1",
+            "-subj",
+            "/CN=localhost",
+        ],
+        check=True,
+        capture_output=True,
     )
-    fingerprint = subprocess.run(
-        ["openssl", "x509", "-in", cert, "-noout", "-fingerprint", "-sha256"], check=True, capture_output=True, text=True
-    ).stdout.strip().split("=", 1)[1]
+    fingerprint = (
+        subprocess.run(
+            ["openssl", "x509", "-in", cert, "-noout", "-fingerprint", "-sha256"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        .stdout.strip()
+        .split("=", 1)[1]
+    )
     calls = Path(os.environ.get("FAKE_TRUENAS_CALL_LOG") or work / "calls.jsonl")
     port = free_port()
     log = (work / "fake.log").open("w")
     proc = subprocess.Popen(
-        [sys.executable, HERE / "fake_truenas.py", "--port", str(port), "--cert", cert, "--key", key,
-         "--state", state, "--address", NAS_ADDRESS,
-         "--call-log", calls],
-        stdout=log, stderr=subprocess.STDOUT,
+        [
+            sys.executable,
+            HERE / "fake_truenas.py",
+            "--port",
+            str(port),
+            "--cert",
+            cert,
+            "--key",
+            key,
+            "--state",
+            state,
+            "--address",
+            NAS_ADDRESS,
+            "--call-log",
+            calls,
+        ],
+        stdout=log,
+        stderr=subprocess.STDOUT,
     )
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
@@ -237,6 +283,7 @@ def test_truenas_role_with_defaults_changes_nothing(nas):
 
 # ---------------------------------------------------------------------------------- Proxmox ---
 
+
 def pve_vars(state):
     return {"fake_pve_state": str(state), "truenas_static_address": "127.0.0.10/24"}
 
@@ -248,7 +295,9 @@ def test_proxmox_storage_role_is_idempotent(tmp_path):
     result = run("proxmox.yml", extra, check=True)
     expect(result, "homeserver", note="dry run")
     for sid in ("truenas-persistent", "truenas-ephemeral"):
-        assert re.search(rf'{sid}"?:\s*"?add', result[2]), f"the dry run does not plan to add {sid}\n{result[2][-3000:]}"
+        assert re.search(rf'{sid}"?:\s*"?add', result[2]), (
+            f"the dry run does not plan to add {sid}\n{result[2][-3000:]}"
+        )
     assert not state.exists() or read(state)["mutations"] == 0, "the dry run changed the host"
 
     expect(run("proxmox.yml", extra), "homeserver", changed=True, note="first run")
@@ -260,7 +309,12 @@ def test_proxmox_storage_role_is_idempotent(tmp_path):
     nfs = {e["storage"]: e for e in s["storage"] if e["type"] == "nfs"}
     assert sorted(nfs) == ["truenas-ephemeral", "truenas-persistent"]
     for entry in nfs.values():
-        assert (entry["server"], entry["content"], entry["format"], entry["options"]) == ("127.0.0.10", "images", "qcow2", "vers=4.2")
+        assert (entry["server"], entry["content"], entry["format"], entry["options"]) == (
+            "127.0.0.10",
+            "images",
+            "qcow2",
+            "vers=4.2",
+        )
         assert "disable" not in entry
     assert nfs["truenas-ephemeral"]["export"] == "/mnt/ephemeral/proxmox/vm"
     assert s["node"]["startall-onboot-delay"] == 120
@@ -278,7 +332,7 @@ def test_proxmox_storage_role_is_idempotent(tmp_path):
     s = read(state)
     next(e for e in s["storage"] if e["storage"] == "truenas-ephemeral")["export"] = "/mnt/elsewhere"
     write(state, s)
-    rc, stats, out = run("proxmox.yml", extra)
+    rc, _, out = run("proxmox.yml", extra)
     assert rc != 0 and "truenas-ephemeral" in out and "Remove or rename them by hand" in out, out[-3000:]
     assert next(e for e in read(state)["storage"] if e["storage"] == "truenas-ephemeral")["export"] == "/mnt/elsewhere"
 
@@ -289,6 +343,6 @@ def test_truenas_role_refuses_an_unpinned_certificate(nas):
     extra["truenas_api_cert_sha256"] = "00" * 32
     extra["truenas_api_connect_wait"] = 0
     logins_before = Path(nas["calls"]).read_text().count("auth.login_with_api_key")
-    rc, stats, out = run("truenas_defaults.yml", extra)
+    rc, _, out = run("truenas_defaults.yml", extra)
     assert rc != 0 and "not the pinned one" in out and "the API key was not sent" in out, out[-3000:]
     assert Path(nas["calls"]).read_text().count("auth.login_with_api_key") == logins_before, "a login was attempted"

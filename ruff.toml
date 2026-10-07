@@ -1,0 +1,12 @@
+# ruff lints and formats this repo's Python. The modules run on the controller, so the oldest Python is
+# ansible-core 2.21's controller minimum, 3.12.
+line-length = 120
+target-version = "py312"
+
+[lint]
+# pycodestyle, pyflakes, import order, bugbear, pyupgrade, simplify, blind except, and ruff's own rules.
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "BLE", "RUF"]
+
+[lint.per-file-ignores]
+# An Ansible module starts with its DOCUMENTATION, EXAMPLES and RETURN strings, and imports after them.
+"roles/*/library/*.py" = ["E402"]

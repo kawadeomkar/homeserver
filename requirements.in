@@ -6,6 +6,10 @@ ansible-core==2.21.4
 ansible-lint==26.9.0
 yamllint==1.38.0
 pytest==9.1.1
+# Coverage of the in-process tests in `make test`: a report, not a gate (.coveragerc).
+pytest-cov==7.1.0
+# Lints and formats the Python, configured in ruff.toml.
+ruff==0.16.9
 # Used by tests/integration/fake_truenas.py, the stand-in NAS for the idempotence tests.
 websockets==17.1
 # Used on the controller by roles/truenas to talk to the TrueNAS WebSocket API.

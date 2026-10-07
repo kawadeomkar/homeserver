@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Client for the TrueNAS JSON-RPC 2.0 WebSocket API, shared by this role's modules.
 
 The modules run on the controller and talk to ``wss://<host>/api/current`` with an API key.
@@ -8,6 +7,7 @@ plain HTTP is revoked by TrueNAS, which is why there is no ``ws://`` fallback.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import ssl
@@ -70,7 +70,7 @@ def normalise_fingerprint(value):
 
 
 def format_fingerprint(hexdigest):
-    return ":".join(hexdigest[i:i + 2] for i in range(0, len(hexdigest), 2)).upper()
+    return ":".join(hexdigest[i : i + 2] for i in range(0, len(hexdigest), 2)).upper()
 
 
 def is_rate_limited(exc):
@@ -166,10 +166,9 @@ class TrueNASClient:
 
     def close(self):
         if self.ws is not None:
-            try:
+            # Closing a dead socket must not mask the real error.
+            with contextlib.suppress(Exception):
                 self.ws.close()
-            except Exception:  # noqa: BLE001 - closing a dead socket must not mask the real error
-                pass
             self.ws = None
 
     def __enter__(self):

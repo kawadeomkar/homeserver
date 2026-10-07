@@ -1,0 +1,5 @@
+# Commits that only reformat code, which `git blame` skips. GitHub reads this file; `make init` points
+# git at it (git config blame.ignoreRevsFile .git-blame-ignore-revs).
+
+# style: format the Python with ruff
+ffb83f5341466f7df8952a63d05cc3a604ca454e

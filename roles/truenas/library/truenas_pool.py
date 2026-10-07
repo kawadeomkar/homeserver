@@ -1,5 +1,4 @@
 #!/usr/bin/python
-# -*- coding: utf-8 -*-
 
 DOCUMENTATION = r"""
 ---
@@ -47,10 +46,17 @@ options:
   scrub:
     description: Scrub task for pools that do not set their own.
     type: dict
-notes:
-  - Connection and timing options (api_host, api_port, api_key, validate_certs, api_cert_sha256,
-    api_timeout, api_connect_wait, api_job_timeout, api_login_wait) are shared by every module in this role; see
-    module_utils/truenas_api.py.
+attributes:
+  check_mode:
+    support: full
+  diff_mode:
+    support: full
+  platform:
+    platforms: posix
+extends_documentation_fragment:
+  - ansible.builtin.action_common_attributes
+  - truenas_api
+  - truenas_api.host
 """
 
 from ansible.module_utils.basic import AnsibleModule
@@ -61,7 +67,6 @@ from ansible.module_utils.truenas_api import (
     differences,
     pick,
 )
-
 
 LAYOUTS = ["STRIPE", "MIRROR", "RAIDZ1", "RAIDZ2", "RAIDZ3"]
 
@@ -83,7 +88,9 @@ def find_blank_disks(api, serials):
                 problems.append(f"{serial} ({other['name']}): in use by {pool}")
             continue
         if disk.get("exported_zpool") or disk.get("imported_zpool"):
-            problems.append(f"{serial} ({disk['name']}): carries pool {disk.get('exported_zpool') or disk.get('imported_zpool')}")
+            problems.append(
+                f"{serial} ({disk['name']}): carries pool {disk.get('exported_zpool') or disk.get('imported_zpool')}"
+            )
         elif disk.get("partitions"):
             problems.append(f"{serial} ({disk['name']}): has {len(disk['partitions'])} partition(s)")
         elif disk.get("duplicate_serial"):
@@ -179,11 +186,15 @@ def ensure(api, module, spec, allow_create):
         pool = api.call("pool.query", [["name", "=", name]])[0]
     if not pool.get("healthy", True):
         module.warn(f"pool {name} reports status {pool.get('status')}")
-    return actions, before, {
-        **pick(pool, ["id", "name", "guid", "status", "healthy", "path"]),
-        "autotrim": (pool.get("autotrim") or {}).get("rawvalue"),
-        "scrub": pick(scrub or {}, ["id", "threshold", "schedule", "enabled"]),
-    }
+    return (
+        actions,
+        before,
+        {
+            **pick(pool, ["id", "name", "guid", "status", "healthy", "path"]),
+            "autotrim": (pool.get("autotrim") or {}).get("rawvalue"),
+            "scrub": pick(scrub or {}, ["id", "threshold", "schedule", "enabled"]),
+        },
+    )
 
 
 def main():
@@ -228,9 +239,7 @@ def main():
                         after[name]["scrub"] = entry["scrub"]
         except TrueNASError as exc:
             module.fail_json(msg=str(exc), actions=actions)
-    module.exit_json(
-        changed=bool(actions), actions=actions, pools=summary, diff={"before": before, "after": after}
-    )
+    module.exit_json(changed=bool(actions), actions=actions, pools=summary, diff={"before": before, "after": after})
 
 
 if __name__ == "__main__":

@@ -64,14 +64,15 @@ lock: ## Re-resolve requirements.txt, with hashes, from requirements.in
 .PHONY: init
 init: venv ## One-time setup: venv, the git hooks, plus inventory and local.yml from their examples
 	$(BIN)/pre-commit install
+	git config blame.ignoreRevsFile .git-blame-ignore-revs
 	@test -f inventory || cp inventory.example inventory
 	@test -f group_vars/all/local.yml || cp group_vars/all/local.yml.example group_vars/all/local.yml
 	@echo "Now fill in group_vars/all/local.yml (git-ignored) and make sure .vault_pass exists."
 
-.PHONY: lint linters lint-yaml lint-ansible lint-module-docs lint-github test
+.PHONY: lint linters lint-yaml lint-ansible lint-python lint-module-docs lint-github test
 lint: linters test ## Every linter, then the unit and policy tests
 
-linters: lint-yaml lint-ansible lint-module-docs lint-github ## yamllint, ansible-lint, module docs, GitHub config schemas (no tests)
+linters: lint-yaml lint-ansible lint-python lint-module-docs lint-github ## yamllint, ansible-lint, ruff, module docs, GitHub config schemas (no tests)
 
 lint-yaml: ## yamllint; warnings fail too
 	$(BIN)/yamllint --strict .
@@ -79,11 +80,14 @@ lint-yaml: ## yamllint; warnings fail too
 # ansible-lint needs a vault password file for its syntax check. Without the real one (a fresh clone, or
 # CI) it gets a placeholder, and it then skips the vault's contents; tests/policy checks that the vault
 # stays encrypted.
-lint-ansible: ## ansible-lint at the production profile
+lint-ansible: ## ansible-lint at the production profile, strict
 	@if [ -z "$$ANSIBLE_VAULT_PASSWORD_FILE" ] && [ ! -f .vault_pass ]; then \
 	  mkdir -p .cache && echo placeholder > .cache/vault-placeholder; \
 	  export ANSIBLE_VAULT_PASSWORD_FILE="$$PWD/.cache/vault-placeholder"; \
 	fi; $(BIN)/ansible-lint
+
+lint-python: ## ruff: lint the Python and check its formatting (ruff format fixes that); both always run
+	@rc=0; $(BIN)/ruff check . || rc=1; $(BIN)/ruff format --check . || rc=1; exit $$rc
 
 lint-module-docs: ## Every custom module's DOCUMENTATION parses (each failure is reported)
 	@test -n "$(MODULES)" || { echo "No module found under roles/*/library: run make from the repository root"; exit 1; }
@@ -95,8 +99,8 @@ lint-github: ## dependabot.yml and the workflows against their published schemas
 	$(BIN)/check-jsonschema --builtin-schema vendor.dependabot .github/dependabot.yml
 	$(BIN)/check-jsonschema --builtin-schema vendor.github-workflows .github/workflows/*.yml
 
-test: ## The unit tests, and the policy tests that check the repo's own rules (the lock matches requirements.in)
-	$(BIN)/pytest -q -m "not gitleaks" tests/unit tests/policy
+test: ## The unit tests, and the policy tests that check the repo's own rules, with a coverage report
+	$(BIN)/pytest -q -m "not gitleaks" --cov --cov-report=term tests/unit tests/policy
 
 .PHONY: test-gitleaks-rules
 test-gitleaks-rules: ## .gitleaks.toml against generated fixtures (gitleaks from PATH)

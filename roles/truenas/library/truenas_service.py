@@ -1,5 +1,4 @@
 #!/usr/bin/python
-# -*- coding: utf-8 -*-
 
 DOCUMENTATION = r"""
 ---
@@ -17,10 +16,17 @@ options:
         C({enabled: <bool>, state: started|stopped}).
     type: dict
     required: true
-notes:
-  - Connection and timing options (api_host, api_port, api_key, validate_certs, api_cert_sha256,
-    api_timeout, api_connect_wait, api_job_timeout, api_login_wait) are shared by every module in this role; see
-    module_utils/truenas_api.py.
+attributes:
+  check_mode:
+    support: full
+  diff_mode:
+    support: full
+  platform:
+    platforms: posix
+extends_documentation_fragment:
+  - ansible.builtin.action_common_attributes
+  - truenas_api
+  - truenas_api.host
 """
 
 from ansible.module_utils.basic import AnsibleModule

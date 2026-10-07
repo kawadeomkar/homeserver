@@ -19,10 +19,20 @@ NODE = socket.gethostname().split(".")[0]
 
 def load():
     if not STATE.exists():
-        return {"storage": [
-            {"storage": "local", "type": "dir", "path": "/var/lib/vz", "content": "backup,iso,vztmpl,import"},
-            {"storage": "local-lvm", "type": "lvmthin", "thinpool": "data", "vgname": "pve", "content": "images,rootdir"},
-        ], "node": {}, "mutations": 0}
+        return {
+            "storage": [
+                {"storage": "local", "type": "dir", "path": "/var/lib/vz", "content": "backup,iso,vztmpl,import"},
+                {
+                    "storage": "local-lvm",
+                    "type": "lvmthin",
+                    "thinpool": "data",
+                    "vgname": "pve",
+                    "content": "images,rootdir",
+                },
+            ],
+            "node": {},
+            "mutations": 0,
+        }
     return json.loads(STATE.read_text())
 
 
@@ -64,8 +74,17 @@ def pvesh(state, args):
         entry = next((s for s in state["storage"] if s["storage"] == sid), None)
         if entry is None:
             fail(f"500 storage '{sid}' does not exist")
-        print(json.dumps({"active": 0 if entry.get("disable") else 1, "enabled": 0 if entry.get("disable") else 1,
-                          "type": entry["type"], "content": entry["content"], "shared": 1}))
+        print(
+            json.dumps(
+                {
+                    "active": 0 if entry.get("disable") else 1,
+                    "enabled": 0 if entry.get("disable") else 1,
+                    "type": entry["type"],
+                    "content": entry["content"],
+                    "shared": 1,
+                }
+            )
+        )
     else:
         fail(f"fake pvesh: unsupported path {path}")
 

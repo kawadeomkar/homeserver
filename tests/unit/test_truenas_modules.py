@@ -61,7 +61,15 @@ def test_validation_errors_are_formatted():
 class TestSizes:
     @pytest.mark.parametrize(
         ("given", "expected"),
-        [(0, 0), (None, 0), (65536, 65536), ("64K", 65536), ("1T", 1099511627776), ("1TiB", 1099511627776), ("512", 512)],
+        [
+            (0, 0),
+            (None, 0),
+            (65536, 65536),
+            ("64K", 65536),
+            ("1T", 1099511627776),
+            ("1TiB", 1099511627776),
+            ("512", 512),
+        ],
     )
     def test_to_bytes(self, given, expected):
         assert dataset.to_bytes(given) == expected
