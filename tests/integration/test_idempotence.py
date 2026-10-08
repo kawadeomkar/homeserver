@@ -7,8 +7,9 @@ the node's own storage to check, which must change nothing and must fail on a st
 VM disks.
 
 The roles run with this repo's own configuration (group_vars/all/storage.yml, group_vars/nas,
-group_vars/proxmox) and test addresses on loopback. Nothing here can reach a real machine: the
-inventory, config and addresses are all local to this directory.
+group_vars/proxmox) and test addresses on loopback, with a NAS and, for the Proxmox role, without one.
+Nothing here can reach a real machine: the inventory, config and addresses are all local to this
+directory.
 
 Needs the project virtualenv and openssl. Run: make test-idempotence
 """
@@ -348,6 +349,29 @@ def test_proxmox_storage_role_is_idempotent(tmp_path):
     rc, _, out = run("proxmox.yml", extra)
     assert rc != 0 and "truenas-ephemeral" in out and "Remove or rename them by hand" in out, out[-3000:]
     assert next(e for e in read(state)["storage"] if e["storage"] == "truenas-ephemeral")["export"] == "/mnt/elsewhere"
+
+
+def test_proxmox_storage_role_without_a_nas(tmp_path):
+    """With no NAS address, this repo's configuration adds no NFS storage, sets no boot delay, and checks local-lvm."""
+    state = tmp_path / "pve.json"
+    extra = {"fake_pve_state": str(state), "truenas_static_address": "", "truenas_bootstrap_address": ""}
+
+    result = run("proxmox.yml", extra, check=True)
+    expect(result, "homeserver", changed=0, note="dry run without a NAS")
+    assert re.search(r'local-lvm"?:\s*"?present', result[2]), result[2][-3000:]
+    assert "truenas-" not in result[2], f"an NFS storage id appears without a NAS\n{result[2][-3000:]}"
+    assert not state.exists() or read(state)["mutations"] == 0, "the dry run changed the host"
+    for note in ("first run", "second run"):
+        expect(run("proxmox.yml", extra), "homeserver", changed=0, note=f"{note} without a NAS")
+    s = read(state)
+    assert s["mutations"] == 0, "running without a NAS changed the host"
+    assert [e["storage"] for e in s["storage"] if e["type"] == "nfs"] == []
+    assert "startall-onboot-delay" not in s["node"], "the boot delay was set with no NAS to wait for"
+
+    # A ZFS install's name on an LVM host: refused before anything runs.
+    rc, _, out = run("proxmox.yml", {**extra, "proxmox_local_vm_storage": "local-zfs"}, check=True)
+    assert rc != 0 and "local-zfs: does not exist" in out, out[-3000:]
+    assert read(state)["mutations"] == 0
 
 
 def test_proxmox_storage_role_checks_existing_storage(tmp_path):

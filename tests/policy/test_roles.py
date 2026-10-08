@@ -6,7 +6,8 @@
 - Each custom module documents its check-mode, diff-mode and platform support as `attributes`, and the
   check-mode support it documents is what its AnsibleModule declares.
 - The tracked configuration and examples pass the roles' argument specs and input checks: site.yml runs
-  with only the always-tagged validation, against inventory.example and local.yml.example.
+  with only the always-tagged validation, against inventory.example and local.yml.example, and again
+  against a local.yml that names only the Proxmox host, so the NAS play must end by itself.
 - Every task that calls a custom module passes only options the module accepts. ansible-lint's args rule
   cannot load these modules, so nothing else checks it.
 - Every option whose name looks like a secret is no_log, in the modules and in the roles' argument specs.
@@ -166,14 +167,42 @@ def test_module_attributes_match_ansible_module(path):
     )
 
 
-def test_examples_satisfy_argument_specs(tmp_path):
-    """The tracked configuration, with local.yml.example for local.yml, passes every role's checks."""
+# A local.yml with only the Proxmox host's address (an RFC 5737 placeholder): no NAS.
+PROXMOX_ONLY_LOCAL_YML = "---\nproxmox_address: 192.0.2.20\n"
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "validations", "present", "absent"),
+    [
+        pytest.param(
+            None,
+            2,
+            ["validate | Check the connection settings", "skipping: [truenas]"],
+            [],
+            id="nas",
+        ),
+        pytest.param(
+            PROXMOX_ONLY_LOCAL_YML,
+            1,
+            ["Skip the NAS when local.yml gives it no address", "ok: [truenas]"],
+            ["TASK [truenas :", "validate | Check the connection settings"],
+            id="proxmox-only",
+        ),
+    ],
+)
+def test_examples_satisfy_argument_specs(tmp_path, local_yml, validations, present, absent):
+    """The tracked configuration passes every role's checks: with local.yml.example for local.yml, and with a
+    local.yml that names only the Proxmox host, where the NAS play must end before its role runs."""
     for name in ["roles", "group_vars"]:
         shutil.copytree(ROOT / name, tmp_path / name, ignore=shutil.ignore_patterns("local.yml", "vault.yml"))
     for playbook in ROOT.glob("*.yml"):
         shutil.copy(playbook, tmp_path)
     shutil.copy(ROOT / "inventory.example", tmp_path)
-    shutil.copy(ROOT / "group_vars" / "all" / "local.yml.example", tmp_path / "group_vars" / "all" / "local.yml")
+    local = tmp_path / "group_vars" / "all" / "local.yml"
+    if local_yml is None:
+        shutil.copy(ROOT / "group_vars" / "all" / "local.yml.example", local)
+    else:
+        local.write_text(local_yml)
     # Not the repo's ansible.cfg, which names the vault password file.
     (tmp_path / "ansible.cfg").write_text("[defaults]\nretry_files_enabled = false\n")
     env = {**os.environ, "ANSIBLE_CONFIG": str(tmp_path / "ansible.cfg"), "ANSIBLE_NOCOLOR": "1"}
@@ -188,8 +217,11 @@ def test_examples_satisfy_argument_specs(tmp_path):
     result = subprocess.run(command, cwd=tmp_path, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
     out = result.stdout + result.stderr
     assert result.returncode == 0, out[-3000:]
-    assert out.count("Validating arguments against arg spec 'main'") == 2, out[-3000:]
-    assert "validate | Check the connection settings" in out, out[-3000:]
+    assert out.count("Validating arguments against arg spec 'main'") == validations, out[-3000:]
+    for text in present:
+        assert text in out, f"{text!r} missing\n{out[-3000:]}"
+    for text in absent:
+        assert text not in out, f"{text!r} present\n{out[-3000:]}"
 
 
 def test_task_arguments_match_module_specs():
