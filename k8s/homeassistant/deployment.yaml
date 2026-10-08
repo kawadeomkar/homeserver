@@ -6,6 +6,8 @@ metadata:
   namespace: homeassistant
   labels:
     app: homeassistant
+  annotations:
+    ignore-check.kube-linter.io/drop-net-raw-capability: "Added for device discovery, which also needs hostNetwork (CLAUDE.md); the namespace is labelled privileged."
 spec:
   replicas: 1
   selector:

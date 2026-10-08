@@ -4,5 +4,7 @@ kind: Namespace
 metadata:
   name: jellyfin
   labels:
+    # Jellyfin runs privileged, for hardware transcoding through /dev/dri, and mounts the render device
+    # from the host. Talos enforces Pod Security Admission at `baseline`, which rejects both.
     pod-security.kubernetes.io/enforce: privileged
     name: jellyfin

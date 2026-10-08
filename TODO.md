@@ -23,8 +23,7 @@ the full audit with file/line references; the finding ids below refer to it.
       `ansible` and `tooling` groups, and whether the ruleset's undocumented
       `require_extra_approval_for_unattributed_changes` holds them back
 - [ ] Drop the Python 3.12 leg when ansible-core stops supporting 3.12 on the controller
-- [ ] The rest of the CI plan: kube-linter and the manifest convention tests (PR 4); OpenSSF Scorecard and
-      dependency review (PR 6)
+- [ ] The rest of the CI plan: OpenSSF Scorecard and dependency review (PR 6)
 
 ## TrueNAS
 
@@ -92,8 +91,6 @@ was reproduced on a cluster, because there is none.
       host it is reached by; the Deployment sets no env at all
 - [ ] `prometheus` Deployment has no `strategy: Recreate` although it now holds a hostPath PV, so a rollout
       starts a second pod against the same TSDB and hangs
-- [ ] Say why in a comment on the `pod-security.kubernetes.io/enforce: privileged` label of the `frigate`,
-      `jellyfin` and `homeassistant` namespaces, as the convention in `CLAUDE.md` asks
 
 ## Removed with the Ubuntu host layer
 
