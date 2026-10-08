@@ -1,7 +1,7 @@
 # Entry points. Every Python tool comes from the project virtualenv, so the versions locked in
 # requirements.txt are the ones that run, here and in CI (.github/workflows/ci.yml). kubeconform,
 # kube-linter and gitleaks are the exceptions: they come from PATH (Homebrew locally; CI pins each version
-# and checksum), as does the openssl the idempotence tests use.
+# and checksum), as does openssl, which the idempotence tests and vault-init use.
 # The Python environment: the active virtualenv if there is one (VIRTUAL_ENV, set by
 # `pyenv activate <env>` or `source <env>/bin/activate`), otherwise ./.venv. Override with VENV=<path>.
 VENV    ?= $(if $(VIRTUAL_ENV),$(VIRTUAL_ENV),.venv)
@@ -152,7 +152,7 @@ check-proxmox: ## Dry-run the Proxmox storage configuration
 	$(RUN) proxmox.yml --check --diff $(ANSIBLE_ARGS)
 
 .PHONY: proxmox
-proxmox: ## Add the NAS's shares to Proxmox as storage
+proxmox: ## Configure the Proxmox host's VM storage: the NAS's shares, or a check of its own
 	$(RUN) proxmox.yml --diff $(ANSIBLE_ARGS)
 
 .PHONY: check
@@ -160,10 +160,30 @@ check: ## Dry-run everything
 	$(RUN) site.yml --check --diff $(ANSIBLE_ARGS)
 
 .PHONY: site
-site: ## Configure everything, NAS first
+site: ## Configure everything, NAS first (the NAS play ends by itself without one)
 	$(RUN) site.yml --diff $(ANSIBLE_ARGS)
 
 .PHONY: vault-edit
 vault-edit: ## Edit the encrypted vault (secrets only; addresses go in local.yml), then lint it
 	$(BIN)/ansible-vault edit group_vars/all/vault.yml
 	@$(MAKE) --no-print-directory lint-ansible
+
+# Without a NAS the vault holds nothing this setup uses, but every run decrypts it, and only the maintainer
+# has the password. This writes an empty vault over the tracked one, encrypted with .vault_pass, which it
+# creates readable by its owner alone if there is none, and tells git to leave the file out of commits. A
+# vault that already opens with .vault_pass, the maintainer's or one made here before, is left alone. Without
+# ansible-vault it stops before anything else, since a vault it cannot open would look like someone else's.
+# The empty vault reaches ansible-vault on stdin, so the file changes only once encryption has worked.
+.PHONY: vault-init
+vault-init: ## Without a NAS: an empty vault of your own, with a new .vault_pass if there is none
+	@test -x $(BIN)/ansible-vault || { echo "ansible-vault is not in $(VENV): activate the project's virtualenv, or pass VENV=<path>"; exit 1; }
+	@if [ -f .vault_pass ] && $(BIN)/ansible-vault view group_vars/all/vault.yml >/dev/null 2>&1; then \
+	  echo "group_vars/all/vault.yml already opens with .vault_pass: nothing to do."; \
+	else \
+	  umask 077 && { [ -f .vault_pass ] || openssl rand -hex 32 > .vault_pass; } \
+	  && printf -- '---\n{}\n' | $(BIN)/ansible-vault encrypt --output group_vars/all/vault.yml \
+	  && if git ls-files --error-unmatch group_vars/all/vault.yml >/dev/null 2>&1; then \
+	    git update-index --skip-worktree group_vars/all/vault.yml \
+	    && echo "git now leaves group_vars/all/vault.yml out of commits; README.md says how to pull past it."; \
+	  fi; \
+	fi
