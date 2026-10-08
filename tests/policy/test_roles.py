@@ -10,7 +10,8 @@
   against a local.yml that names only the Proxmox host, so the NAS play must end by itself. Without a NAS,
   the storage both VM classes use is the one local.yml names, which no tracked file overrides. A TrueNAS
   section that keeps other settings but gives no address stops both playbooks, and so does nas_present given
-  on the command line.
+  on the command line. Deleting the truenas host from the inventory, which inventory.example advises
+  against, still gives a working run without a NAS.
 - Every task that calls a custom module passes only options the module accepts. ansible-lint's args rule
   cannot load these modules, so nothing else checks it.
 - Every option whose name looks like a secret is no_log, in the modules and in the roles' argument specs.
@@ -278,6 +279,18 @@ def test_nas_settings_without_an_address_are_refused(tmp_path, playbook):
     assert "but neither truenas_static_address nor truenas_bootstrap_address" in out, out[-3000:]
     assert "truenas_gateway" in out, out[-3000:]
     assert "TASK [truenas :" not in out and "TASK [proxmox_storage :" not in out, out[-3000:]
+
+
+def test_inventory_without_the_nas_host(tmp_path):
+    """inventory.example says to keep the truenas host without a NAS, but a user who deletes it still gets a
+    working run: the NAS play matches no host, and the Proxmox play runs as it does without a NAS."""
+    tree = example_tree(tmp_path, PROXMOX_ONLY_LOCAL_YML)
+    inventory = tree / "inventory.example"
+    inventory.write_text(re.sub(r"^truenas\n", "", inventory.read_text(), flags=re.MULTILINE))
+    rc, out = argspec_pass(tree)
+    assert rc == 0, out[-3000:]
+    assert "skipping: no hosts matched" in out, out[-3000:]
+    assert out.count("Validating arguments against arg spec 'main'") == 1, out[-3000:]
 
 
 def test_nas_present_cannot_be_set(tmp_path):
