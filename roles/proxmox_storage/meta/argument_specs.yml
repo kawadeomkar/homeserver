@@ -1,12 +1,14 @@
 ---
 argument_specs:
   main:
-    short_description: Add NFS shares to Proxmox VE as VM-disk storage
+    short_description: Add NFS shares to Proxmox VE as qcow2 VM-disk storage, and check that existing storage can hold VM disks
     description:
       - Adds one NFS storage per entry of proxmox_storage_nfs with pvesm, and corrects the content,
         format, mount options and enabled state of one that already exists.
       - Refuses a storage id that exists with another type, server or export, rather than
         replacing it.
+      - Checks that each storage in proxmox_storage_local already exists, is enabled and holds images.
+        Any type passes; it is meant for the installer's own storage. It never creates or changes one.
       - Optionally sets the node's start-on-boot delay so VMs wait for the NFS server after a power cut.
       - The defaults change nothing.
     options:
@@ -19,6 +21,11 @@ argument_specs:
         elements: dict
         default: []
         description: Storages, each with id and export; optional server, content, format, nfs_options, enabled.
+      proxmox_storage_local:
+        type: list
+        elements: str
+        default: []
+        description: Ids of storage of any type the node must already have, enabled and with images in its content. Checked, never created.
       proxmox_storage_nfs_options:
         type: str
         default: ""

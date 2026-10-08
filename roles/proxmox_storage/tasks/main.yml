@@ -2,15 +2,29 @@
 # Uses pvesm over root SSH. community.proxmox's proxmox_storage module only creates storage,
 # never corrects it, and has no format option.
 
+# Each problem gets its own sentence, naming the variable to change. Argument validation accepts a string
+# for a list (it would split it on commas) but leaves the variable as it was, so the string is refused here
+# before anything iterates its characters.
 - name: Check the role's inputs
   ansible.builtin.assert:
-    that:
-      - proxmox_storage_nfs | map(attribute='id') | unique | list | length == proxmox_storage_nfs | length
-      - proxmox_storage_nfs | rejectattr('server', 'defined') | list | length == 0 or proxmox_storage_nfs_server | length > 0
-    fail_msg: >-
-      Storage ids must be unique, and every storage needs an NFS server: its own server, or
-      proxmox_storage_nfs_server.
+    that: _errors | length == 0
+    fail_msg: "{{ _errors | join(' ') }}"
     quiet: true
+  vars:
+    _ids: "{{ (proxmox_storage_nfs | map(attribute='id') | list) + ([] if proxmox_storage_local is string else proxmox_storage_local) }}"
+    _serverless: "{{ proxmox_storage_nfs | rejectattr('server', 'defined') | map(attribute='id') | list }}"
+    _errors: >-
+      {%- set out = [] -%}
+      {%- if proxmox_storage_local is string -%}
+      {%-   set _ = out.append('proxmox_storage_local must be a list of storage ids, such as [local-lvm], not a string.') -%}
+      {%- endif -%}
+      {%- if _ids | select | unique | list | length != _ids | length -%}
+      {%-   set _ = out.append('Storage ids must be unique across proxmox_storage_nfs and proxmox_storage_local, and none may be empty.') -%}
+      {%- endif -%}
+      {%- if _serverless and proxmox_storage_nfs_server | length == 0 -%}
+      {%-   set _ = out.append('No NFS server for ' ~ _serverless | join(', ') ~ ': set proxmox_storage_nfs_server, or a server in the entry.') -%}
+      {%- endif -%}
+      {{ out }}
 
 - name: Read the storage configuration
   ansible.builtin.command:
@@ -18,7 +32,7 @@
   register: proxmox_storage_config
   changed_when: false
   check_mode: false
-  when: proxmox_storage_nfs | length > 0
+  when: proxmox_storage_nfs | length > 0 or proxmox_storage_local | length > 0
 
 - name: Work out the wanted settings and what each storage needs
   ansible.builtin.set_fact:
@@ -64,6 +78,54 @@
       {%- endfor -%}
       {{ plan }}
 
+# Storage the node already has, of any type and typically the installer's local-lvm or local-zfs, is
+# checked, never created or changed: it must exist, be enabled and hold images.
+- name: Work out what the node's own storage lacks
+  ansible.builtin.set_fact:
+    proxmox_storage_local_problems: "{{ _problems }}"
+  when: proxmox_storage_local | length > 0
+  vars:
+    _existing: "{{ proxmox_storage_config.stdout | from_json }}"
+    _problems: >-
+      {%- set have = dict(_existing | map(attribute='storage') | zip(_existing)) -%}
+      {%- set out = [] -%}
+      {%- for id in proxmox_storage_local -%}
+      {%-   if id not in have -%}
+      {%-     set _ = out.append(id ~ ': does not exist') -%}
+      {%-   else -%}
+      {%-     if have[id].disable | default(0) | int == 1 -%}
+      {%-       set _ = out.append(id ~ ': is disabled') -%}
+      {%-     endif -%}
+      {%-     if 'images' not in (have[id].content | default('')).split(',') -%}
+      {%-       set _ = out.append(id ~ ': has no images in its content') -%}
+      {%-     endif -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ out }}
+
+# The message lists the storage Proxmox has, so the id to use instead is in front of whoever reads it.
+- name: Refuse a storage that cannot hold VM disks
+  ansible.builtin.assert:
+    that: proxmox_storage_local_problems | length == 0
+    fail_msg: >-
+      These storages in proxmox_storage_local cannot hold VM disks: {{ proxmox_storage_local_problems | join('; ') }}.
+      Storage configured in Proxmox: {{ _configured | join(', ') }}.{{ ' ' ~ _installer if _missing else '' }}
+    quiet: true
+  when: proxmox_storage_local | length > 0
+  vars:
+    _existing: "{{ proxmox_storage_config.stdout | from_json | sort(attribute='storage') }}"
+    _missing: "{{ proxmox_storage_local | difference(_existing | map(attribute='storage')) }}"
+    _installer: The installer creates local-lvm on an LVM install and local-zfs on a ZFS one; this role does not create storage.
+    # Each as "id (type: content)", the content sorted: Proxmox gives it in no fixed order.
+    _configured: >-
+      {%- set out = [] -%}
+      {%- for e in _existing -%}
+      {%-   set content = (e.content | default('')).split(',') | select | sort | join(',') -%}
+      {%-   set _ = out.append(e.storage ~ ' (' ~ e.type ~ ': ' ~ (content or 'no content')
+                               ~ (', disabled' if e.disable | default(0) | int == 1 else '') ~ ')') -%}
+      {%- endfor -%}
+      {{ out }}
+
 # A storage's type, server and export cannot be changed in place, and replacing a storage that
 # holds disks is not something to do implicitly.
 - name: Refuse a storage id that already points somewhere else
@@ -76,11 +138,12 @@
     quiet: true
   when: proxmox_storage_nfs | length > 0
 
-# Commands do not run in check mode, so this is what a dry run shows.
-- name: Show what will be added or corrected
+# Commands do not run in check mode, so this is what a dry run shows: add, correct or ok per NFS
+# storage, and present for each of the node's own storages that exists, is enabled and holds images.
+- name: Show what will be added or corrected, and what was checked
   ansible.builtin.debug:
-    var: proxmox_storage_plan
-  when: proxmox_storage_nfs | length > 0
+    msg: "{{ proxmox_storage_plan | default({}) | combine(dict(proxmox_storage_local | product(['present']))) }}"
+  when: proxmox_storage_nfs | length > 0 or proxmox_storage_local | length > 0
 
 - name: Add the NFS storages
   ansible.builtin.command:
