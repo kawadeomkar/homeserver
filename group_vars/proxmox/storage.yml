@@ -2,7 +2,7 @@
 # This Proxmox host's storage, applied by roles/proxmox_storage. The NAS's address comes from
 # group_vars/all/local.yml, the VM storage layout and the NAS switch from group_vars/all/storage.yml.
 
-proxmox_storage_nfs_server: "{{ truenas_static_address | default('') | split('/') | first }}"
+proxmox_storage_nfs_server: "{{ truenas_static_address | default('', true) | trim | split('/') | first }}"
 # With a NAS, its two shares; without one, nothing to add.
 proxmox_storage_nfs: "{{ vm_storage_nfs_exports if nas_present else [] }}"
 # Without a NAS, the installer's storage that every VM class resolves to must be able to hold VM disks.

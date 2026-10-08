@@ -171,6 +171,21 @@ def test_module_attributes_match_ansible_module(path):
 PROXMOX_ONLY_LOCAL_YML = "---\nproxmox_address: 192.0.2.20\n"
 
 
+def blank_nas_local_yml():
+    """local.yml.example with every TrueNAS value left blank after its colon, which the example allows,
+    and the bootstrap address only a space."""
+    example = yaml.safe_load((ROOT / "group_vars" / "all" / "local.yml.example").read_text())
+    lines = ["---"]
+    for name, value in example.items():
+        if name == "truenas_bootstrap_address":
+            lines.append(f'{name}: " "')
+        elif name.startswith("truenas_"):
+            lines.append(f"{name}:")
+        else:
+            lines.append(yaml.safe_dump({name: value}, default_flow_style=True).strip()[1:-1])
+    return "\n".join(lines) + "\n"
+
+
 @pytest.mark.parametrize(
     ("local_yml", "validations", "present", "absent"),
     [
@@ -188,11 +203,19 @@ PROXMOX_ONLY_LOCAL_YML = "---\nproxmox_address: 192.0.2.20\n"
             ["TASK [truenas :", "validate | Check the connection settings"],
             id="proxmox-only",
         ),
+        pytest.param(
+            blank_nas_local_yml(),
+            1,
+            ["Skip the NAS when local.yml gives it no address", "ok: [truenas]"],
+            ["TASK [truenas :", "validate | Check the connection settings"],
+            id="proxmox-only-blank-values",
+        ),
     ],
 )
 def test_examples_satisfy_argument_specs(tmp_path, local_yml, validations, present, absent):
     """The tracked configuration passes every role's checks: with local.yml.example for local.yml, and with a
-    local.yml that names only the Proxmox host, where the NAS play must end before its role runs."""
+    local.yml that names only the Proxmox host or leaves every TrueNAS value blank, where the NAS play must
+    end before its role runs."""
     for name in ["roles", "group_vars"]:
         shutil.copytree(ROOT / name, tmp_path / name, ignore=shutil.ignore_patterns("local.yml", "vault.yml"))
     for playbook in ROOT.glob("*.yml"):

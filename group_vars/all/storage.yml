@@ -6,9 +6,10 @@
 
 # True when this setup has a NAS, which is the case when local.yml gives it an address. With a NAS, VM
 # disks live on its datasets below, over NFS; without one, they stay on the Proxmox host's own storage,
-# and the NAS play ends before it does anything.
-nas_present: "{{ (truenas_static_address | default('') | length > 0)
-                 or (truenas_bootstrap_address | default('') | length > 0) }}"
+# and the NAS play ends before it does anything. A value left blank (YAML null) or only whitespace is no
+# address, wherever the two addresses are read.
+nas_present: "{{ (truenas_static_address | default('', true) | trim | length > 0)
+                 or (truenas_bootstrap_address | default('', true) | trim | length > 0) }}"
 
 # Where TrueNAS mounts its pools.
 vm_storage_mount_root: /mnt
