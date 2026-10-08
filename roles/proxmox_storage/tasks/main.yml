@@ -7,9 +7,11 @@
     that:
       - proxmox_storage_nfs | map(attribute='id') | unique | list | length == proxmox_storage_nfs | length
       - proxmox_storage_nfs | rejectattr('server', 'defined') | list | length == 0 or proxmox_storage_nfs_server | length > 0
+      - proxmox_storage_local | select | unique | list | length == proxmox_storage_local | length
+      - proxmox_storage_local | intersect(proxmox_storage_nfs | map(attribute='id') | list) | length == 0
     fail_msg: >-
-      Storage ids must be unique, and every storage needs an NFS server: its own server, or
-      proxmox_storage_nfs_server.
+      Storage ids must be unique across proxmox_storage_nfs and proxmox_storage_local and none may be
+      empty, and every NFS storage needs a server: its own, or proxmox_storage_nfs_server.
     quiet: true
 
 - name: Read the storage configuration
@@ -18,7 +20,7 @@
   register: proxmox_storage_config
   changed_when: false
   check_mode: false
-  when: proxmox_storage_nfs | length > 0
+  when: proxmox_storage_nfs | length > 0 or proxmox_storage_local | length > 0
 
 - name: Work out the wanted settings and what each storage needs
   ansible.builtin.set_fact:
@@ -64,6 +66,41 @@
       {%- endfor -%}
       {{ plan }}
 
+# The node's own storage (the installer's local-lvm or local-zfs) is checked, never created or changed:
+# it must exist, be enabled and hold images.
+- name: Work out what the node's own storage lacks
+  ansible.builtin.set_fact:
+    proxmox_storage_local_problems: "{{ _problems }}"
+  when: proxmox_storage_local | length > 0
+  vars:
+    _existing: "{{ proxmox_storage_config.stdout | from_json }}"
+    _problems: >-
+      {%- set have = dict(_existing | map(attribute='storage') | zip(_existing)) -%}
+      {%- set out = [] -%}
+      {%- for id in proxmox_storage_local -%}
+      {%-   if id not in have -%}
+      {%-     set _ = out.append(id ~ ': does not exist') -%}
+      {%-   else -%}
+      {%-     if have[id].disable | default(0) | int == 1 -%}
+      {%-       set _ = out.append(id ~ ': is disabled') -%}
+      {%-     endif -%}
+      {%-     if 'images' not in (have[id].content | default('')).split(',') -%}
+      {%-       set _ = out.append(id ~ ': content ' ~ (have[id].content | default('none')) ~ ' has no images') -%}
+      {%-     endif -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Refuse a storage that cannot hold VM disks
+  ansible.builtin.assert:
+    that: proxmox_storage_local_problems | length == 0
+    fail_msg: >-
+      These storages must already exist on the node, enabled and with images in their content:
+      {{ proxmox_storage_local_problems | join('; ') }}. The installer's storage is local-lvm on an LVM
+      install and local-zfs on a ZFS one; this role does not create storage.
+    quiet: true
+  when: proxmox_storage_local | length > 0
+
 # A storage's type, server and export cannot be changed in place, and replacing a storage that
 # holds disks is not something to do implicitly.
 - name: Refuse a storage id that already points somewhere else
@@ -76,11 +113,12 @@
     quiet: true
   when: proxmox_storage_nfs | length > 0
 
-# Commands do not run in check mode, so this is what a dry run shows.
-- name: Show what will be added or corrected
+# Commands do not run in check mode, so this is what a dry run shows: add, correct or ok per NFS
+# storage, and present for each of the node's own storages that passed its checks.
+- name: Show what will be added or corrected, and what was checked
   ansible.builtin.debug:
-    var: proxmox_storage_plan
-  when: proxmox_storage_nfs | length > 0
+    msg: "{{ proxmox_storage_plan | default({}) | combine(dict(proxmox_storage_local | product(['present']))) }}"
+  when: proxmox_storage_nfs | length > 0 or proxmox_storage_local | length > 0
 
 - name: Add the NFS storages
   ansible.builtin.command:
@@ -148,6 +186,7 @@
       != proxmox_storage_startall_delay | int
   changed_when: true
 
+# The NFS storages, and the node's own storages the role was asked to check.
 - name: Check each enabled storage is mounted and active
   ansible.builtin.command:
     argv: [pvesh, get, "/nodes/{{ proxmox_storage_node_name }}/storage/{{ item.id }}/status", --output-format, json]
@@ -156,9 +195,16 @@
   failed_when: >-
     proxmox_storage_status.rc != 0
     or (proxmox_storage_status.stdout | from_json).active | default(0) | int != 1
-  loop: "{{ proxmox_storage_wanted | default([]) }}"
+  loop: "{{ _to_check }}"
   loop_control:
     label: "{{ item.id }}"
   when:
     - not ansible_check_mode
     - item.disable == 0
+  vars:
+    _to_check: >-
+      {%- set out = [] -%}
+      {%- for id in proxmox_storage_local -%}
+      {%-   set _ = out.append({'id': id, 'disable': 0}) -%}
+      {%- endfor -%}
+      {{ (proxmox_storage_wanted | default([])) + out }}
