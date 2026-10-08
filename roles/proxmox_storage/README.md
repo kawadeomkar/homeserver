@@ -26,10 +26,13 @@ storage, never corrects it, and has no format option.
 A disk imported with `import-from` keeps the source image's format whatever the storage default says.
 Whatever imports images must ask for `format=qcow2` itself.
 
-Each id in `proxmox_storage_local` must exist on the node, not be disabled, have `images` in its content
-and be active there; the role fails, in check mode too, naming the id and what it lacks. The installer
-creates `local-lvm` on an LVM install and `local-zfs` on a ZFS one; `local` holds ISOs and backups and
-cannot take VM disks. The role does not create storage.
+Each id in `proxmox_storage_local` must exist on the node, not be disabled and have `images` in its
+content. The role checks that from the storage configuration and fails, in check mode too, naming the id
+and what it lacks. Whether a storage is active on the node, for these ids and every NFS storage alike, is
+checked only for real, at the end of a run: a dry run reports `present` for a storage that cannot be
+activated or is restricted to other cluster nodes, and the real run then fails naming it and the reason.
+The installer creates `local-lvm` on an LVM install and `local-zfs` on a ZFS one; `local` holds ISOs and
+backups and cannot take VM disks. The role does not create storage.
 
 ## Examples
 

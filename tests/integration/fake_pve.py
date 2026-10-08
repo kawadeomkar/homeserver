@@ -4,9 +4,12 @@
 `pvesm add nfs`, `pvesm set` and `pvenode config set`, backed by a JSON file named by $FAKE_PVE_STATE.
 Output follows Proxmox VE 9.2, as captured on a fresh install: `disable` appears only when set, every
 `/storage` entry carries a `digest` of the whole configuration, `content` comes back in an order that
-differs from one call to the next (it is a hash's order on a real host, so the fake rotates it), only an
-NFS storage reports `shared`, and adding an id that exists fails as `pvesm add` does. Anything else exits
-non-zero, so an unexpected command fails the test.
+differs from one call to the next (it is a hash's order on a real host, so the fake rotates it), every
+status answer carries `shared`, 1 only for an NFS storage, and adding an id that exists fails as `pvesm add`
+does. A storage named in the state's `inactive` list answers `active: 0` while still enabled, as one whose
+mount or pool failed to come up does, and one whose `nodes` leaves this node out answers `enabled: 0`, as
+Proxmox does for a storage restricted to other cluster nodes. Nothing the role runs changes either. Anything
+else exits non-zero, so an unexpected command fails the test.
 """
 
 import hashlib
@@ -37,6 +40,7 @@ def load():
             "node": {},
             "mutations": 0,
             "reads": 0,
+            "inactive": [],
         }
     return json.loads(STATE.read_text())
 
@@ -91,11 +95,13 @@ def pvesh(state, args):
         entry = next((s for s in state["storage"] if s["storage"] == sid), None)
         if entry is None:
             fail(f"500 storage '{sid}' does not exist")
+        restricted = "nodes" in entry and NODE not in entry["nodes"].split(",")
+        enabled = not entry.get("disable") and not restricted
         print(
             json.dumps(
                 {
-                    "active": 0 if entry.get("disable") else 1,
-                    "enabled": 0 if entry.get("disable") else 1,
+                    "active": 1 if enabled and sid not in state.get("inactive", []) else 0,
+                    "enabled": 1 if enabled else 0,
                     "type": entry["type"],
                     "content": entry["content"],
                     "shared": 1 if entry["type"] == "nfs" else 0,

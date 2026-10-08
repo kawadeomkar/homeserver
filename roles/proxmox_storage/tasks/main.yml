@@ -114,7 +114,8 @@
   when: proxmox_storage_nfs | length > 0
 
 # Commands do not run in check mode, so this is what a dry run shows: add, correct or ok per NFS
-# storage, and present for each of the node's own storages that passed its checks.
+# storage, and present for each of the node's own storages that exists, is enabled and holds images.
+# Whether a storage is active on the node is checked only for real, at the end.
 - name: Show what will be added or corrected, and what was checked
   ansible.builtin.debug:
     msg: "{{ proxmox_storage_plan | default({}) | combine(dict(proxmox_storage_local | product(['present']))) }}"
@@ -186,15 +187,13 @@
       != proxmox_storage_startall_delay | int
   changed_when: true
 
-# The NFS storages, and the node's own storages the role was asked to check.
-- name: Check each enabled storage is mounted and active
+# The NFS storages, and the node's own storages the role was asked to check. Only for real: in check
+# mode a storage the role would add does not exist yet.
+- name: Read each enabled storage's status on the node
   ansible.builtin.command:
     argv: [pvesh, get, "/nodes/{{ proxmox_storage_node_name }}/storage/{{ item.id }}/status", --output-format, json]
   register: proxmox_storage_status
   changed_when: false
-  failed_when: >-
-    proxmox_storage_status.rc != 0
-    or (proxmox_storage_status.stdout | from_json).active | default(0) | int != 1
   loop: "{{ _to_check }}"
   loop_control:
     label: "{{ item.id }}"
@@ -208,3 +207,27 @@
       {%-   set _ = out.append({'id': id, 'disable': 0}) -%}
       {%- endfor -%}
       {{ (proxmox_storage_wanted | default([])) + out }}
+
+# Proxmox answers for a storage it cannot use rather than failing: enabled 0 when the storage is
+# restricted to other nodes, active 0 when it could not be activated (an NFS server out of reach, a ZFS
+# pool that was not imported, a missing thin pool).
+- name: Check each enabled storage is mounted and active
+  ansible.builtin.assert:
+    that: _unusable | length == 0
+    fail_msg: >-
+      These storages cannot hold VM disks on {{ proxmox_storage_node_name }} now:
+      {{ _unusable | join('; ') }}. `pvesm status` on the node shows the same.
+    quiet: true
+  when: not ansible_check_mode
+  vars:
+    _unusable: >-
+      {%- set out = [] -%}
+      {%- for r in proxmox_storage_status.results | default([]) if r is not skipped -%}
+      {%-   set s = r.stdout | from_json -%}
+      {%-   if s.enabled | default(1) | int != 1 -%}
+      {%-     set _ = out.append(r.item.id ~ ': not enabled on this node, so probably restricted to other nodes') -%}
+      {%-   elif s.active | default(0) | int != 1 -%}
+      {%-     set _ = out.append(r.item.id ~ ': enabled but not active (an NFS server out of reach, a pool not imported?)') -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ out }}

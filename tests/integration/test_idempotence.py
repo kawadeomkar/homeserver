@@ -350,8 +350,31 @@ def test_proxmox_storage_role_checks_existing_storage(tmp_path):
         f"the dry run does not report local-lvm\n{result[2][-3000:]}"
     )
     assert not state.exists() or read(state)["mutations"] == 0, "the dry run changed the host"
-    expect(run("proxmox_local.yml", extra), "homeserver", changed=0, note="apply")
+    result = run("proxmox_local.yml", extra)
+    expect(result, "homeserver", changed=0, note="apply")
     assert read(state)["mutations"] == 0, "checking the node's storage changed the host"
+    # The status is read only for real, and must be read for the node's own storage too.
+    status = result[2][result[2].find("Read each enabled storage's status") :]
+    assert "ok: [homeserver] => (item=local-lvm)" in status, f"local-lvm's status was not read\n{result[2][-3000:]}"
+
+    # Enabled but not active, as after a pool that failed to come up. A dry run cannot see it; the real run
+    # names it.
+    s = read(state)
+    s["inactive"] = ["local-lvm"]
+    write(state, s)
+    rc, _, out = run("proxmox_local.yml", extra)
+    assert rc != 0 and "local-lvm: enabled but not active" in out, f"an inactive storage passed\n{out[-3000:]}"
+    # Restricted to another cluster node.
+    s = read(state)
+    s["inactive"] = []
+    next(e for e in s["storage"] if e["storage"] == "local-lvm")["nodes"] = "elsewhere"
+    write(state, s)
+    rc, _, out = run("proxmox_local.yml", extra)
+    assert rc != 0 and "local-lvm: not enabled on this node" in out, f"another node's storage passed\n{out[-3000:]}"
+    assert read(state)["mutations"] == 0, "a failed status check changed the host"
+    s = read(state)
+    next(e for e in s["storage"] if e["storage"] == "local-lvm").pop("nodes")
+    write(state, s)
 
     # A storage that does not exist, one that cannot hold VM disks, and an empty id.
     for local, message in (
