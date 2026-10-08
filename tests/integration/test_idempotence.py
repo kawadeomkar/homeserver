@@ -391,10 +391,12 @@ def test_proxmox_storage_role_checks_existing_storage(tmp_path):
     # id, a string for the list, an id in both lists, and an NFS storage with no server.
     nfs = [{"id": "truenas-persistent", "export": "/mnt/tank/vm"}]
     server = {"proxmox_storage_nfs_server": "127.0.0.10"}
+    configured = (
+        "Storage configured in Proxmox: local (dir: backup,import,iso,vztmpl), local-lvm (lvmthin: images,rootdir)."
+    )
     for given, message in (
-        ({"proxmox_storage_local": ["local-zfs"]}, "local-zfs: does not exist"),
-        ({"proxmox_storage_local": ["local"]}, "local: content"),
-        ({"proxmox_storage_local": ["local"]}, "has no images"),
+        ({"proxmox_storage_local": ["local-zfs"]}, f"local-zfs: does not exist. {configured} The installer creates"),
+        ({"proxmox_storage_local": ["local"]}, f"local: has no images in its content. {configured}"),
         ({"proxmox_storage_local": [""]}, "none may be empty"),
         ({"proxmox_storage_local": "local-lvm"}, "proxmox_storage_local must be a list of storage ids"),
         ({"proxmox_storage_nfs": [{**nfs[0], "id": "local-lvm"}], **server}, "unique across proxmox_storage_nfs and"),
@@ -402,12 +404,13 @@ def test_proxmox_storage_role_checks_existing_storage(tmp_path):
     ):
         rc, _, out = run("proxmox_local.yml", {**extra, **given}, check=True)
         assert rc != 0 and message in out, f"{given}: expected {message!r}\n{out[-3000:]}"
-    # One disabled by hand.
+    # One disabled by hand: no word about installers, since the storage is there.
     s = read(state)
     next(e for e in s["storage"] if e["storage"] == "local-lvm")["disable"] = 1
     write(state, s)
     rc, _, out = run("proxmox_local.yml", extra, check=True)
     assert rc != 0 and "local-lvm: is disabled" in out, out[-3000:]
+    assert "local-lvm (lvmthin: images,rootdir, disabled)" in out and "The installer" not in out, out[-3000:]
     assert read(state)["mutations"] == 0, "a failed check changed the host"
 
 

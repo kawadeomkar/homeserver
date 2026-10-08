@@ -97,21 +97,34 @@
       {%-       set _ = out.append(id ~ ': is disabled') -%}
       {%-     endif -%}
       {%-     if 'images' not in (have[id].content | default('')).split(',') -%}
-      {%-       set _ = out.append(id ~ ': content ' ~ (have[id].content | default('none')) ~ ' has no images') -%}
+      {%-       set _ = out.append(id ~ ': has no images in its content') -%}
       {%-     endif -%}
       {%-   endif -%}
       {%- endfor -%}
       {{ out }}
 
+# The message lists the storage Proxmox has, so the id to use instead is in front of whoever reads it.
 - name: Refuse a storage that cannot hold VM disks
   ansible.builtin.assert:
     that: proxmox_storage_local_problems | length == 0
     fail_msg: >-
-      These storages must already exist on the node, enabled and with images in their content:
-      {{ proxmox_storage_local_problems | join('; ') }}. The installer's storage is local-lvm on an LVM
-      install and local-zfs on a ZFS one; this role does not create storage.
+      These storages in proxmox_storage_local cannot hold VM disks: {{ proxmox_storage_local_problems | join('; ') }}.
+      Storage configured in Proxmox: {{ _configured | join(', ') }}.{{ ' ' ~ _installer if _missing else '' }}
     quiet: true
   when: proxmox_storage_local | length > 0
+  vars:
+    _existing: "{{ proxmox_storage_config.stdout | from_json | sort(attribute='storage') }}"
+    _missing: "{{ proxmox_storage_local | difference(_existing | map(attribute='storage')) }}"
+    _installer: The installer creates local-lvm on an LVM install and local-zfs on a ZFS one; this role does not create storage.
+    # Each as "id (type: content)", the content sorted: Proxmox gives it in no fixed order.
+    _configured: >-
+      {%- set out = [] -%}
+      {%- for e in _existing -%}
+      {%-   set content = (e.content | default('')).split(',') | select | sort | join(',') -%}
+      {%-   set _ = out.append(e.storage ~ ' (' ~ e.type ~ ': ' ~ (content or 'no content')
+                               ~ (', disabled' if e.disable | default(0) | int == 1 else '') ~ ')') -%}
+      {%- endfor -%}
+      {{ out }}
 
 # A storage's type, server and export cannot be changed in place, and replacing a storage that
 # holds disks is not something to do implicitly.
