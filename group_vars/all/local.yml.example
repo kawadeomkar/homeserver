@@ -9,6 +9,10 @@
 # placeholders (RFC 5737 addresses, made-up serials), not real hosts.
 
 # ------------------------------------------------------------------ TrueNAS ---
+# No NAS? Delete this whole section, or leave every value empty. With no NAS address the NAS play
+# ends by itself, and Proxmox keeps its VM disks on the storage its installer created (see
+# group_vars/all/storage.yml). Everything a Proxmox-only setup needs is in the Proxmox section.
+#
 # The address the NAS should end up on, in CIDR form, and the gateway and name
 # servers it should use once DHCP is off.
 truenas_static_address: 192.0.2.10/24

@@ -152,7 +152,7 @@ check-proxmox: ## Dry-run the Proxmox storage configuration
 	$(RUN) proxmox.yml --check --diff $(ANSIBLE_ARGS)
 
 .PHONY: proxmox
-proxmox: ## Add the NAS's shares to Proxmox as storage
+proxmox: ## Configure the Proxmox host's VM storage: the NAS's shares, or a check of its own
 	$(RUN) proxmox.yml --diff $(ANSIBLE_ARGS)
 
 .PHONY: check
@@ -160,7 +160,7 @@ check: ## Dry-run everything
 	$(RUN) site.yml --check --diff $(ANSIBLE_ARGS)
 
 .PHONY: site
-site: ## Configure everything, NAS first
+site: ## Configure everything, NAS first (the NAS play ends by itself without one)
 	$(RUN) site.yml --diff $(ANSIBLE_ARGS)
 
 .PHONY: vault-edit

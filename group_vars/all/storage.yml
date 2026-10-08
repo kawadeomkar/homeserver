@@ -1,18 +1,36 @@
 ---
 # The VM storage layout, read by both plays: the NAS play creates and exports each dataset, and the
 # Proxmox play mounts it as a storage. Defined once so a share and the storage that mounts it
-# cannot drift apart. Names only; addresses live in local.yml.
+# cannot drift apart. Names only; addresses live in local.yml. This file also holds the switch between
+# a setup with a NAS and one without.
+
+# True when this setup has a NAS, which is the case when local.yml gives it an address. With a NAS, VM
+# disks live on its datasets below, over NFS; without one, they stay on the Proxmox host's own storage,
+# and the NAS play ends before it does anything.
+nas_present: "{{ (truenas_static_address | default('') | length > 0)
+                 or (truenas_bootstrap_address | default('') | length > 0) }}"
 
 # Where TrueNAS mounts its pools.
 vm_storage_mount_root: /mnt
+
+# Without a NAS, every VM class uses this storage, which the Proxmox installer creates: local-lvm on an
+# LVM install, local-zfs on a ZFS one. Ignored when a NAS is present.
+proxmox_local_vm_storage: local-lvm
 
 # One entry per VM class: the dataset holding its disks and the Proxmox storage id for it.
 vm_storage:
   # Long-term data: on the redundant pool, synchronous writes honoured.
   persistent:
     dataset: nvme_gen3/proxmox/vm
-    proxmox_id: truenas-persistent
+    proxmox_id: "{{ 'truenas-persistent' if nas_present else proxmox_local_vm_storage }}"
   # Throwaway Claude-session VMs: on the single-disk pool, all data gone when the VM is destroyed.
   ephemeral:
     dataset: ephemeral/proxmox/vm
-    proxmox_id: truenas-ephemeral
+    proxmox_id: "{{ 'truenas-ephemeral' if nas_present else proxmox_local_vm_storage }}"
+
+# The NAS's exports as Proxmox mounts them, one per VM class. Read only when a NAS is present.
+vm_storage_nfs_exports:
+  - id: "{{ vm_storage.persistent.proxmox_id }}"
+    export: "{{ vm_storage_mount_root }}/{{ vm_storage.persistent.dataset }}"
+  - id: "{{ vm_storage.ephemeral.proxmox_id }}"
+    export: "{{ vm_storage_mount_root }}/{{ vm_storage.ephemeral.dataset }}"
