@@ -4,8 +4,9 @@
 `pvesm add nfs`, `pvesm set` and `pvenode config set`, backed by a JSON file named by $FAKE_PVE_STATE.
 Output follows Proxmox VE 9.2, as captured on a fresh install: `disable` appears only when set, every
 `/storage` entry carries a `digest` of the whole configuration, `content` comes back in an order that
-differs from one call to the next (it is a hash's order on a real host, so the fake rotates it), every
-status answer carries `shared`, 1 only for an NFS storage, and adding an id that exists fails as `pvesm add`
+differs from one listing to the next (it is a hash's order on a real host, so the fake rotates it, and a
+status answer shows the latest listing's order), every status answer carries `shared`, 1 only for an NFS
+storage, and sizes, 0 for a storage that is not active, and adding an id that exists fails as `pvesm add`
 does. A storage named in the state's `inactive` list answers `active: 0` while still enabled, as one whose
 mount or pool failed to come up does, and one whose `nodes` leaves this node out answers `enabled: 0`, as
 Proxmox does for a storage restricted to other cluster nodes. Nothing the role runs changes either. Anything
@@ -65,16 +66,18 @@ def options(args):
     return out
 
 
+def rotated(content, reads):
+    """A comma-separated list, rotated by the number of listings so far."""
+    items = content.split(",")
+    shift = reads % len(items)
+    return ",".join(items[shift:] + items[:shift])
+
+
 def listing(state):
     """The storage list as `pvesh get /storage` prints it, with `content` in a different order each time."""
-    state["reads"] = state.get("reads", 0) + 1
+    reads = state["reads"] = state.get("reads", 0) + 1
     digest = hashlib.sha1(json.dumps(state["storage"], sort_keys=True).encode()).hexdigest()
-    out = []
-    for entry in state["storage"]:
-        content = entry["content"].split(",")
-        shift = state["reads"] % len(content)
-        out.append({**entry, "content": ",".join(content[shift:] + content[:shift]), "digest": digest})
-    return out
+    return [{**e, "content": rotated(e["content"], reads), "digest": digest} for e in state["storage"]]
 
 
 def pvesh(state, args):
@@ -97,14 +100,21 @@ def pvesh(state, args):
             fail(f"500 storage '{sid}' does not exist")
         restricted = "nodes" in entry and NODE not in entry["nodes"].split(",")
         enabled = not entry.get("disable") and not restricted
+        active = enabled and sid not in state.get("inactive", [])
+        total = 64 * 2**30 if active else 0
+        # content in the latest listing's order: counting status reads too would change the order the next
+        # listing shows, which the content-order test depends on.
         print(
             json.dumps(
                 {
-                    "active": 1 if enabled and sid not in state.get("inactive", []) else 0,
+                    "active": 1 if active else 0,
+                    "avail": total - total // 8,
+                    "content": rotated(entry["content"], state.get("reads", 0)),
                     "enabled": 1 if enabled else 0,
-                    "type": entry["type"],
-                    "content": entry["content"],
                     "shared": 1 if entry["type"] == "nfs" else 0,
+                    "total": total,
+                    "type": entry["type"],
+                    "used": total // 8,
                 }
             )
         )
