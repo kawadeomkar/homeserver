@@ -328,6 +328,17 @@ def test_proxmox_storage_role_is_idempotent(tmp_path):
     entry = next(e for e in read(state)["storage"] if e["storage"] == "truenas-persistent")
     assert (entry["options"], entry["content"], "disable" in entry) == ("vers=4.2", "images", False)
 
+    # Two content types, which the fake hands back in a different order on every other read: a comparison
+    # that did not sort both sides would see drift on one of the two runs after the correction.
+    two = {**extra, "proxmox_storage_content": ["images", "rootdir"]}
+    expect(run("proxmox.yml", two), "homeserver", changed=True, note="run with two content types")
+    for n in (1, 2):
+        result = run("proxmox.yml", two)
+        note = f"run {n} after two content types (changed: {changed_tasks(result[2])})"
+        expect(result, "homeserver", changed=0, note=note)
+    entry = next(e for e in read(state)["storage"] if e["storage"] == "truenas-persistent")
+    assert sorted(entry["content"].split(",")) == ["images", "rootdir"]
+
     # A storage id that points somewhere else is refused, not replaced.
     s = read(state)
     next(e for e in s["storage"] if e["storage"] == "truenas-ephemeral")["export"] = "/mnt/elsewhere"
