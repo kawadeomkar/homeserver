@@ -404,8 +404,14 @@ def test_proxmox_storage_role_checks_existing_storage(tmp_path):
     ):
         rc, _, out = run("proxmox_local.yml", {**extra, **given}, check=True)
         assert rc != 0 and message in out, f"{given}: expected {message!r}\n{out[-3000:]}"
-    # One disabled by hand: no word about installers, since the storage is there.
+    # For real, a bad id is refused before any NFS storage is added.
+    rc, _, out = run(
+        "proxmox_local.yml", {**extra, "proxmox_storage_local": ["local-zfs"], "proxmox_storage_nfs": nfs, **server}
+    )
+    assert rc != 0 and "local-zfs: does not exist" in out, out[-3000:]
     s = read(state)
+    assert s["mutations"] == 0 and all(e["type"] != "nfs" for e in s["storage"]), "storage was added before the refusal"
+    # One disabled by hand: no word about installers, since the storage is there.
     next(e for e in s["storage"] if e["storage"] == "local-lvm")["disable"] = 1
     write(state, s)
     rc, _, out = run("proxmox_local.yml", extra, check=True)
