@@ -75,8 +75,8 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       from `vm_storage.<class>.proxmox_id` so a setup without a NAS gets `local-lvm` for both classes,
       pass `format=qcow2` when importing the cloud image onto NFS storage only (`import-from` keeps the
       source image's format and ignores the storage default; LVM-thin takes `raw`), turn on
-      `destroy-unreferenced-disks` when deleting ephemeral VMs, and give its API user access to the new
-      storage ids. That user, `ansible@pve`, does not exist on the reinstalled host yet
+      `destroy-unreferenced-disks` when deleting ephemeral VMs, and give its API user, `ansible@pve`, access
+      to the new storage ids
 
 ## Manifest defects found in review
 
