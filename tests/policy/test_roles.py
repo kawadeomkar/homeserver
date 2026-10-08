@@ -8,7 +8,8 @@
 - The tracked configuration and examples pass the roles' argument specs and input checks: site.yml runs
   with only the always-tagged validation, against inventory.example and local.yml.example, and again
   against a local.yml that names only the Proxmox host, so the NAS play must end by itself. Without a NAS,
-  the storage both VM classes use is the one local.yml names, which no tracked file overrides.
+  the storage both VM classes use is the one local.yml names, which no tracked file overrides. A TrueNAS
+  section that keeps other settings but gives no address stops both playbooks.
 - Every task that calls a custom module passes only options the module accepts. ansible-lint's args rule
   cannot load these modules, so nothing else checks it.
 - Every option whose name looks like a secret is no_log, in the modules and in the roles' argument specs.
@@ -261,6 +262,21 @@ def test_examples_satisfy_argument_specs(tmp_path, local_yml, validations, prese
         assert text in out, f"{text!r} missing\n{out[-3000:]}"
     for text in absent:
         assert text not in out, f"{text!r} present\n{out[-3000:]}"
+
+
+@pytest.mark.parametrize("playbook", ["site.yml", "proxmox.yml"])
+def test_nas_settings_without_an_address_are_refused(tmp_path, playbook):
+    """A TrueNAS section that keeps its other settings but has no address, as a misspelt address leaves it,
+    stops both playbooks before any role runs, instead of passing for a setup without a NAS."""
+    example = (ROOT / "group_vars" / "all" / "local.yml.example").read_text()
+    misspelt = re.sub(r"^truenas_static_address:", "truenas_static_adress:", example, flags=re.MULTILINE)
+    misspelt = re.sub(r"^truenas_bootstrap_address:.*\n", "", misspelt, flags=re.MULTILINE)
+    assert "\ntruenas_static_adress:" in misspelt and "\ntruenas_bootstrap_address:" not in misspelt
+    rc, out = argspec_pass(example_tree(tmp_path, misspelt), playbook)
+    assert rc != 0, out[-3000:]
+    assert "but neither truenas_static_address nor truenas_bootstrap_address" in out, out[-3000:]
+    assert "truenas_gateway" in out, out[-3000:]
+    assert "TASK [truenas :" not in out and "TASK [proxmox_storage :" not in out, out[-3000:]
 
 
 @pytest.mark.parametrize(

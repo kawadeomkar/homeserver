@@ -4,11 +4,18 @@
 # One stage at a time: add --tags truenas_network, truenas_pools, truenas_system,
 # truenas_datasets, truenas_nfs or truenas_services.
 # Without a NAS (no truenas_static_address or truenas_bootstrap_address in group_vars/all/local.yml)
-# the play says so and ends before the role runs.
+# the play says so and ends before the role runs. A TrueNAS section that keeps other settings but gives
+# no address stops it instead: that is what a misspelt address looks like.
 - name: Configure the TrueNAS storage server
   hosts: nas
   gather_facts: false
   pre_tasks:
+    - name: Refuse NAS settings that come without a NAS address
+      ansible.builtin.assert:
+        that: nas_section_error | length == 0
+        fail_msg: "{{ nas_section_error }}"
+        quiet: true
+      tags: [always]
     - name: Say why the NAS is skipped
       ansible.builtin.debug:
         msg: >-

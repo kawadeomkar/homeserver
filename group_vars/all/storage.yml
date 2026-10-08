@@ -11,6 +11,21 @@
 nas_present: "{{ (truenas_static_address | default('', true) | trim | length > 0)
                  or (truenas_bootstrap_address | default('', true) | trim | length > 0) }}"
 
+# Empty unless local.yml's TrueNAS section keeps other settings but gives neither address. That is what a
+# misspelt address looks like, and it would otherwise pass for a setup without a NAS, so both playbooks
+# refuse to run (the first pre-task of truenas.yml and of proxmox.yml). A value left blank counts as unset,
+# so a section with every value blank still means no NAS.
+nas_section_error: >-
+  {%- set given = {'truenas_api_cert_sha256': truenas_api_cert_sha256 | default(''),
+                   'truenas_gateway': truenas_gateway | default(''),
+                   'truenas_nameservers': truenas_nameservers | default(''),
+                   'truenas_pool_disks': truenas_pool_disks | default('')}
+                  | dict2items | selectattr('value') | map(attribute='key') | list -%}
+  {{ '' if nas_present or not given else
+     'group_vars/all/local.yml sets ' ~ given | join(', ') ~ ' but neither truenas_static_address nor '
+     ~ 'truenas_bootstrap_address, which usually means one of them is misspelt. Correct it, or delete the '
+     ~ 'whole TrueNAS section to run without a NAS.' }}
+
 # Where TrueNAS mounts its pools.
 vm_storage_mount_root: /mnt
 

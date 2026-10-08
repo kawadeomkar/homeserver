@@ -70,15 +70,19 @@ The roles are generic and change nothing by default; this setup's configuration 
 
 ### Without a NAS
 
-A setup with only a Proxmox host works from the same files. Leave the TrueNAS section out of
-`group_vars/all/local.yml` (or empty): with no NAS address, `group_vars/all/storage.yml` sets `nas_present`
-to false, the NAS play says so and ends before its role runs, and the Proxmox play adds no NFS storage and
-sets no start-on-boot delay. Both VM classes then resolve to the storage the Proxmox installer created:
-`local-lvm`, or on a ZFS install the `local-zfs` you set as `proxmox_local_vm_storage` in
+A setup with only a Proxmox host works from the same files. Delete the TrueNAS section from
+`group_vars/all/local.yml`, or leave every value in it blank: with no NAS address, `group_vars/all/storage.yml`
+sets `nas_present` to false, the NAS play says so and ends before its role runs, and the Proxmox play adds no
+NFS storage and sets no start-on-boot delay. Both VM classes then resolve to the storage the Proxmox installer
+created: `local-lvm`, or on a ZFS install the `local-zfs` you set as `proxmox_local_vm_storage` in
 `group_vars/all/local.yml`. The role checks that it exists, is enabled and holds `images`, and on a real run
-that it is active. It creates nothing. The two VM classes share that one
-storage, so the persistent/ephemeral distinction (separate pools, `sync`, quota) does not exist in this mode,
-and VM disks are lost with the Proxmox boot disk.
+that it is active. It creates nothing. The two VM classes share that one storage, so the persistent/ephemeral
+distinction (separate pools, `sync`, quota) does not exist in this mode, and VM disks are lost with the
+Proxmox boot disk.
+
+A TrueNAS section that keeps its other settings but gives no address stops both playbooks before anything
+runs, rather than passing for a setup without a NAS: that is what a misspelt address looks like. The message
+names the settings it found.
 
 Two things still apply. The inventory keeps the `truenas` host: the addresses decide whether a NAS exists,
 not the inventory. And `.vault_pass` must exist, because `ansible.cfg` names it, and the tracked vault is

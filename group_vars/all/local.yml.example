@@ -12,6 +12,7 @@
 # No NAS? Delete this whole section, or leave every value empty. With no NAS address the NAS play
 # ends by itself, and Proxmox keeps its VM disks on the storage its installer created (local-lvm, or
 # proxmox_local_vm_storage below). Everything a Proxmox-only setup needs is in the Proxmox section.
+# A section that keeps other values but no address is refused: that is what a misspelt address looks like.
 #
 # The address the NAS should end up on, in CIDR form, and the gateway and name
 # servers it should use once DHCP is off.

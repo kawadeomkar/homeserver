@@ -2,8 +2,16 @@
 # Configure the Proxmox host's VM-disk storage, over root SSH. With a NAS, its NFS shares are added as
 # storage: run truenas.yml first, so the shares exist and are exported to this host. Without one (no
 # NAS address in group_vars/all/local.yml), the installer's own storage is checked to hold VM disks.
+# A TrueNAS section that keeps other settings but gives no address stops the play, as in truenas.yml.
 - name: Configure the Proxmox host's VM storage
   hosts: proxmox
   gather_facts: false
+  pre_tasks:
+    - name: Refuse NAS settings that come without a NAS address
+      ansible.builtin.assert:
+        that: nas_section_error | length == 0
+        fail_msg: "{{ nas_section_error }}"
+        quiet: true
+      tags: [always]
   roles:
     - role: proxmox_storage
