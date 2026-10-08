@@ -13,7 +13,7 @@ services, plus the Ansible that configures the machines they run on.
 | Machine | Role |
 |---|---|
 | homeserver | Proxmox hypervisor; Kubernetes runs in VMs on it (Talos Linux is the plan) |
-| truenas | TrueNAS Community Edition; all Proxmox VM storage lives here |
+| truenas | TrueNAS Community Edition; all Proxmox VM storage lives here. **Optional**: without one, VM disks stay on the Proxmox host (see [Without a NAS](#without-a-nas)) |
 | opnsense | Router and firewall for the LAN |
 
 Hardware details are in `docs/MACHINES.md`, which is **gitignored** (this repo is public, and it holds
@@ -24,11 +24,11 @@ addresses and serial numbers), so it is absent from a fresh clone.
 ```
 k8s/                     one directory per service (+ 00-namespaces/ for shared ones)
 roles/truenas/           configures the NAS through its API: address, pools, datasets, NFS
-roles/proxmox_storage/   adds the NAS's shares to Proxmox as qcow2 VM-disk storage
+roles/proxmox_storage/   adds the NAS's shares to Proxmox as qcow2 VM-disk storage, or checks its own storage
 truenas.yml proxmox.yml  one playbook per role; site.yml runs both, NAS first
 group_vars/all/vault.yml Ansible Vault file: the TrueNAS API key
 group_vars/all/local.yml.example  template for local.yml, which holds every address and serial
-group_vars/all/storage.yml        VM storage layout shared by both plays
+group_vars/all/storage.yml        VM storage layout shared by both plays, and the switch for a setup without a NAS
 group_vars/nas/, group_vars/proxmox/  connection and per-machine configuration
 inventory.example        template for inventory (no addresses in it)
 .gitleaks.toml           gitleaks rules for the identifiers this public repo must never hold
@@ -67,6 +67,47 @@ fakes, which cannot prove the real machines behave the same.
 The roles are generic and change nothing by default; this setup's configuration is in `group_vars/`
 (`all/storage.yml`, `nas/truenas.yml`, `proxmox/storage.yml`), with addresses and serials in the git-ignored
 `all/local.yml`. Each role's `README.md` describes its variables.
+
+### Without a NAS
+
+A setup with only a Proxmox host works from the same files. Delete the TrueNAS section from
+`group_vars/all/local.yml`, or leave every value in it blank: with no NAS address, `group_vars/all/storage.yml`
+sets `nas_present` to false, the NAS play says so and ends before its role runs, and the Proxmox play adds no
+NFS storage and sets no start-on-boot delay. Both VM classes then resolve to the storage the Proxmox installer
+created: `local-lvm`, or on a ZFS install the `local-zfs` you set as `proxmox_local_vm_storage` in
+`group_vars/all/local.yml`. The role checks that it exists, is enabled and holds `images`, and on a real run
+that it is active. It creates nothing. The two VM classes share that one storage, so the persistent/ephemeral
+distinction (separate pools, `sync`, quota) does not exist in this mode, and VM disks are lost with the
+Proxmox boot disk.
+
+A TrueNAS section that keeps its other settings but gives no address stops both playbooks before anything
+runs, rather than passing for a setup without a NAS: that is what a misspelt address looks like. The message
+names the settings it found.
+
+Two things still apply. The inventory keeps the `truenas` host: the addresses decide whether a NAS exists,
+not the inventory. And `.vault_pass` must exist, because `ansible.cfg` names it, and the tracked vault is
+decrypted on every run. Nothing in it is needed without a NAS, so replace it with an empty vault of your own:
+
+```bash
+make vault-init
+```
+
+That writes a new password to `.vault_pass`, readable by you alone, and an empty vault encrypted with it over
+`group_vars/all/vault.yml`. It then tells git to leave that file out of your commits
+(`git update-index --skip-worktree`), so your vault never reaches a commit or a pull request. A vault that
+already opens with `.vault_pass` is left alone. When the tracked vault changes upstream, `git pull` refuses,
+saying your local changes to `group_vars/all/vault.yml` would be overwritten. Put the tracked file back, pull,
+and make your vault again, which keeps your password:
+
+```bash
+git update-index --no-skip-worktree group_vars/all/vault.yml
+git checkout -- group_vars/all/vault.yml
+git pull
+make vault-init
+```
+
+This mode is covered by the fake-backed tests and the argument-spec pass in both modes; the maintainer's own
+setup has a NAS.
 
 ### After a hardware failure
 
