@@ -7,8 +7,9 @@ argument_specs:
         format, mount options and enabled state of one that already exists.
       - Refuses a storage id that exists with another type, server or export, rather than
         replacing it.
-      - Checks that each storage in proxmox_storage_local already exists, is enabled and holds images.
-        Any type passes; it is meant for the installer's own storage. It never creates or changes one.
+      - Checks that each storage in proxmox_storage_local already exists, is enabled, holds images and is
+        active on the node. Any type passes; it is meant for the installer's own storage. It never creates or
+        changes one.
       - Optionally sets the node's start-on-boot delay so VMs wait for the NFS server after a power cut.
       - The defaults change nothing.
     options:
