@@ -13,6 +13,7 @@ by their variable in `group_vars/all/local.yml`; the real values live only there
 | The single disk of `ephemeral` | Nothing: that pool and the media on it are lost | A new, empty pool on a blank replacement disk, then its datasets and share | Allow pool creation and list the new disk |
 | NAS network card | Everything on disk | Everything, once the NAS is reachable | Update the router's DHCP reservation to the new MAC |
 | Proxmox boot drive | VM disks, on the NAS | Both NFS storages and the start-on-boot delay | Reinstall, root SSH key; recreate VM definitions |
+| Proxmox boot drive, in a setup without a NAS | Nothing: the VM disks were on it | The check that `local-lvm` can hold VM disks | Reinstall, root SSH key; recreate the VMs from backups, if any |
 | The controller (this Mac) | The repo on GitHub, the vault (encrypted) | — | Restore `.vault_pass` and `local.yml` from your password manager |
 
 ## 1. The controller
@@ -83,15 +84,22 @@ report no change, and `pvesm status` on the host should show both storages activ
    `proxmox_address` with the LAN's prefix, and set the gateway, DNS server and hostname. The installer creates the
    bridge `vmbr0` on that port.
 2. **Give the controller root SSH access.** The old host key no longer matches, so remove it first:
-   `ssh-keygen -R <proxmox address>`, then `ssh-copy-id root@<proxmox address>`.
+   `ssh-keygen -R <proxmox address>`. Then install the controller's key for this host with one password login:
+   `ssh-copy-id -f -i ~/.ssh/<key>.pub -o PubkeyAuthentication=no root@<proxmox address>`. The flags matter on
+   Proxmox VE 9, whose OpenSSH 10 enables `PerSourcePenalties`: a plain `ssh-copy-id` first logs in with every
+   key to see which are installed, fails, is penalised for at least 15 s, and its next connection is reset
+   with `kex_exchange_identification: read: Connection reset by peer`. `-f` skips that login and
+   `PubkeyAuthentication=no` goes straight to the password. The controller keeps one key per machine, with a
+   `Host` block in `~/.ssh/config` naming the key and `IdentitiesOnly yes`, so Ansible, which connects by
+   address, offers the right one.
 3. **If the network card was replaced**, update the router's DHCP reservation. The bridge carries the card's MAC.
 
 ### Running it
 
 | Step | Command | Expect |
 | --- | --- | --- |
-| 1 | `make check-proxmox` | The plan shows `add` for both storages |
-| 2 | `make proxmox` | Both storages added and active, start-on-boot delay set |
+| 1 | `make check-proxmox` | The plan shows `add` for both storages. Without a NAS: `local-lvm: present` and nothing to add |
+| 2 | `make proxmox` | Both storages added and active, start-on-boot delay set. Without a NAS: `changed=0` already |
 | 3 | `make proxmox` | `changed=0` |
 
 The VM disks are still on the NAS, but the VM definitions lived on the old boot drive (`/etc/pve`) and are gone.

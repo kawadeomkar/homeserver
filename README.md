@@ -13,7 +13,7 @@ services, plus the Ansible that configures the machines they run on.
 | Machine | Role |
 |---|---|
 | homeserver | Proxmox hypervisor; Kubernetes runs in VMs on it (Talos Linux is the plan) |
-| truenas | TrueNAS Community Edition; all Proxmox VM storage lives here |
+| truenas | TrueNAS Community Edition; all Proxmox VM storage lives here. **Optional**: without one, VM disks stay on the Proxmox host (see [Without a NAS](#without-a-nas)) |
 | opnsense | Router and firewall for the LAN |
 
 Hardware details are in `docs/MACHINES.md`, which is **gitignored** (this repo is public, and it holds
@@ -28,7 +28,7 @@ roles/proxmox_storage/   adds the NAS's shares to Proxmox as qcow2 VM-disk stora
 truenas.yml proxmox.yml  one playbook per role; site.yml runs both, NAS first
 group_vars/all/vault.yml Ansible Vault file: the TrueNAS API key
 group_vars/all/local.yml.example  template for local.yml, which holds every address and serial
-group_vars/all/storage.yml        VM storage layout shared by both plays
+group_vars/all/storage.yml        VM storage layout shared by both plays, and the switch for a setup without a NAS
 group_vars/nas/, group_vars/proxmox/  connection and per-machine configuration
 inventory.example        template for inventory (no addresses in it)
 .gitleaks.toml           gitleaks rules for the identifiers this public repo must never hold
@@ -67,6 +67,30 @@ fakes, which cannot prove the real machines behave the same.
 The roles are generic and change nothing by default; this setup's configuration is in `group_vars/`
 (`all/storage.yml`, `nas/truenas.yml`, `proxmox/storage.yml`), with addresses and serials in the git-ignored
 `all/local.yml`. Each role's `README.md` describes its variables.
+
+### Without a NAS
+
+A setup with only a Proxmox host works from the same files. Leave the TrueNAS section out of
+`group_vars/all/local.yml` (or empty): with no NAS address, `group_vars/all/storage.yml` sets `nas_present`
+to false, the NAS play says so and ends before its role runs, and the Proxmox play adds no NFS storage and
+sets no start-on-boot delay. Both VM classes then resolve to the storage the Proxmox installer created,
+`proxmox_local_vm_storage` (`local-lvm`; set it to `local-zfs` for a ZFS install), which the role checks
+exists, is enabled, holds `images` and is active. It creates nothing. The two VM classes share that one
+storage, so the persistent/ephemeral distinction (separate pools, `sync`, quota) does not exist in this mode,
+and VM disks are lost with the Proxmox boot disk.
+
+Two things still apply. The inventory keeps the `truenas` host: the addresses decide whether a NAS exists,
+not the inventory. And `.vault_pass` must exist, because `ansible.cfg` names it, and the tracked vault is
+decrypted on every run. Nothing in it is needed without a NAS, so replace it with an empty vault of your own:
+
+```bash
+openssl rand -hex 32 > .vault_pass
+printf -- '---\n' > group_vars/all/vault.yml
+ansible-vault encrypt group_vars/all/vault.yml
+```
+
+This mode is covered by the fake-backed tests and the argument-spec pass in both modes; the maintainer's own
+setup has a NAS.
 
 ### After a hardware failure
 
