@@ -9,7 +9,8 @@
   with only the always-tagged validation, against inventory.example and local.yml.example, and again
   against a local.yml that names only the Proxmox host, so the NAS play must end by itself. Without a NAS,
   the storage both VM classes use is the one local.yml names, which no tracked file overrides. A TrueNAS
-  section that keeps other settings but gives no address stops both playbooks.
+  section that keeps other settings but gives no address stops both playbooks, and so does nas_present given
+  on the command line.
 - Every task that calls a custom module passes only options the module accepts. ansible-lint's args rule
   cannot load these modules, so nothing else checks it.
 - Every option whose name looks like a secret is no_log, in the modules and in the roles' argument specs.
@@ -214,14 +215,14 @@ def ansible_cli(tree, tool, *args):
     return result.returncode, result.stdout + result.stderr
 
 
-def argspec_pass(tree, playbook="site.yml"):
+def argspec_pass(tree, playbook="site.yml", *extra):
     """Run `playbook` with only the tasks tagged `always`: the argument-spec validation Ansible adds to each
     role, and the roles' and playbooks' own input checks. truenas_info, also always, would connect to the NAS."""
     return ansible_cli(
         tree,
         "ansible-playbook",
         *["-i", "inventory.example", playbook, "--tags", "__argspec_only__", "--skip-tags", "truenas_info"],
-        *["-e", "ansible_connection=local", "-e", "vault_truenas_api_key=stub"],
+        *["-e", "ansible_connection=local", "-e", "vault_truenas_api_key=stub", *extra],
     )
 
 
@@ -276,6 +277,15 @@ def test_nas_settings_without_an_address_are_refused(tmp_path, playbook):
     assert rc != 0, out[-3000:]
     assert "but neither truenas_static_address nor truenas_bootstrap_address" in out, out[-3000:]
     assert "truenas_gateway" in out, out[-3000:]
+    assert "TASK [truenas :" not in out and "TASK [proxmox_storage :" not in out, out[-3000:]
+
+
+def test_nas_present_cannot_be_set(tmp_path):
+    """nas_present is worked out from the addresses. Given with -e it is a string, and "false" would count as
+    true, so both plays refuse it rather than run with the NAS it was meant to turn off."""
+    rc, out = argspec_pass(example_tree(tmp_path), "site.yml", "-e", "nas_present=false")
+    assert rc != 0, out[-3000:]
+    assert out.count("nas_present is worked out from the NAS addresses") == 2, out[-3000:]
     assert "TASK [truenas :" not in out and "TASK [proxmox_storage :" not in out, out[-3000:]
 
 
