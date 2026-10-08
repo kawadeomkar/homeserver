@@ -2,17 +2,29 @@
 # Uses pvesm over root SSH. community.proxmox's proxmox_storage module only creates storage,
 # never corrects it, and has no format option.
 
+# Each problem gets its own sentence, naming the variable to change. Argument validation accepts a string
+# for a list (it would split it on commas) but leaves the variable as it was, so the string is refused here
+# before anything iterates its characters.
 - name: Check the role's inputs
   ansible.builtin.assert:
-    that:
-      - proxmox_storage_nfs | map(attribute='id') | unique | list | length == proxmox_storage_nfs | length
-      - proxmox_storage_nfs | rejectattr('server', 'defined') | list | length == 0 or proxmox_storage_nfs_server | length > 0
-      - proxmox_storage_local | select | unique | list | length == proxmox_storage_local | length
-      - proxmox_storage_local | intersect(proxmox_storage_nfs | map(attribute='id') | list) | length == 0
-    fail_msg: >-
-      Storage ids must be unique across proxmox_storage_nfs and proxmox_storage_local and none may be
-      empty, and every NFS storage needs a server: its own, or proxmox_storage_nfs_server.
+    that: _errors | length == 0
+    fail_msg: "{{ _errors | join(' ') }}"
     quiet: true
+  vars:
+    _ids: "{{ (proxmox_storage_nfs | map(attribute='id') | list) + ([] if proxmox_storage_local is string else proxmox_storage_local) }}"
+    _serverless: "{{ proxmox_storage_nfs | rejectattr('server', 'defined') | map(attribute='id') | list }}"
+    _errors: >-
+      {%- set out = [] -%}
+      {%- if proxmox_storage_local is string -%}
+      {%-   set _ = out.append('proxmox_storage_local must be a list of storage ids, such as [local-lvm], not a string.') -%}
+      {%- endif -%}
+      {%- if _ids | select | unique | list | length != _ids | length -%}
+      {%-   set _ = out.append('Storage ids must be unique across proxmox_storage_nfs and proxmox_storage_local, and none may be empty.') -%}
+      {%- endif -%}
+      {%- if _serverless and proxmox_storage_nfs_server | length == 0 -%}
+      {%-   set _ = out.append('No NFS server for ' ~ _serverless | join(', ') ~ ': set proxmox_storage_nfs_server, or a server in the entry.') -%}
+      {%- endif -%}
+      {{ out }}
 
 - name: Read the storage configuration
   ansible.builtin.command:

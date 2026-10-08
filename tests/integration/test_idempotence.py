@@ -387,15 +387,21 @@ def test_proxmox_storage_role_checks_existing_storage(tmp_path):
     next(e for e in s["storage"] if e["storage"] == "local-lvm").pop("nodes")
     write(state, s)
 
-    # A storage that does not exist, one that cannot hold VM disks, and an empty id.
-    for local, message in (
-        (["local-zfs"], "local-zfs: does not exist"),
-        (["local"], "local: content"),
-        (["local"], "has no images"),
-        ([""], "none may be empty"),
+    # Refused, each with what to change: a storage that does not exist, one that cannot hold VM disks, an empty
+    # id, a string for the list, an id in both lists, and an NFS storage with no server.
+    nfs = [{"id": "truenas-persistent", "export": "/mnt/tank/vm"}]
+    server = {"proxmox_storage_nfs_server": "127.0.0.10"}
+    for given, message in (
+        ({"proxmox_storage_local": ["local-zfs"]}, "local-zfs: does not exist"),
+        ({"proxmox_storage_local": ["local"]}, "local: content"),
+        ({"proxmox_storage_local": ["local"]}, "has no images"),
+        ({"proxmox_storage_local": [""]}, "none may be empty"),
+        ({"proxmox_storage_local": "local-lvm"}, "proxmox_storage_local must be a list of storage ids"),
+        ({"proxmox_storage_nfs": [{**nfs[0], "id": "local-lvm"}], **server}, "unique across proxmox_storage_nfs and"),
+        ({"proxmox_storage_nfs": nfs}, "No NFS server for truenas-persistent: set proxmox_storage_nfs_server"),
     ):
-        rc, _, out = run("proxmox_local.yml", {**extra, "proxmox_storage_local": local}, check=True)
-        assert rc != 0 and message in out, f"{local}: expected {message!r}\n{out[-3000:]}"
+        rc, _, out = run("proxmox_local.yml", {**extra, **given}, check=True)
+        assert rc != 0 and message in out, f"{given}: expected {message!r}\n{out[-3000:]}"
     # One disabled by hand.
     s = read(state)
     next(e for e in s["storage"] if e["storage"] == "local-lvm")["disable"] = 1
