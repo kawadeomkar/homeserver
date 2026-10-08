@@ -78,8 +78,8 @@
       {%- endfor -%}
       {{ plan }}
 
-# The node's own storage (the installer's local-lvm or local-zfs) is checked, never created or changed:
-# it must exist, be enabled and hold images.
+# Storage the node already has, of any type and typically the installer's local-lvm or local-zfs, is
+# checked, never created or changed: it must exist, be enabled and hold images.
 - name: Work out what the node's own storage lacks
   ansible.builtin.set_fact:
     proxmox_storage_local_problems: "{{ _problems }}"
