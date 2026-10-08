@@ -25,7 +25,9 @@ Everything runs from a checkout of this repo.
    (or any Python 3.12+: `make venv PYTHON=/path/to/python3`).
 2. `make init`, which creates `inventory` and `group_vars/all/local.yml` from their examples.
 3. Restore the two files only you have:
-   - **`.vault_pass`**: the vault password, from your password manager.
+   - **`.vault_pass`**: the vault password, from your password manager, readable by you alone
+     (`chmod 600 .vault_pass`). Without a NAS there is nothing to restore: `make vault-init` makes a new one, with
+     an empty vault (see `README.md`).
    - **`group_vars/all/local.yml`**: addresses, disk serials and the certificate pin. Keep a copy of this file in
      your password manager. If it's lost, refill it from `local.yml.example`; the comments there say where each
      value comes from.

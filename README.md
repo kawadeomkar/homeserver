@@ -89,9 +89,21 @@ not the inventory. And `.vault_pass` must exist, because `ansible.cfg` names it,
 decrypted on every run. Nothing in it is needed without a NAS, so replace it with an empty vault of your own:
 
 ```bash
-openssl rand -hex 32 > .vault_pass
-printf -- '---\n' > group_vars/all/vault.yml
-ansible-vault encrypt group_vars/all/vault.yml
+make vault-init
+```
+
+That writes a new password to `.vault_pass`, readable by you alone, and an empty vault encrypted with it over
+`group_vars/all/vault.yml`. It then tells git to leave that file out of your commits
+(`git update-index --skip-worktree`), so your vault never reaches a commit or a pull request. A vault that
+already opens with `.vault_pass` is left alone. When the tracked vault changes upstream, `git pull` refuses,
+saying your local changes to `group_vars/all/vault.yml` would be overwritten. Put the tracked file back, pull,
+and make your vault again, which keeps your password:
+
+```bash
+git update-index --no-skip-worktree group_vars/all/vault.yml
+git checkout -- group_vars/all/vault.yml
+git pull
+make vault-init
 ```
 
 This mode is covered by the fake-backed tests and the argument-spec pass in both modes; the maintainer's own
