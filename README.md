@@ -24,7 +24,7 @@ addresses and serial numbers), so it is absent from a fresh clone.
 ```
 k8s/                     one directory per service (+ 00-namespaces/ for shared ones)
 roles/truenas/           configures the NAS through its API: address, pools, datasets, NFS
-roles/proxmox_storage/   adds the NAS's shares to Proxmox as qcow2 VM-disk storage
+roles/proxmox_storage/   adds the NAS's shares to Proxmox as qcow2 VM-disk storage, or checks its own storage
 truenas.yml proxmox.yml  one playbook per role; site.yml runs both, NAS first
 group_vars/all/vault.yml Ansible Vault file: the TrueNAS API key
 group_vars/all/local.yml.example  template for local.yml, which holds every address and serial
