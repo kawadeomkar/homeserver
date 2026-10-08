@@ -293,12 +293,14 @@ def test_inventory_without_the_nas_host(tmp_path):
     assert out.count("Validating arguments against arg spec 'main'") == 1, out[-3000:]
 
 
-def test_nas_present_cannot_be_set(tmp_path):
+@pytest.mark.parametrize("playbook", ["site.yml", "proxmox.yml"])
+def test_nas_present_cannot_be_set(tmp_path, playbook):
     """nas_present is worked out from the addresses. Given with -e it is a string, and "false" would count as
-    true, so both plays refuse it rather than run with the NAS it was meant to turn off."""
-    rc, out = argspec_pass(example_tree(tmp_path), "site.yml", "-e", "nas_present=false")
+    true, so each playbook's guard refuses it rather than run with the NAS it was meant to turn off. In site.yml
+    the NAS play's guard stops the whole run, since that play has no host left."""
+    rc, out = argspec_pass(example_tree(tmp_path), playbook, "-e", "nas_present=false")
     assert rc != 0, out[-3000:]
-    assert out.count("nas_present is worked out from the NAS addresses") == 2, out[-3000:]
+    assert "nas_present is worked out from the NAS addresses" in out, out[-3000:]
     assert "TASK [truenas :" not in out and "TASK [proxmox_storage :" not in out, out[-3000:]
 
 
