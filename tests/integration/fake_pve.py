@@ -2,10 +2,14 @@
 
 `pvesh get /storage`, `pvesh get /nodes/<node>/config`, `pvesh get /nodes/<node>/storage/<id>/status`,
 `pvesm add nfs`, `pvesm set` and `pvenode config set`, backed by a JSON file named by $FAKE_PVE_STATE.
-Output follows Proxmox VE 9.2: `disable` appears only when set, and adding an id that exists fails
-as `pvesm add` does. Anything else exits non-zero, so an unexpected command fails the test.
+Output follows Proxmox VE 9.2, as captured on a fresh install: `disable` appears only when set, every
+`/storage` entry carries a `digest` of the whole configuration, `content` comes back in an order that
+differs from one call to the next (it is a hash's order on a real host, so the fake rotates it), only an
+NFS storage reports `shared`, and adding an id that exists fails as `pvesm add` does. Anything else exits
+non-zero, so an unexpected command fails the test.
 """
 
+import hashlib
 import json
 import os
 import socket
@@ -32,6 +36,7 @@ def load():
             ],
             "node": {},
             "mutations": 0,
+            "reads": 0,
         }
     return json.loads(STATE.read_text())
 
@@ -56,13 +61,25 @@ def options(args):
     return out
 
 
+def listing(state):
+    """The storage list as `pvesh get /storage` prints it, with `content` in a different order each time."""
+    state["reads"] = state.get("reads", 0) + 1
+    digest = hashlib.sha1(json.dumps(state["storage"], sort_keys=True).encode()).hexdigest()
+    out = []
+    for entry in state["storage"]:
+        content = entry["content"].split(",")
+        shift = state["reads"] % len(content)
+        out.append({**entry, "content": ",".join(content[shift:] + content[:shift]), "digest": digest})
+    return out
+
+
 def pvesh(state, args):
     if args[:1] != ["get"] or args[-2:] != ["--output-format", "json"]:
         fail(f"fake pvesh: unsupported {args}")
     path = args[1]
     parts = path.split("/")
     if path == "/storage":
-        print(json.dumps(state["storage"]))
+        print(json.dumps(listing(state)))
     elif len(parts) == 4 and parts[1] == "nodes" and parts[3] == "config":
         # As on a real host, /nodes/localhost/config (or any name but the node's own) answers {},
         # and values come back as strings.
@@ -81,7 +98,7 @@ def pvesh(state, args):
                     "enabled": 0 if entry.get("disable") else 1,
                     "type": entry["type"],
                     "content": entry["content"],
-                    "shared": 1,
+                    "shared": 1 if entry["type"] == "nfs" else 0,
                 }
             )
         )

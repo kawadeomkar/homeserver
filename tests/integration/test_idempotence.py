@@ -2,7 +2,9 @@
 
 For each role: a dry run changes nothing; the first real run applies the configuration; a second
 run changes nothing and does not fail; a dry run afterwards reports nothing; drift introduced behind
-the role's back is corrected by one run and left alone by the next.
+the role's back is corrected by one run and left alone by the next. The Proxmox role is also told
+the node's own storage to check, which must change nothing and must fail on a storage that cannot hold
+VM disks.
 
 The roles run with this repo's own configuration (group_vars/all/storage.yml, group_vars/nas,
 group_vars/proxmox) and test addresses on loopback. Nothing here can reach a real machine: the
@@ -335,6 +337,38 @@ def test_proxmox_storage_role_is_idempotent(tmp_path):
     rc, _, out = run("proxmox.yml", extra)
     assert rc != 0 and "truenas-ephemeral" in out and "Remove or rename them by hand" in out, out[-3000:]
     assert next(e for e in read(state)["storage"] if e["storage"] == "truenas-ephemeral")["export"] == "/mnt/elsewhere"
+
+
+def test_proxmox_storage_role_checks_existing_storage(tmp_path):
+    """Told the node's own storage ids, the role checks them and changes nothing; a bad one fails at once."""
+    state = tmp_path / "pve.json"
+    extra = {"fake_pve_state": str(state), "proxmox_storage_local": ["local-lvm"]}
+
+    result = run("proxmox_local.yml", extra, check=True)
+    expect(result, "homeserver", changed=0, note="dry run")
+    assert re.search(r'local-lvm"?:\s*"?present', result[2]), (
+        f"the dry run does not report local-lvm\n{result[2][-3000:]}"
+    )
+    assert not state.exists() or read(state)["mutations"] == 0, "the dry run changed the host"
+    expect(run("proxmox_local.yml", extra), "homeserver", changed=0, note="apply")
+    assert read(state)["mutations"] == 0, "checking the node's storage changed the host"
+
+    # A storage that does not exist, one that cannot hold VM disks, and an empty id.
+    for local, message in (
+        (["local-zfs"], "local-zfs: does not exist"),
+        (["local"], "local: content"),
+        (["local"], "has no images"),
+        ([""], "none may be empty"),
+    ):
+        rc, _, out = run("proxmox_local.yml", {**extra, "proxmox_storage_local": local}, check=True)
+        assert rc != 0 and message in out, f"{local}: expected {message!r}\n{out[-3000:]}"
+    # One disabled by hand.
+    s = read(state)
+    next(e for e in s["storage"] if e["storage"] == "local-lvm")["disable"] = 1
+    write(state, s)
+    rc, _, out = run("proxmox_local.yml", extra, check=True)
+    assert rc != 0 and "local-lvm: is disabled" in out, out[-3000:]
+    assert read(state)["mutations"] == 0, "a failed check changed the host"
 
 
 def test_truenas_role_refuses_an_unpinned_certificate(nas):
