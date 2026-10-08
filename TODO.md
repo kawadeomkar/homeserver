@@ -23,7 +23,9 @@ the full audit with file/line references; the finding ids below refer to it.
       `ansible` and `tooling` groups, and whether the ruleset's undocumented
       `require_extra_approval_for_unattributed_changes` holds them back
 - [ ] Drop the Python 3.12 leg when ansible-core stops supporting 3.12 on the controller
-- [ ] The rest of the CI plan: OpenSSF Scorecard and dependency review (PR 6)
+- [ ] Check the first Scorecard run on `main`: that the OpenSSF API accepted the result, and which low
+      scores are worth acting on. Code-Review (every change is the maintainer's own), Fuzzing,
+      CII-Best-Practices and Packaging are expected to score low. Add its badge to `README.md` if wanted
 
 ## TrueNAS
 
