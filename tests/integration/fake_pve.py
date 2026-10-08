@@ -1,7 +1,8 @@
 """Stand-ins for the Proxmox VE commands roles/proxmox_storage runs, for the idempotence tests.
 
 `pvesh get /storage`, `pvesh get /nodes/<node>/config`, `pvesh get /nodes/<node>/storage/<id>/status`,
-`pvesm add nfs`, `pvesm set` and `pvenode config set`, backed by a JSON file named by $FAKE_PVE_STATE.
+`pvesm add nfs`, `pvesm set`, `pvenode config set` and `hostname -s`, backed by a JSON file named by
+$FAKE_PVE_STATE.
 Output follows Proxmox VE 9.2, as captured on a fresh install: `disable` appears only when set, every
 `/storage` entry carries a `digest` of the whole configuration, `content` comes back in an order that
 differs from one listing to the next (it is a hash's order on a real host, so the fake rotates it, and a
@@ -16,13 +17,14 @@ else exits non-zero, so an unexpected command fails the test.
 import hashlib
 import json
 import os
-import socket
 import sys
 from pathlib import Path
 
 STATE = Path(os.environ["FAKE_PVE_STATE"])
-# Proxmox names the node after the short hostname.
-NODE = socket.gethostname().split(".")[0]
+# Proxmox names the node after the short hostname, which the fake `hostname -s` answers. Fixed rather than
+# the controller's own: macOS renames itself when the network hands it a name, and a rename between the
+# role's `hostname -s` and a later call would fail the run.
+NODE = "pve"
 
 
 def load():
@@ -170,10 +172,16 @@ def pvenode(state, args):
     state["mutations"] += 1
 
 
+def hostname(state, args):
+    if args != ["-s"]:
+        fail(f"fake hostname: unsupported {args}")
+    print(NODE)
+
+
 def main():
     tool, args = sys.argv[1], sys.argv[2:]
     state = load()
-    {"pvesh": pvesh, "pvesm": pvesm, "pvenode": pvenode}[tool](state, args)
+    {"pvesh": pvesh, "pvesm": pvesm, "pvenode": pvenode, "hostname": hostname}[tool](state, args)
     save(state)
 
 
