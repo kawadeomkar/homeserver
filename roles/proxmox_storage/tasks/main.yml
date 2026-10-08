@@ -172,18 +172,22 @@
   changed_when: true
 
 # Proxmox names a node after its short hostname. The API's "localhost" alias is not enough: it
-# works for storage status, but /nodes/localhost/config answers {} even when settings exist.
+# works for storage status, but /nodes/localhost/config answers {} even when settings exist. The name is
+# read only when something uses it: the node configuration, or the status checks, which run only for real.
 - name: Find the node's name
   ansible.builtin.command:
     argv: [hostname, -s]
   register: proxmox_storage_hostname
   changed_when: false
   check_mode: false
-  when: proxmox_storage_node | length == 0
+  when:
+    - proxmox_storage_node | length == 0
+    - not ansible_check_mode or proxmox_storage_startall_delay is not none
 
 - name: Use the node's name
   ansible.builtin.set_fact:
     proxmox_storage_node_name: "{{ proxmox_storage_node if proxmox_storage_node | length > 0 else proxmox_storage_hostname.stdout | trim }}"
+  when: not ansible_check_mode or proxmox_storage_startall_delay is not none
 
 - name: Read the node configuration
   ansible.builtin.command:

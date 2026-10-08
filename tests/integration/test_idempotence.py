@@ -361,6 +361,10 @@ def test_proxmox_storage_role_checks_existing_storage(tmp_path):
         f"the dry run does not report local-lvm\n{result[2][-3000:]}"
     )
     assert not state.exists() or read(state)["mutations"] == 0, "the dry run changed the host"
+    # Without a boot delay, nothing in a dry run uses the node's name, so it is not read.
+    assert re.search(r"TASK \[proxmox_storage : Find the node's name\][^\n]*\nskipping:", result[2]), (
+        f"the dry run read the node's name\n{result[2][-3000:]}"
+    )
     result = run("proxmox_local.yml", extra)
     expect(result, "homeserver", changed=0, note="apply")
     assert read(state)["mutations"] == 0, "checking the node's storage changed the host"
