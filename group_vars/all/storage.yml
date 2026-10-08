@@ -14,20 +14,21 @@ nas_present: "{{ (truenas_static_address | default('', true) | trim | length > 0
 # Where TrueNAS mounts its pools.
 vm_storage_mount_root: /mnt
 
-# Without a NAS, every VM class uses this storage, which the Proxmox installer creates: local-lvm on an
-# LVM install, local-zfs on a ZFS one. Ignored when a NAS is present.
-proxmox_local_vm_storage: local-lvm
+# Without a NAS, every VM class uses the storage the Proxmox installer created: local-lvm on an LVM
+# install, or whatever local.yml names as proxmox_local_vm_storage (local-zfs on a ZFS install). It is
+# read here and never set: a group_vars/all/ directory is read alphabetically and the last file wins, so a
+# value set in this file would silently override local.yml's.
 
 # One entry per VM class: the dataset holding its disks and the Proxmox storage id for it.
 vm_storage:
   # Long-term data: on the redundant pool, synchronous writes honoured.
   persistent:
     dataset: nvme_gen3/proxmox/vm
-    proxmox_id: "{{ 'truenas-persistent' if nas_present else proxmox_local_vm_storage }}"
+    proxmox_id: "{{ 'truenas-persistent' if nas_present else proxmox_local_vm_storage | default('local-lvm') }}"
   # Throwaway Claude-session VMs: on the single-disk pool, all data gone when the VM is destroyed.
   ephemeral:
     dataset: ephemeral/proxmox/vm
-    proxmox_id: "{{ 'truenas-ephemeral' if nas_present else proxmox_local_vm_storage }}"
+    proxmox_id: "{{ 'truenas-ephemeral' if nas_present else proxmox_local_vm_storage | default('local-lvm') }}"
 
 # The NAS's exports as Proxmox mounts them, one per VM class. Read only when a NAS is present.
 vm_storage_nfs_exports:

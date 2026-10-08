@@ -7,7 +7,8 @@
   check-mode support it documents is what its AnsibleModule declares.
 - The tracked configuration and examples pass the roles' argument specs and input checks: site.yml runs
   with only the always-tagged validation, against inventory.example and local.yml.example, and again
-  against a local.yml that names only the Proxmox host, so the NAS play must end by itself.
+  against a local.yml that names only the Proxmox host, so the NAS play must end by itself. Without a NAS,
+  the storage both VM classes use is the one local.yml names, which no tracked file overrides.
 - Every task that calls a custom module passes only options the module accepts. ansible-lint's args rule
   cannot load these modules, so nothing else checks it.
 - Every option whose name looks like a secret is no_log, in the modules and in the roles' argument specs.
@@ -186,6 +187,43 @@ def blank_nas_local_yml():
     return "\n".join(lines) + "\n"
 
 
+def example_tree(tmp_path, local_yml=None):
+    """The roles, group_vars and playbooks copied into tmp_path, with local.yml.example or `local_yml` as
+    local.yml, and an ansible.cfg that names no vault password file."""
+    for name in ["roles", "group_vars"]:
+        shutil.copytree(ROOT / name, tmp_path / name, ignore=shutil.ignore_patterns("local.yml", "vault.yml"))
+    for playbook in ROOT.glob("*.yml"):
+        shutil.copy(playbook, tmp_path)
+    shutil.copy(ROOT / "inventory.example", tmp_path)
+    local = tmp_path / "group_vars" / "all" / "local.yml"
+    if local_yml is None:
+        shutil.copy(ROOT / "group_vars" / "all" / "local.yml.example", local)
+    else:
+        local.write_text(local_yml)
+    (tmp_path / "ansible.cfg").write_text("[defaults]\nretry_files_enabled = false\n")
+    return tmp_path
+
+
+def ansible_cli(tree, tool, *args):
+    """Run one of the ansible CLIs in `tree`; return its exit code and combined output."""
+    env = {**os.environ, "ANSIBLE_CONFIG": str(tree / "ansible.cfg"), "ANSIBLE_NOCOLOR": "1"}
+    env.pop("ANSIBLE_FORCE_COLOR", None)
+    command = [str(Path(sys.executable).parent / tool), *args]
+    result = subprocess.run(command, cwd=tree, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    return result.returncode, result.stdout + result.stderr
+
+
+def argspec_pass(tree, playbook="site.yml"):
+    """Run `playbook` with only the tasks tagged `always`: the argument-spec validation Ansible adds to each
+    role, and the roles' and playbooks' own input checks. truenas_info, also always, would connect to the NAS."""
+    return ansible_cli(
+        tree,
+        "ansible-playbook",
+        *["-i", "inventory.example", playbook, "--tags", "__argspec_only__", "--skip-tags", "truenas_info"],
+        *["-e", "ansible_connection=local", "-e", "vault_truenas_api_key=stub"],
+    )
+
+
 @pytest.mark.parametrize(
     ("local_yml", "validations", "present", "absent"),
     [
@@ -216,35 +254,34 @@ def test_examples_satisfy_argument_specs(tmp_path, local_yml, validations, prese
     """The tracked configuration passes every role's checks: with local.yml.example for local.yml, and with a
     local.yml that names only the Proxmox host or leaves every TrueNAS value blank, where the NAS play must
     end before its role runs."""
-    for name in ["roles", "group_vars"]:
-        shutil.copytree(ROOT / name, tmp_path / name, ignore=shutil.ignore_patterns("local.yml", "vault.yml"))
-    for playbook in ROOT.glob("*.yml"):
-        shutil.copy(playbook, tmp_path)
-    shutil.copy(ROOT / "inventory.example", tmp_path)
-    local = tmp_path / "group_vars" / "all" / "local.yml"
-    if local_yml is None:
-        shutil.copy(ROOT / "group_vars" / "all" / "local.yml.example", local)
-    else:
-        local.write_text(local_yml)
-    # Not the repo's ansible.cfg, which names the vault password file.
-    (tmp_path / "ansible.cfg").write_text("[defaults]\nretry_files_enabled = false\n")
-    env = {**os.environ, "ANSIBLE_CONFIG": str(tmp_path / "ansible.cfg"), "ANSIBLE_NOCOLOR": "1"}
-    env.pop("ANSIBLE_FORCE_COLOR", None)
-    # Only tasks tagged `always` run: the argument-spec validation Ansible adds to each role, and the
-    # roles' own input checks. truenas_info, also always, would connect to the NAS.
-    command = [
-        str(Path(sys.executable).parent / "ansible-playbook"),
-        *["-i", "inventory.example", "site.yml", "--tags", "__argspec_only__", "--skip-tags", "truenas_info"],
-        *["-e", "ansible_connection=local", "-e", "vault_truenas_api_key=stub"],
-    ]
-    result = subprocess.run(command, cwd=tmp_path, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
-    out = result.stdout + result.stderr
-    assert result.returncode == 0, out[-3000:]
+    rc, out = argspec_pass(example_tree(tmp_path, local_yml))
+    assert rc == 0, out[-3000:]
     assert out.count("Validating arguments against arg spec 'main'") == validations, out[-3000:]
     for text in present:
         assert text in out, f"{text!r} missing\n{out[-3000:]}"
     for text in absent:
         assert text not in out, f"{text!r} present\n{out[-3000:]}"
+
+
+@pytest.mark.parametrize(
+    ("setting", "storage"),
+    [
+        pytest.param("", "local-lvm", id="lvm-default"),
+        pytest.param("proxmox_local_vm_storage: local-zfs\n", "local-zfs", id="zfs-from-local-yml"),
+    ],
+)
+def test_local_yml_names_the_installer_storage(tmp_path, setting, storage):
+    """Without a NAS, both VM classes use the installer's storage: local-lvm, or what local.yml names. A
+    tracked group_vars file that set it too would win over local.yml, which loads first."""
+    tree = example_tree(tmp_path, PROXMOX_ONLY_LOCAL_YML + setting)
+    rc, out = ansible_cli(
+        tree,
+        "ansible",
+        *["-i", "inventory.example", "homeserver", "-m", "ansible.builtin.debug", "-a", "var=proxmox_storage_local"],
+        *["-e", "ansible_connection=local"],
+    )
+    assert rc == 0, out[-3000:]
+    assert re.search(rf'"proxmox_storage_local": \[\s*"{storage}"\s*\]', out), out[-3000:]
 
 
 def test_task_arguments_match_module_specs():

@@ -73,9 +73,10 @@ The roles are generic and change nothing by default; this setup's configuration 
 A setup with only a Proxmox host works from the same files. Leave the TrueNAS section out of
 `group_vars/all/local.yml` (or empty): with no NAS address, `group_vars/all/storage.yml` sets `nas_present`
 to false, the NAS play says so and ends before its role runs, and the Proxmox play adds no NFS storage and
-sets no start-on-boot delay. Both VM classes then resolve to the storage the Proxmox installer created,
-`proxmox_local_vm_storage` (`local-lvm`; set it to `local-zfs` for a ZFS install), which the role checks
-exists, is enabled, holds `images` and is active. It creates nothing. The two VM classes share that one
+sets no start-on-boot delay. Both VM classes then resolve to the storage the Proxmox installer created:
+`local-lvm`, or on a ZFS install the `local-zfs` you set as `proxmox_local_vm_storage` in
+`group_vars/all/local.yml`. The role checks that it exists, is enabled and holds `images`, and on a real run
+that it is active. It creates nothing. The two VM classes share that one
 storage, so the persistent/ephemeral distinction (separate pools, `sync`, quota) does not exist in this mode,
 and VM disks are lost with the Proxmox boot disk.
 
