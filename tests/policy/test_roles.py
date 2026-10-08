@@ -8,9 +8,10 @@
 - The tracked configuration and examples pass the roles' argument specs and input checks: site.yml runs
   with only the always-tagged validation, against inventory.example and local.yml.example, and again
   against a local.yml that names only the Proxmox host, so the NAS play must end by itself. Without a NAS,
-  the storage both VM classes use is the one local.yml names, which no tracked file overrides. Deleting the
-  truenas host from the inventory, which inventory.example advises against, still gives a working run
-  without a NAS.
+  the storage both VM classes use is the one local.yml names, which no tracked file overrides. A TrueNAS
+  section that keeps other settings but gives no address stops both playbooks, and so does nas_present given
+  on the command line. Deleting the truenas host from the inventory, which inventory.example advises
+  against, still gives a working run without a NAS.
 - Every task that calls a custom module passes only options the module accepts. ansible-lint's args rule
   cannot load these modules, so nothing else checks it.
 - Every option whose name looks like a secret is no_log, in the modules and in the roles' argument specs.
@@ -215,14 +216,14 @@ def ansible_cli(tree, tool, *args):
     return result.returncode, result.stdout + result.stderr
 
 
-def argspec_pass(tree, playbook="site.yml"):
+def argspec_pass(tree, playbook="site.yml", *extra):
     """Run `playbook` with only the tasks tagged `always`: the argument-spec validation Ansible adds to each
     role, and the roles' and playbooks' own input checks. truenas_info, also always, would connect to the NAS."""
     return ansible_cli(
         tree,
         "ansible-playbook",
         *["-i", "inventory.example", playbook, "--tags", "__argspec_only__", "--skip-tags", "truenas_info"],
-        *["-e", "ansible_connection=local", "-e", "vault_truenas_api_key=stub"],
+        *["-e", "ansible_connection=local", "-e", "vault_truenas_api_key=stub", *extra],
     )
 
 
@@ -265,6 +266,21 @@ def test_examples_satisfy_argument_specs(tmp_path, local_yml, validations, prese
         assert text not in out, f"{text!r} present\n{out[-3000:]}"
 
 
+@pytest.mark.parametrize("playbook", ["site.yml", "proxmox.yml"])
+def test_nas_settings_without_an_address_are_refused(tmp_path, playbook):
+    """A TrueNAS section that keeps its other settings but has no address, as a misspelt address leaves it,
+    stops both playbooks before any role runs, instead of passing for a setup without a NAS."""
+    example = (ROOT / "group_vars" / "all" / "local.yml.example").read_text()
+    misspelt = re.sub(r"^truenas_static_address:", "truenas_static_adress:", example, flags=re.MULTILINE)
+    misspelt = re.sub(r"^truenas_bootstrap_address:.*\n", "", misspelt, flags=re.MULTILINE)
+    assert "\ntruenas_static_adress:" in misspelt and "\ntruenas_bootstrap_address:" not in misspelt
+    rc, out = argspec_pass(example_tree(tmp_path, misspelt), playbook)
+    assert rc != 0, out[-3000:]
+    assert "but neither truenas_static_address nor truenas_bootstrap_address" in out, out[-3000:]
+    assert "truenas_gateway" in out, out[-3000:]
+    assert "TASK [truenas :" not in out and "TASK [proxmox_storage :" not in out, out[-3000:]
+
+
 def test_inventory_without_the_nas_host(tmp_path):
     """inventory.example says to keep the truenas host without a NAS, but a user who deletes it still gets a
     working run: the NAS play matches no host, and the Proxmox play runs as it does without a NAS."""
@@ -275,6 +291,17 @@ def test_inventory_without_the_nas_host(tmp_path):
     assert rc == 0, out[-3000:]
     assert "skipping: no hosts matched" in out, out[-3000:]
     assert out.count("Validating arguments against arg spec 'main'") == 1, out[-3000:]
+
+
+@pytest.mark.parametrize("playbook", ["site.yml", "proxmox.yml"])
+def test_nas_present_cannot_be_set(tmp_path, playbook):
+    """nas_present is worked out from the addresses. Given with -e it is a string, and "false" would count as
+    true, so each playbook's guard refuses it rather than run with the NAS it was meant to turn off. In site.yml
+    the NAS play's guard stops the whole run, since that play has no host left."""
+    rc, out = argspec_pass(example_tree(tmp_path), playbook, "-e", "nas_present=false")
+    assert rc != 0, out[-3000:]
+    assert "nas_present is worked out from the NAS addresses" in out, out[-3000:]
+    assert "TASK [truenas :" not in out and "TASK [proxmox_storage :" not in out, out[-3000:]
 
 
 @pytest.mark.parametrize(
