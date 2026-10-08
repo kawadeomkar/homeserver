@@ -6,7 +6,11 @@
 - Each custom module documents its check-mode, diff-mode and platform support as `attributes`, and the
   check-mode support it documents is what its AnsibleModule declares.
 - The tracked configuration and examples pass the roles' argument specs and input checks: site.yml runs
-  with only the always-tagged validation, against inventory.example and local.yml.example.
+  with only the always-tagged validation, against inventory.example and local.yml.example, and again
+  against a local.yml that names only the Proxmox host, so the NAS play must end by itself. Without a NAS,
+  the storage both VM classes use is the one local.yml names, which no tracked file overrides. Deleting the
+  truenas host from the inventory, which inventory.example advises against, still gives a working run
+  without a NAS.
 - Every task that calls a custom module passes only options the module accepts. ansible-lint's args rule
   cannot load these modules, so nothing else checks it.
 - Every option whose name looks like a secret is no_log, in the modules and in the roles' argument specs.
@@ -166,30 +170,132 @@ def test_module_attributes_match_ansible_module(path):
     )
 
 
-def test_examples_satisfy_argument_specs(tmp_path):
-    """The tracked configuration, with local.yml.example for local.yml, passes every role's checks."""
+# A local.yml with only the Proxmox host's address (an RFC 5737 placeholder): no NAS.
+PROXMOX_ONLY_LOCAL_YML = "---\nproxmox_address: 192.0.2.20\n"
+
+
+def blank_nas_local_yml():
+    """local.yml.example with every TrueNAS value left blank after its colon, which the example allows,
+    and the bootstrap address only a space."""
+    example = yaml.safe_load((ROOT / "group_vars" / "all" / "local.yml.example").read_text())
+    lines = ["---"]
+    for name, value in example.items():
+        if name == "truenas_bootstrap_address":
+            lines.append(f'{name}: " "')
+        elif name.startswith("truenas_"):
+            lines.append(f"{name}:")
+        else:
+            lines.append(yaml.safe_dump({name: value}, default_flow_style=True).strip()[1:-1])
+    return "\n".join(lines) + "\n"
+
+
+def example_tree(tmp_path, local_yml=None):
+    """The roles, group_vars and playbooks copied into tmp_path, with local.yml.example or `local_yml` as
+    local.yml, and an ansible.cfg that names no vault password file."""
     for name in ["roles", "group_vars"]:
         shutil.copytree(ROOT / name, tmp_path / name, ignore=shutil.ignore_patterns("local.yml", "vault.yml"))
     for playbook in ROOT.glob("*.yml"):
         shutil.copy(playbook, tmp_path)
     shutil.copy(ROOT / "inventory.example", tmp_path)
-    shutil.copy(ROOT / "group_vars" / "all" / "local.yml.example", tmp_path / "group_vars" / "all" / "local.yml")
-    # Not the repo's ansible.cfg, which names the vault password file.
+    local = tmp_path / "group_vars" / "all" / "local.yml"
+    if local_yml is None:
+        shutil.copy(ROOT / "group_vars" / "all" / "local.yml.example", local)
+    else:
+        local.write_text(local_yml)
     (tmp_path / "ansible.cfg").write_text("[defaults]\nretry_files_enabled = false\n")
-    env = {**os.environ, "ANSIBLE_CONFIG": str(tmp_path / "ansible.cfg"), "ANSIBLE_NOCOLOR": "1"}
+    return tmp_path
+
+
+def ansible_cli(tree, tool, *args):
+    """Run one of the ansible CLIs in `tree`; return its exit code and combined output."""
+    env = {**os.environ, "ANSIBLE_CONFIG": str(tree / "ansible.cfg"), "ANSIBLE_NOCOLOR": "1"}
     env.pop("ANSIBLE_FORCE_COLOR", None)
-    # Only tasks tagged `always` run: the argument-spec validation Ansible adds to each role, and the
-    # roles' own input checks. truenas_info, also always, would connect to the NAS.
-    command = [
-        str(Path(sys.executable).parent / "ansible-playbook"),
-        *["-i", "inventory.example", "site.yml", "--tags", "__argspec_only__", "--skip-tags", "truenas_info"],
+    command = [str(Path(sys.executable).parent / tool), *args]
+    result = subprocess.run(command, cwd=tree, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    return result.returncode, result.stdout + result.stderr
+
+
+def argspec_pass(tree, playbook="site.yml"):
+    """Run `playbook` with only the tasks tagged `always`: the argument-spec validation Ansible adds to each
+    role, and the roles' and playbooks' own input checks. truenas_info, also always, would connect to the NAS."""
+    return ansible_cli(
+        tree,
+        "ansible-playbook",
+        *["-i", "inventory.example", playbook, "--tags", "__argspec_only__", "--skip-tags", "truenas_info"],
         *["-e", "ansible_connection=local", "-e", "vault_truenas_api_key=stub"],
-    ]
-    result = subprocess.run(command, cwd=tmp_path, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
-    out = result.stdout + result.stderr
-    assert result.returncode == 0, out[-3000:]
-    assert out.count("Validating arguments against arg spec 'main'") == 2, out[-3000:]
-    assert "validate | Check the connection settings" in out, out[-3000:]
+    )
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "validations", "present", "absent"),
+    [
+        pytest.param(
+            None,
+            2,
+            ["validate | Check the connection settings", "skipping: [truenas]"],
+            [],
+            id="nas",
+        ),
+        pytest.param(
+            PROXMOX_ONLY_LOCAL_YML,
+            1,
+            ["Skip the NAS when local.yml gives it no address", "ok: [truenas]"],
+            ["TASK [truenas :", "validate | Check the connection settings"],
+            id="proxmox-only",
+        ),
+        pytest.param(
+            blank_nas_local_yml(),
+            1,
+            ["Skip the NAS when local.yml gives it no address", "ok: [truenas]"],
+            ["TASK [truenas :", "validate | Check the connection settings"],
+            id="proxmox-only-blank-values",
+        ),
+    ],
+)
+def test_examples_satisfy_argument_specs(tmp_path, local_yml, validations, present, absent):
+    """The tracked configuration passes every role's checks: with local.yml.example for local.yml, and with a
+    local.yml that names only the Proxmox host or leaves every TrueNAS value blank, where the NAS play must
+    end before its role runs."""
+    rc, out = argspec_pass(example_tree(tmp_path, local_yml))
+    assert rc == 0, out[-3000:]
+    assert out.count("Validating arguments against arg spec 'main'") == validations, out[-3000:]
+    for text in present:
+        assert text in out, f"{text!r} missing\n{out[-3000:]}"
+    for text in absent:
+        assert text not in out, f"{text!r} present\n{out[-3000:]}"
+
+
+def test_inventory_without_the_nas_host(tmp_path):
+    """inventory.example says to keep the truenas host without a NAS, but a user who deletes it still gets a
+    working run: the NAS play matches no host, and the Proxmox play runs as it does without a NAS."""
+    tree = example_tree(tmp_path, PROXMOX_ONLY_LOCAL_YML)
+    inventory = tree / "inventory.example"
+    inventory.write_text(re.sub(r"^truenas\n", "", inventory.read_text(), flags=re.MULTILINE))
+    rc, out = argspec_pass(tree)
+    assert rc == 0, out[-3000:]
+    assert "skipping: no hosts matched" in out, out[-3000:]
+    assert out.count("Validating arguments against arg spec 'main'") == 1, out[-3000:]
+
+
+@pytest.mark.parametrize(
+    ("setting", "storage"),
+    [
+        pytest.param("", "local-lvm", id="lvm-default"),
+        pytest.param("proxmox_local_vm_storage: local-zfs\n", "local-zfs", id="zfs-from-local-yml"),
+    ],
+)
+def test_local_yml_names_the_installer_storage(tmp_path, setting, storage):
+    """Without a NAS, both VM classes use the installer's storage: local-lvm, or what local.yml names. A
+    tracked group_vars file that set it too would win over local.yml, which loads first."""
+    tree = example_tree(tmp_path, PROXMOX_ONLY_LOCAL_YML + setting)
+    rc, out = ansible_cli(
+        tree,
+        "ansible",
+        *["-i", "inventory.example", "homeserver", "-m", "ansible.builtin.debug", "-a", "var=proxmox_storage_local"],
+        *["-e", "ansible_connection=local"],
+    )
+    assert rc == 0, out[-3000:]
+    assert re.search(rf'"proxmox_storage_local": \[\s*"{storage}"\s*\]', out), out[-3000:]
 
 
 def test_task_arguments_match_module_specs():
