@@ -380,6 +380,15 @@ def test_proxmox_storage_role_without_a_nas(tmp_path):
     assert "truenas-" not in result[2] and re.search(r'local-lvm"?:\s*"?present', result[2]), result[2][-3000:]
 
 
+def test_proxmox_storage_role_needs_the_static_address(tmp_path):
+    """A NAS known only by its bootstrap address counts as a NAS, but Proxmox mounts it at its static address, so
+    the run is refused, naming the variable the server comes from."""
+    extra = {"fake_pve_state": str(tmp_path / "pve.json"), "truenas_static_address": ""}
+    rc, _, out = run("proxmox.yml", {**extra, "truenas_bootstrap_address": "127.0.0.10"}, check=True)
+    expected = "No NFS server for truenas-persistent, truenas-ephemeral: set proxmox_storage_nfs_server"
+    assert rc != 0 and expected in out, out[-3000:]
+
+
 def test_proxmox_storage_role_checks_existing_storage(tmp_path):
     """Told the node's own storage ids, the role checks them and changes nothing; a bad one fails at once."""
     state = tmp_path / "pve.json"
