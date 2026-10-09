@@ -8,11 +8,10 @@
 proxmox_storage_nfs_server: "{{ truenas_static_address | default('', true) | trim | split('/') | first }}"
 # With a NAS, its two shares; without one, nothing to add.
 proxmox_storage_nfs: "{{ vm_storage_nfs_exports if nas_present else [] }}"
-# Without a NAS, the installer's storage that every VM class resolves to must be able to hold VM disks:
-# local-lvm, or proxmox_local_vm_storage from local.yml (see group_vars/all/storage.yml). That is the
-# variable to change when the role refuses the storage.
-proxmox_storage_local: "{{ [] if nas_present
-                           else [vm_storage.persistent.proxmox_id, vm_storage.ephemeral.proxmox_id] | unique }}"
+# Without a NAS, the installer's storage, which is then the ephemeral class and the only one, must be able to
+# hold VM disks: local-lvm, or proxmox_local_vm_storage from local.yml (see group_vars/all/storage.yml). That
+# is the variable to change when the role refuses the storage.
+proxmox_storage_local: "{{ [] if nas_present else [vm_storage.ephemeral.proxmox_id] }}"
 # Pinned so an upgrade on either side cannot silently change the protocol version. nconnect is
 # left out until it has been measured.
 proxmox_storage_nfs_options: vers=4.2

@@ -33,25 +33,30 @@ nas_section_error: >-
 # Where TrueNAS mounts its pools.
 vm_storage_mount_root: /mnt
 
-# Without a NAS, every VM class uses the storage the Proxmox installer created: local-lvm on an LVM
+# Without a NAS, the ephemeral class uses the storage the Proxmox installer created: local-lvm on an LVM
 # install, or whatever local.yml names as proxmox_local_vm_storage (local-zfs on a ZFS install). It is
 # read here and never set: a group_vars/all/ directory is read alphabetically and the last file wins, so a
 # value set in this file would silently override local.yml's.
 
-# One entry per VM class: the dataset holding its disks and the Proxmox storage id for it.
-vm_storage:
-  # Long-term data: on the redundant pool, synchronous writes honoured.
+# Every VM class this layout knows: the dataset holding its disks and the Proxmox storage id for it. Ids say
+# who owns a storage and what it is for, never what is behind it, so a project told an id learns nothing
+# about the backend and the id never changes with it. Only the classes a setup has appear in vm_storage.
+vm_storage_classes:
+  # Long-term data: on the redundant pool, synchronous writes honoured. Exists only with a NAS.
   persistent:
     dataset: nvme_gen3/proxmox/vm
-    proxmox_id: "{{ 'truenas-persistent' if nas_present else proxmox_local_vm_storage | default('local-lvm') }}"
-  # Throwaway Claude-session VMs: on the single-disk pool, all data gone when the VM is destroyed.
+    proxmox_id: homeserver-persistent
+  # Throwaway VMs: on the single-disk pool, all data gone when the VM is destroyed. Without a NAS this is
+  # the storage the Proxmox installer created, and the only VM storage there is.
   ephemeral:
     dataset: ephemeral/proxmox/vm
-    proxmox_id: "{{ 'truenas-ephemeral' if nas_present else proxmox_local_vm_storage | default('local-lvm') }}"
+    proxmox_id: "{{ 'homeserver-ephemeral' if nas_present else proxmox_local_vm_storage | default('local-lvm') }}"
+vm_storage: "{{ vm_storage_classes if nas_present else {'ephemeral': vm_storage_classes.ephemeral} }}"
 
-# The NAS's exports as Proxmox mounts them, one per VM class. Read only when a NAS is present.
-vm_storage_nfs_exports:
-  - id: "{{ vm_storage.persistent.proxmox_id }}"
-    export: "{{ vm_storage_mount_root }}/{{ vm_storage.persistent.dataset }}"
-  - id: "{{ vm_storage.ephemeral.proxmox_id }}"
-    export: "{{ vm_storage_mount_root }}/{{ vm_storage.ephemeral.dataset }}"
+# The NAS's exports as Proxmox mounts them, one per class the setup has. Read only when a NAS is present.
+vm_storage_nfs_exports: >-
+  {%- set out = [] -%}
+  {%- for e in vm_storage.values() -%}
+  {%-   set _ = out.append({'id': e.proxmox_id, 'export': vm_storage_mount_root ~ '/' ~ e.dataset}) -%}
+  {%- endfor -%}
+  {{ out }}

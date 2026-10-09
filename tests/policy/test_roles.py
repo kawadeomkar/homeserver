@@ -24,6 +24,7 @@ nothing connects anywhere.
 
 import contextlib
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -323,6 +324,46 @@ def test_local_yml_names_the_installer_storage(tmp_path, setting, storage):
     )
     assert rc == 0, out[-3000:]
     assert re.search(rf'"proxmox_storage_local": \[\s*"{storage}"\s*\]', out), out[-3000:]
+
+
+def resolve_on(tree, host, expression):
+    """What a Jinja expression resolves to for `host`, through ansible.builtin.debug: the first JSON object in
+    the output, so warnings printed after it do not matter."""
+    rc, out = ansible_cli(
+        tree,
+        "ansible",
+        *["-i", "inventory.example", host, "-m", "ansible.builtin.debug", "-a", f"msg={{{{ {expression} }}}}"],
+        *["-e", "ansible_connection=local"],
+    )
+    assert rc == 0, out[-3000:]
+    return json.JSONDecoder().raw_decode(out[out.index("{") :])[0]["msg"]
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "classes", "exports", "local"),
+    [
+        pytest.param(
+            None,
+            ["persistent", "ephemeral"],
+            [
+                {"id": "homeserver-persistent", "export": "/mnt/nvme_gen3/proxmox/vm"},
+                {"id": "homeserver-ephemeral", "export": "/mnt/ephemeral/proxmox/vm"},
+            ],
+            [],
+            id="nas",
+        ),
+        pytest.param(PROXMOX_ONLY_LOCAL_YML, ["ephemeral"], [], ["local-lvm"], id="proxmox-only"),
+    ],
+)
+def test_layout_resolves_per_setup(tmp_path, local_yml, classes, exports, local):
+    """With a NAS both VM classes exist and each export names a storage for its owner and class, never its
+    backend. Without one only the ephemeral class exists, there is nothing to export, and the installer's
+    storage is the one to check."""
+    tree = example_tree(tmp_path, local_yml)
+    layout = resolve_on(
+        tree, "homeserver", "{'classes': vm_storage | list, 'nfs': proxmox_storage_nfs, 'local': proxmox_storage_local}"
+    )
+    assert layout == {"classes": classes, "nfs": exports, "local": local}
 
 
 def test_task_arguments_match_module_specs():
