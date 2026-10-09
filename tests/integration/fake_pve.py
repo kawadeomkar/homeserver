@@ -7,16 +7,19 @@ Output follows Proxmox VE 9.2, as captured on a fresh install: `disable` appears
 `/storage` entry carries a `digest` of the whole configuration, `content` comes back in an order that
 differs from one listing to the next (it is a hash's order on a real host, so the fake rotates it, and a
 status answer shows the latest listing's order), every status answer carries `shared`, 1 only for an NFS
-storage, and sizes, 0 for a storage that is not active, and adding an id that exists fails as `pvesm add`
-does. A storage named in the state's `inactive` list answers `active: 0` while still enabled, as one whose
-mount or pool failed to come up does, and one whose `nodes` leaves this node out answers `enabled: 0`, as
-Proxmox does for a storage restricted to other cluster nodes. Nothing the role runs changes either. Anything
-else exits non-zero, so an unexpected command fails the test.
+storage, and sizes, 0 for a storage that is not active, and adding an id that exists, or one Proxmox's id
+rule rejects (pve-storage-id: two or more letters, digits, hyphens, underscores and dots, starting with a
+letter and ending with a letter or digit, case not mattering), fails as `pvesm add` does. A storage named
+in the state's `inactive` list answers `active: 0` while still enabled, as one whose mount or pool failed to
+come up does, and one whose `nodes` leaves this node out answers `enabled: 0`, as Proxmox does for a storage
+restricted to other cluster nodes. Nothing the role runs changes either. Anything else exits non-zero, so an
+unexpected command fails the test.
 """
 
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -130,6 +133,10 @@ def pvesm(state, args):
         if args[1] != "nfs":
             fail("fake pvesm: only nfs storage is supported")
         sid, opts = args[2], options(args[3:])
+        if len(sid) < 2:
+            fail(f"400 Parameter verification failed.\nstorage: storage ID '{sid}' cannot be shorter than 2 characters")
+        if not re.fullmatch(r"[a-z][a-z0-9_.-]*[a-z0-9]", sid, re.IGNORECASE):
+            fail(f"400 Parameter verification failed.\nstorage: storage ID '{sid}' contains illegal characters")
         if any(s["storage"] == sid for s in state["storage"]):
             fail(f"create storage failed: storage ID '{sid}' already defined")
         missing = {"server", "export"} - set(opts)
