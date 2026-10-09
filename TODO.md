@@ -71,12 +71,13 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 
 ## Proxmox
 
-- [ ] In `claude-on-proxmox` (the repo that creates VMs): choose the storage by VM class, reading the id
-      from `vm_storage.<class>.proxmox_id` so a setup without a NAS gets `local-lvm` for both classes,
-      pass `format=qcow2` when importing the cloud image onto NFS storage only (`import-from` keeps the
-      source image's format and ignores the storage default; LVM-thin takes `raw`), turn on
-      `destroy-unreferenced-disks` when deleting ephemeral VMs, and give its API user, `ansible@pve`, access
-      to the new storage ids
+- [ ] Move the home host to the owner-and-class storage ids, once, by hand: check with `pvesm list` that
+      `truenas-persistent` and `truenas-ephemeral` hold no volume, `pvesm remove` both, then `make check`,
+      `make site` twice, and grant `claude-on-proxmox`'s token its pool
+      (`pveum aclmod /storage/claude-on-proxmox-ephemeral …`, the line from that project's README). Nothing
+      in `claude-on-proxmox` changes: its `local.yml` for this host sets `proxmox_storage` to the id
+- [ ] Pick a quota for `claude-on-proxmox-ephemeral` (`quota` on its `vm_storage_consumers` entry, in bytes);
+      the parent's 1 TiB applies meanwhile
 
 ## Manifest defects found in review
 

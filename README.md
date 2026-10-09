@@ -73,12 +73,11 @@ The roles are generic and change nothing by default; this setup's configuration 
 A setup with only a Proxmox host works from the same files. Delete the TrueNAS section from
 `group_vars/all/local.yml`, or leave every value in it blank: with no NAS address, `group_vars/all/storage.yml`
 sets `nas_present` to false, the NAS play says so and ends before its role runs, and the Proxmox play adds no
-NFS storage and sets no start-on-boot delay. Both VM classes then resolve to the storage the Proxmox installer
+NFS storage and sets no start-on-boot delay. There is then one VM storage, the one the Proxmox installer
 created: `local-lvm`, or on a ZFS install the `local-zfs` you set as `proxmox_local_vm_storage` in
 `group_vars/all/local.yml`. The role checks that it exists, is enabled and holds `images`, and on a real run
-that it is active. It creates nothing. The two VM classes share that one storage, so the persistent/ephemeral
-distinction (separate pools, `sync`, quota) does not exist in this mode, and VM disks are lost with the
-Proxmox boot disk.
+that it is active. It creates nothing. The persistent VM class exists only with a NAS: without one every VM
+is ephemeral in the sense that its disk goes with the Proxmox boot disk, and no project pools (below) exist.
 
 A TrueNAS section that keeps its other settings but gives no address stops both playbooks before anything
 runs, rather than passing for a setup without a NAS: that is what a misspelt address looks like. The message
@@ -108,6 +107,29 @@ make vault-init
 
 This mode is covered by the fake-backed tests and the argument-spec pass in both modes; the maintainer's own
 setup has a NAS.
+
+### Storage for projects that create VMs
+
+A project that creates VMs on the Proxmox host, such as `claude-on-proxmox`, names the storage its disks go to
+and knows nothing else about it: not this repo, not whether a NAS exists. Proxmox has no host-wide default
+storage, so the storage id is the whole interface, like the bridge name.
+
+- **With a NAS**, this repo provisions a pool per project. An entry in `vm_storage_consumers`
+  (`group_vars/all/storage.yml`) gives it a dataset of its own on the ephemeral pool, an NFS export, and a
+  Proxmox storage under the project's id; the first is `claude-on-proxmox-ephemeral`. After `make site`, grant
+  the project's token its pool with the line from that project's README (`pveum aclmod /storage/<id> …`) and
+  set the id in the project's own configuration (`proxmox_storage`, for `claude-on-proxmox`). An optional
+  `quota` on the entry caps the project; the parent dataset's 1 TiB quota applies regardless.
+- **Without a NAS**, nothing: the project's default, the installer's `local-lvm`, is right, and no pool exists.
+
+Ids say who owns a storage and what it is for, never what is behind it: `homeserver-persistent` and
+`homeserver-ephemeral` for this repo's two VM classes, `<project>-ephemeral` for a project's pool. An id does
+not change with the backend. Renaming one is a migration: the role never removes a storage, so the old id comes
+out by hand first (`pvesm remove <id>`), or the two ids would share one export. This repo manages no Proxmox
+users or permissions, and a project never gets `Datastore.Allocate`: in Proxmox that right, granted on
+`/storage` for creating a storage, also allows changing or removing every other one. One cosmetic effect: the
+GUI's "Create VM" wizard preselects the first storage by id, so with a NAS it preselects a project's pool.
+Tools name their storage and are unaffected.
 
 ### After a hardware failure
 
