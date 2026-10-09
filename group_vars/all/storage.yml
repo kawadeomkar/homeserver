@@ -53,10 +53,20 @@ vm_storage_classes:
     proxmox_id: "{{ 'homeserver-ephemeral' if nas_present else proxmox_local_vm_storage | default('local-lvm') }}"
 vm_storage: "{{ vm_storage_classes if nas_present else {'ephemeral': vm_storage_classes.ephemeral} }}"
 
-# The NAS's exports as Proxmox mounts them, one per class the setup has. Read only when a NAS is present.
+# One storage pool per project that creates VMs on the Proxmox host, with a NAS: a dataset of its own on the
+# ephemeral pool, exported like the classes, so the project's token can be granted its pool alone and a quota
+# can cap it. A project is told the id and nothing else; it never creates storage and never reads this file.
+# Without a NAS none of these exists, and a project uses its own default, the installer's storage. Adding a
+# project is one more entry. quota is optional, in bytes; the parent dataset's quota applies regardless.
+vm_storage_consumers:
+  - proxmox_id: claude-on-proxmox-ephemeral
+    dataset: ephemeral/proxmox/claude-on-proxmox
+
+# The NAS's exports as Proxmox mounts them: the classes the setup has, then the project pools. Read only when
+# a NAS is present.
 vm_storage_nfs_exports: >-
   {%- set out = [] -%}
-  {%- for e in vm_storage.values() -%}
+  {%- for e in (vm_storage.values() | list) + vm_storage_consumers -%}
   {%-   set _ = out.append({'id': e.proxmox_id, 'export': vm_storage_mount_root ~ '/' ~ e.dataset}) -%}
   {%- endfor -%}
   {{ out }}

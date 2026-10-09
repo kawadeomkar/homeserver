@@ -348,6 +348,7 @@ def resolve_on(tree, host, expression):
             [
                 {"id": "homeserver-persistent", "export": "/mnt/nvme_gen3/proxmox/vm"},
                 {"id": "homeserver-ephemeral", "export": "/mnt/ephemeral/proxmox/vm"},
+                {"id": "claude-on-proxmox-ephemeral", "export": "/mnt/ephemeral/proxmox/claude-on-proxmox"},
             ],
             [],
             id="nas",
@@ -364,6 +365,34 @@ def test_layout_resolves_per_setup(tmp_path, local_yml, classes, exports, local)
         tree, "homeserver", "{'classes': vm_storage | list, 'nfs': proxmox_storage_nfs, 'local': proxmox_storage_local}"
     )
     assert layout == {"classes": classes, "nfs": exports, "local": local}
+
+
+def test_nas_gets_a_dataset_and_share_per_vm_storage(tmp_path):
+    """With a NAS, the NAS configuration derives one dataset and one share for each VM class and each project
+    pool, so an export and the storage that mounts it come from one entry. A project pool gets the ephemeral
+    class's properties."""
+    tree = example_tree(tmp_path)
+    nas = resolve_on(
+        tree,
+        "truenas",
+        "{'datasets': truenas_datasets | map(attribute='name') | list,"
+        " 'pool': (truenas_datasets | selectattr('name', 'equalto', 'ephemeral/proxmox/claude-on-proxmox')"
+        " | first).properties,"
+        " 'shares': truenas_nfs_shares | map(attribute='path') | list}",
+    )
+    assert nas["datasets"] == [
+        "nvme_gen3/proxmox",
+        "nvme_gen3/proxmox/vm",
+        "ephemeral/proxmox",
+        "ephemeral/proxmox/vm",
+        "ephemeral/proxmox/claude-on-proxmox",
+    ]
+    assert nas["pool"] == {"sync": "DISABLED", "recordsize": "64K"}
+    assert nas["shares"] == [
+        "/mnt/nvme_gen3/proxmox/vm",
+        "/mnt/ephemeral/proxmox/vm",
+        "/mnt/ephemeral/proxmox/claude-on-proxmox",
+    ]
 
 
 def test_task_arguments_match_module_specs():

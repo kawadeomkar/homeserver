@@ -229,9 +229,16 @@ def test_truenas_role_is_idempotent(nas):
     assert ds["ephemeral/proxmox/vm"]["sync"]["rawvalue"] == "disabled"
     assert ds["ephemeral/proxmox"]["quota"]["rawvalue"] == "1099511627776"
     assert ds["nvme_gen3/proxmox/vm"]["recordsize"]["rawvalue"] == "65536"
+    # The project pool: a dataset of its own with the ephemeral class's properties.
+    pool = ds["ephemeral/proxmox/claude-on-proxmox"]
+    assert (pool["sync"]["rawvalue"], pool["recordsize"]["rawvalue"]) == ("disabled", "65536")
     assert ds["ephemeral/proxmox"]["acltype"]["rawvalue"] == "posix"
     assert ds["ephemeral/jellyfin"]["acltype"]["rawvalue"] == "nfsv4", "an undeclared dataset was touched"
-    assert sorted(sh["path"] for sh in s["shares"]) == ["/mnt/ephemeral/proxmox/vm", "/mnt/nvme_gen3/proxmox/vm"]
+    assert sorted(sh["path"] for sh in s["shares"]) == [
+        "/mnt/ephemeral/proxmox/claude-on-proxmox",
+        "/mnt/ephemeral/proxmox/vm",
+        "/mnt/nvme_gen3/proxmox/vm",
+    ]
     assert all(sh["hosts"] == [PROXMOX_ADDRESS] and sh["maproot_user"] == "root" for sh in s["shares"])
     services = {sv["service"]: sv for sv in s["services"]}
     assert services["nfs"]["enable"] and services["nfs"]["state"] == "RUNNING"
@@ -297,7 +304,7 @@ def test_proxmox_storage_role_is_idempotent(tmp_path):
 
     result = run("proxmox.yml", extra, check=True)
     expect(result, "homeserver", note="dry run")
-    for sid in ("homeserver-persistent", "homeserver-ephemeral"):
+    for sid in ("homeserver-persistent", "homeserver-ephemeral", "claude-on-proxmox-ephemeral"):
         assert re.search(rf'{sid}"?:\s*"?add', result[2]), (
             f"the dry run does not plan to add {sid}\n{result[2][-3000:]}"
         )
@@ -310,7 +317,7 @@ def test_proxmox_storage_role_is_idempotent(tmp_path):
 
     s = read(state)
     nfs = {e["storage"]: e for e in s["storage"] if e["type"] == "nfs"}
-    assert sorted(nfs) == ["homeserver-ephemeral", "homeserver-persistent"]
+    assert sorted(nfs) == ["claude-on-proxmox-ephemeral", "homeserver-ephemeral", "homeserver-persistent"]
     for entry in nfs.values():
         assert (entry["server"], entry["content"], entry["format"], entry["options"]) == (
             "127.0.0.10",
@@ -320,6 +327,7 @@ def test_proxmox_storage_role_is_idempotent(tmp_path):
         )
         assert "disable" not in entry
     assert nfs["homeserver-ephemeral"]["export"] == "/mnt/ephemeral/proxmox/vm"
+    assert nfs["claude-on-proxmox-ephemeral"]["export"] == "/mnt/ephemeral/proxmox/claude-on-proxmox"
     assert s["node"]["startall-onboot-delay"] == 120
 
     # Drift: options, content and the enabled flag changed by hand.
@@ -387,7 +395,10 @@ def test_proxmox_storage_role_needs_the_static_address(tmp_path):
     the run is refused, naming the variable the server comes from."""
     extra = {"fake_pve_state": str(tmp_path / "pve.json"), "truenas_static_address": ""}
     rc, _, out = run("proxmox.yml", {**extra, "truenas_bootstrap_address": "127.0.0.10"}, check=True)
-    expected = "No NFS server for homeserver-persistent, homeserver-ephemeral: set proxmox_storage_nfs_server"
+    expected = (
+        "No NFS server for homeserver-persistent, homeserver-ephemeral, claude-on-proxmox-ephemeral: "
+        "set proxmox_storage_nfs_server"
+    )
     assert rc != 0 and expected in out, out[-3000:]
 
 
