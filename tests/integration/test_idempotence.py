@@ -444,7 +444,9 @@ def test_proxmox_storage_role_checks_existing_storage(tmp_path):
     write(state, s)
 
     # Refused, each with what to change: a storage that does not exist, one that cannot hold VM disks, an empty
-    # id, a string for the list, an id in both lists, and an NFS storage with no server.
+    # id, a string for the list, an id in both lists, an NFS storage with no server, ids Proxmox's rule rejects
+    # (an uppercase one passes it, case not mattering, and fails only for not existing), and an export listed
+    # twice.
     nfs = [{"id": "nas-vm", "export": "/mnt/tank/vm"}]
     server = {"proxmox_storage_nfs_server": "127.0.0.10"}
     configured = (
@@ -457,6 +459,13 @@ def test_proxmox_storage_role_checks_existing_storage(tmp_path):
         ({"proxmox_storage_local": "local-lvm"}, "proxmox_storage_local must be a list of storage ids"),
         ({"proxmox_storage_nfs": [{**nfs[0], "id": "local-lvm"}], **server}, "unique across proxmox_storage_nfs and"),
         ({"proxmox_storage_nfs": nfs}, "No NFS server for nas-vm: set proxmox_storage_nfs_server"),
+        ({"proxmox_storage_local": ["1lvm", "lvm-", "x"]}, "letter or digit; these are not: 1lvm, lvm-, x."),
+        ({"proxmox_storage_nfs": [{**nfs[0], "id": "nas vm"}], **server}, "these are not: nas vm."),
+        ({"proxmox_storage_local": ["Local-LVM"]}, f"Local-LVM: does not exist. {configured}"),
+        (
+            {"proxmox_storage_nfs": [nfs[0], {"id": "nas-vm-too", "export": "/mnt/tank/vm"}], **server},
+            "proxmox_storage_nfs lists these more than once: 127.0.0.10:/mnt/tank/vm.",
+        ),
     ):
         rc, _, out = run("proxmox_local.yml", {**extra, **given}, check=True)
         assert rc != 0 and message in out, f"{given}: expected {message!r}\n{out[-3000:]}"
@@ -474,6 +483,47 @@ def test_proxmox_storage_role_checks_existing_storage(tmp_path):
     assert rc != 0 and "local-lvm: is disabled" in out, out[-3000:]
     assert "local-lvm (lvmthin: images,rootdir, disabled)" in out and "The installer" not in out, out[-3000:]
     assert read(state)["mutations"] == 0, "a failed check changed the host"
+
+
+def test_proxmox_storage_role_refuses_an_export_another_id_mounts(tmp_path):
+    """One export, one storage id. An export the configuration wants under one id while the node mounts it
+    under another, as a renamed id leaves behind until the old one is removed by hand, is refused in check
+    mode and for real, naming both ids, before anything is added, whether or not the wanted id exists yet.
+    With the old ids gone, the run proceeds."""
+    state = tmp_path / "pve.json"
+    extra = pve_vars(state)
+    run("proxmox.yml", extra, check=True)  # writes the fake's base state
+
+    def mounted(sid, export):
+        settings = {"content": "images", "format": "qcow2", "options": "vers=4.2", "path": f"/mnt/pve/{sid}"}
+        return {"storage": sid, "type": "nfs", "server": "127.0.0.10", "export": export, **settings}
+
+    pairs = (("truenas-persistent", "homeserver-persistent"), ("truenas-ephemeral", "homeserver-ephemeral"))
+    s = read(state)
+    s["storage"] += [mounted("truenas-persistent", "/mnt/nvme_gen3/proxmox/vm")]
+    s["storage"] += [mounted("truenas-ephemeral", "/mnt/ephemeral/proxmox/vm")]
+    write(state, s)
+    for check in (True, False):
+        rc, _, out = run("proxmox.yml", extra, check=check)
+        assert rc != 0 and "already mounted under another storage id" in out and "pvesm remove" in out, out[-3000:]
+        for old, new in pairs:
+            assert f"is mounted as {old}, wanted as {new}" in out, out[-3000:]
+        s = read(state)
+        nfs = sorted(e["storage"] for e in s["storage"] if e["type"] == "nfs")
+        assert s["mutations"] == 0 and nfs == ["truenas-ephemeral", "truenas-persistent"], "storage was added"
+    # The wanted id exists beside the old one, as after a run that added it: the old one still has to go.
+    s["storage"] += [mounted("homeserver-persistent", "/mnt/nvme_gen3/proxmox/vm")]
+    write(state, s)
+    rc, _, out = run("proxmox.yml", extra, check=True)
+    assert rc != 0 and "is mounted as truenas-persistent, wanted as homeserver-persistent" in out, out[-3000:]
+    # The old ids removed by hand.
+    s = read(state)
+    s["storage"] = [e for e in s["storage"] if not e["storage"].startswith("truenas-")]
+    write(state, s)
+    expect(run("proxmox.yml", extra), "homeserver", changed=True, note="run once the old ids are gone")
+    expect(run("proxmox.yml", extra), "homeserver", changed=0, note="second run once the old ids are gone")
+    nfs = sorted(e["storage"] for e in read(state)["storage"] if e["type"] == "nfs")
+    assert nfs == ["claude-on-proxmox-ephemeral", "homeserver-ephemeral", "homeserver-persistent"]
 
 
 def test_truenas_role_refuses_an_unpinned_certificate(nas):

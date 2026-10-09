@@ -12,7 +12,18 @@
     quiet: true
   vars:
     _ids: "{{ (proxmox_storage_nfs | map(attribute='id') | list) + ([] if proxmox_storage_local is string else proxmox_storage_local) }}"
+    # Proxmox's rule for an id (pve-storage-id): two or more letters, digits, hyphens, underscores and dots,
+    # starting with a letter and ending with a letter or digit, case not mattering. Checked here so a typo
+    # fails the dry run rather than pvesm add.
+    _malformed: "{{ _ids | select | map('string') | reject('match', '^[a-z][a-z0-9_.-]*[a-z0-9]$', ignorecase=True) | list }}"
     _serverless: "{{ proxmox_storage_nfs | rejectattr('server', 'defined') | map(attribute='id') | list }}"
+    # server:export per NFS entry, with the role-wide server filled in.
+    _exports: >-
+      {%- set out = [] -%}
+      {%- for s in proxmox_storage_nfs -%}
+      {%-   set _ = out.append((s.server | default(proxmox_storage_nfs_server)) ~ ':' ~ s.export) -%}
+      {%- endfor -%}
+      {{ out }}
     _errors: >-
       {%- set out = [] -%}
       {%- if proxmox_storage_local is string -%}
@@ -20,6 +31,18 @@
       {%- endif -%}
       {%- if _ids | select | unique | list | length != _ids | length -%}
       {%-   set _ = out.append('Storage ids must be unique across proxmox_storage_nfs and proxmox_storage_local, and none may be empty.') -%}
+      {%- endif -%}
+      {%- if _malformed -%}
+      {%-   set _ = out.append('Proxmox takes a storage id of two or more letters, digits, hyphens, underscores and dots, '
+                               ~ 'starting with a letter and ending with a letter or digit; these are not: ' ~ _malformed | join(', ') ~ '.') -%}
+      {%- endif -%}
+      {%- set twice = [] -%}
+      {%- for e in _exports | unique if _exports | select('eq', e) | list | length > 1 -%}
+      {%-   set _ = twice.append(e) -%}
+      {%- endfor -%}
+      {%- if twice -%}
+      {%-   set _ = out.append('Each export is mounted under one storage id; proxmox_storage_nfs lists these more than once: '
+                               ~ twice | join(', ') ~ '.') -%}
       {%- endif -%}
       {%- if _serverless and proxmox_storage_nfs_server | length == 0 -%}
       {%-   set _ = out.append('No NFS server for ' ~ _serverless | join(', ') ~ ': set proxmox_storage_nfs_server, or a server in the entry.') -%}
@@ -38,6 +61,7 @@
   ansible.builtin.set_fact:
     proxmox_storage_wanted: "{{ _wanted }}"
     proxmox_storage_plan: "{{ _plan }}"
+    proxmox_storage_shared: "{{ _shared }}"
   when: proxmox_storage_nfs | length > 0
   vars:
     _existing: "{{ proxmox_storage_config.stdout | from_json }}"
@@ -77,6 +101,17 @@
       {%-   endif -%}
       {%- endfor -%}
       {{ plan }}
+    # A wanted export that another id already mounts: what a renamed id leaves behind until the old one is
+    # removed by hand, or a storage set up by hand. Found whether or not the wanted id exists yet.
+    _shared: >-
+      {%- set out = [] -%}
+      {%- for s in _wanted -%}
+      {%-   for h in _existing if h.storage != s.id and h.type == 'nfs'
+                and h.server | default('') == s.server and h.export | default('') == s.export -%}
+      {%-     set _ = out.append(s.server ~ ':' ~ s.export ~ ' is mounted as ' ~ h.storage ~ ', wanted as ' ~ s.id) -%}
+      {%-   endfor -%}
+      {%- endfor -%}
+      {{ out }}
 
 # Storage the node already has, of any type and typically the installer's local-lvm or local-zfs, is
 # checked, never created or changed: it must exist, be enabled and hold images.
@@ -135,6 +170,18 @@
       These storage ids exist with another type, server or export:
       {{ proxmox_storage_plan | dict2items | selectattr('value', 'eq', 'conflict') | map(attribute='key') | join(', ') }}.
       Remove or rename them by hand first.
+    quiet: true
+  when: proxmox_storage_nfs | length > 0
+
+# One export, one storage id. Two ids over one export list the same volumes twice, and a disk deleted under
+# one is gone under the other. The role never removes a storage, so the old id goes by hand.
+- name: Refuse an export that another storage id already mounts
+  ansible.builtin.assert:
+    that: proxmox_storage_shared | length == 0
+    fail_msg: >-
+      These exports are already mounted under another storage id: {{ proxmox_storage_shared | join('; ') }}.
+      This role never removes a storage: if the old id holds no volume (`pvesm list <id>`), remove it by hand
+      (`pvesm remove <id>`); if it holds some, keep that id in proxmox_storage_nfs instead.
     quiet: true
   when: proxmox_storage_nfs | length > 0
 

@@ -72,8 +72,9 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 ## Proxmox
 
 - [ ] Move the home host to the owner-and-class storage ids, once, by hand: check with `pvesm list` that
-      `truenas-persistent` and `truenas-ephemeral` hold no volume, `pvesm remove` both, then `make check`,
-      `make site` twice, and grant `claude-on-proxmox`'s token its pool
+      `truenas-persistent` and `truenas-ephemeral` hold no volume, `pvesm remove` both (until they are gone
+      every run refuses, naming them), then `make check`, `make site` twice, and grant `claude-on-proxmox`'s
+      token its pool
       (`pveum aclmod /storage/claude-on-proxmox-ephemeral …`, the line from that project's README). Nothing
       in `claude-on-proxmox` changes: its `local.yml` for this host sets `proxmox_storage` to the id
 - [ ] Pick a quota for `claude-on-proxmox-ephemeral` (`quota` on its `vm_storage_consumers` entry, in bytes);
