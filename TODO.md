@@ -25,8 +25,9 @@ the full audit with file/line references; the finding ids below refer to it.
       ruleset's undocumented `require_extra_approval_for_unattributed_changes` holds them back
 - [ ] Drop the Python 3.12 leg when ansible-core stops supporting 3.12 on the controller, and raise
       `requires-python` in `pyproject.toml` with it (likewise its upper bound when a 3.15 leg is added)
-- [ ] The rest of the CI plan: kube-linter and the manifest convention tests (PR 4); TrueNAS client tests
-      (PR 5); OpenSSF Scorecard and dependency review (PR 6)
+- [ ] Check the first Scorecard run on `main`: that the OpenSSF API accepted the result, and which low
+      scores are worth acting on. Code-Review (every change is the maintainer's own), Fuzzing,
+      CII-Best-Practices and Packaging are expected to score low. Add its badge to `README.md` if wanted
 
 ## TrueNAS
 
@@ -74,11 +75,12 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 
 ## Proxmox
 
-- [ ] In `claude-on-proxmox` (the repo that creates VMs): choose the storage by VM class
-      (`truenas-persistent` or `truenas-ephemeral`), pass `format=qcow2` when importing the cloud image
-      (`import-from` keeps the source image's format and ignores the storage default), turn on
-      `destroy-unreferenced-disks` when deleting ephemeral VMs, and give its API user access to the new
-      storage ids. That user, `ansible@pve`, does not exist on the reinstalled host yet
+- [ ] In `claude-on-proxmox` (the repo that creates VMs): choose the storage by VM class, reading the id
+      from `vm_storage.<class>.proxmox_id` so a setup without a NAS gets `local-lvm` for both classes,
+      pass `format=qcow2` when importing the cloud image onto NFS storage only (`import-from` keeps the
+      source image's format and ignores the storage default; LVM-thin takes `raw`), turn on
+      `destroy-unreferenced-disks` when deleting ephemeral VMs, and give its API user, `ansible@pve`, access
+      to the new storage ids
 
 ## Manifest defects found in review
 
@@ -96,8 +98,6 @@ was reproduced on a cluster, because there is none.
       host it is reached by; the Deployment sets no env at all
 - [ ] `prometheus` Deployment has no `strategy: Recreate` although it now holds a hostPath PV, so a rollout
       starts a second pod against the same TSDB and hangs
-- [ ] Say why in a comment on the `pod-security.kubernetes.io/enforce: privileged` label of the `frigate`,
-      `jellyfin` and `homeassistant` namespaces, as the convention in `CLAUDE.md` asks
 
 ## Removed with the Ubuntu host layer
 

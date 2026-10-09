@@ -2,7 +2,8 @@
 
 .github/rulesets/main.json is applied to the "Protect main" ruleset by hand, and GitHub never reads the file.
 If it named a check the workflow does not report, every pull request would wait on it forever; if the workflow
-added a job that ci-success does not wait for, that job could fail and the pull request still merge.
+added a job that ci-success does not wait for, that job could fail and the pull request still merge. ci-success
+also lets a job be skipped only if it is skipped on pushes alone, so no pull request can skip it.
 """
 
 import json
@@ -43,3 +44,11 @@ def test_gate_waits_for_every_other_job_even_when_one_fails():
     gate = jobs["ci-success"]
     assert set(gate["needs"]) == set(jobs) - {"ci-success"}
     assert gate["if"] == "always()"
+
+
+def test_gate_allows_skipping_only_jobs_that_run_on_every_pull_request():
+    jobs = workflow()["jobs"]
+    (gate,) = [step for step in jobs["ci-success"]["steps"] if step["uses"].startswith("re-actors/alls-green@")]
+    skippable = {name.strip() for name in gate["with"].get("allowed-skips", "").split(",") if name.strip()}
+    conditional = {name: job["if"] for name, job in jobs.items() if "if" in job and name != "ci-success"}
+    assert conditional == dict.fromkeys(skippable, "github.event_name == 'pull_request'")

@@ -4,5 +4,7 @@ kind: Namespace
 metadata:
   name: frigate
   labels:
+    # Frigate runs privileged, for hardware video decoding through /dev/dri, and mounts host paths.
+    # Talos enforces Pod Security Admission at `baseline`, which rejects both.
     pod-security.kubernetes.io/enforce: privileged
     name: frigate

@@ -1,0 +1,12 @@
+---
+# roles/proxmox_storage with variables from the test only: the node's own storage is checked and nothing
+# is added. Runs against the fake pvesh, pvesm and pvenode in fake_pve_bin/.
+- name: Check the fake Proxmox host's own storage
+  hosts: proxmox
+  gather_facts: false
+  environment:
+    PATH: "{{ playbook_dir }}/fake_pve_bin:{{ lookup('ansible.builtin.env', 'PATH') }}"
+    FAKE_PVE_STATE: "{{ fake_pve_state }}"
+    FAKE_PVE_PYTHON: "{{ ansible_playbook_python }}"
+  roles:
+    - role: proxmox_storage
