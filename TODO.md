@@ -77,8 +77,8 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       token its pool
       (`pveum aclmod /storage/claude-on-proxmox-ephemeral …`, the line from that project's README). Nothing
       in `claude-on-proxmox` changes: its `local.yml` for this host sets `proxmox_storage` to the id
-- [ ] Pick a quota for `claude-on-proxmox-ephemeral` (`quota` on its `vm_storage_consumers` entry, in bytes);
-      the parent's 1 TiB applies meanwhile
+- [ ] Pick a quota for `claude-on-proxmox-ephemeral` (`quota` on its `vm_storage_consumers` entry, in bytes or
+      with a binary suffix such as `200G`); the parent's 1 TiB applies meanwhile
 
 ## Manifest defects found in review
 

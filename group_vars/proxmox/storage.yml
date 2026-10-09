@@ -6,7 +6,7 @@
 # play replaces, so it is never used here: with only that address, the role refuses to run, naming this
 # variable.
 proxmox_storage_nfs_server: "{{ truenas_static_address | default('', true) | trim | split('/') | first }}"
-# With a NAS, its two shares; without one, nothing to add.
+# With a NAS, its shares, one per VM class and per project pool; without one, nothing to add.
 proxmox_storage_nfs: "{{ vm_storage_nfs_exports if nas_present else [] }}"
 # Without a NAS, the installer's storage, which is then the ephemeral class and the only one, must be able to
 # hold VM disks: local-lvm, or proxmox_local_vm_storage from local.yml (see group_vars/all/storage.yml). That

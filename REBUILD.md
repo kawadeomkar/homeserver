@@ -76,7 +76,7 @@ minute and a full dry run uses about 13, so leave a minute between a full dry ru
 | 6 | `make truenas` | `changed=0` |
 
 The Proxmox host needs nothing: its NFS storages reconnect once the shares exist. `make check-proxmox` should
-report no change, and `pvesm status` on the host should show both storages active.
+report no change, and `pvesm status` on the host should show every NFS storage active.
 
 ## 3. The Proxmox host
 

@@ -119,7 +119,8 @@ storage, so the storage id is the whole interface, like the bridge name.
   Proxmox storage under the project's id; the first is `claude-on-proxmox-ephemeral`. After `make site`, grant
   the project's token its pool with the line from that project's README (`pveum aclmod /storage/<id> …`) and
   set the id in the project's own configuration (`proxmox_storage`, for `claude-on-proxmox`). An optional
-  `quota` on the entry caps the project; the parent dataset's 1 TiB quota applies regardless.
+  `quota` on the entry, in bytes or with a binary suffix such as `200G`, caps the project; the parent dataset's
+  1 TiB quota applies regardless.
 - **Without a NAS**, nothing: the project's default, the installer's `local-lvm`, is right, and no pool exists.
 
 Ids say who owns a storage and what it is for, never what is behind it: `homeserver-persistent` and

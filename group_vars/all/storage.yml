@@ -57,7 +57,8 @@ vm_storage: "{{ vm_storage_classes if nas_present else {'ephemeral': vm_storage_
 # ephemeral pool, exported like the classes, so the project's token can be granted its pool alone and a quota
 # can cap it. A project is told the id and nothing else; it never creates storage and never reads this file.
 # Without a NAS none of these exists, and a project uses its own default, the installer's storage. Adding a
-# project is one more entry. quota is optional, in bytes; the parent dataset's quota applies regardless.
+# project is one more entry. quota is optional, in bytes or with a binary suffix (200G); the parent dataset's
+# quota applies regardless.
 vm_storage_consumers:
   - proxmox_id: claude-on-proxmox-ephemeral
     dataset: ephemeral/proxmox/claude-on-proxmox
