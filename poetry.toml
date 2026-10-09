@@ -1,0 +1,21 @@
+# Poetry's settings for this project. They take precedence over the user's own Poetry configuration, so every
+# checkout behaves the same. Environment variables (POETRY_*) still override them.
+
+[virtualenvs]
+# Without an active virtualenv, Poetry uses ./.venv, where make looks for one, and creates it if it is missing.
+create = true
+in-project = true
+
+[solver]
+# Lock only releases at least 7 days old, the cooldown Dependabot keeps too: a malicious release is usually found and
+# yanked within days.
+min-release-age = 7
+
+[installer]
+# Wheels only. Building a source distribution runs its build backend, with build dependencies the lock does not hash.
+only-binary = ":all:"
+
+[keyring]
+# Every package comes from PyPI, which needs no credentials, so Poetry has no reason to open the system keyring (where
+# a locked macOS keychain would prompt, and a CI runner without one can hang).
+enabled = false

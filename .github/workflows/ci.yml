@@ -33,6 +33,9 @@ env:
   KUBE_LINTER_SHA256: "1a6d8419b11971372971fdbc22682b684ebfb7cf1c39591662d1b6ca736c41df"
   GITLEAKS_VERSION: "8.30.1"
   GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+  # Poetry, pinned by version as its CI recommendations advise, and bumped by hand like the tools above.
+  # pyproject.toml's requires-poetry must allow it.
+  POETRY_VERSION: "2.5.1"
 
 jobs:
   lint:
@@ -48,9 +51,11 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
-          cache: pip
-          cache-dependency-path: requirements.txt
-      - name: Install the hash-locked tooling
+      # pipx, which the runner image has, installs Poetry into a virtualenv of its own, as Poetry's docs
+      # require; make then creates .venv with setup-python's Python and syncs it to poetry.lock.
+      - name: Install Poetry
+        run: pipx install "poetry==${POETRY_VERSION}"
+      - name: Install the locked tooling
         run: make venv PYTHON=python
       # The real vault password never reaches CI: without .vault_pass, make gives ansible-lint a
       # placeholder, and the vault's contents go unlinted (tests/policy checks it stays encrypted).
@@ -76,9 +81,9 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
-          cache: pip
-          cache-dependency-path: requirements.txt
-      - name: Install the hash-locked tooling
+      - name: Install Poetry
+        run: pipx install "poetry==${POETRY_VERSION}"
+      - name: Install the locked tooling
         run: make venv PYTHON=python
       - name: Unit tests
         run: make test
@@ -127,9 +132,9 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
-          cache: pip
-          cache-dependency-path: requirements.txt
-      - name: Install the hash-locked tooling
+      - name: Install Poetry
+        run: pipx install "poetry==${POETRY_VERSION}"
+      - name: Install the locked tooling
         run: make venv PYTHON=python
       - name: Install gitleaks (checksum verified)
         run: |
