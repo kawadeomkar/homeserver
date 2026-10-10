@@ -1,8 +1,10 @@
-"""Stand-ins for the Proxmox VE commands roles/proxmox_storage runs, for the idempotence tests.
+"""Stand-ins for the Proxmox VE commands roles/proxmox_storage and roles/proxmox_apt run, for the idempotence
+tests.
 
 `pvesh get /storage`, `pvesh get /nodes/<node>/config`, `pvesh get /nodes/<node>/storage/<id>/status`,
-`pvesm add nfs`, `pvesm set`, `pvenode config set` and `hostname -s`, backed by a JSON file named by
-$FAKE_PVE_STATE.
+`pvesh get /nodes/<node>/qemu` and `/lxc`, `pvesm add nfs`, `pvesm set`, `pvenode config set`, `hostname -s`,
+`apt-get update`, `apt-get dist-upgrade`, `uname -r`, `dpkg-query -W` for the kernel packages and
+`systemctl reboot`, backed by a JSON file named by $FAKE_PVE_STATE.
 Output follows Proxmox VE 9.2, as captured on a fresh install: `disable` appears only when set, every
 `/storage` entry carries a `digest` of the whole configuration, `content` comes back in an order that
 differs from one listing to the next (it is a hash's order on a real host, so the fake rotates it, and a
@@ -12,6 +14,14 @@ does. A storage named in the state's `inactive` list answers `active: 0` while s
 mount or pool failed to come up does, and one whose `nodes` leaves this node out answers `enabled: 0`, as
 Proxmox does for a storage restricted to other cluster nodes. Nothing the role runs changes either. Anything
 else exits non-zero, so an unexpected command fails the test.
+
+apt-get reads the deb822 .sources files in $FAKE_PVE_SOURCES_DIR, the directory the role is given. `update`
+fails with 401 Unauthorized, as the real one does, when an enterprise.proxmox.com repository is still
+enabled, and otherwise fills the package lists from the no-subscription repository if one is enabled, or with
+nothing. `dist-upgrade` upgrades what the lists offer; `-s` only reports it; without `-y` and
+DEBIAN_FRONTEND=noninteractive it fails, as the real one would stop to ask. The kernel the node runs is the
+state's `running_kernel`; `systemctl reboot` makes it the newest installed signed kernel package and counts the
+reboot, and the guests the state lists under `vms` are what `/nodes/<node>/qemu` answers.
 """
 
 import hashlib
@@ -19,37 +29,67 @@ import json
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
-STATE = Path(os.environ["FAKE_PVE_STATE"])
 # Proxmox names the node after the short hostname, which the fake `hostname -s` answers. Fixed rather than
 # the controller's own: macOS renames itself when the network hands it a name, and a rename between the
 # role's `hostname -s` and a later call would fail the run.
 NODE = "pve"
+# What a fresh install has and what the no-subscription repository offers, by package. `lists` is what apt
+# knows: empty until an update has read a repository that carries these packages.
+# The kernel comes as a meta package and a signed package named after the release uname reports.
+PACKAGES = {
+    "installed": {
+        "pve-manager": "9.2.2-1",
+        "proxmox-kernel-7.0": "7.0.2-6",
+        "proxmox-kernel-7.0.2-6-pve-signed": "7.0.2-6",
+    },
+    "repository": {
+        "pve-manager": "9.2.3-1",
+        "proxmox-kernel-7.0": "7.0.14-23",
+        "proxmox-kernel-7.0.14-23-pve-signed": "7.0.14-23",
+    },
+    "lists": {},
+}
+RUNNING_KERNEL = "7.0.2-6-pve"
+
+
+def fresh_state():
+    return {
+        "storage": [
+            {"storage": "local", "type": "dir", "path": "/var/lib/vz", "content": "backup,iso,vztmpl,import"},
+            {
+                "storage": "local-lvm",
+                "type": "lvmthin",
+                "thinpool": "data",
+                "vgname": "pve",
+                "content": "images,rootdir",
+            },
+        ],
+        "node": {},
+        "mutations": 0,
+        "reads": 0,
+        "inactive": [],
+        "packages": json.loads(json.dumps(PACKAGES)),
+        "apt_get_runs": 0,
+        "running_kernel": RUNNING_KERNEL,
+        "reboots": 0,
+        "vms": [],
+    }
+
+
+def state_path():
+    return Path(os.environ["FAKE_PVE_STATE"])
 
 
 def load():
-    if not STATE.exists():
-        return {
-            "storage": [
-                {"storage": "local", "type": "dir", "path": "/var/lib/vz", "content": "backup,iso,vztmpl,import"},
-                {
-                    "storage": "local-lvm",
-                    "type": "lvmthin",
-                    "thinpool": "data",
-                    "vgname": "pve",
-                    "content": "images,rootdir",
-                },
-            ],
-            "node": {},
-            "mutations": 0,
-            "reads": 0,
-            "inactive": [],
-        }
-    return json.loads(STATE.read_text())
+    if not state_path().exists():
+        return fresh_state()
+    return json.loads(state_path().read_text())
 
 
 def save(state):
-    STATE.write_text(json.dumps(state, indent=1, sort_keys=True))
+    state_path().write_text(json.dumps(state, indent=1, sort_keys=True))
 
 
 def fail(message):
@@ -89,6 +129,10 @@ def pvesh(state, args):
     parts = path.split("/")
     if path == "/storage":
         print(json.dumps(listing(state)))
+    elif len(parts) == 4 and parts[1] == "nodes" and parts[3] in ("qemu", "lxc"):
+        if parts[2] != NODE:
+            fail(f"500 hostname lookup '{parts[2]}' failed")
+        print(json.dumps(state.get("vms", []) if parts[3] == "qemu" else []))
     elif len(parts) == 4 and parts[1] == "nodes" and parts[3] == "config":
         # As on a real host, /nodes/localhost/config (or any name but the node's own) answers {},
         # and values come back as strings.
@@ -172,16 +216,131 @@ def pvenode(state, args):
     state["mutations"] += 1
 
 
+def stanzas(path):
+    """The fields of each deb822 stanza in a .sources file, keys lower-cased."""
+    out, current = [], {}
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            if current:
+                out.append(current)
+            current = {}
+        elif not line.startswith("#"):
+            key, _, value = line.partition(":")
+            current[key.strip().lower()] = value.strip()
+    if current:
+        out.append(current)
+    return out
+
+
+def hosted_at(uris, host, path_prefix=""):
+    """Whether one of the space-separated URIs is on `host`, under `path_prefix`."""
+    return any(urlsplit(uri).hostname == host and urlsplit(uri).path.startswith(path_prefix) for uri in uris.split())
+
+
+def repositories():
+    """(uris, components, enabled) for every stanza in $FAKE_PVE_SOURCES_DIR."""
+    directory = os.environ.get("FAKE_PVE_SOURCES_DIR")
+    if not directory:
+        fail("fake apt-get: FAKE_PVE_SOURCES_DIR is not set")
+    for path in sorted(Path(directory).glob("*.sources")):
+        for stanza in stanzas(path):
+            enabled = stanza.get("enabled", "yes").lower() not in ("no", "false", "off", "0")
+            yield stanza.get("uris", ""), stanza.get("components", "").split(), enabled
+
+
+def apt_get(state, args):
+    state["apt_get_runs"] = state.get("apt_get_runs", 0) + 1
+    packages = state.setdefault("packages", json.loads(json.dumps(PACKAGES)))
+    flags, verbs, i = set(), [], 0
+    while i < len(args):
+        if args[i] == "-o":  # -o Dpkg::Options::=..., accepted and ignored
+            i += 2
+            continue
+        (flags.add if args[i].startswith("-") else verbs.append)(args[i])
+        i += 1
+    if verbs == ["update"]:
+        found = list(repositories())
+        for uris, _, enabled in found:
+            if enabled and hosted_at(uris, "enterprise.proxmox.com"):
+                print(f"E: Failed to fetch {uris}/dists/trixie/InRelease  401  Unauthorized", file=sys.stderr)
+                print(f"E: The repository '{uris} trixie InRelease' is not signed.", file=sys.stderr)
+                sys.exit(100)
+        offered = any(
+            enabled and hosted_at(uris, "download.proxmox.com", "/debian/pve") and "pve-no-subscription" in components
+            for uris, components, enabled in found
+        )
+        packages["lists"] = dict(packages["repository"]) if offered else {}
+        print("Reading package lists...")
+    elif verbs == ["dist-upgrade"]:
+        simulate = "-s" in flags
+        if not simulate and ("-y" not in flags or os.environ.get("DEBIAN_FRONTEND") != "noninteractive"):
+            fail("fake apt-get: dist-upgrade would stop to ask: it needs -y and DEBIAN_FRONTEND=noninteractive")
+        upgrades = {p: v for p, v in packages["lists"].items() if packages["installed"].get(p) != v}
+        new = sum(1 for p in upgrades if p not in packages["installed"])
+        print(f"{len(upgrades) - new} upgraded, {new} newly installed, 0 to remove and 0 not upgraded.")
+        for name, version in sorted(upgrades.items()):
+            old = packages["installed"].get(name, "none")
+            print(
+                f"Inst {name} [{old}] ({version} Proxmox:trixie [amd64])"
+                if simulate
+                else f"Unpacking {name} ({version}) over ({old}) ..."
+            )
+        if not simulate and upgrades:
+            packages["installed"].update(upgrades)
+            state["mutations"] += 1
+    else:
+        fail(f"fake apt-get: unsupported {args}")
+
+
 def hostname(state, args):
     if args != ["-s"]:
         fail(f"fake hostname: unsupported {args}")
     print(NODE)
 
 
+def installed_kernels(state):
+    """The kernel releases whose signed package is installed, newest last."""
+    names = [p for p in state["packages"]["installed"] if p.startswith("proxmox-kernel-") and p.endswith("-pve-signed")]
+    releases = [n.removeprefix("proxmox-kernel-").removesuffix("-signed") for n in names]
+    return sorted(releases, key=lambda r: [int(x) for x in r.removesuffix("-pve").replace("-", ".").split(".")])
+
+
+def uname(state, args):
+    if args != ["-r"]:
+        fail(f"fake uname: unsupported {args}")
+    print(state["running_kernel"])
+
+
+def dpkg_query(state, args):
+    """Only the form the role uses: installed status and name of the signed kernel packages."""
+    if args != ["-W", "-f", "${db:Status-Status} ${Package}\\n", "proxmox-kernel-*-pve-signed"]:
+        fail(f"fake dpkg-query: unsupported {args}")
+    for release in installed_kernels(state):
+        print(f"installed proxmox-kernel-{release}-signed")
+
+
+def systemctl(state, args):
+    if args != ["reboot"]:
+        fail(f"fake systemctl: unsupported {args}")
+    state["running_kernel"] = installed_kernels(state)[-1]
+    state["reboots"] = state.get("reboots", 0) + 1
+    state["mutations"] += 1
+
+
 def main():
     tool, args = sys.argv[1], sys.argv[2:]
     state = load()
-    {"pvesh": pvesh, "pvesm": pvesm, "pvenode": pvenode, "hostname": hostname}[tool](state, args)
+    tools = {
+        "pvesh": pvesh,
+        "pvesm": pvesm,
+        "pvenode": pvenode,
+        "hostname": hostname,
+        "apt-get": apt_get,
+        "uname": uname,
+        "dpkg-query": dpkg_query,
+        "systemctl": systemctl,
+    }
+    tools[tool](state, args)
     save(state)
 
 

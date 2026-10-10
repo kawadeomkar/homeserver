@@ -71,6 +71,9 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 
 ## Proxmox
 
+- [ ] `make proxmox` refuses to reboot for a kernel while VMs run, so once the Talos VMs exist a kernel
+      upgrade needs a run with `-e proxmox_apt_reboot_with_vms=true` at a time the cluster can go down.
+      Decide whether to drain the cluster first instead, or let Proxmox stop and restart the VMs
 - [ ] In `claude-on-proxmox` (the repo that creates VMs): choose the storage by VM class, reading the id
       from `vm_storage.<class>.proxmox_id` so a setup without a NAS gets `local-lvm` for both classes,
       pass `format=qcow2` when importing the cloud image onto NFS storage only (`import-from` keeps the

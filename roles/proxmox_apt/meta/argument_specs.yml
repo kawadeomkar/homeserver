@@ -1,0 +1,57 @@
+---
+argument_specs:
+  main:
+    short_description: Set a Proxmox VE node's package repositories and upgrade its packages
+    description:
+      - Writes deb822 repository files (<name>.sources) into apt's sources directory, as Proxmox VE 9 ships
+        them, and disables the files named in proxmox_apt_disabled when they exist, with an Enabled line,
+        which is what the web UI does to the enterprise repositories on a host without a subscription.
+      - Optionally refreshes the package lists and runs apt-get dist-upgrade, non-interactively, keeping
+        configuration files that were changed on the node. In check mode the upgrade is only simulated.
+      - With proxmox_apt_reboot, reboots the node when the running kernel is not the newest installed one,
+        waits for it to come back and checks the kernel it booted. It refuses while VMs are running unless
+        proxmox_apt_reboot_with_vms allows it. Without it, a pending reboot is only reported.
+      - The defaults change nothing.
+    options:
+      proxmox_apt_sources_dir:
+        type: str
+        default: /etc/apt/sources.list.d
+        description: Where apt keeps its deb822 repository files.
+      proxmox_apt_suite:
+        type: str
+        default: ""
+        description: The Debian release for the repositories. Empty reads it from the node's /etc/os-release.
+      proxmox_apt_signed_by:
+        type: str
+        default: /usr/share/keyrings/proxmox-archive-keyring.gpg
+        description: Signing key for entries that do not name their own.
+      proxmox_apt_sources:
+        type: list
+        elements: dict
+        default: []
+        description: Repository files to write, each with name, uris and components; optional suites and signed_by.
+      proxmox_apt_disabled:
+        type: list
+        elements: str
+        default: []
+        description: Names of repository files to disable when they exist.
+      proxmox_apt_upgrade:
+        type: bool
+        default: false
+        description: Refresh the package lists and dist-upgrade. In check mode, simulate only.
+      proxmox_apt_reboot:
+        type: bool
+        default: false
+        description: Reboot when the running kernel is not the newest installed one. In check mode, report only.
+      proxmox_apt_reboot_with_vms:
+        type: bool
+        default: false
+        description: Reboot even while VMs are running, instead of failing with their names.
+      proxmox_apt_reboot_wait:
+        type: int
+        default: 60
+        description: Seconds before the first reconnection attempt after the reboot.
+      proxmox_apt_reboot_timeout:
+        type: int
+        default: 600
+        description: Seconds to keep trying to reconnect after that.

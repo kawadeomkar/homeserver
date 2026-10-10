@@ -1,0 +1,36 @@
+---
+# Neutral defaults: with nothing else set, the role changes nothing. The repositories to write or
+# disable, and whether to upgrade, are configuration, set in inventory group_vars; see README.md.
+
+# Where apt keeps its deb822 repository files. The idempotence tests point it at a scratch directory.
+proxmox_apt_sources_dir: /etc/apt/sources.list.d
+# The Debian release the repositories are for (trixie for Proxmox VE 9). Empty reads VERSION_CODENAME
+# from the node's /etc/os-release, so a reinstall on a newer release gets that release's repositories.
+proxmox_apt_suite: ""
+# The key every Proxmox repository is signed with, for entries that do not name their own.
+proxmox_apt_signed_by: /usr/share/keyrings/proxmox-archive-keyring.gpg
+
+# Repository files to write, each as <name>.sources in proxmox_apt_sources_dir: name, uris and
+# components; optional suites (default: the release above) and signed_by.
+proxmox_apt_sources: []
+# Names of repository files that must not be used, such as the enterprise ones on a host with no
+# subscription: each <name>.sources that exists gets `Enabled: false`, and keeps its other lines.
+# One that does not exist is left alone.
+proxmox_apt_disabled: []
+
+# Refresh the package lists and upgrade every package (apt-get dist-upgrade, which Proxmox requires in
+# place of a plain upgrade). A dry run only simulates the upgrade, with the lists as last refreshed.
+# A reboot after a kernel upgrade is reported, and done only with proxmox_apt_reboot.
+proxmox_apt_upgrade: false
+
+# Reboot the node when the running kernel is not the newest installed one, which is the case right after
+# a kernel upgrade; nothing else reboots. A dry run only says whether it would. A node with running VMs
+# is not rebooted: the run fails naming them, unless proxmox_apt_reboot_with_vms allows it (Proxmox stops
+# the VMs on the way down and starts the ones marked for it after the boot delay).
+proxmox_apt_reboot: false
+proxmox_apt_reboot_with_vms: false
+# Seconds to wait before the first reconnection attempt: long enough for sshd to have gone down (the
+# reboot itself is asked for 2 s after the task returns), or a connection made before the shutdown would
+# pass for the node being back. Then seconds to keep trying.
+proxmox_apt_reboot_wait: 60
+proxmox_apt_reboot_timeout: 600

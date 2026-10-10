@@ -4,5 +4,5 @@
 - name: Configure the NAS
   ansible.builtin.import_playbook: truenas.yml
 
-- name: Configure Proxmox storage
+- name: Configure the Proxmox host
   ansible.builtin.import_playbook: proxmox.yml

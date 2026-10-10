@@ -2,9 +2,11 @@
 
 For each role: a dry run changes nothing; the first real run applies the configuration; a second
 run changes nothing and does not fail; a dry run afterwards reports nothing; drift introduced behind
-the role's back is corrected by one run and left alone by the next. The Proxmox role is also told
-the node's own storage to check, which must change nothing and must fail on a storage that cannot hold
-VM disks.
+the role's back is corrected by one run and left alone by the next. The Proxmox storage role is also
+told the node's own storage to check, which must change nothing and must fail on a storage that cannot hold
+VM disks. The Proxmox apt role starts from the repository files a fresh install has, and must disable the
+enterprise ones before it refreshes the package lists, or the fake apt-get answers 401 as the real one does;
+it reboots the fake node only when a kernel is waiting to be booted, and not while a VM is running.
 
 The roles run with this repo's own configuration (group_vars/all/storage.yml, group_vars/nas,
 group_vars/proxmox) and test addresses on loopback, with a NAS and, for the Proxmox role, without one.
@@ -27,6 +29,7 @@ import pytest
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import fake_pve  # noqa: E402
 import fake_truenas  # noqa: E402
 
 RECAP = re.compile(r"^(\S+)\s+:\s+ok=(\d+)\s+changed=(\d+)\s+unreachable=(\d+)\s+failed=(\d+)", re.MULTILINE)
@@ -287,13 +290,63 @@ def test_truenas_role_with_defaults_changes_nothing(nas):
 # ---------------------------------------------------------------------------------- Proxmox ---
 
 
-def pve_vars(state):
-    return {"fake_pve_state": str(state), "truenas_static_address": "127.0.0.10/24"}
+# A fresh Proxmox VE 9 install's repository files: the enterprise ones enabled, as the installer leaves them.
+KEYRING = "Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg\n"
+FRESH_SOURCES = {
+    "pve-enterprise.sources": (
+        "Types: deb\nURIs: https://enterprise.proxmox.com/debian/pve\nSuites: trixie\nComponents: pve-enterprise\n"
+        + KEYRING
+    ),
+    "ceph.sources": (
+        "Types: deb\nURIs: https://enterprise.proxmox.com/debian/ceph-tentacle\nSuites: trixie\n"
+        "Components: enterprise\n" + KEYRING
+    ),
+    "debian.sources": (
+        "Types: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie trixie-updates\nComponents: main contrib\n"
+        "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
+    ),
+}
+NO_SUBSCRIPTION = (
+    "Types: deb\nURIs: http://download.proxmox.com/debian/pve\nSuites: trixie\nComponents: pve-no-subscription\n"
+    + KEYRING
+)
+
+
+def pve_vars(tmp_path, settled=False, nas=True):
+    """Variables for the fake Proxmox host: its state file and a repository directory as a fresh install
+    leaves it or, settled, as a run of this repo's configuration leaves it: the no-subscription repository
+    written, the enterprise ones disabled, and the package lists refreshed with nothing left to upgrade."""
+    state, sources = tmp_path / "pve.json", tmp_path / "sources"
+    sources.mkdir()
+    for name, text in FRESH_SOURCES.items():
+        enterprise = name in ("pve-enterprise.sources", "ceph.sources")
+        (sources / name).write_text(("Enabled: false\n" if settled and enterprise else "") + text)
+    if settled:
+        (sources / "proxmox.sources").write_text(NO_SUBSCRIPTION)
+        s = fake_pve.fresh_state()
+        s["packages"]["installed"] = s["packages"]["lists"] = dict(s["packages"]["repository"])
+        s["running_kernel"] = fake_pve.installed_kernels(s)[-1]
+        write(state, s)
+    extra = {
+        "fake_pve_state": str(state),
+        "proxmox_apt_sources_dir": str(sources),
+        "proxmox_apt_suite": "trixie",
+        # The fake reboot is instant, but it fires 2 s after the task, like the real one; a real node needs the
+        # role's defaults.
+        "proxmox_apt_reboot_wait": 3,
+        "proxmox_apt_reboot_timeout": 30,
+    }
+    return {**extra, "truenas_static_address": "127.0.0.10/24"} if nas else extra
+
+
+def sources_of(extra):
+    """The repository files the fake host has, by name."""
+    return {p.name: p.read_text() for p in Path(extra["proxmox_apt_sources_dir"]).iterdir()}
 
 
 def test_proxmox_storage_role_is_idempotent(tmp_path):
-    state = tmp_path / "pve.json"
-    extra = pve_vars(state)
+    extra = pve_vars(tmp_path)
+    state = Path(extra["fake_pve_state"])
 
     result = run("proxmox.yml", extra, check=True)
     expect(result, "homeserver", note="dry run")
@@ -353,8 +406,12 @@ def test_proxmox_storage_role_is_idempotent(tmp_path):
 
 def test_proxmox_storage_role_without_a_nas(tmp_path):
     """With no NAS address, this repo's configuration adds no NFS storage, sets no boot delay, and checks local-lvm."""
-    state = tmp_path / "pve.json"
-    extra = {"fake_pve_state": str(state), "truenas_static_address": "", "truenas_bootstrap_address": ""}
+    extra = {
+        **pve_vars(tmp_path, settled=True, nas=False),
+        "truenas_static_address": "",
+        "truenas_bootstrap_address": "",
+    }
+    state = Path(extra["fake_pve_state"])
 
     result = run("proxmox.yml", extra, check=True)
     expect(result, "homeserver", changed=0, note="dry run without a NAS")
@@ -383,10 +440,154 @@ def test_proxmox_storage_role_without_a_nas(tmp_path):
 def test_proxmox_storage_role_needs_the_static_address(tmp_path):
     """A NAS known only by its bootstrap address counts as a NAS, but Proxmox mounts it at its static address, so
     the run is refused, naming the variable the server comes from."""
-    extra = {"fake_pve_state": str(tmp_path / "pve.json"), "truenas_static_address": ""}
+    extra = {**pve_vars(tmp_path, settled=True, nas=False), "truenas_static_address": ""}
     rc, _, out = run("proxmox.yml", {**extra, "truenas_bootstrap_address": "127.0.0.10"}, check=True)
     expected = "No NFS server for truenas-persistent, truenas-ephemeral: set proxmox_storage_nfs_server"
     assert rc != 0 and expected in out, out[-3000:]
+
+
+def test_proxmox_apt_role_is_idempotent(tmp_path):
+    """From a fresh install's repository files: the dry run shows the files to write and change and no pending
+    upgrade (the lists were never refreshed); the first run writes them, disables the enterprise ones before it
+    refreshes the lists, and upgrades; later runs change nothing; drift is corrected."""
+    extra = pve_vars(tmp_path)
+    state, sources = Path(extra["fake_pve_state"]), Path(extra["proxmox_apt_sources_dir"])
+    fresh = sources_of(extra)
+
+    result = run("proxmox.yml", extra, check=True)
+    expect(result, "homeserver", changed=True, note="dry run on a fresh install")
+    out = result[2]
+    assert "proxmox.sources" in out and "+Enabled: false" in out, (
+        f"the dry run shows no repository change\n{out[-3000:]}"
+    )
+    assert "before the repository changes above: 0 upgraded, 0 newly installed" in out, out[-3000:]
+    assert "No reboot needed: the running kernel 7.0.2-6-pve is the newest installed" in out, out[-3000:]
+    assert sources_of(extra) == fresh, "the dry run changed the repository files"
+    assert read(state)["mutations"] == 0 and read(state)["apt_get_runs"] == 1, "the dry run did more than simulate"
+
+    # The first run upgrades, which installs a kernel, so it reboots and comes back on that kernel.
+    result = run("proxmox.yml", extra)
+    expect(result, "homeserver", changed=True, note="first run")
+    assert (
+        "2 upgraded, 1 newly installed" in result[2] and "A kernel was upgraded, which takes a reboot" in result[2]
+    ), result[2][-3000:]
+    assert "Rebooting the node: running 7.0.2-6-pve, newest installed 7.0.14-23-pve" in result[2], result[2][-3000:]
+    assert (read(state)["reboots"], read(state)["running_kernel"]) == (1, "7.0.14-23-pve")
+    settled = {
+        **fresh,
+        "proxmox.sources": NO_SUBSCRIPTION,
+        "pve-enterprise.sources": "Enabled: false\n" + fresh["pve-enterprise.sources"],
+        "ceph.sources": "Enabled: false\n" + fresh["ceph.sources"],
+    }
+    assert sources_of(extra) == settled
+    s = read(state)
+    # The old kernel stays installed beside the new one, as on a real node.
+    assert s["packages"]["repository"].items() <= s["packages"]["installed"].items(), "not upgraded"
+
+    result = run("proxmox.yml", extra)
+    expect(result, "homeserver", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")
+    assert "A kernel was upgraded" not in result[2] and read(state)["reboots"] == 1
+    result = run("proxmox.yml", extra, check=True)
+    expect(result, "homeserver", changed=0, note="dry run after applying")
+    assert "With the package lists as last refreshed: 0 upgraded" in result[2], result[2][-3000:]
+
+    # Drift: the enterprise repository re-enabled by hand, the no-subscription one deleted, and a new release
+    # in the repository. The lists are refreshed only after the files are put right, or the fake answers 401.
+    (sources / "pve-enterprise.sources").write_text(fresh["pve-enterprise.sources"])
+    (sources / "proxmox.sources").unlink()
+    s = read(state)
+    s["packages"]["repository"]["pve-manager"] = "9.2.4-1"
+    write(state, s)
+    result = run("proxmox.yml", extra)
+    expect(result, "homeserver", changed=True, note="run after drift")
+    assert sources_of(extra) == settled and "1 upgraded" in result[2] and "A kernel was upgraded" not in result[2]
+    assert read(state)["packages"]["installed"]["pve-manager"] == "9.2.4-1"
+    assert read(state)["reboots"] == 1, "rebooted without a kernel upgrade"
+    result = run("proxmox.yml", extra)
+    expect(result, "homeserver", changed=0, note=f"second run after drift (changed: {changed_tasks(result[2])})")
+
+    # A new kernel in the repository, with the package lists refreshed by hand so a dry run can see it: the
+    # dry run says the node would reboot; with a VM running the real run upgrades and then refuses to
+    # reboot, naming the VM; allowed, it reboots.
+    s = read(state)
+    s["packages"]["repository"]["proxmox-kernel-7.0.20-1-pve-signed"] = "7.0.20-1"
+    s["packages"]["lists"] = dict(s["packages"]["repository"])
+    s["vms"] = [
+        {"vmid": 100, "name": "talos-1", "status": "running"},
+        {"vmid": 101, "name": "idle", "status": "stopped"},
+    ]
+    write(state, s)
+    rc, _, out = run("proxmox.yml", extra, check=True)
+    assert "The node would reboot" in out and "the upgrade installs a kernel" in out, out[-3000:]
+    assert rc != 0 and "these VMs are running: 100 talos-1 (qemu)" in out, f"the dry run did not refuse\n{out[-3000:]}"
+    assert read(state)["reboots"] == 1, "the dry run rebooted"
+    rc, _, out = run("proxmox.yml", extra)
+    assert rc != 0 and "these VMs are running: 100 talos-1 (qemu)" in out and "idle" not in out, out[-3000:]
+    assert "proxmox_apt_reboot_with_vms" in out, out[-3000:]
+    assert read(state)["running_kernel"] == "7.0.14-23-pve" and read(state)["reboots"] == 1, (
+        "rebooted with a VM running"
+    )
+    assert "proxmox-kernel-7.0.20-1-pve-signed" in read(state)["packages"]["installed"], "the upgrade was held back too"
+    result = run("proxmox.yml", {**extra, "proxmox_apt_reboot_with_vms": True})
+    expect(result, "homeserver", changed=True, note="run allowed to reboot with VMs")
+    assert (read(state)["reboots"], read(state)["running_kernel"]) == (2, "7.0.20-1-pve")
+    expect(run("proxmox.yml", extra), "homeserver", changed=0, note="run after the reboot")
+
+    # A kernel installed but never booted, as after a run with the reboot off, is still pending next time.
+    s = read(state)
+    s["running_kernel"] = "7.0.14-23-pve"
+    s["vms"] = []
+    write(state, s)
+    result = run("proxmox.yml", {**extra, "proxmox_apt_reboot": False})
+    expect(result, "homeserver", changed=0, note="run with the reboot off")
+    assert read(state)["reboots"] == 2 and "No reboot needed" not in result[2]
+    result = run("proxmox.yml", extra, check=True)
+    expect(result, "homeserver", changed=True, note="dry run with a booted-never kernel")
+    assert "The node would reboot: running 7.0.14-23-pve, newest installed 7.0.20-1-pve." in result[2], result[2][
+        -3000:
+    ]
+    expect(run("proxmox.yml", extra), "homeserver", changed=True, note="run that boots the pending kernel")
+    assert (read(state)["reboots"], read(state)["running_kernel"]) == (3, "7.0.20-1-pve")
+
+    # Without the upgrade, apt-get is never run; a file to disable that does not exist is left alone.
+    runs = read(state)["apt_get_runs"]
+    expect(run("proxmox.yml", {**extra, "proxmox_apt_upgrade": False}), "homeserver", changed=0, note="no upgrade")
+    assert read(state)["apt_get_runs"] == runs, "apt-get ran with proxmox_apt_upgrade false"
+    more = {**extra, "proxmox_apt_disabled": ["pve-enterprise", "ceph", "pbs-enterprise"]}
+    expect(run("proxmox.yml", more), "homeserver", changed=0, note="a missing file to disable")
+    assert sources_of(extra) == settled
+
+    # An enterprise repository left enabled makes the refresh fail as it does for real, so a configuration
+    # that forgets to disable one cannot pass.
+    (sources / "pve-enterprise.sources").write_text(fresh["pve-enterprise.sources"])
+    rc, _, out = run("proxmox.yml", {**extra, "proxmox_apt_disabled": []})
+    assert rc != 0 and "401  Unauthorized" in out, out[-3000:]
+    expect(run("proxmox.yml", extra), "homeserver", changed=True, note="run after the refusal")
+
+    # Refused, each with what to change (the first by argument validation, the rest by the role's own check).
+    proxmox = {
+        "name": "proxmox",
+        "uris": ["http://download.proxmox.com/debian/pve"],
+        "components": ["pve-no-subscription"],
+    }
+    for given, message in (
+        ({"proxmox_apt_sources": "proxmox"}, "we were unable to convert to dict"),
+        ({"proxmox_apt_disabled": "pve-enterprise"}, "proxmox_apt_disabled must be a list of repository file names"),
+        (
+            {"proxmox_apt_sources": [{**proxmox, "components": "pve-no-subscription"}]},
+            "needs uris and components, each a list",
+        ),
+        ({"proxmox_apt_sources": [{**proxmox, "components": []}]}, "Repository proxmox in proxmox_apt_sources needs"),
+        (
+            {"proxmox_apt_sources": [{**proxmox, "name": "ceph"}]},
+            "unique across proxmox_apt_sources and proxmox_apt_disabled",
+        ),
+        ({"proxmox_apt_disabled": ["pve-enterprise", "../cron.d/x"]}, "none may contain a slash"),
+        ({"proxmox_apt_disabled": ["pve-enterprise", ""]}, "none may be empty"),
+    ):
+        rc, _, out = run("proxmox.yml", {**extra, **given}, check=True)
+        assert rc != 0 and message in out, f"{given}: expected {message!r}\n{out[-3000:]}"
+    assert sources_of(extra) == settled
 
 
 def test_proxmox_storage_role_checks_existing_storage(tmp_path):
