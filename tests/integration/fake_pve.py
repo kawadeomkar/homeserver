@@ -29,6 +29,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # Proxmox names the node after the short hostname, which the fake `hostname -s` answers. Fixed rather than
 # the controller's own: macOS renames itself when the network hands it a name, and a rename between the
@@ -231,6 +232,11 @@ def stanzas(path):
     return out
 
 
+def hosted_at(uris, host, path_prefix=""):
+    """Whether one of the space-separated URIs is on `host`, under `path_prefix`."""
+    return any(urlsplit(uri).hostname == host and urlsplit(uri).path.startswith(path_prefix) for uri in uris.split())
+
+
 def repositories():
     """(uris, components, enabled) for every stanza in $FAKE_PVE_SOURCES_DIR."""
     directory = os.environ.get("FAKE_PVE_SOURCES_DIR")
@@ -255,12 +261,12 @@ def apt_get(state, args):
     if verbs == ["update"]:
         found = list(repositories())
         for uris, _, enabled in found:
-            if enabled and "enterprise.proxmox.com" in uris:
+            if enabled and hosted_at(uris, "enterprise.proxmox.com"):
                 print(f"E: Failed to fetch {uris}/dists/trixie/InRelease  401  Unauthorized", file=sys.stderr)
                 print(f"E: The repository '{uris} trixie InRelease' is not signed.", file=sys.stderr)
                 sys.exit(100)
         offered = any(
-            enabled and "download.proxmox.com/debian/pve" in uris and "pve-no-subscription" in components
+            enabled and hosted_at(uris, "download.proxmox.com", "/debian/pve") and "pve-no-subscription" in components
             for uris, components, enabled in found
         )
         packages["lists"] = dict(packages["repository"]) if offered else {}

@@ -319,7 +319,8 @@ def pve_vars(tmp_path, settled=False, nas=True):
     state, sources = tmp_path / "pve.json", tmp_path / "sources"
     sources.mkdir()
     for name, text in FRESH_SOURCES.items():
-        (sources / name).write_text(("Enabled: false\n" if settled and "enterprise.proxmox.com" in text else "") + text)
+        enterprise = name in ("pve-enterprise.sources", "ceph.sources")
+        (sources / name).write_text(("Enabled: false\n" if settled and enterprise else "") + text)
     if settled:
         (sources / "proxmox.sources").write_text(NO_SUBSCRIPTION)
         s = fake_pve.fresh_state()
