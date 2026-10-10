@@ -1,0 +1,20 @@
+---
+# The Proxmox host's package repositories and upgrades, applied by roles/proxmox_apt on every run of
+# proxmox.yml, before the storage. A fresh install ships with the enterprise repositories enabled and no
+# subscription, so apt fails with 401 Unauthorized until they are turned off and the no-subscription one
+# is added: what the web UI's Updates → Repositories panel does by hand. The Debian release is read from
+# the host, so a reinstall on a newer Proxmox gets that release's repository.
+proxmox_apt_sources:
+  - name: proxmox
+    uris: [http://download.proxmox.com/debian/pve]
+    components: [pve-no-subscription]
+# The enterprise Proxmox and Ceph repositories the installer leaves enabled. There is no Ceph here, so
+# no no-subscription Ceph repository replaces the second.
+proxmox_apt_disabled: [pve-enterprise, ceph]
+# Every run refreshes the package lists and upgrades the host. One command for everything is easier than a
+# separate one, and an upgrade that has nothing to do is quick.
+proxmox_apt_upgrade: true
+# And reboots the host when a kernel upgrade is waiting for it, which is the one time a reboot does
+# anything. Not while VMs run: once the Talos VMs exist, taking them all down is a decision to make by
+# hand, with `-e proxmox_apt_reboot_with_vms=true` for that run.
+proxmox_apt_reboot: true

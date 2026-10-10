@@ -12,8 +12,8 @@ by their variable in `group_vars/all/local.yml`; the real values live only there
 | One disk of the RAIDZ1 pool (`nvme_gen3`) | The pool, degraded | Nothing until the pool is healthy: the role only imports ONLINE pools | Replace the disk and resilver (see [Known limits](#known-limits)) |
 | The single disk of `ephemeral` | Nothing: that pool and the media on it are lost | A new, empty pool on a blank replacement disk, then its datasets and share | Allow pool creation and list the new disk |
 | NAS network card | Everything on disk | Everything, once the NAS is reachable | Update the router's DHCP reservation to the new MAC |
-| Proxmox boot drive | VM disks, on the NAS | Both NFS storages and the start-on-boot delay | Reinstall, root SSH key; recreate VM definitions |
-| Proxmox boot drive, in a setup without a NAS | Nothing: the VM disks were on it | The check that `local-lvm` can hold VM disks | Reinstall, root SSH key; recreate the VMs from backups, if any |
+| Proxmox boot drive | VM disks, on the NAS | The no-subscription repository, the upgrade and its reboot, both NFS storages and the start-on-boot delay | Reinstall, root SSH key; recreate VM definitions |
+| Proxmox boot drive, in a setup without a NAS | Nothing: the VM disks were on it | The repository, the upgrade, and the check that `local-lvm` can hold VM disks | Reinstall, root SSH key; recreate the VMs from backups, if any |
 | The controller (this Mac) | The repo on GitHub, the vault (encrypted) | — | Restore `.vault_pass` and `local.yml` from your password manager |
 
 ## 1. The controller
@@ -84,7 +84,8 @@ report no change, and `pvesm status` on the host should show both storages activ
 
 1. **Install Proxmox VE.** In the installer, pick the 40 GbE port as the management interface, give it
    `proxmox_address` with the LAN's prefix, and set the gateway, DNS server and hostname. The installer creates the
-   bridge `vmbr0` on that port.
+   bridge `vmbr0` on that port. **Leave the web UI's Updates → Repositories panel alone**: the fresh install's
+   enterprise repositories and missing no-subscription one are what `make proxmox` fixes first.
 2. **Give the controller root SSH access.** The old host key no longer matches, so remove it first:
    `ssh-keygen -R <proxmox address>`. Then install the controller's key for this host with one password login:
    `ssh-copy-id -f -i ~/.ssh/<key>.pub -o PubkeyAuthentication=no root@<proxmox address>`. With the old key
@@ -104,8 +105,8 @@ report no change, and `pvesm status` on the host should show both storages activ
 
 | Step | Command | Expect |
 | --- | --- | --- |
-| 1 | `make check-proxmox` | The plan shows `add` for both storages. Without a NAS: `local-lvm: present` and nothing to add |
-| 2 | `make proxmox` | Both storages added and active, start-on-boot delay set. Without a NAS: `changed=0` already |
+| 1 | `make check-proxmox` | A `proxmox.sources` file to write, `Enabled: false` for `pve-enterprise` and `ceph`, and no pending upgrade yet (the package lists are refreshed only for real). The plan shows `add` for both storages. Without a NAS: `local-lvm: present` and nothing to add |
+| 2 | `make proxmox` | Repositories written, package lists refreshed, packages upgraded, and, since that brings a newer kernel, the host rebooted and back on it: allow a few minutes. Both storages added and active, start-on-boot delay set. Without a NAS: no storage change |
 | 3 | `make proxmox` | `changed=0` |
 
 With a NAS, the VM disks are still on it, but the VM definitions lived on the old boot drive (`/etc/pve`) and

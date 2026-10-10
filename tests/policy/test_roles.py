@@ -232,21 +232,21 @@ def argspec_pass(tree, playbook="site.yml", *extra):
     [
         pytest.param(
             None,
-            2,
+            3,
             ["validate | Check the connection settings", "skipping: [truenas]"],
             [],
             id="nas",
         ),
         pytest.param(
             PROXMOX_ONLY_LOCAL_YML,
-            1,
+            2,
             ["Skip the NAS when local.yml gives it no address", "ok: [truenas]"],
             ["TASK [truenas :", "validate | Check the connection settings"],
             id="proxmox-only",
         ),
         pytest.param(
             blank_nas_local_yml(),
-            1,
+            2,
             ["Skip the NAS when local.yml gives it no address", "ok: [truenas]"],
             ["TASK [truenas :", "validate | Check the connection settings"],
             id="proxmox-only-blank-values",
@@ -278,7 +278,7 @@ def test_nas_settings_without_an_address_are_refused(tmp_path, playbook):
     assert rc != 0, out[-3000:]
     assert "but neither truenas_static_address nor truenas_bootstrap_address" in out, out[-3000:]
     assert "truenas_gateway" in out, out[-3000:]
-    assert "TASK [truenas :" not in out and "TASK [proxmox_storage :" not in out, out[-3000:]
+    assert "TASK [truenas :" not in out and "TASK [proxmox_" not in out, out[-3000:]
 
 
 def test_inventory_without_the_nas_host(tmp_path):
@@ -290,7 +290,7 @@ def test_inventory_without_the_nas_host(tmp_path):
     rc, out = argspec_pass(tree)
     assert rc == 0, out[-3000:]
     assert "skipping: no hosts matched" in out, out[-3000:]
-    assert out.count("Validating arguments against arg spec 'main'") == 1, out[-3000:]
+    assert out.count("Validating arguments against arg spec 'main'") == 2, out[-3000:]
 
 
 @pytest.mark.parametrize("playbook", ["site.yml", "proxmox.yml"])
@@ -301,7 +301,7 @@ def test_nas_present_cannot_be_set(tmp_path, playbook):
     rc, out = argspec_pass(example_tree(tmp_path), playbook, "-e", "nas_present=false")
     assert rc != 0, out[-3000:]
     assert "nas_present is worked out from the NAS addresses" in out, out[-3000:]
-    assert "TASK [truenas :" not in out and "TASK [proxmox_storage :" not in out, out[-3000:]
+    assert "TASK [truenas :" not in out and "TASK [proxmox_" not in out, out[-3000:]
 
 
 @pytest.mark.parametrize(
