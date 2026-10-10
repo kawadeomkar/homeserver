@@ -25,7 +25,10 @@ LOG_DIR ?= logs
 STAMP   := $(shell date +%Y%m%d-%H%M%S)
 comma   := ,
 RUN_LOG  = $(LOG_DIR)/$(STAMP)-$@$(if $(TAGS),-$(subst $(comma),+,$(TAGS))).log
-RUN      = @umask 077 && mkdir -p $(LOG_DIR) && ln -sf $(notdir $(RUN_LOG)) $(LOG_DIR)/latest.log \
+# A missing playbook binary means no virtualenv is active and there is no ./.venv; say so, rather than
+# leave the shell's "No such file or directory" and a dangling latest.log.
+RUN      = @test -x $(PLAYBOOK) || { echo "$(PLAYBOOK) not found: activate the project virtualenv, pass VENV=<its path>, or create ./.venv with make venv" >&2; exit 2; }; \
+           umask 077 && mkdir -p $(LOG_DIR) && ln -sf $(notdir $(RUN_LOG)) $(LOG_DIR)/latest.log \
            && echo "Logging to $(RUN_LOG) (Python environment: $(VENV))" && ANSIBLE_LOG_PATH=$(RUN_LOG) $(PLAYBOOK)
 # Manifests are validated against the Kubernetes version Talos ships (v1.14.2 runs 1.37.1), with the
 # JSON schemas pinned to one commit of yannh/kubernetes-json-schema instead of its moving master.
