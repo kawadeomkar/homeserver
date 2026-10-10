@@ -1,0 +1,44 @@
+---
+# OpenSSF Scorecard: scores the repository's supply-chain practices (pinned dependencies, token permissions,
+# branch protection and the rest), publishes the result to the OpenSSF API and uploads it to code scanning.
+# It is not part of the pull-request gate. Publishing constrains this file, and the API refuses results
+# from a workflow that breaks the constraints: no workflow-level env, defaults or write permissions; no
+# env, defaults, containers or services on the job; a GitHub-hosted Ubuntu runner; and only the steps
+# below, with no run: steps (ossf/scorecard-action's README, "Workflow Restrictions").
+name: Scorecard
+
+# Scorecard's template also triggers on branch_protection_rule, which fires only for classic branch
+# protection rules. main is protected by a ruleset instead, so the weekly run picks up changes to it.
+'on':
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 7 * * 1"
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  analysis:
+    name: scorecard
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write # upload the results to code scanning
+      id-token: write # sign the results the OpenSSF API publishes
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: results.sarif

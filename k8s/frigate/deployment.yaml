@@ -6,6 +6,9 @@ metadata:
   namespace: frigate
   labels:
     app: frigate
+  annotations:
+    ignore-check.kube-linter.io/privileged-container: "Hardware video decoding through /dev/dri; the namespace is labelled privileged."
+    ignore-check.kube-linter.io/privilege-escalation-container: "A privileged container can always escalate."
 spec:
   replicas: 1
   selector:

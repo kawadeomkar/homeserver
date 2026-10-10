@@ -1,5 +1,6 @@
 ---
-# Everything, in dependency order.
+# Everything, in dependency order: the NAS, then the Proxmox host. Without a NAS the first play ends
+# by itself.
 - name: Configure the NAS
   ansible.builtin.import_playbook: truenas.yml
 

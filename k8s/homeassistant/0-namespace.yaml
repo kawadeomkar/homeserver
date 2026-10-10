@@ -4,5 +4,7 @@ kind: Namespace
 metadata:
   name: homeassistant
   labels:
+    # Home Assistant adds NET_ADMIN, NET_RAW and NET_BROADCAST, for device discovery, and mounts the
+    # host's /etc/localtime. Talos enforces Pod Security Admission at `baseline`, which rejects both.
     pod-security.kubernetes.io/enforce: privileged
     name: homeassistant

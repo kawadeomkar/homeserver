@@ -1,7 +1,9 @@
 # Copy to `inventory` (git-ignored); `make init` does it. No host here carries an address: the
-# addresses are variables in group_vars/all/local.yml, which group_vars/<group>/main.yml reads.
+# addresses are variables in group_vars/all/local.yml, which group_vars/<group>/connection.yml reads.
 
-# Configured through its API from this machine (ansible_connection: local).
+# Configured through its API from this machine (ansible_connection: local). Keep this host even
+# without a NAS: whether one exists is decided by the NAS addresses in group_vars/all/local.yml,
+# and the NAS play ends by itself when there are none.
 [nas]
 truenas
 

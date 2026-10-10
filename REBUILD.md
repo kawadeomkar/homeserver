@@ -13,6 +13,7 @@ by their variable in `group_vars/all/local.yml`; the real values live only there
 | The single disk of `ephemeral` | Nothing: that pool and the media on it are lost | A new, empty pool on a blank replacement disk, then its datasets and share | Allow pool creation and list the new disk |
 | NAS network card | Everything on disk | Everything, once the NAS is reachable | Update the router's DHCP reservation to the new MAC |
 | Proxmox boot drive | VM disks, on the NAS | Both NFS storages and the start-on-boot delay | Reinstall, root SSH key; recreate VM definitions |
+| Proxmox boot drive, in a setup without a NAS | Nothing: the VM disks were on it | The check that `local-lvm` can hold VM disks | Reinstall, root SSH key; recreate the VMs from backups, if any |
 | The controller (this Mac) | The repo on GitHub, the vault (encrypted) | — | Restore `.vault_pass` and `local.yml` from your password manager |
 
 ## 1. The controller
@@ -24,7 +25,9 @@ Everything runs from a checkout of this repo.
    (or any Python 3.12+: `make venv PYTHON=/path/to/python3`).
 2. `make init`, which creates `inventory` and `group_vars/all/local.yml` from their examples.
 3. Restore the two files only you have:
-   - **`.vault_pass`**: the vault password, from your password manager.
+   - **`.vault_pass`**: the vault password, from your password manager, readable by you alone
+     (`chmod 600 .vault_pass`). Without a NAS there is nothing to restore: `make vault-init` makes a new one, with
+     an empty vault (see `README.md`).
    - **`group_vars/all/local.yml`**: addresses, disk serials and the certificate pin. Keep a copy of this file in
      your password manager. If it's lost, refill it from `local.yml.example`; the comments there say where each
      value comes from.
@@ -83,20 +86,32 @@ report no change, and `pvesm status` on the host should show both storages activ
    `proxmox_address` with the LAN's prefix, and set the gateway, DNS server and hostname. The installer creates the
    bridge `vmbr0` on that port.
 2. **Give the controller root SSH access.** The old host key no longer matches, so remove it first:
-   `ssh-keygen -R <proxmox address>`, then `ssh-copy-id root@<proxmox address>`.
+   `ssh-keygen -R <proxmox address>`. Then install the controller's key for this host with one password login:
+   `ssh-copy-id -f -i ~/.ssh/<key>.pub -o PubkeyAuthentication=no root@<proxmox address>`. With the old key
+   gone, nothing vouches for the host, so before typing the root password compare the fingerprint ssh shows
+   with the one `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` prints on the Proxmox console. The flags
+   matter on Proxmox VE 9, whose OpenSSH 10 enables `PerSourcePenalties`. A plain `ssh-copy-id` first tries
+   each of the agent's keys in a connection of its own, to see which are installed. Each failed connection adds
+   5 s of penalty, and once 15 s have built up, after three keys, sshd resets the next connection with
+   `kex_exchange_identification: read: Connection reset by peer`. `-f` skips those tries, and
+   `PubkeyAuthentication=no` takes the install connection straight to the password. `-f` also skips the check
+   for a key already installed, so a second run adds the key again. The controller keeps one key per machine,
+   with a `Host` block in `~/.ssh/config` naming the key and `IdentitiesOnly yes`, so Ansible, which connects
+   by address, offers the right one.
 3. **If the network card was replaced**, update the router's DHCP reservation. The bridge carries the card's MAC.
 
 ### Running it
 
 | Step | Command | Expect |
 | --- | --- | --- |
-| 1 | `make check-proxmox` | The plan shows `add` for both storages |
-| 2 | `make proxmox` | Both storages added and active, start-on-boot delay set |
+| 1 | `make check-proxmox` | The plan shows `add` for both storages. Without a NAS: `local-lvm: present` and nothing to add |
+| 2 | `make proxmox` | Both storages added and active, start-on-boot delay set. Without a NAS: `changed=0` already |
 | 3 | `make proxmox` | `changed=0` |
 
-The VM disks are still on the NAS, but the VM definitions lived on the old boot drive (`/etc/pve`) and are gone.
-Recreate the VMs with the VM-provisioning repo and attach the existing disks. There are no Proxmox backups yet;
-whether to add them is an open item in `TODO.md`.
+With a NAS, the VM disks are still on it, but the VM definitions lived on the old boot drive (`/etc/pve`) and
+are gone: recreate the VMs with the VM-provisioning repo and attach the existing disks. Without one, the disks
+went with the boot drive (see the table at the top): restore the VMs from backups, if there are any, or
+recreate them empty. There are no Proxmox backups yet; whether to add them is an open item in `TODO.md`.
 
 ## Known limits
 

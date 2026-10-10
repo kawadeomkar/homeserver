@@ -2,11 +2,14 @@
 
 For each role: a dry run changes nothing; the first real run applies the configuration; a second
 run changes nothing and does not fail; a dry run afterwards reports nothing; drift introduced behind
-the role's back is corrected by one run and left alone by the next.
+the role's back is corrected by one run and left alone by the next. The Proxmox role is also told
+the node's own storage to check, which must change nothing and must fail on a storage that cannot hold
+VM disks.
 
 The roles run with this repo's own configuration (group_vars/all/storage.yml, group_vars/nas,
-group_vars/proxmox) and test addresses on loopback. Nothing here can reach a real machine: the
-inventory, config and addresses are all local to this directory.
+group_vars/proxmox) and test addresses on loopback, with a NAS and, for the Proxmox role, without one.
+Nothing here can reach a real machine: the inventory, config and addresses are all local to this
+directory.
 
 Needs the project virtualenv and openssl. Run: make test-idempotence
 """
@@ -328,6 +331,17 @@ def test_proxmox_storage_role_is_idempotent(tmp_path):
     entry = next(e for e in read(state)["storage"] if e["storage"] == "truenas-persistent")
     assert (entry["options"], entry["content"], "disable" in entry) == ("vers=4.2", "images", False)
 
+    # Two content types, which the fake hands back in a different order on every other read: a comparison
+    # that did not sort both sides would see drift on one of the two runs after the correction.
+    two = {**extra, "proxmox_storage_content": ["images", "rootdir"]}
+    expect(run("proxmox.yml", two), "homeserver", changed=True, note="run with two content types")
+    for n in (1, 2):
+        result = run("proxmox.yml", two)
+        note = f"run {n} after two content types (changed: {changed_tasks(result[2])})"
+        expect(result, "homeserver", changed=0, note=note)
+    entry = next(e for e in read(state)["storage"] if e["storage"] == "truenas-persistent")
+    assert sorted(entry["content"].split(",")) == ["images", "rootdir"]
+
     # A storage id that points somewhere else is refused, not replaced.
     s = read(state)
     next(e for e in s["storage"] if e["storage"] == "truenas-ephemeral")["export"] = "/mnt/elsewhere"
@@ -335,6 +349,118 @@ def test_proxmox_storage_role_is_idempotent(tmp_path):
     rc, _, out = run("proxmox.yml", extra)
     assert rc != 0 and "truenas-ephemeral" in out and "Remove or rename them by hand" in out, out[-3000:]
     assert next(e for e in read(state)["storage"] if e["storage"] == "truenas-ephemeral")["export"] == "/mnt/elsewhere"
+
+
+def test_proxmox_storage_role_without_a_nas(tmp_path):
+    """With no NAS address, this repo's configuration adds no NFS storage, sets no boot delay, and checks local-lvm."""
+    state = tmp_path / "pve.json"
+    extra = {"fake_pve_state": str(state), "truenas_static_address": "", "truenas_bootstrap_address": ""}
+
+    result = run("proxmox.yml", extra, check=True)
+    expect(result, "homeserver", changed=0, note="dry run without a NAS")
+    assert re.search(r'local-lvm"?:\s*"?present', result[2]), result[2][-3000:]
+    assert "truenas-" not in result[2], f"an NFS storage id appears without a NAS\n{result[2][-3000:]}"
+    assert not state.exists() or read(state)["mutations"] == 0, "the dry run changed the host"
+    for note in ("first run", "second run"):
+        expect(run("proxmox.yml", extra), "homeserver", changed=0, note=f"{note} without a NAS")
+    s = read(state)
+    assert s["mutations"] == 0, "running without a NAS changed the host"
+    assert [e["storage"] for e in s["storage"] if e["type"] == "nfs"] == []
+    assert "startall-onboot-delay" not in s["node"], "the boot delay was set with no NAS to wait for"
+
+    # A ZFS install's name on an LVM host: refused before anything runs.
+    rc, _, out = run("proxmox.yml", {**extra, "proxmox_local_vm_storage": "local-zfs"}, check=True)
+    assert rc != 0 and "local-zfs: does not exist" in out, out[-3000:]
+    assert read(state)["mutations"] == 0
+
+    # A blank (null) address and one that is only whitespace are no address either.
+    blank = {**extra, "truenas_static_address": None, "truenas_bootstrap_address": " "}
+    result = run("proxmox.yml", blank, check=True)
+    expect(result, "homeserver", changed=0, note="dry run with blank addresses")
+    assert "truenas-" not in result[2] and re.search(r'local-lvm"?:\s*"?present', result[2]), result[2][-3000:]
+
+
+def test_proxmox_storage_role_needs_the_static_address(tmp_path):
+    """A NAS known only by its bootstrap address counts as a NAS, but Proxmox mounts it at its static address, so
+    the run is refused, naming the variable the server comes from."""
+    extra = {"fake_pve_state": str(tmp_path / "pve.json"), "truenas_static_address": ""}
+    rc, _, out = run("proxmox.yml", {**extra, "truenas_bootstrap_address": "127.0.0.10"}, check=True)
+    expected = "No NFS server for truenas-persistent, truenas-ephemeral: set proxmox_storage_nfs_server"
+    assert rc != 0 and expected in out, out[-3000:]
+
+
+def test_proxmox_storage_role_checks_existing_storage(tmp_path):
+    """Told the node's own storage ids, the role checks them and changes nothing; a bad one fails at once."""
+    state = tmp_path / "pve.json"
+    extra = {"fake_pve_state": str(state), "proxmox_storage_local": ["local-lvm"]}
+
+    result = run("proxmox_local.yml", extra, check=True)
+    expect(result, "homeserver", changed=0, note="dry run")
+    assert re.search(r'local-lvm"?:\s*"?present', result[2]), (
+        f"the dry run does not report local-lvm\n{result[2][-3000:]}"
+    )
+    assert not state.exists() or read(state)["mutations"] == 0, "the dry run changed the host"
+    # Without a boot delay, nothing in a dry run uses the node's name, so it is not read.
+    assert re.search(r"TASK \[proxmox_storage : Find the node's name\][^\n]*\nskipping:", result[2]), (
+        f"the dry run read the node's name\n{result[2][-3000:]}"
+    )
+    result = run("proxmox_local.yml", extra)
+    expect(result, "homeserver", changed=0, note="apply")
+    assert read(state)["mutations"] == 0, "checking the node's storage changed the host"
+    # The status is read only for real, and must be read for the node's own storage too.
+    status = result[2][result[2].find("Read each enabled storage's status") :]
+    assert "ok: [homeserver] => (item=local-lvm)" in status, f"local-lvm's status was not read\n{result[2][-3000:]}"
+
+    # Enabled but not active, as after a pool that failed to come up. A dry run cannot see it; the real run
+    # names it.
+    s = read(state)
+    s["inactive"] = ["local-lvm"]
+    write(state, s)
+    rc, _, out = run("proxmox_local.yml", extra)
+    assert rc != 0 and "local-lvm: enabled but not active" in out, f"an inactive storage passed\n{out[-3000:]}"
+    # Restricted to another cluster node.
+    s = read(state)
+    s["inactive"] = []
+    next(e for e in s["storage"] if e["storage"] == "local-lvm")["nodes"] = "elsewhere"
+    write(state, s)
+    rc, _, out = run("proxmox_local.yml", extra)
+    assert rc != 0 and "local-lvm: not enabled on this node" in out, f"another node's storage passed\n{out[-3000:]}"
+    assert read(state)["mutations"] == 0, "a failed status check changed the host"
+    s = read(state)
+    next(e for e in s["storage"] if e["storage"] == "local-lvm").pop("nodes")
+    write(state, s)
+
+    # Refused, each with what to change: a storage that does not exist, one that cannot hold VM disks, an empty
+    # id, a string for the list, an id in both lists, and an NFS storage with no server.
+    nfs = [{"id": "truenas-persistent", "export": "/mnt/tank/vm"}]
+    server = {"proxmox_storage_nfs_server": "127.0.0.10"}
+    configured = (
+        "Storage configured in Proxmox: local (dir: backup,import,iso,vztmpl), local-lvm (lvmthin: images,rootdir)."
+    )
+    for given, message in (
+        ({"proxmox_storage_local": ["local-zfs"]}, f"local-zfs: does not exist. {configured} The installer creates"),
+        ({"proxmox_storage_local": ["local"]}, f"local: has no images in its content. {configured}"),
+        ({"proxmox_storage_local": [""]}, "none may be empty"),
+        ({"proxmox_storage_local": "local-lvm"}, "proxmox_storage_local must be a list of storage ids"),
+        ({"proxmox_storage_nfs": [{**nfs[0], "id": "local-lvm"}], **server}, "unique across proxmox_storage_nfs and"),
+        ({"proxmox_storage_nfs": nfs}, "No NFS server for truenas-persistent: set proxmox_storage_nfs_server"),
+    ):
+        rc, _, out = run("proxmox_local.yml", {**extra, **given}, check=True)
+        assert rc != 0 and message in out, f"{given}: expected {message!r}\n{out[-3000:]}"
+    # For real, a bad id is refused before any NFS storage is added.
+    rc, _, out = run(
+        "proxmox_local.yml", {**extra, "proxmox_storage_local": ["local-zfs"], "proxmox_storage_nfs": nfs, **server}
+    )
+    assert rc != 0 and "local-zfs: does not exist" in out, out[-3000:]
+    s = read(state)
+    assert s["mutations"] == 0 and all(e["type"] != "nfs" for e in s["storage"]), "storage was added before the refusal"
+    # One disabled by hand: no word about installers, since the storage is there.
+    next(e for e in s["storage"] if e["storage"] == "local-lvm")["disable"] = 1
+    write(state, s)
+    rc, _, out = run("proxmox_local.yml", extra, check=True)
+    assert rc != 0 and "local-lvm: is disabled" in out, out[-3000:]
+    assert "local-lvm (lvmthin: images,rootdir, disabled)" in out and "The installer" not in out, out[-3000:]
+    assert read(state)["mutations"] == 0, "a failed check changed the host"
 
 
 def test_truenas_role_refuses_an_unpinned_certificate(nas):

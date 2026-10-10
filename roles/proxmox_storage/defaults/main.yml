@@ -7,6 +7,11 @@ proxmox_storage_nfs_server: ""
 # Each entry: id and export; optional server, content, format, nfs_options, enabled.
 proxmox_storage_nfs: []
 
+# Storage ids that must already exist on the node, enabled and with images in their content: usually the
+# installer's local storage (local-lvm on an LVM install, local-zfs on a ZFS one), though any type passes.
+# Each is checked, including that it is active on the node, and never created or changed.
+proxmox_storage_local: []
+
 # Applied to entries that do not set their own.
 # Mount options as `man nfs` takes them, e.g. vers=4.2. Empty leaves Proxmox's defaults.
 proxmox_storage_nfs_options: ""

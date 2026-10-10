@@ -6,6 +6,9 @@ metadata:
     app: jellyfin
   name: jellyfin
   namespace: jellyfin
+  annotations:
+    ignore-check.kube-linter.io/privileged-container: "Hardware transcoding through /dev/dri; the namespace is labelled privileged."
+    ignore-check.kube-linter.io/privilege-escalation-container: "A privileged container can always escalate."
 spec:
   progressDeadlineSeconds: 600
   replicas: 1
