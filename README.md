@@ -64,8 +64,9 @@ make check-proxmox && make proxmox
 Each TrueNAS stage can be run on its own with `TAGS=truenas_network`, `truenas_pools`, `truenas_system`,
 `truenas_datasets`, `truenas_nfs` or `truenas_services`. Always run the check first: the idempotence tests use
 fakes, which cannot prove the real machines behave the same. Every `make proxmox` also refreshes the package lists
-and upgrades the Proxmox host, and reboots it when an upgrade of the kernel, the CPU's microcode or dbus waits for
-that, unless VMs are running.
+and upgrades the Proxmox host, and says when an upgrade of the kernel, the CPU's microcode or dbus waits for a reboot.
+Rebooting it as well is off for now (`proxmox_apt_reboot` in `group_vars/proxmox/apt.yml`): reboot it by hand when
+the run says so.
 
 The roles are generic and change nothing by default; this setup's configuration is in `group_vars/`
 (`all/storage.yml`, `nas/truenas.yml`, `proxmox/apt.yml`, `proxmox/storage.yml`), with addresses and serials in the git-ignored

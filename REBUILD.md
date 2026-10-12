@@ -106,7 +106,7 @@ report no change, and `pvesm status` on the host should show every NFS storage a
 | Step | Command | Expect |
 | --- | --- | --- |
 | 1 | `make check-proxmox` | A `proxmox.sources` file to write, `Enabled: false` for `pve-enterprise` and `ceph`, and no pending upgrade yet (the package lists are refreshed only for real). The plan shows `add` for the NFS storages (`homeserver-persistent`, `homeserver-ephemeral`, `claude-on-proxmox-ephemeral`). Without a NAS: `local-lvm: present` and nothing to add |
-| 2 | `make proxmox` | Repositories written, package lists refreshed, packages upgraded, and, since that brings a newer kernel, the host rebooted and back on it: allow a few minutes. The storages added and active, start-on-boot delay set. Without a NAS: no storage change |
+| 2 | `make proxmox` | Repositories written, package lists refreshed, packages upgraded, and, since that brings a newer kernel, "A reboot is needed": reboot the host by hand, unless `proxmox_apt_reboot` is on, when the run does it and waits, which takes a few minutes. The storages added and active, start-on-boot delay set. Without a NAS: no storage change |
 | 3 | `make proxmox` | `changed=0` |
 | 4 | `pveum aclmod /storage/claude-on-proxmox-ephemeral -user <user> -role <role>` | With a NAS: the grant for each project pool, with the user and role from that project's README, which also creates them on a fresh host |
 

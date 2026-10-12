@@ -344,6 +344,9 @@ def pve_vars(tmp_path, settled=False, nas=True):
         # The fake reboot is instant, but it fires 2 s after the task, like the real one; a real node needs the
         # role's defaults.
         "proxmox_apt_reboot_wait": 3,
+        # This setup's configuration leaves the reboot off until the home host's cable is replaced; the tests turn
+        # it on to exercise it, and the ones about it being off say so.
+        "proxmox_apt_reboot": True,
         "proxmox_apt_reboot_timeout": 30,
     }
     return {**extra, "truenas_static_address": "127.0.0.10/24"} if nas else extra

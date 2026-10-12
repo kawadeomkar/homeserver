@@ -19,6 +19,9 @@ proxmox_apt_upgrade: true
 # asks Debian's way for a reboot on every upgrade, since its system bus cannot be restarted. Listing dbus lets a dry
 # run predict that. A microcode release may bring this CPU nothing; when in doubt, a reboot is asked for.
 proxmox_apt_reboot_packages: [dbus, intel-microcode, amd64-microcode]
-# And reboots the host for it, and for nothing else. Not while VMs run: once the Talos VMs exist, taking them all
-# down is a decision to make by hand, with `-e proxmox_apt_reboot_with_vms=true` for that run.
-proxmox_apt_reboot: true
+# Whether the run then reboots the host itself. Off here for now: this host's 40 GbE cable, a generic Cisco-coded
+# DAC, fails the ConnectX-3's cable check at some boots, and the host then comes back without a network until the
+# cable is re-seated by hand. Turn it on once a Mellanox-coded cable is in and a reboot test passes. When on, it
+# reboots only when needed, and not while VMs run: once the Talos VMs exist, taking them all down is a decision to
+# make by hand, with `-e proxmox_apt_reboot_with_vms=true` for that run.
+proxmox_apt_reboot: false

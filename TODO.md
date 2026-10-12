@@ -71,6 +71,12 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 
 ## Proxmox
 
+- [ ] Replace the home host's 40 GbE DAC, a generic Cisco-coded `QSFP-H40G-CU3M`, with a Mellanox-coded one
+      (NVIDIA MC2210130, or a third-party DAC coded for Mellanox). The ConnectX-3 fails its cable check at some
+      boots ("Unsupported cable detected") and the host stays off the network until the cable is re-seated. Then
+      check that `ethtool -m nic2` reads the cable, repeat the reboot test (`touch /run/reboot-required`,
+      `make proxmox` with the reboot on) and set `proxmox_apt_reboot: true` in `group_vars/proxmox/apt.yml`. Check
+      the NAS's and the router's cables too: the router's card rejected its cable once.
 - [ ] `make proxmox` refuses to reboot for a kernel, microcode or dbus while VMs run, so once the Talos VMs exist
       such an upgrade needs a run with `-e proxmox_apt_reboot_with_vms=true` at a time the cluster can go down.
       Decide whether to drain the cluster first instead, or let Proxmox stop and restart the VMs
