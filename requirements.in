@@ -9,9 +9,9 @@ pytest==9.1.1
 # Coverage of the in-process tests in `make test`: a report, not a gate (.coveragerc).
 pytest-cov==7.1.0
 # Lints and formats the Python, configured in ruff.toml.
-ruff==0.16.9
+ruff==0.16.10
 # Used by tests/integration/fake_truenas.py, the stand-in NAS for the idempotence tests.
-websockets==17.1
+websockets==17.2
 # Used on the controller by roles/truenas to talk to the TrueNAS WebSocket API.
 websocket-client==1.9.2
 # Validates .github/dependabot.yml and the workflows against SchemaStore's schemas, which it bundles.
