@@ -1,7 +1,8 @@
 ---
 # roles/proxmox_apt and roles/proxmox_storage with this repo's own Proxmox configuration, run against the
 # fake apt-get, pvesh, pvesm and pvenode in fake_pve_bin/. The repository files go to the scratch directory
-# the test passes as proxmox_apt_sources_dir, which the fake apt-get reads too.
+# the test passes as proxmox_apt_sources_dir, which the fake apt-get reads too, and the reboot-required flag
+# file to the scratch path it passes as proxmox_apt_reboot_required_file, which the fake reboot deletes.
 - name: Configure the fake Proxmox host
   hosts: proxmox
   gather_facts: false
@@ -14,6 +15,7 @@
     FAKE_PVE_STATE: "{{ fake_pve_state }}"
     FAKE_PVE_PYTHON: "{{ ansible_playbook_python }}"
     FAKE_PVE_SOURCES_DIR: "{{ proxmox_apt_sources_dir }}"
+    FAKE_PVE_REBOOT_REQUIRED: "{{ proxmox_apt_reboot_required_file }}"
   roles:
     - role: proxmox_apt
     - role: proxmox_storage

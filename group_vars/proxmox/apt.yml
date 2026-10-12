@@ -14,7 +14,11 @@ proxmox_apt_disabled: [pve-enterprise, ceph]
 # Every run refreshes the package lists and upgrades the host. One command for everything is easier than a
 # separate one, and an upgrade that has nothing to do is quick.
 proxmox_apt_upgrade: true
-# And reboots the host when a kernel upgrade is waiting for it, which is the one time a reboot does
-# anything. Not while VMs run: once the Talos VMs exist, taking them all down is a decision to make by
-# hand, with `-e proxmox_apt_reboot_with_vms=true` for that run.
+# Every run also says when the host needs a reboot for an upgrade to take effect: a kernel; CPU microcode, which
+# the kernel loads only at boot, Intel's or AMD's, so other hardware needs no change; or dbus, whose package itself
+# asks Debian's way for a reboot on every upgrade, since its system bus cannot be restarted. Listing dbus lets a dry
+# run predict that. A microcode release may bring this CPU nothing; when in doubt, a reboot is asked for.
+proxmox_apt_reboot_packages: [dbus, intel-microcode, amd64-microcode]
+# And reboots the host for it, and for nothing else. Not while VMs run: once the Talos VMs exist, taking them all
+# down is a decision to make by hand, with `-e proxmox_apt_reboot_with_vms=true` for that run.
 proxmox_apt_reboot: true

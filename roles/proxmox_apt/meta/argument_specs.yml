@@ -8,9 +8,12 @@ argument_specs:
         which is what the web UI does to the enterprise repositories on a host without a subscription.
       - Optionally refreshes the package lists and runs apt-get dist-upgrade, non-interactively, keeping
         configuration files that were changed on the node. In check mode the upgrade is only simulated.
-      - With proxmox_apt_reboot, reboots the node when the running kernel is not the newest installed one,
-        waits for it to come back and checks the kernel it booted. It refuses while VMs are running unless
-        proxmox_apt_reboot_with_vms allows it. Without it, a pending reboot is only reported.
+      - Records an upgrade of a package in proxmox_apt_reboot_packages in Debian's reboot-required flag file,
+        which every boot empties, even when the upgrade fails.
+      - Says on every run whether the node needs a reboot, when the running kernel is not the newest installed
+        one or the flag file exists. With proxmox_apt_reboot, reboots it then, waits for it to come back and checks
+        the kernel it booted; it refuses while VMs are running unless proxmox_apt_reboot_with_vms allows it.
+        Without it, the reboot is only reported.
       - The defaults change nothing.
     options:
       proxmox_apt_sources_dir:
@@ -39,10 +42,21 @@ argument_specs:
         type: bool
         default: false
         description: Refresh the package lists and dist-upgrade. In check mode, simulate only.
+      proxmox_apt_reboot_packages:
+        type: list
+        elements: str
+        default: []
+        description: Packages besides the kernel whose upgrade needs a reboot; an upgrade of one is recorded in the flag file.
+      proxmox_apt_reboot_required_file:
+        type: str
+        default: /run/reboot-required
+        description: Debian's flag file for a pending reboot, with a .pkgs file beside it. Must be emptied by a boot.
       proxmox_apt_reboot:
         type: bool
         default: false
-        description: Reboot when the running kernel is not the newest installed one. In check mode, report only.
+        description: >-
+          Reboot when the running kernel is not the newest installed one or the flag file exists. Off, a needed
+          reboot is only reported, as it is in check mode.
       proxmox_apt_reboot_with_vms:
         type: bool
         default: false

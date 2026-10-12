@@ -21,11 +21,17 @@ apt-get reads the deb822 .sources files in $FAKE_PVE_SOURCES_DIR, the directory 
 fails with 401 Unauthorized, as the real one does, when an enterprise.proxmox.com repository is still
 enabled, and otherwise fills the package lists from the no-subscription repository if one is enabled, or with
 nothing. `dist-upgrade` upgrades what the lists offer; `-s` only reports it; without `-y` and
-DEBIAN_FRONTEND=noninteractive it fails, as the real one would stop to ask. The kernel the node runs is the
-state's `running_kernel`; `systemctl reboot` makes it the newest installed signed kernel package and counts the
-reboot, and the guests the state lists under `vms` are what `/nodes/<node>/qemu` answers.
+DEBIAN_FRONTEND=noninteractive it fails, as the real one would stop to ask. Its lines follow the real ones: a
+simulation's `Inst <package> [<old>] (<new> ...)`, without the old version for a new package, and dpkg's
+`Unpacking <package> (<new>) over (<old>) ...`, without `over` for a new one. With the state's `dpkg_fails` set,
+dist-upgrade unpacks everything and then fails as dpkg does when a package's script fails, with apt's error and
+exit status 100. The kernel the node runs is the state's `running_kernel`, and its kernel packages are signed
+or unsigned; `systemctl reboot` makes it the newest installed kernel package, counts the reboot and deletes the
+reboot-required flag file named by $FAKE_PVE_REBOOT_REQUIRED and its .pkgs file, as a boot empties /run. The
+guests the state lists under `vms` are what `/nodes/<node>/qemu` answers.
 """
 
+import fnmatch
 import hashlib
 import json
 import os
@@ -55,6 +61,8 @@ PACKAGES = {
     "lists": {},
 }
 RUNNING_KERNEL = "7.0.2-6-pve"
+KERNEL_PATTERNS = ["proxmox-kernel-*-pve", "proxmox-kernel-*-pve-signed"]
+KERNEL_PACKAGE = re.compile(r"^proxmox-kernel-(.+-pve)(?:-signed)?$")
 
 
 def fresh_state():
@@ -286,15 +294,19 @@ def apt_get(state, args):
         new = sum(1 for p in upgrades if p not in packages["installed"])
         print(f"{len(upgrades) - new} upgraded, {new} newly installed, 0 to remove and 0 not upgraded.")
         for name, version in sorted(upgrades.items()):
-            old = packages["installed"].get(name, "none")
-            print(
-                f"Inst {name} [{old}] ({version} Proxmox:trixie [amd64])"
-                if simulate
-                else f"Unpacking {name} ({version}) over ({old}) ..."
-            )
+            old = packages["installed"].get(name)
+            if simulate:
+                print(f"Inst {name} {f'[{old}] ' if old else ''}({version} Proxmox:trixie [amd64])")
+            else:
+                print(f"Unpacking {name} ({version}) {f'over ({old}) ' if old else ''}...")
         if not simulate and upgrades:
             packages["installed"].update(upgrades)
             state["mutations"] += 1
+            if state.get("dpkg_fails"):
+                print("Errors were encountered while processing:\n " + sorted(upgrades)[0])
+                print("E: Sub-process /usr/bin/dpkg returned an error code (1)", file=sys.stderr)
+                save(state)
+                sys.exit(100)
     else:
         fail(f"fake apt-get: unsupported {args}")
 
@@ -306,9 +318,8 @@ def hostname(state, args):
 
 
 def installed_kernels(state):
-    """The kernel releases whose signed package is installed, newest last."""
-    names = [p for p in state["packages"]["installed"] if p.startswith("proxmox-kernel-") and p.endswith("-pve-signed")]
-    releases = [n.removeprefix("proxmox-kernel-").removesuffix("-signed") for n in names]
+    """The kernel releases whose package is installed, under any of its names, newest last."""
+    releases = {m.group(1) for p in state["packages"]["installed"] if (m := KERNEL_PACKAGE.match(p))}
     return sorted(releases, key=lambda r: [int(x) for x in r.removesuffix("-pve").replace("-", ".").split(".")])
 
 
@@ -319,11 +330,19 @@ def uname(state, args):
 
 
 def dpkg_query(state, args):
-    """Only the form the role uses: installed status and name of the signed kernel packages."""
-    if args != ["-W", "-f", "${db:Status-Status} ${Package}\\n", "proxmox-kernel-*-pve-signed"]:
+    """Only the form the role uses: installed status and name of the kernel packages, signed and not. A pattern
+    that matches nothing makes it exit 1, as the real one does, after printing what the other matches."""
+    if args != ["-W", "-f", "${db:Status-Status} ${Package}\\n", *KERNEL_PATTERNS]:
         fail(f"fake dpkg-query: unsupported {args}")
-    for release in installed_kernels(state):
-        print(f"installed proxmox-kernel-{release}-signed")
+    names = sorted(p for p in state["packages"]["installed"] if KERNEL_PACKAGE.match(p))
+    for name in names:
+        print(f"installed {name}")
+    unmatched = [pattern for pattern in KERNEL_PATTERNS if not fnmatch.filter(names, pattern)]
+    for pattern in unmatched:
+        print(f"dpkg-query: no packages found matching {pattern}", file=sys.stderr)
+    if unmatched:
+        save(state)
+        sys.exit(1)
 
 
 def systemctl(state, args):
@@ -331,6 +350,10 @@ def systemctl(state, args):
         fail(f"fake systemctl: unsupported {args}")
     state["running_kernel"] = installed_kernels(state)[-1]
     state["reboots"] = state.get("reboots", 0) + 1
+    flag = os.environ.get("FAKE_PVE_REBOOT_REQUIRED")
+    if flag:
+        for path in (Path(flag), Path(flag + ".pkgs")):
+            path.unlink(missing_ok=True)
     state["mutations"] += 1
 
 

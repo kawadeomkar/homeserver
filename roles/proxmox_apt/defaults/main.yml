@@ -20,13 +20,24 @@ proxmox_apt_disabled: []
 
 # Refresh the package lists and upgrade every package (apt-get dist-upgrade, which Proxmox requires in
 # place of a plain upgrade). A dry run only simulates the upgrade, with the lists as last refreshed.
-# A reboot after a kernel upgrade is reported, and done only with proxmox_apt_reboot.
+# An upgrade that needs a reboot is reported, and the reboot done only with proxmox_apt_reboot.
 proxmox_apt_upgrade: false
+# Packages besides the kernel whose upgrade needs a reboot, such as CPU microcode, which the kernel loads only at
+# boot, or dbus, whose system bus cannot be restarted. When the upgrade installs or upgrades one, the role records
+# it in proxmox_apt_reboot_required_file, as Debian's tools do; listing one is also what lets a dry run predict
+# that reboot.
+proxmox_apt_reboot_packages: []
+# Debian's flag for a pending reboot, with the packages that asked for it in the .pkgs file beside it. It is
+# in /run, which every boot empties, so it lasts until the node boots. The idempotence tests point it at a
+# scratch file.
+proxmox_apt_reboot_required_file: /run/reboot-required
 
-# Reboot the node when the running kernel is not the newest installed one, which is the case right after
-# a kernel upgrade; nothing else reboots. A dry run only says whether it would. A node with running VMs
-# is not rebooted: the run fails naming them, unless proxmox_apt_reboot_with_vms allows it (Proxmox stops
-# the VMs on the way down and starts the ones marked for it after the boot delay).
+# Every run says whether the node needs a reboot: when the running kernel is not the newest installed one, as
+# right after a kernel upgrade, or while proxmox_apt_reboot_required_file exists, whoever created it. With this
+# on, the run then reboots it; off, it only says so, for a node that a run cannot reboot safely. A dry run only
+# says whether it would. A node with running VMs is not rebooted: the run fails naming them, unless
+# proxmox_apt_reboot_with_vms allows it (Proxmox stops the VMs on the way down and starts the ones marked for it
+# after the boot delay).
 proxmox_apt_reboot: false
 proxmox_apt_reboot_with_vms: false
 # Seconds to wait before the first reconnection attempt: long enough for sshd to have gone down (the
