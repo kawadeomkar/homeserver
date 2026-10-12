@@ -12,7 +12,7 @@ by their variable in `group_vars/all/local.yml`; the real values live only there
 | One disk of the RAIDZ1 pool (`nvme_gen3`) | The pool, degraded | Nothing until the pool is healthy: the role only imports ONLINE pools | Replace the disk and resilver (see [Known limits](#known-limits)) |
 | The single disk of `ephemeral` | Nothing: that pool and the media on it are lost | A new, empty pool on a blank replacement disk, then its datasets and share | Allow pool creation and list the new disk |
 | NAS network card | Everything on disk | Everything, once the NAS is reachable | Update the router's DHCP reservation to the new MAC |
-| Proxmox boot drive | VM disks, on the NAS | Both NFS storages and the start-on-boot delay | Reinstall, root SSH key; recreate VM definitions |
+| Proxmox boot drive | VM disks, on the NAS | The NFS storages and the start-on-boot delay | Reinstall, root SSH key; recreate VM definitions |
 | Proxmox boot drive, in a setup without a NAS | Nothing: the VM disks were on it | The check that `local-lvm` can hold VM disks | Reinstall, root SSH key; recreate the VMs from backups, if any |
 | The controller (this Mac) | The repo on GitHub, the vault (encrypted) | — | Restore `.vault_pass` and `local.yml` from your password manager |
 
@@ -76,7 +76,7 @@ minute and a full dry run uses about 13, so leave a minute between a full dry ru
 | 6 | `make truenas` | `changed=0` |
 
 The Proxmox host needs nothing: its NFS storages reconnect once the shares exist. `make check-proxmox` should
-report no change, and `pvesm status` on the host should show both storages active.
+report no change, and `pvesm status` on the host should show every NFS storage active.
 
 ## 3. The Proxmox host
 
@@ -104,9 +104,13 @@ report no change, and `pvesm status` on the host should show both storages activ
 
 | Step | Command | Expect |
 | --- | --- | --- |
-| 1 | `make check-proxmox` | The plan shows `add` for both storages. Without a NAS: `local-lvm: present` and nothing to add |
-| 2 | `make proxmox` | Both storages added and active, start-on-boot delay set. Without a NAS: `changed=0` already |
+| 1 | `make check-proxmox` | The plan shows `add` for the NFS storages (`homeserver-persistent`, `homeserver-ephemeral`, `claude-on-proxmox-ephemeral`). Without a NAS: `local-lvm: present` and nothing to add |
+| 2 | `make proxmox` | The storages added and active, start-on-boot delay set. Without a NAS: `changed=0` already |
 | 3 | `make proxmox` | `changed=0` |
+| 4 | `pveum aclmod /storage/claude-on-proxmox-ephemeral -user <user> -role <role>` | With a NAS: the grant for each project pool, with the user and role from that project's README, which also creates them on a fresh host |
+
+A fresh install carries none of the old `truenas-*` storage ids, so nothing needs removing; `README.md`'s
+section on storage for projects that create VMs says what each project is then told.
 
 With a NAS, the VM disks are still on it, but the VM definitions lived on the old boot drive (`/etc/pve`) and
 are gone: recreate the VMs with the VM-provisioning repo and attach the existing disks. Without one, the disks

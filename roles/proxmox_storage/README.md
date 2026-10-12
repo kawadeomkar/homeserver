@@ -6,8 +6,13 @@ already has, usually the installer's `local-lvm` or `local-zfs`, can hold VM dis
 it changes nothing.
 
 It refuses a storage id that already exists with another type, server or export, rather than replacing
-a storage that may hold disks. `community.proxmox.proxmox_storage` is not used: it only creates
-storage, never corrects it, and has no format option.
+a storage that may hold disks, and an export that another storage id already mounts: one export, one id,
+or the same volumes are listed under two names and a disk deleted under one is gone under the other. That
+is what a renamed id looks like until the old one is removed by hand, which the role never does; the
+refusal names both ids. An id Proxmox would reject (its rule: two or more letters, digits, hyphens,
+underscores and dots, starting with a letter and ending with a letter or digit) and an export listed twice
+are refused before anything runs, so a dry run catches them. `community.proxmox.proxmox_storage` is not
+used: it only creates storage, never corrects it, and has no format option.
 
 ## Variables
 
@@ -57,4 +62,5 @@ proxmox_storage_local: [local-lvm]
 ```
 
 In check mode the role reads the node's configuration and prints its plan (`add`, `correct` or `ok` per NFS
-storage, `present` per checked storage). The `pvesm` commands themselves run only for real.
+storage, `present` per checked storage), and every refusal above applies. The `pvesm` commands themselves
+run only for real.
