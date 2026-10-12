@@ -2,7 +2,7 @@
 # every package, by `make lock` (pip-compile); edit this file, never requirements.txt, then run it.
 # `make lock` takes only releases at least 7 days old, as Dependabot does, so a pin here that is
 # younger than that fails to resolve until it has aged.
-ansible-core==2.21.4
+ansible-core==2.21.5
 ansible-lint==26.9.0
 yamllint==1.38.0
 pytest==9.1.1
