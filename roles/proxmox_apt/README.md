@@ -18,36 +18,19 @@ refreshed the lists.
 
 Only what takes effect at boot needs a reboot: a kernel, and packages such as CPU microcode, which a
 kernel without late loading applies only at boot, or dbus, whose system bus stays up until the node boots.
-Other upgrades restart their own services and reboot nothing. Every run says whether either is waiting for
-a boot, which it reads from the node rather than from what this run did, so a reboot not done once is still
-pending on the next run, even one with nothing left to upgrade. Only with `proxmox_apt_reboot` does the role
-then reboot the node itself; it is off by default, for a node that a run cannot reboot safely, which is then
-told on every run to be rebooted by hand. What counts as waiting:
+Other upgrades restart their own services and need no reboot. When the upgrade installs or upgrades a kernel
+image package (`proxmox-kernel-<release>`, signed or not; `proxmox-kernel-helper` and the meta package share
+the prefix and boot nothing) or a package in `proxmox_apt_reboot_packages`, the role writes Debian's flag file
+for a pending reboot, `proxmox_apt_reboot_required_file`, `/run/reboot-required`, even when the upgrade fails
+after unpacking it. dbus's own package writes it too. Every run says whether the file exists, whoever wrote it,
+and every boot empties `/run`, so the node is told to reboot on each run until it has. A dry run says so for
+what the simulated upgrade would change. A listed package asks for a reboot on every upgrade of it, including a
+microcode release that brings this CPU nothing new: when in doubt, reboot. The role never reboots the node:
+when to take it and its VMs down is decided by hand.
 
-- **A kernel** is waiting when the kernel the node runs is not the newest installed kernel image package
-  (`uname -r` against `dpkg-query`): `proxmox-kernel-<release>`, with `-signed` for the Secure Boot build
-  Proxmox installs by default on x86. One installed earlier, by hand or from the web UI, counts too; other
-  packages that share the prefix, such as `proxmox-kernel-helper`, boot nothing. A running kernel that is
-  none of these packages, as on a node whose kernels are named some other way, is never rebooted for, since
-  the reboot would not change that.
-- **Anything else** is waiting while Debian's flag file for a pending reboot exists,
-  `proxmox_apt_reboot_required_file`, `/run/reboot-required`, whoever wrote it: dbus's own package writes
-  it on every upgrade. The role writes it too, with the package's name in the `.pkgs` file beside it, for
-  each package in `proxmox_apt_reboot_packages` the upgrade installed or upgraded, even when the upgrade
-  fails after unpacking it. `/run` is emptied by every boot, so a request lasts until the node boots and
-  never outlives it.
-
-A listed package reboots the node on every upgrade of it, including a microcode release that brings this
-CPU nothing new: when in doubt, the node reboots. A dry run predicts a reboot for a kernel, for a listed
-package and for a flag file that already exists; a package that writes the flag file itself and is not
-listed reboots the node without the dry run predicting it, which is why this setup lists dbus.
-
-After the reboot the role waits for the node to come back and checks that it booted the newest kernel.
-While VMs are running the reboot is refused and the run fails naming them,
-unless `proxmox_apt_reboot_with_vms` allows it; Proxmox then stops them on the way down and starts the
-ones marked for it after the boot delay.
-`ansible.builtin.reboot` is not used because it refuses a local connection, which is how the idempotence
-tests run the role against a fake `systemctl`.
+What the role sees is what its own upgrade unpacked. A kernel installed some other way, by hand or from the
+web UI, is not reported, and neither is a boot that came up on an older kernel (a stale boot entry, or a pinned
+kernel): the boot empties the flag file. After rebooting, `uname -r` should name the kernel the run reported.
 
 The apt-get steps run through `command`, not the `apt` module, so the idempotence tests can stand in
 for them with a fake on `PATH`; the `apt` module needs python3-apt on the node.
@@ -59,12 +42,8 @@ for them with a fake on `PATH`; the `apt` module needs python3-apt on the node.
 | `proxmox_apt_sources` | `[]` | Repository files to write: `name`, `uris`, `components`; optional `suites`, `signed_by` |
 | `proxmox_apt_disabled` | `[]` | Names of repository files to mark `Enabled: false` when they exist |
 | `proxmox_apt_upgrade` | `false` | Refresh the package lists and dist-upgrade; simulate only in check mode |
-| `proxmox_apt_reboot_packages` | `[]` | Packages besides the kernel whose upgrade needs a reboot, such as `dbus` or `intel-microcode`; an upgrade of one is recorded in the flag file, and a dry run predicts it |
-| `proxmox_apt_reboot_required_file` | `/run/reboot-required` | Debian's flag file for a pending reboot, with a `.pkgs` file beside it; must be on a filesystem a boot empties |
-| `proxmox_apt_reboot` | `false` | Reboot when the running kernel is not the newest installed or the flag file exists; report only in check mode |
-| `proxmox_apt_reboot_with_vms` | `false` | Reboot even while VMs run, instead of failing with their names |
-| `proxmox_apt_reboot_wait` | `60` | Seconds before the first reconnection attempt, so a connection made before the shutdown is not taken for the node being back |
-| `proxmox_apt_reboot_timeout` | `600` | Seconds to keep trying to reconnect after that |
+| `proxmox_apt_reboot_packages` | `[]` | Packages besides the kernel whose upgrade needs a reboot, such as `dbus` or `intel-microcode`; an upgrade of one is recorded in the flag file |
+| `proxmox_apt_reboot_required_file` | `/run/reboot-required` | Debian's flag file for a pending reboot; must be on a filesystem a boot empties |
 | `proxmox_apt_suite` | `""` | The Debian release for the repositories; empty reads it from the node's `/etc/os-release` |
 | `proxmox_apt_signed_by` | `/usr/share/keyrings/proxmox-archive-keyring.gpg` | Signing key for entries without their own |
 | `proxmox_apt_sources_dir` | `/etc/apt/sources.list.d` | Where apt keeps its deb822 files; the tests point it at a scratch directory |
@@ -85,10 +64,9 @@ proxmox_apt_sources:
     components: [pve-no-subscription]
 proxmox_apt_disabled: [pve-enterprise, ceph]
 proxmox_apt_upgrade: true
-proxmox_apt_reboot: true      # off by default; on only where a run may reboot the node
 proxmox_apt_reboot_packages: [dbus, intel-microcode, amd64-microcode]
 ```
 
 A dry run shows each file it would write or change, with a diff, and the upgrade apt-get would do with the
-lists as last refreshed, and whether the node would reboot. The real run refreshes the lists after the
+lists as last refreshed, and whether it would need a reboot. The real run refreshes the lists after the
 repository changes, so a fresh install's enterprise repository never answers 401.

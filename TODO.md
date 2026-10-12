@@ -74,16 +74,11 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 - [ ] Replace the home host's 40 GbE DAC, a generic Cisco-coded `QSFP-H40G-CU3M`, with a Mellanox-coded one
       (NVIDIA MC2210130, or a third-party DAC coded for Mellanox). The ConnectX-3 fails its cable check at some
       boots ("Unsupported cable detected") and the host stays off the network until the cable is re-seated. Then
-      check that `ethtool -m nic2` reads the cable, repeat the reboot test (`touch /run/reboot-required`,
-      `make proxmox` with the reboot on) and set `proxmox_apt_reboot: true` in `group_vars/proxmox/apt.yml`. Check
-      the NAS's and the router's cables too: the router's card rejected its cable once.
-- [ ] A kernel pinned with `proxmox-boot-tool kernel pin` is never the newest installed one, so `roles/proxmox_apt`
-      says on every run that a reboot is needed and, with `proxmox_apt_reboot` on, reboots the host on every run and
-      then fails its check of the booted kernel. If a kernel is ever pinned, compare the running kernel with the pin
-      (`/etc/kernel/proxmox-boot-pin`, or `/etc/kernel/next-boot-pin` for one boot) instead of the newest installed.
-- [ ] `make proxmox` refuses to reboot for a kernel, microcode or dbus while VMs run, so once the Talos VMs exist
-      such an upgrade needs a run with `-e proxmox_apt_reboot_with_vms=true` at a time the cluster can go down.
-      Decide whether to drain the cluster first instead, or let Proxmox stop and restart the VMs
+      check that `ethtool -m nic2` reads the cable and that a reboot brings the link back. Check the NAS's and
+      the router's cables too: the router's card rejected its cable once.
+- [ ] `make proxmox` says when the host needs a reboot and leaves it to a person. Once the Talos VMs exist,
+      decide how that reboot is done: drain the cluster first, or let Proxmox stop the VMs and start them
+      again after the boot delay
 - [ ] Move the home host to the owner-and-class storage ids, once, by hand: check with `pvesm list` that
       `truenas-persistent` and `truenas-ephemeral` hold no volume, `pvesm remove` both (until they are gone
       every run refuses, naming them), then `make check`, `make site` twice, and grant `claude-on-proxmox`'s

@@ -113,7 +113,7 @@
     - ansible_check_mode
 
 # What follows the upgrade runs even when it fails: dpkg may have unpacked a package that needs a reboot before
-# another package failed, and the record made here is then what a later run reboots for.
+# another package failed, and the record made here is then what later runs report.
 - name: Upgrade the packages, and record what needs a reboot
   block:
     # dist-upgrade, as Proxmox requires: a plain upgrade holds back packages whose dependencies changed and
@@ -130,36 +130,27 @@
 
   always:
     # The packages the upgrade changes, from apt-get's output: dpkg's Unpacking lines for real, the simulation's
-    # Inst lines in check mode, a name ending where an architecture may follow. A kernel is a kernel image
-    # package, signed or not; proxmox-kernel-helper and the proxmox-kernel-<series> meta package share the
+    # Inst lines in check mode, a name ending where an architecture may follow. A kernel image package,
+    # proxmox-kernel-<release> signed or not, takes effect only at boot, as does each package in
+    # proxmox_apt_reboot_packages; proxmox-kernel-helper and the proxmox-kernel-<series> meta package share the
     # prefix and boot nothing.
     - name: Find what the upgrade changes that needs a reboot
       ansible.builtin.set_fact:
-        proxmox_apt_upgraded_kernel: "{{ _changed | select('match', '^proxmox-kernel-.+-pve(-signed)?$') | list | length > 0 }}"
-        proxmox_apt_reboot_record: "{{ _changed | select('in', proxmox_apt_reboot_packages) | list }}"
+        proxmox_apt_reboot_for: >-
+          {{ _changed | select('match', '^proxmox-kernel-.+-pve(-signed)?$') | list
+             + _changed | select('in', proxmox_apt_reboot_packages) | list }}
       vars:
         _out: "{{ (proxmox_apt_simulated if ansible_check_mode else proxmox_apt_upgraded).stdout | default('') }}"
         _changed: "{{ _out | regex_findall('^(?:Inst|Unpacking) ([^ :]+)', multiline=True) | unique | list }}"
 
-    # A package in proxmox_apt_reboot_packages that the upgrade changed is recorded the way Debian's tools record
-    # a pending reboot, and as dbus's own package does: the flag file, and the package's name in the .pkgs file
-    # beside it. They live in /run, which every boot empties, so the request lasts until the node boots: a run
-    # that refuses the reboot, or stops before it, leaves it for the next, and no request outlives the boot it
-    # asked for. A kernel needs no record, since the node's kernels say it is pending.
+    # Recorded the way Debian's tools, and dbus's own package, record a pending reboot: a flag file in /run, which
+    # every boot empties. Until the node boots, every run reads it and says a reboot is needed.
     - name: Record that the upgrade needs a reboot
       ansible.builtin.copy:
         dest: "{{ proxmox_apt_reboot_required_file }}"
         content: "*** System restart required ***\n"
         mode: "0644"
-      when: proxmox_apt_reboot_record | length > 0
-
-    - name: Record the packages that need it
-      ansible.builtin.lineinfile:
-        path: "{{ proxmox_apt_reboot_required_file }}.pkgs"
-        line: "{{ item }}"
-        create: true
-        mode: "0644"
-      loop: "{{ proxmox_apt_reboot_record }}"
+      when: proxmox_apt_reboot_for | length > 0
 
 # In check mode this is where the pending upgrade is reported as a change; for real, the upgrade task itself
 # reported it. Whether it needs a reboot is said below.
@@ -176,167 +167,20 @@
       With the package lists as last refreshed{{ ', before the repository changes above'
       if (proxmox_apt_written is changed or proxmox_apt_disabled_result is changed) else '' }}:
 
-# Whether a reboot is needed is read from the node, not inferred from this run: a kernel installed by an earlier
-# run, or by hand, is pending until the node boots it, and so is anything recorded in the flag file, whoever wrote
-# it. It is worked out and said on every run; only the reboot itself, below, waits for proxmox_apt_reboot, so a
-# node that cannot be rebooted safely by a run is told when to be rebooted by hand. Kernel image packages are
-# named after the release uname reports, proxmox-kernel-<release>, with -signed for the Secure Boot build Proxmox
-# installs by default on x86. A pattern that matches nothing makes dpkg-query exit 1, which is not a failure here.
-- name: Read the running kernel
-  ansible.builtin.command:
-    argv: [uname, -r]
-  register: proxmox_apt_running_kernel
-  changed_when: false
-  check_mode: false
-
-- name: Read the installed kernels
-  ansible.builtin.command:
-    argv: [dpkg-query, -W, -f, '${db:Status-Status} ${Package}\n', 'proxmox-kernel-*-pve', 'proxmox-kernel-*-pve-signed']
-  register: proxmox_apt_installed_kernels
-  changed_when: false
-  failed_when: proxmox_apt_installed_kernels.rc > 1
-  check_mode: false
-
+# The flag is read from the node, not inferred from this run, so a reboot not done after one run is still reported
+# by the next, whoever asked for it. The role never reboots the node: when to take it and its VMs down is decided
+# by hand.
 - name: Read whether a reboot was asked for
   ansible.builtin.stat:
     path: "{{ proxmox_apt_reboot_required_file }}"
     get_checksum: false
   register: proxmox_apt_reboot_required
 
-# Jinja's sort is alphabetical, where 7.0.2 would come after 7.0.14; the version test compares as versions. A
-# running kernel that is none of the installed packages, as on a node whose kernels are named some other way, is
-# never rebooted for: the newest one could not be told, and a reboot would not change that, so it would reboot on
-# every run. In check mode the upgrade was only simulated, so what it would install is counted from the simulation.
-- name: Work out whether a reboot is needed
-  ansible.builtin.set_fact:
-    proxmox_apt_newest_kernel: "{{ _newest }}"
-    proxmox_apt_kernel_known: "{{ _known }}"
-    proxmox_apt_reboot_reasons: "{{ _reasons }}"
-    proxmox_apt_reboot_needed: "{{ _reasons | length > 0 }}"
-  vars:
-    _running: "{{ proxmox_apt_running_kernel.stdout | trim }}"
-    _installed: >-
-      {{ proxmox_apt_installed_kernels.stdout_lines | select('match', '^installed proxmox-kernel-')
-         | map('regex_replace', '^installed proxmox-kernel-(.*?)(?:-signed)?$', '\1') | unique | list }}
-    _known: "{{ _running in _installed }}"
-    _newest: >-
-      {%- set ns = namespace(best='') -%}
-      {%- for k in _installed -%}
-      {%-   if ns.best == '' or k is version(ns.best, '>') -%}{%- set ns.best = k -%}{%- endif -%}
-      {%- endfor -%}
-      {{ ns.best }}
-    _reasons: >-
-      {{ (['running ' ~ _running ~ ', newest installed ' ~ _newest] if _known and _newest != _running else [])
-         + ([proxmox_apt_reboot_required_file ~ ' asks for one'] if proxmox_apt_reboot_required.stat.exists else [])
-         + (['the upgrade installs a kernel'] if ansible_check_mode and _known and proxmox_apt_upgraded_kernel else [])
-         + (['the upgrade changes ' ~ proxmox_apt_reboot_record | join(', ')]
-            if ansible_check_mode and proxmox_apt_reboot_record else []) }}
-
 - name: Show whether a reboot is needed
   ansible.builtin.debug:
-    msg: >-
-      {{ _none if not proxmox_apt_reboot_needed
-         else (_manual if not proxmox_apt_reboot else (_would if ansible_check_mode else _doing)) }}
-  changed_when: ansible_check_mode and proxmox_apt_reboot_needed and proxmox_apt_reboot
+    msg: "{{ ('Reboot the node when it is safe to: ' ~ _why ~ '.') if _why else 'No reboot needed.' }}"
   vars:
-    _running: "{{ proxmox_apt_running_kernel.stdout | trim }}"
-    _kernel: >-
-      {{ ('the running kernel ' ~ _running ~ ' is the newest installed') if proxmox_apt_kernel_known
-         else ('the running kernel ' ~ _running ~ ' is none of the installed kernel packages, so a newer one cannot be told') }}
-    _none: "No reboot needed: {{ _kernel }}, and no upgrade waits for a boot."
-    _would: "The node would reboot: {{ proxmox_apt_reboot_reasons | join('; ') }}."
-    _doing: "Rebooting the node: {{ proxmox_apt_reboot_reasons | join('; ') }}."
-    _manual: >-
-      A reboot is needed, and proxmox_apt_reboot is off, so reboot the node when it is safe to:
-      {{ proxmox_apt_reboot_reasons | join('; ') }}.
-
-# Proxmox names the node after its short hostname; the API's localhost alias does not list guests reliably.
-- name: Find the node's name
-  ansible.builtin.command:
-    argv: [hostname, -s]
-  register: proxmox_apt_hostname
-  changed_when: false
-  check_mode: false
-  when:
-    - proxmox_apt_reboot
-    - proxmox_apt_reboot_needed
-    - not proxmox_apt_reboot_with_vms
-
-- name: Find the running VMs
-  ansible.builtin.command:
-    argv: [pvesh, get, "/nodes/{{ proxmox_apt_hostname.stdout | trim }}/{{ item }}", --output-format, json]
-  loop: [qemu, lxc]
-  register: proxmox_apt_guests
-  changed_when: false
-  check_mode: false
-  when:
-    - proxmox_apt_reboot
-    - proxmox_apt_reboot_needed
-    - not proxmox_apt_reboot_with_vms
-
-# Proxmox would stop them cleanly on the way down and start the ones marked for it after the boot delay,
-# but taking every VM down is a decision for whoever runs this, so it is refused unless allowed.
-- name: Refuse to reboot while VMs are running
-  ansible.builtin.assert:
-    that: _running | length == 0
-    fail_msg: >-
-      A reboot is needed but these VMs are running: {{ _running | join(', ') }}.
-      Stop them, or set proxmox_apt_reboot_with_vms to let the reboot stop and restart them.
-    quiet: true
-  when:
-    - proxmox_apt_reboot
-    - proxmox_apt_reboot_needed
-    - not proxmox_apt_reboot_with_vms
-  vars:
-    _running: >-
-      {%- set out = [] -%}
-      {%- for result in proxmox_apt_guests.results -%}
-      {%-   for vm in result.stdout | from_json | selectattr('status', 'eq', 'running') -%}
-      {%-     set _ = out.append(vm.vmid ~ ' ' ~ vm.name | default('') ~ ' (' ~ result.item ~ ')') -%}
-      {%-   endfor -%}
-      {%- endfor -%}
-      {{ out }}
-
-# The reboot is asked for from a detached command, with a pause so the task can return before sshd goes
-# down; async is how long that job may run (1 would kill the pause), poll 0 leaves it behind.
-# ansible.builtin.reboot is not used: it refuses a local connection, which is how the idempotence tests
-# run the role against a fake systemctl on PATH.
-- name: Reboot the node
-  ansible.builtin.shell: sleep 2 && systemctl reboot
-  async: 30
-  poll: 0
-  changed_when: true
-  when:
-    - proxmox_apt_reboot
-    - proxmox_apt_reboot_needed
-
-- name: Wait for the node to come back
-  ansible.builtin.wait_for_connection:
-    delay: "{{ proxmox_apt_reboot_wait }}"
-    timeout: "{{ proxmox_apt_reboot_timeout }}"
-  when:
-    - proxmox_apt_reboot
-    - proxmox_apt_reboot_needed
-    - not ansible_check_mode
-
-- name: Read the kernel the node booted
-  ansible.builtin.command:
-    argv: [uname, -r]
-  register: proxmox_apt_booted_kernel
-  changed_when: false
-  when:
-    - proxmox_apt_reboot
-    - proxmox_apt_reboot_needed
-    - not ansible_check_mode
-
-- name: Check the node booted the newest kernel
-  ansible.builtin.assert:
-    that: not proxmox_apt_kernel_known or proxmox_apt_booted_kernel.stdout | trim == proxmox_apt_newest_kernel
-    fail_msg: >-
-      The node came back on {{ proxmox_apt_booted_kernel.stdout | trim }}, not {{ proxmox_apt_newest_kernel }}:
-      a kernel may be pinned (proxmox-boot-tool kernel list) or the boot entries may be stale.
-    quiet: true
-  when:
-    - proxmox_apt_reboot
-    - proxmox_apt_reboot_needed
-    - not ansible_check_mode
+    _why: >-
+      {{ ((['the upgrade changes ' ~ proxmox_apt_reboot_for | join(', ')] if proxmox_apt_reboot_for else [])
+         + ([proxmox_apt_reboot_required_file ~ ' asks for one'] if proxmox_apt_reboot_required.stat.exists else []))
+         | join('; ') }}

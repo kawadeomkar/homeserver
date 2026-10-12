@@ -2,9 +2,8 @@
 tests.
 
 `pvesh get /storage`, `pvesh get /nodes/<node>/config`, `pvesh get /nodes/<node>/storage/<id>/status`,
-`pvesh get /nodes/<node>/qemu` and `/lxc`, `pvesm add nfs`, `pvesm set`, `pvenode config set`, `hostname -s`,
-`apt-get update`, `apt-get dist-upgrade`, `uname -r`, `dpkg-query -W` for the kernel packages and
-`systemctl reboot`, backed by a JSON file named by $FAKE_PVE_STATE.
+`pvesm add nfs`, `pvesm set`, `pvenode config set`, `hostname -s`, `apt-get update` and `apt-get dist-upgrade`,
+backed by a JSON file named by $FAKE_PVE_STATE.
 Output follows Proxmox VE 9.2, as captured on a fresh install: `disable` appears only when set, every
 `/storage` entry carries a `digest` of the whole configuration, `content` comes back in an order that
 differs from one listing to the next (it is a hash's order on a real host, so the fake rotates it, and a
@@ -25,13 +24,9 @@ DEBIAN_FRONTEND=noninteractive it fails, as the real one would stop to ask. Its 
 simulation's `Inst <package> [<old>] (<new> ...)`, without the old version for a new package, and dpkg's
 `Unpacking <package> (<new>) over (<old>) ...`, without `over` for a new one. With the state's `dpkg_fails` set,
 dist-upgrade unpacks everything and then fails as dpkg does when a package's script fails, with apt's error and
-exit status 100. The kernel the node runs is the state's `running_kernel`, and its kernel packages are signed
-or unsigned; `systemctl reboot` makes it the newest installed kernel package, counts the reboot and deletes the
-reboot-required flag file named by $FAKE_PVE_REBOOT_REQUIRED and its .pkgs file, as a boot empties /run. The
-guests the state lists under `vms` are what `/nodes/<node>/qemu` answers.
+exit status 100.
 """
 
-import fnmatch
 import hashlib
 import json
 import os
@@ -46,7 +41,7 @@ from urllib.parse import urlsplit
 NODE = "pve"
 # What a fresh install has and what the no-subscription repository offers, by package. `lists` is what apt
 # knows: empty until an update has read a repository that carries these packages.
-# The kernel comes as a meta package and a signed package named after the release uname reports.
+# The kernel comes as a meta package and a signed package named after the kernel release.
 PACKAGES = {
     "installed": {
         "pve-manager": "9.2.2-1",
@@ -60,9 +55,6 @@ PACKAGES = {
     },
     "lists": {},
 }
-RUNNING_KERNEL = "7.0.2-6-pve"
-KERNEL_PATTERNS = ["proxmox-kernel-*-pve", "proxmox-kernel-*-pve-signed"]
-KERNEL_PACKAGE = re.compile(r"^proxmox-kernel-(.+-pve)(?:-signed)?$")
 
 
 def fresh_state():
@@ -83,9 +75,6 @@ def fresh_state():
         "inactive": [],
         "packages": json.loads(json.dumps(PACKAGES)),
         "apt_get_runs": 0,
-        "running_kernel": RUNNING_KERNEL,
-        "reboots": 0,
-        "vms": [],
     }
 
 
@@ -140,10 +129,6 @@ def pvesh(state, args):
     parts = path.split("/")
     if path == "/storage":
         print(json.dumps(listing(state)))
-    elif len(parts) == 4 and parts[1] == "nodes" and parts[3] in ("qemu", "lxc"):
-        if parts[2] != NODE:
-            fail(f"500 hostname lookup '{parts[2]}' failed")
-        print(json.dumps(state.get("vms", []) if parts[3] == "qemu" else []))
     elif len(parts) == 4 and parts[1] == "nodes" and parts[3] == "config":
         # As on a real host, /nodes/localhost/config (or any name but the node's own) answers {},
         # and values come back as strings.
@@ -317,46 +302,6 @@ def hostname(state, args):
     print(NODE)
 
 
-def installed_kernels(state):
-    """The kernel releases whose package is installed, under any of its names, newest last."""
-    releases = {m.group(1) for p in state["packages"]["installed"] if (m := KERNEL_PACKAGE.match(p))}
-    return sorted(releases, key=lambda r: [int(x) for x in r.removesuffix("-pve").replace("-", ".").split(".")])
-
-
-def uname(state, args):
-    if args != ["-r"]:
-        fail(f"fake uname: unsupported {args}")
-    print(state["running_kernel"])
-
-
-def dpkg_query(state, args):
-    """Only the form the role uses: installed status and name of the kernel packages, signed and not. A pattern
-    that matches nothing makes it exit 1, as the real one does, after printing what the other matches."""
-    if args != ["-W", "-f", "${db:Status-Status} ${Package}\\n", *KERNEL_PATTERNS]:
-        fail(f"fake dpkg-query: unsupported {args}")
-    names = sorted(p for p in state["packages"]["installed"] if KERNEL_PACKAGE.match(p))
-    for name in names:
-        print(f"installed {name}")
-    unmatched = [pattern for pattern in KERNEL_PATTERNS if not fnmatch.filter(names, pattern)]
-    for pattern in unmatched:
-        print(f"dpkg-query: no packages found matching {pattern}", file=sys.stderr)
-    if unmatched:
-        save(state)
-        sys.exit(1)
-
-
-def systemctl(state, args):
-    if args != ["reboot"]:
-        fail(f"fake systemctl: unsupported {args}")
-    state["running_kernel"] = installed_kernels(state)[-1]
-    state["reboots"] = state.get("reboots", 0) + 1
-    flag = os.environ.get("FAKE_PVE_REBOOT_REQUIRED")
-    if flag:
-        for path in (Path(flag), Path(flag + ".pkgs")):
-            path.unlink(missing_ok=True)
-    state["mutations"] += 1
-
-
 def main():
     tool, args = sys.argv[1], sys.argv[2:]
     state = load()
@@ -366,9 +311,6 @@ def main():
         "pvenode": pvenode,
         "hostname": hostname,
         "apt-get": apt_get,
-        "uname": uname,
-        "dpkg-query": dpkg_query,
-        "systemctl": systemctl,
     }
     tools[tool](state, args)
     save(state)

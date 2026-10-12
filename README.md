@@ -24,7 +24,7 @@ addresses and serial numbers), so it is absent from a fresh clone.
 ```
 k8s/                     one directory per service (+ 00-namespaces/ for shared ones)
 roles/truenas/           configures the NAS through its API: address, pools, datasets, NFS
-roles/proxmox_apt/       sets Proxmox's package repositories (no subscription), upgrades it on every run, says when it needs a reboot, and can do it
+roles/proxmox_apt/       sets Proxmox's package repositories (no subscription), upgrades it on every run, and says when it needs a reboot
 roles/proxmox_storage/   adds the NAS's shares to Proxmox as qcow2 VM-disk storage, or checks its own storage
 truenas.yml proxmox.yml  one playbook per machine; site.yml runs both, NAS first
 group_vars/all/vault.yml Ansible Vault file: the TrueNAS API key
@@ -64,9 +64,8 @@ make check-proxmox && make proxmox
 Each TrueNAS stage can be run on its own with `TAGS=truenas_network`, `truenas_pools`, `truenas_system`,
 `truenas_datasets`, `truenas_nfs` or `truenas_services`. Always run the check first: the idempotence tests use
 fakes, which cannot prove the real machines behave the same. Every `make proxmox` also refreshes the package lists
-and upgrades the Proxmox host, and says when an upgrade of the kernel, the CPU's microcode or dbus waits for a reboot.
-Rebooting it as well is off for now (`proxmox_apt_reboot` in `group_vars/proxmox/apt.yml`): reboot it by hand when
-the run says so.
+and upgrades the Proxmox host, and says when an upgrade of the kernel, the CPU's microcode or dbus waits for a reboot,
+which is then done by hand.
 
 The roles are generic and change nothing by default; this setup's configuration is in `group_vars/`
 (`all/storage.yml`, `nas/truenas.yml`, `proxmox/apt.yml`, `proxmox/storage.yml`), with addresses and serials in the git-ignored
