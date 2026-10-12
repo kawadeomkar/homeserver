@@ -6,7 +6,9 @@ argument_specs:
       - Adds one NFS storage per entry of proxmox_storage_nfs with pvesm, and corrects the content,
         format, mount options and enabled state of one that already exists.
       - Refuses a storage id that exists with another type, server or export, rather than
-        replacing it.
+        replacing it, and an export that another storage id already mounts, as a renamed id leaves
+        behind until the old one is removed by hand. An id Proxmox would reject and an export listed
+        twice are refused before anything runs, in check mode too.
       - Checks that each storage in proxmox_storage_local already exists, is enabled, holds images and is
         active on the node. Any type passes; it is meant for the installer's own storage. It never creates or
         changes one.

@@ -43,7 +43,8 @@ truenas_ntp_server_defaults: {iburst: true, burst: false, prefer: false, minpoll
 # 64K records match qcow2's cluster size and waste no padding on a five-wide RAIDZ1 at ashift 12.
 # POSIX ACLs (which TrueNAS pairs with aclmode DISCARD) suit root-owned disk images served to a
 # Linux client; the pools' roots carry NFSv4 ACLs from TrueNAS CORE.
-truenas_datasets:
+truenas_datasets: "{{ truenas_datasets_vm_classes + truenas_datasets_vm_consumers }}"
+truenas_datasets_vm_classes:
   - name: "{{ vm_storage.persistent.dataset | dirname }}"
     properties: {compression: LZ4, atime: "OFF", acltype: POSIX, aclmode: DISCARD}
   - name: "{{ vm_storage.persistent.dataset }}"
@@ -57,16 +58,33 @@ truenas_datasets:
     # A crash can lose the last seconds of writes, accepted for throwaway VMs. Never give this
     # dataset a snapshot task: snapshots would keep deleted VMs' data.
     properties: {sync: DISABLED, recordsize: 64K}
+# A project's pool holds throwaway VMs like the ephemeral class, so it gets the same sync and record size,
+# and never a snapshot task either. A quota, when the entry sets one, caps that project alone.
+truenas_datasets_vm_consumers: >-
+  {%- set out = [] -%}
+  {%- for c in vm_storage_consumers -%}
+  {%-   set props = {'sync': 'DISABLED', 'recordsize': '64K'} -%}
+  {%-   if c.quota is defined -%}{%- set _ = props.update({'quota': c.quota}) -%}{%- endif -%}
+  {%-   set _ = out.append({'name': c.dataset, 'properties': props}) -%}
+  {%- endfor -%}
+  {{ out }}
 
 # ----------------------------------------------------------------------- NFS ---
 truenas_nfs_settings:
   # Proxmox checks an NFSv4 storage with rpcinfo, which needs the port mapper NFSv3 brings.
   protocols: [NFSV3, NFSV4]
-truenas_nfs_shares:
+truenas_nfs_shares: "{{ truenas_nfs_shares_vm_classes + truenas_nfs_shares_vm_consumers }}"
+truenas_nfs_shares_vm_classes:
   - path: "{{ vm_storage_mount_root }}/{{ vm_storage.persistent.dataset }}"
     comment: Proxmox disks, persistent VMs
   - path: "{{ vm_storage_mount_root }}/{{ vm_storage.ephemeral.dataset }}"
     comment: Proxmox disks, ephemeral VMs
+truenas_nfs_shares_vm_consumers: >-
+  {%- set out = [] -%}
+  {%- for c in vm_storage_consumers -%}
+  {%-   set _ = out.append({'path': vm_storage_mount_root ~ '/' ~ c.dataset, 'comment': 'Proxmox disks, ' ~ c.proxmox_id}) -%}
+  {%- endfor -%}
+  {{ out }}
 # Only the Proxmox host may mount them, and it writes disk images as root.
 truenas_nfs_share_defaults:
   hosts: ["{{ proxmox_address }}"]

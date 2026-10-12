@@ -24,6 +24,7 @@ nothing connects anywhere.
 
 import contextlib
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -232,21 +233,21 @@ def argspec_pass(tree, playbook="site.yml", *extra):
     [
         pytest.param(
             None,
-            2,
+            3,
             ["validate | Check the connection settings", "skipping: [truenas]"],
             [],
             id="nas",
         ),
         pytest.param(
             PROXMOX_ONLY_LOCAL_YML,
-            1,
+            2,
             ["Skip the NAS when local.yml gives it no address", "ok: [truenas]"],
             ["TASK [truenas :", "validate | Check the connection settings"],
             id="proxmox-only",
         ),
         pytest.param(
             blank_nas_local_yml(),
-            1,
+            2,
             ["Skip the NAS when local.yml gives it no address", "ok: [truenas]"],
             ["TASK [truenas :", "validate | Check the connection settings"],
             id="proxmox-only-blank-values",
@@ -278,7 +279,7 @@ def test_nas_settings_without_an_address_are_refused(tmp_path, playbook):
     assert rc != 0, out[-3000:]
     assert "but neither truenas_static_address nor truenas_bootstrap_address" in out, out[-3000:]
     assert "truenas_gateway" in out, out[-3000:]
-    assert "TASK [truenas :" not in out and "TASK [proxmox_storage :" not in out, out[-3000:]
+    assert "TASK [truenas :" not in out and "TASK [proxmox_" not in out, out[-3000:]
 
 
 def test_inventory_without_the_nas_host(tmp_path):
@@ -290,7 +291,7 @@ def test_inventory_without_the_nas_host(tmp_path):
     rc, out = argspec_pass(tree)
     assert rc == 0, out[-3000:]
     assert "skipping: no hosts matched" in out, out[-3000:]
-    assert out.count("Validating arguments against arg spec 'main'") == 1, out[-3000:]
+    assert out.count("Validating arguments against arg spec 'main'") == 2, out[-3000:]
 
 
 @pytest.mark.parametrize("playbook", ["site.yml", "proxmox.yml"])
@@ -301,7 +302,7 @@ def test_nas_present_cannot_be_set(tmp_path, playbook):
     rc, out = argspec_pass(example_tree(tmp_path), playbook, "-e", "nas_present=false")
     assert rc != 0, out[-3000:]
     assert "nas_present is worked out from the NAS addresses" in out, out[-3000:]
-    assert "TASK [truenas :" not in out and "TASK [proxmox_storage :" not in out, out[-3000:]
+    assert "TASK [truenas :" not in out and "TASK [proxmox_" not in out, out[-3000:]
 
 
 @pytest.mark.parametrize(
@@ -323,6 +324,75 @@ def test_local_yml_names_the_installer_storage(tmp_path, setting, storage):
     )
     assert rc == 0, out[-3000:]
     assert re.search(rf'"proxmox_storage_local": \[\s*"{storage}"\s*\]', out), out[-3000:]
+
+
+def resolve_on(tree, host, expression):
+    """What a Jinja expression resolves to for `host`, through ansible.builtin.debug: the first JSON object in
+    the output, so warnings printed after it do not matter."""
+    rc, out = ansible_cli(
+        tree,
+        "ansible",
+        *["-i", "inventory.example", host, "-m", "ansible.builtin.debug", "-a", f"msg={{{{ {expression} }}}}"],
+        *["-e", "ansible_connection=local"],
+    )
+    assert rc == 0, out[-3000:]
+    return json.JSONDecoder().raw_decode(out[out.index("{") :])[0]["msg"]
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "classes", "exports", "local"),
+    [
+        pytest.param(
+            None,
+            ["persistent", "ephemeral"],
+            [
+                {"id": "homeserver-persistent", "export": "/mnt/nvme_gen3/proxmox/vm"},
+                {"id": "homeserver-ephemeral", "export": "/mnt/ephemeral/proxmox/vm"},
+                {"id": "claude-on-proxmox-ephemeral", "export": "/mnt/ephemeral/proxmox/claude-on-proxmox"},
+            ],
+            [],
+            id="nas",
+        ),
+        pytest.param(PROXMOX_ONLY_LOCAL_YML, ["ephemeral"], [], ["local-lvm"], id="proxmox-only"),
+    ],
+)
+def test_layout_resolves_per_setup(tmp_path, local_yml, classes, exports, local):
+    """With a NAS both VM classes exist and each export names a storage for its owner and class, never its
+    backend. Without one only the ephemeral class exists, there is nothing to export, and the installer's
+    storage is the one to check."""
+    tree = example_tree(tmp_path, local_yml)
+    layout = resolve_on(
+        tree, "homeserver", "{'classes': vm_storage | list, 'nfs': proxmox_storage_nfs, 'local': proxmox_storage_local}"
+    )
+    assert layout == {"classes": classes, "nfs": exports, "local": local}
+
+
+def test_nas_gets_a_dataset_and_share_per_vm_storage(tmp_path):
+    """With a NAS, the NAS configuration derives one dataset and one share for each VM class and each project
+    pool, so an export and the storage that mounts it come from one entry. A project pool gets the ephemeral
+    class's properties."""
+    tree = example_tree(tmp_path)
+    nas = resolve_on(
+        tree,
+        "truenas",
+        "{'datasets': truenas_datasets | map(attribute='name') | list,"
+        " 'pool': (truenas_datasets | selectattr('name', 'equalto', 'ephemeral/proxmox/claude-on-proxmox')"
+        " | first).properties,"
+        " 'shares': truenas_nfs_shares | map(attribute='path') | list}",
+    )
+    assert nas["datasets"] == [
+        "nvme_gen3/proxmox",
+        "nvme_gen3/proxmox/vm",
+        "ephemeral/proxmox",
+        "ephemeral/proxmox/vm",
+        "ephemeral/proxmox/claude-on-proxmox",
+    ]
+    assert nas["pool"] == {"sync": "DISABLED", "recordsize": "64K"}
+    assert nas["shares"] == [
+        "/mnt/nvme_gen3/proxmox/vm",
+        "/mnt/ephemeral/proxmox/vm",
+        "/mnt/ephemeral/proxmox/claude-on-proxmox",
+    ]
 
 
 def test_task_arguments_match_module_specs():
