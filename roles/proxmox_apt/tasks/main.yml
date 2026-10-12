@@ -1,0 +1,288 @@
+---
+# Repository files are written whole, as deb822 .sources files, the form Proxmox VE 9 ships. The
+# enterprise ones are not rewritten: a file to disable gets an `Enabled: false` line and keeps the
+# rest, as the web UI's Repositories panel does, so Proxmox's own URIs and Ceph release stay its own.
+# The package steps run apt-get through command, not the apt module, so the idempotence tests can
+# stand in for them with a fake on PATH; the apt module needs python3-apt on the node.
+
+# Each problem gets its own sentence, naming the variable to change. Argument validation accepts a string
+# for a list of strings (it would split it on commas) but leaves the variable as it was, so the string is
+# refused here before anything iterates its characters; a string for the list of dicts it refuses itself.
+- name: Check the role's inputs
+  ansible.builtin.assert:
+    that: _errors | length == 0
+    fail_msg: "{{ _errors | join(' ') }}"
+    quiet: true
+  vars:
+    _disabled: "{{ [] if proxmox_apt_disabled is string else proxmox_apt_disabled }}"
+    _names: "{{ (proxmox_apt_sources | map(attribute='name', default='') | list) + _disabled }}"
+    _errors: >-
+      {%- set out = [] -%}
+      {%- if proxmox_apt_disabled is string -%}
+      {%-   set _ = out.append('proxmox_apt_disabled must be a list of repository file names, such as [pve-enterprise], not a string.') -%}
+      {%- endif -%}
+      {%- for s in proxmox_apt_sources -%}
+      {%-   if s.uris | default([]) is string or s.components | default([]) is string
+                or s.uris | default([]) | length == 0 or s.components | default([]) | length == 0 -%}
+      {%-     set _ = out.append('Repository ' ~ s.name | default('?') ~ ' in proxmox_apt_sources needs uris and components, each a list.') -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {%- if _names | select | reject('search', '/') | unique | list | length != _names | length -%}
+      {%-   set _ = out.append('Repository file names must be unique across proxmox_apt_sources and proxmox_apt_disabled,
+                                none may be empty, and none may contain a slash.') -%}
+      {%- endif -%}
+      {{ out }}
+
+# The release is read from the node rather than configured, so a reinstall on a newer Proxmox gets that
+# release's repositories instead of the old release's, silently.
+- name: Read the node's Debian release
+  ansible.builtin.shell: . /etc/os-release && printf '%s' "$VERSION_CODENAME"
+  register: proxmox_apt_os_release
+  changed_when: false
+  check_mode: false
+  when:
+    - proxmox_apt_sources | length > 0
+    - proxmox_apt_suite | length == 0
+
+- name: Use the Debian release
+  ansible.builtin.set_fact:
+    proxmox_apt_release: "{{ proxmox_apt_suite if proxmox_apt_suite | length > 0 else proxmox_apt_os_release.stdout | trim }}"
+  when: proxmox_apt_sources | length > 0
+
+- name: Refuse to write repositories for an unknown release
+  ansible.builtin.assert:
+    that: proxmox_apt_release | length > 0
+    fail_msg: /etc/os-release on the node gives no VERSION_CODENAME; set proxmox_apt_suite to the Debian release.
+    quiet: true
+  when: proxmox_apt_sources | length > 0
+
+- name: Write the repository files
+  ansible.builtin.copy:
+    dest: "{{ proxmox_apt_sources_dir }}/{{ item.name }}.sources"
+    content: |
+      Types: deb
+      URIs: {{ item.uris | join(' ') }}
+      Suites: {{ item.suites | default([proxmox_apt_release]) | join(' ') }}
+      Components: {{ item.components | join(' ') }}
+      Signed-By: {{ item.signed_by | default(proxmox_apt_signed_by) }}
+    mode: "0644"
+  loop: "{{ proxmox_apt_sources }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: proxmox_apt_written
+
+- name: Find the repository files to disable
+  ansible.builtin.stat:
+    path: "{{ proxmox_apt_sources_dir }}/{{ item }}.sources"
+    get_checksum: false
+  loop: "{{ proxmox_apt_disabled }}"
+  register: proxmox_apt_disabled_files
+
+# The line goes first in the file: deb822 takes its fields in any order, and the end of the file may be
+# a blank line, after which the line would start a stanza of its own and disable nothing. Proxmox's files
+# hold one stanza each.
+- name: Disable the repositories that need a subscription
+  ansible.builtin.lineinfile:
+    path: "{{ item.stat.path }}"
+    regexp: '^Enabled:'
+    line: "Enabled: false"
+    insertbefore: BOF
+    create: false
+  loop: "{{ proxmox_apt_disabled_files.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stat.exists
+  register: proxmox_apt_disabled_result
+
+# Both apt-get steps are skipped in check mode, as commands are. A dry run simulates the upgrade instead,
+# below, on the package lists as they were last refreshed.
+- name: Refresh the package lists
+  ansible.builtin.command:
+    argv: [apt-get, -q, update]
+  changed_when: false
+  when: proxmox_apt_upgrade
+
+# dist-upgrade, as Proxmox requires: a plain upgrade holds back packages whose dependencies changed and
+# can leave the node half upgraded. Configuration files changed on the node are kept (confold), and the
+# rest take the package's version without asking (confdef).
+- name: Upgrade the packages
+  ansible.builtin.command:
+    argv: [apt-get, -q, -y, -o, Dpkg::Options::=--force-confdef, -o, Dpkg::Options::=--force-confold, dist-upgrade]
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: proxmox_apt_upgraded
+  changed_when: proxmox_apt_upgraded.stdout is not search('^0 upgraded, 0 newly installed, 0 to remove', multiline=True)
+  when: proxmox_apt_upgrade
+
+- name: Simulate the upgrade
+  ansible.builtin.command:
+    argv: [apt-get, -q, -s, dist-upgrade]
+  register: proxmox_apt_simulated
+  changed_when: false
+  check_mode: false
+  when:
+    - proxmox_apt_upgrade
+    - ansible_check_mode
+
+# In check mode this is where the pending upgrade is reported as a change; for real, the upgrade task
+# itself reported it. A kernel upgrade needs a reboot, which the steps below do only with proxmox_apt_reboot.
+- name: Show what the upgrade changes
+  ansible.builtin.debug:
+    msg: "{{ ([_lists ~ ' ' ~ _summary] if ansible_check_mode else [_summary]) + ([_reboot] if _kernel else []) }}"
+  changed_when: ansible_check_mode and _pending
+  when: proxmox_apt_upgrade
+  vars:
+    _out: "{{ (proxmox_apt_simulated if ansible_check_mode else proxmox_apt_upgraded).stdout | default('') }}"
+    _summary: "{{ _out | regex_search('^\\d+ upgraded, .*$', multiline=True) | default('apt-get printed no summary', true) }}"
+    _pending: "{{ _out is not search('^0 upgraded, 0 newly installed, 0 to remove', multiline=True) }}"
+    _lists: >-
+      With the package lists as last refreshed{{ ', before the repository changes above'
+      if (proxmox_apt_written is changed or proxmox_apt_disabled_result is changed) else '' }}:
+    _kernel: "{{ _out is search('^(Inst|Unpacking|Setting up) proxmox-kernel-', multiline=True) }}"
+    _reboot: >-
+      A kernel was {{ 'upgraded' if not ansible_check_mode else 'would be upgraded' }}, which takes a reboot
+      {{ '(below)' if proxmox_apt_reboot else '(not done here: proxmox_apt_reboot is off)' }}.
+
+# Whether a reboot is needed is read from the node, not inferred from this run: a kernel installed by an
+# earlier run, or by hand, is pending until the node boots it. The signed kernel packages are named after
+# the kernel release uname reports, proxmox-kernel-<release>-signed, so the two compare directly.
+- name: Read the running kernel
+  ansible.builtin.command:
+    argv: [uname, -r]
+  register: proxmox_apt_running_kernel
+  changed_when: false
+  check_mode: false
+  when: proxmox_apt_reboot
+
+- name: Read the installed kernels
+  ansible.builtin.command:
+    argv: [dpkg-query, -W, -f, '${db:Status-Status} ${Package}\n', 'proxmox-kernel-*-pve-signed']
+  register: proxmox_apt_installed_kernels
+  changed_when: false
+  check_mode: false
+  when: proxmox_apt_reboot
+
+# Jinja's sort is alphabetical, where 7.0.2 would come after 7.0.14; the version test compares as versions.
+- name: Work out whether a reboot is needed
+  ansible.builtin.set_fact:
+    proxmox_apt_newest_kernel: "{{ _newest }}"
+    proxmox_apt_reboot_needed: "{{ _newest != proxmox_apt_running_kernel.stdout | trim or _kernel_pending }}"
+  when: proxmox_apt_reboot
+  vars:
+    _installed: >-
+      {{ proxmox_apt_installed_kernels.stdout_lines | select('match', '^installed proxmox-kernel-')
+         | map('regex_replace', '^installed proxmox-kernel-(.*)-signed$', '\1') | list }}
+    _newest: >-
+      {%- set ns = namespace(best='') -%}
+      {%- for k in _installed -%}
+      {%-   if ns.best == '' or k is version(ns.best, '>') -%}{%- set ns.best = k -%}{%- endif -%}
+      {%- endfor -%}
+      {{ ns.best }}
+    # In check mode the upgrade was only simulated, so a kernel it would install is not installed yet.
+    _kernel_pending: >-
+      {{ ansible_check_mode and proxmox_apt_upgrade
+         and (proxmox_apt_simulated.stdout | default('')) is search('^Inst proxmox-kernel-', multiline=True) }}
+
+- name: Show whether a reboot is needed
+  ansible.builtin.debug:
+    msg: "{{ _none if not proxmox_apt_reboot_needed else (_would if ansible_check_mode else _doing) }}"
+  changed_when: ansible_check_mode and proxmox_apt_reboot_needed
+  when: proxmox_apt_reboot
+  vars:
+    _running: "{{ proxmox_apt_running_kernel.stdout | trim }}"
+    _none: "No reboot needed: the running kernel {{ _running }} is the newest installed."
+    _would: >-
+      The node would reboot: running {{ _running }}, newest installed {{ proxmox_apt_newest_kernel
+      }}{{ ', and the upgrade installs a kernel' if proxmox_apt_newest_kernel == _running else '' }}.
+    _doing: "Rebooting the node: running {{ _running }}, newest installed {{ proxmox_apt_newest_kernel }}."
+
+# Proxmox names the node after its short hostname; the API's localhost alias does not list guests reliably.
+- name: Find the node's name
+  ansible.builtin.command:
+    argv: [hostname, -s]
+  register: proxmox_apt_hostname
+  changed_when: false
+  check_mode: false
+  when:
+    - proxmox_apt_reboot
+    - proxmox_apt_reboot_needed
+    - not proxmox_apt_reboot_with_vms
+
+- name: Find the running VMs
+  ansible.builtin.command:
+    argv: [pvesh, get, "/nodes/{{ proxmox_apt_hostname.stdout | trim }}/{{ item }}", --output-format, json]
+  loop: [qemu, lxc]
+  register: proxmox_apt_guests
+  changed_when: false
+  check_mode: false
+  when:
+    - proxmox_apt_reboot
+    - proxmox_apt_reboot_needed
+    - not proxmox_apt_reboot_with_vms
+
+# Proxmox would stop them cleanly on the way down and start the ones marked for it after the boot delay,
+# but taking every VM down is a decision for whoever runs this, so it is refused unless allowed.
+- name: Refuse to reboot while VMs are running
+  ansible.builtin.assert:
+    that: _running | length == 0
+    fail_msg: >-
+      A reboot is needed but these VMs are running: {{ _running | join(', ') }}.
+      Stop them, or set proxmox_apt_reboot_with_vms to let the reboot stop and restart them.
+    quiet: true
+  when:
+    - proxmox_apt_reboot
+    - proxmox_apt_reboot_needed
+    - not proxmox_apt_reboot_with_vms
+  vars:
+    _running: >-
+      {%- set out = [] -%}
+      {%- for result in proxmox_apt_guests.results -%}
+      {%-   for vm in result.stdout | from_json | selectattr('status', 'eq', 'running') -%}
+      {%-     set _ = out.append(vm.vmid ~ ' ' ~ vm.name | default('') ~ ' (' ~ result.item ~ ')') -%}
+      {%-   endfor -%}
+      {%- endfor -%}
+      {{ out }}
+
+# The reboot is asked for from a detached command, with a pause so the task can return before sshd goes
+# down; async is how long that job may run (1 would kill the pause), poll 0 leaves it behind.
+# ansible.builtin.reboot is not used: it refuses a local connection, which is how the idempotence tests
+# run the role against a fake systemctl on PATH.
+- name: Reboot the node
+  ansible.builtin.shell: sleep 2 && systemctl reboot
+  async: 30
+  poll: 0
+  changed_when: true
+  when:
+    - proxmox_apt_reboot
+    - proxmox_apt_reboot_needed
+
+- name: Wait for the node to come back
+  ansible.builtin.wait_for_connection:
+    delay: "{{ proxmox_apt_reboot_wait }}"
+    timeout: "{{ proxmox_apt_reboot_timeout }}"
+  when:
+    - proxmox_apt_reboot
+    - proxmox_apt_reboot_needed
+    - not ansible_check_mode
+
+- name: Read the kernel the node booted
+  ansible.builtin.command:
+    argv: [uname, -r]
+  register: proxmox_apt_booted_kernel
+  changed_when: false
+  when:
+    - proxmox_apt_reboot
+    - proxmox_apt_reboot_needed
+    - not ansible_check_mode
+
+- name: Check the node booted the newest kernel
+  ansible.builtin.assert:
+    that: proxmox_apt_booted_kernel.stdout | trim == proxmox_apt_newest_kernel
+    fail_msg: >-
+      The node came back on {{ proxmox_apt_booted_kernel.stdout | trim }}, not {{ proxmox_apt_newest_kernel }}:
+      a kernel may be pinned (proxmox-boot-tool kernel list) or the boot entries may be stale.
+    quiet: true
+  when:
+    - proxmox_apt_reboot
+    - proxmox_apt_reboot_needed
+    - not ansible_check_mode

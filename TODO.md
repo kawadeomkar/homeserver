@@ -71,6 +71,9 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 
 ## Proxmox
 
+- [ ] `make proxmox` refuses to reboot for a kernel while VMs run, so once the Talos VMs exist a kernel
+      upgrade needs a run with `-e proxmox_apt_reboot_with_vms=true` at a time the cluster can go down.
+      Decide whether to drain the cluster first instead, or let Proxmox stop and restart the VMs
 - [ ] Move the home host to the owner-and-class storage ids, once, by hand: check with `pvesm list` that
       `truenas-persistent` and `truenas-ephemeral` hold no volume, `pvesm remove` both (until they are gone
       every run refuses, naming them), then `make check`, `make site` twice, and grant `claude-on-proxmox`'s
