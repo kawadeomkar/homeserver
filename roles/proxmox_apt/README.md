@@ -64,7 +64,7 @@ proxmox_apt_sources:
     components: [pve-no-subscription]
 proxmox_apt_disabled: [pve-enterprise, ceph]
 proxmox_apt_upgrade: true
-proxmox_apt_reboot_packages: [dbus, intel-microcode, amd64-microcode]
+proxmox_apt_reboot_packages: [dbus, intel-microcode, amd64-microcode, pve-firmware]
 ```
 
 A dry run shows each file it would write or change, with a diff, and the upgrade apt-get would do with the
