@@ -34,7 +34,7 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 
 - [ ] Automate recovery of a degraded pool. `roles/truenas` imports only ONLINE pools, so after a disk
       failure in the RAIDZ1 pool it stops, and replacing the disk and resilvering has no Ansible path yet
-      (see `REBUILD.md`)
+      (see `scripts/runbooks/REBUILD.md`)
 - [ ] Move the router's DHCP dynamic range off the addresses the servers use. The NAS and the Proxmox host
       are now reserved in DHCP (OPNsense Dnsmasq host entries), but the range still overlaps server
       addresses, which is how the NAS's first-choice static address turned out to be taken
