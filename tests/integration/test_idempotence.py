@@ -6,7 +6,7 @@ the role's back is corrected by one run and left alone by the next. The Proxmox 
 told the node's own storage to check, which must change nothing and must fail on a storage that cannot hold
 VM disks. The Proxmox apt role starts from the repository files a fresh install has, and must disable the
 enterprise ones before it refreshes the package lists, or the fake apt-get answers 401 as the real one does;
-it reboots the fake node only when a kernel is waiting to be booted, and not while a VM is running.
+it says a reboot is needed only when an upgrade changed what takes effect at boot.
 
 The roles run with this repo's own configuration (group_vars/all/storage.yml, group_vars/nas,
 group_vars/proxmox) and test addresses on loopback, with a NAS and, for the Proxmox role, without one.
@@ -325,6 +325,7 @@ def pve_vars(tmp_path, settled=False, nas=True):
     written, the enterprise ones disabled, and the package lists refreshed with nothing left to upgrade."""
     state, sources = tmp_path / "pve.json", tmp_path / "sources"
     sources.mkdir()
+    (tmp_path / "run").mkdir()
     for name, text in FRESH_SOURCES.items():
         enterprise = name in ("pve-enterprise.sources", "ceph.sources")
         (sources / name).write_text(("Enabled: false\n" if settled and enterprise else "") + text)
@@ -332,18 +333,17 @@ def pve_vars(tmp_path, settled=False, nas=True):
         (sources / "proxmox.sources").write_text(NO_SUBSCRIPTION)
         s = fake_pve.fresh_state()
         s["packages"]["installed"] = s["packages"]["lists"] = dict(s["packages"]["repository"])
-        s["running_kernel"] = fake_pve.installed_kernels(s)[-1]
         write(state, s)
     extra = {
         "fake_pve_state": str(state),
         "proxmox_apt_sources_dir": str(sources),
         "proxmox_apt_suite": "trixie",
-        # The fake reboot is instant, but it fires 2 s after the task, like the real one; a real node needs the
-        # role's defaults.
-        "proxmox_apt_reboot_wait": 3,
-        "proxmox_apt_reboot_timeout": 30,
+        "proxmox_apt_reboot_required_file": str(tmp_path / "run" / "reboot-required"),
     }
     return {**extra, "truenas_static_address": "127.0.0.10/24"} if nas else extra
+
+
+REQUESTED = "*** System restart required ***\n"
 
 
 def sources_of(extra):
@@ -465,6 +465,7 @@ def test_proxmox_apt_role_is_idempotent(tmp_path):
     refreshes the lists, and upgrades; later runs change nothing; drift is corrected."""
     extra = pve_vars(tmp_path)
     state, sources = Path(extra["fake_pve_state"]), Path(extra["proxmox_apt_sources_dir"])
+    flag = Path(extra["proxmox_apt_reboot_required_file"])
     fresh = sources_of(extra)
 
     result = run("proxmox.yml", extra, check=True)
@@ -474,18 +475,18 @@ def test_proxmox_apt_role_is_idempotent(tmp_path):
         f"the dry run shows no repository change\n{out[-3000:]}"
     )
     assert "before the repository changes above: 0 upgraded, 0 newly installed" in out, out[-3000:]
-    assert "No reboot needed: the running kernel 7.0.2-6-pve is the newest installed" in out, out[-3000:]
+    assert "No reboot needed." in out, out[-3000:]
     assert sources_of(extra) == fresh, "the dry run changed the repository files"
     assert read(state)["mutations"] == 0 and read(state)["apt_get_runs"] == 1, "the dry run did more than simulate"
 
-    # The first run upgrades, which installs a kernel, so it reboots and comes back on that kernel.
+    # The first run upgrades, which installs a kernel image and upgrades the kernel's meta package: only the
+    # image asks for a reboot, and every run says so until the node boots, which empties /run.
     result = run("proxmox.yml", extra)
     expect(result, "homeserver", changed=True, note="first run")
-    assert (
-        "2 upgraded, 1 newly installed" in result[2] and "A kernel was upgraded, which takes a reboot" in result[2]
-    ), result[2][-3000:]
-    assert "Rebooting the node: running 7.0.2-6-pve, newest installed 7.0.14-23-pve" in result[2], result[2][-3000:]
-    assert (read(state)["reboots"], read(state)["running_kernel"]) == (1, "7.0.14-23-pve")
+    assert "2 upgraded, 1 newly installed" in result[2], result[2][-3000:]
+    kernel = "Reboot the node when it is safe to: the upgrade changes proxmox-kernel-7.0.14-23-pve-signed;"
+    assert f"{kernel} {flag} asks for one." in result[2], result[2][-3000:]
+    assert flag.read_text() == REQUESTED
     settled = {
         **fresh,
         "proxmox.sources": NO_SUBSCRIPTION,
@@ -499,7 +500,8 @@ def test_proxmox_apt_role_is_idempotent(tmp_path):
 
     result = run("proxmox.yml", extra)
     expect(result, "homeserver", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")
-    assert "A kernel was upgraded" not in result[2] and read(state)["reboots"] == 1
+    assert f"Reboot the node when it is safe to: {flag} asks for one." in result[2], result[2][-3000:]
+    flag.unlink()
     result = run("proxmox.yml", extra, check=True)
     expect(result, "homeserver", changed=0, note="dry run after applying")
     assert "With the package lists as last refreshed: 0 upgraded" in result[2], result[2][-3000:]
@@ -513,54 +515,26 @@ def test_proxmox_apt_role_is_idempotent(tmp_path):
     write(state, s)
     result = run("proxmox.yml", extra)
     expect(result, "homeserver", changed=True, note="run after drift")
-    assert sources_of(extra) == settled and "1 upgraded" in result[2] and "A kernel was upgraded" not in result[2]
+    assert sources_of(extra) == settled and "1 upgraded" in result[2]
     assert read(state)["packages"]["installed"]["pve-manager"] == "9.2.4-1"
-    assert read(state)["reboots"] == 1, "rebooted without a kernel upgrade"
+    assert not flag.exists() and "No reboot needed." in result[2], "asked for a reboot without a kernel upgrade"
     result = run("proxmox.yml", extra)
     expect(result, "homeserver", changed=0, note=f"second run after drift (changed: {changed_tasks(result[2])})")
 
-    # A new kernel in the repository, with the package lists refreshed by hand so a dry run can see it: the
-    # dry run says the node would reboot; with a VM running the real run upgrades and then refuses to
-    # reboot, naming the VM; allowed, it reboots.
+    # A new kernel in the repository, with the package lists refreshed by hand so a dry run can see it: the dry
+    # run says it would need a reboot, and the real run asks for one.
     s = read(state)
     s["packages"]["repository"]["proxmox-kernel-7.0.20-1-pve-signed"] = "7.0.20-1"
     s["packages"]["lists"] = dict(s["packages"]["repository"])
-    s["vms"] = [
-        {"vmid": 100, "name": "talos-1", "status": "running"},
-        {"vmid": 101, "name": "idle", "status": "stopped"},
-    ]
     write(state, s)
-    rc, _, out = run("proxmox.yml", extra, check=True)
-    assert "The node would reboot" in out and "the upgrade installs a kernel" in out, out[-3000:]
-    assert rc != 0 and "these VMs are running: 100 talos-1 (qemu)" in out, f"the dry run did not refuse\n{out[-3000:]}"
-    assert read(state)["reboots"] == 1, "the dry run rebooted"
-    rc, _, out = run("proxmox.yml", extra)
-    assert rc != 0 and "these VMs are running: 100 talos-1 (qemu)" in out and "idle" not in out, out[-3000:]
-    assert "proxmox_apt_reboot_with_vms" in out, out[-3000:]
-    assert read(state)["running_kernel"] == "7.0.14-23-pve" and read(state)["reboots"] == 1, (
-        "rebooted with a VM running"
-    )
-    assert "proxmox-kernel-7.0.20-1-pve-signed" in read(state)["packages"]["installed"], "the upgrade was held back too"
-    result = run("proxmox.yml", {**extra, "proxmox_apt_reboot_with_vms": True})
-    expect(result, "homeserver", changed=True, note="run allowed to reboot with VMs")
-    assert (read(state)["reboots"], read(state)["running_kernel"]) == (2, "7.0.20-1-pve")
-    expect(run("proxmox.yml", extra), "homeserver", changed=0, note="run after the reboot")
-
-    # A kernel installed but never booted, as after a run with the reboot off, is still pending next time.
-    s = read(state)
-    s["running_kernel"] = "7.0.14-23-pve"
-    s["vms"] = []
-    write(state, s)
-    result = run("proxmox.yml", {**extra, "proxmox_apt_reboot": False})
-    expect(result, "homeserver", changed=0, note="run with the reboot off")
-    assert read(state)["reboots"] == 2 and "No reboot needed" not in result[2]
     result = run("proxmox.yml", extra, check=True)
-    expect(result, "homeserver", changed=True, note="dry run with a booted-never kernel")
-    assert "The node would reboot: running 7.0.14-23-pve, newest installed 7.0.20-1-pve." in result[2], result[2][
+    expect(result, "homeserver", changed=True, note="dry run with a new kernel")
+    assert "the upgrade changes proxmox-kernel-7.0.20-1-pve-signed." in result[2] and not flag.exists(), result[2][
         -3000:
     ]
-    expect(run("proxmox.yml", extra), "homeserver", changed=True, note="run that boots the pending kernel")
-    assert (read(state)["reboots"], read(state)["running_kernel"]) == (3, "7.0.20-1-pve")
+    expect(run("proxmox.yml", extra), "homeserver", changed=True, note="run installing a new kernel")
+    assert flag.exists()
+    flag.unlink()
 
     # Without the upgrade, apt-get is never run; a file to disable that does not exist is left alone.
     runs = read(state)["apt_get_runs"]
@@ -601,6 +575,64 @@ def test_proxmox_apt_role_is_idempotent(tmp_path):
         rc, _, out = run("proxmox.yml", {**extra, **given}, check=True)
         assert rc != 0 and message in out, f"{given}: expected {message!r}\n{out[-3000:]}"
     assert sources_of(extra) == settled
+
+
+def offer(state, installed=None, repository=None, **more):
+    """Change the fake node: packages installed and offered (the lists refreshed), anything else."""
+    s = read(state)
+    s["packages"]["installed"].update(installed or {})
+    s["packages"]["repository"].update(repository or {})
+    s["packages"]["lists"] = dict(s["packages"]["repository"])
+    s.update(more)
+    write(state, s)
+
+
+def test_proxmox_apt_role_asks_for_a_reboot_only_for_what_takes_effect_at_boot(tmp_path):
+    """From a settled host: an upgrade of a package that only shares the kernel packages' prefix asks for nothing.
+    An unsigned kernel and the listed packages, dbus and CPU microcode here, are predicted by the dry run and
+    recorded. An upgrade that fails after unpacking still records what it unpacked, and a flag file someone else
+    wrote is honoured."""
+    extra = pve_vars(tmp_path, settled=True)
+    state, flag = Path(extra["fake_pve_state"]), Path(extra["proxmox_apt_reboot_required_file"])
+    ask = "Reboot the node when it is safe to:"
+
+    # proxmox-kernel-helper, which a real node has, shares the prefix and boots nothing.
+    offer(state, {"proxmox-kernel-helper": "9.2.0"}, {"proxmox-kernel-helper": "9.2.1"})
+    for check in (True, False):
+        result = run("proxmox.yml", extra, check=check)
+        expect(result, "homeserver", changed=True, note=f"{'dry run' if check else 'run'} upgrading the kernel helper")
+        assert "No reboot needed." in result[2], result[2][-3000:]
+    assert not flag.exists()
+
+    # An unsigned kernel, as on a node without Secure Boot's build, with dbus and microcode: the dry run predicts
+    # them and the run records them.
+    offer(
+        state,
+        installed={"dbus": "1.16.2-2", "intel-microcode": "3.20251111.1"},
+        repository={"dbus": "1.16.2-3", "intel-microcode": "3.20260210.1", "proxmox-kernel-7.0.20-1-pve": "7.0.20-1"},
+    )
+    changes = "the upgrade changes proxmox-kernel-7.0.20-1-pve, dbus, intel-microcode"
+    result = run("proxmox.yml", extra, check=True)
+    expect(result, "homeserver", changed=True, note="dry run upgrading a kernel, dbus and microcode")
+    assert f"{ask} {changes}." in result[2] and not flag.exists(), result[2][-3000:]
+    result = run("proxmox.yml", extra)
+    expect(result, "homeserver", changed=True, note="run upgrading a kernel, dbus and microcode")
+    assert f"{ask} {changes}; {flag} asks for one." in result[2] and flag.read_text() == REQUESTED, result[2][-3000:]
+    flag.unlink()
+    expect(run("proxmox.yml", extra), "homeserver", changed=0, note="run after the boot")
+
+    # An upgrade that fails after unpacking a listed package still records the reboot it needs.
+    offer(state, {"amd64-microcode": "3.20250311.1"}, {"amd64-microcode": "3.20260311.1"}, dpkg_fails=True)
+    rc, _, out = run("proxmox.yml", extra)
+    assert rc != 0 and "returned an error code" in out and flag.read_text() == REQUESTED, out[-3000:]
+    offer(state, dpkg_fails=False)
+    result = run("proxmox.yml", extra)
+    assert f"{ask} {flag} asks for one." in result[2], result[2][-3000:]
+
+    # A flag file someone else wrote is honoured.
+    flag.unlink()
+    flag.write_text(REQUESTED)
+    assert f"{ask} {flag} asks for one." in run("proxmox.yml", extra)[2]
 
 
 def test_proxmox_storage_role_checks_existing_storage(tmp_path):

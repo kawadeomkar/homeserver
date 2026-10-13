@@ -36,7 +36,7 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 
 - [ ] Automate recovery of a degraded pool. `roles/truenas` imports only ONLINE pools, so after a disk
       failure in the RAIDZ1 pool it stops, and replacing the disk and resilvering has no Ansible path yet
-      (see `REBUILD.md`)
+      (see `scripts/runbooks/REBUILD.md`)
 - [ ] Move the router's DHCP dynamic range off the addresses the servers use. The NAS and the Proxmox host
       are now reserved in DHCP (OPNsense Dnsmasq host entries), but the range still overlaps server
       addresses, which is how the NAS's first-choice static address turned out to be taken
@@ -75,9 +75,14 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 
 ## Proxmox
 
-- [ ] `make proxmox` refuses to reboot for a kernel while VMs run, so once the Talos VMs exist a kernel
-      upgrade needs a run with `-e proxmox_apt_reboot_with_vms=true` at a time the cluster can go down.
-      Decide whether to drain the cluster first instead, or let Proxmox stop and restart the VMs
+- [ ] Replace the home host's 40 GbE DAC, a generic Cisco-coded `QSFP-H40G-CU3M`, with a Mellanox-coded one
+      (NVIDIA MC2210130, or a third-party DAC coded for Mellanox). The ConnectX-3 fails its cable check at some
+      boots ("Unsupported cable detected") and the host stays off the network until the cable is re-seated. Then
+      check that `ethtool -m nic2` reads the cable and that a reboot brings the link back. Check the NAS's and
+      the router's cables too: the router's card rejected its cable once.
+- [ ] `make proxmox` says when the host needs a reboot and leaves it to a person. Once the Talos VMs exist,
+      decide how that reboot is done: drain the cluster first, or let Proxmox stop the VMs and start them
+      again after the boot delay
 - [ ] Move the home host to the owner-and-class storage ids, once, by hand: check with `pvesm list` that
       `truenas-persistent` and `truenas-ephemeral` hold no volume, `pvesm remove` both (until they are gone
       every run refuses, naming them), then `make check`, `make site` twice, and grant `claude-on-proxmox`'s
