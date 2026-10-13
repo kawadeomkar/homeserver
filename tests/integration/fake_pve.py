@@ -2,9 +2,8 @@
 tests.
 
 `pvesh get /storage`, `pvesh get /nodes/<node>/config`, `pvesh get /nodes/<node>/storage/<id>/status`,
-`pvesh get /nodes/<node>/qemu` and `/lxc`, `pvesm add nfs`, `pvesm set`, `pvenode config set`, `hostname -s`,
-`apt-get update`, `apt-get dist-upgrade`, `uname -r`, `dpkg-query -W` for the kernel packages and
-`systemctl reboot`, backed by a JSON file named by $FAKE_PVE_STATE.
+`pvesm add nfs`, `pvesm set`, `pvenode config set`, `hostname -s`, `apt-get update` and `apt-get dist-upgrade`,
+backed by a JSON file named by $FAKE_PVE_STATE.
 Output follows Proxmox VE 9.2, as captured on a fresh install: `disable` appears only when set, every
 `/storage` entry carries a `digest` of the whole configuration, `content` comes back in an order that
 differs from one listing to the next (it is a hash's order on a real host, so the fake rotates it, and a
@@ -21,9 +20,11 @@ apt-get reads the deb822 .sources files in $FAKE_PVE_SOURCES_DIR, the directory 
 fails with 401 Unauthorized, as the real one does, when an enterprise.proxmox.com repository is still
 enabled, and otherwise fills the package lists from the no-subscription repository if one is enabled, or with
 nothing. `dist-upgrade` upgrades what the lists offer; `-s` only reports it; without `-y` and
-DEBIAN_FRONTEND=noninteractive it fails, as the real one would stop to ask. The kernel the node runs is the
-state's `running_kernel`; `systemctl reboot` makes it the newest installed signed kernel package and counts the
-reboot, and the guests the state lists under `vms` are what `/nodes/<node>/qemu` answers.
+DEBIAN_FRONTEND=noninteractive it fails, as the real one would stop to ask. Its lines follow the real ones: a
+simulation's `Inst <package> [<old>] (<new> ...)`, without the old version for a new package, and dpkg's
+`Unpacking <package> (<new>) over (<old>) ...`, without `over` for a new one. With the state's `dpkg_fails` set,
+dist-upgrade unpacks everything and then fails as dpkg does when a package's script fails, with apt's error and
+exit status 100.
 """
 
 import hashlib
@@ -40,7 +41,7 @@ from urllib.parse import urlsplit
 NODE = "pve"
 # What a fresh install has and what the no-subscription repository offers, by package. `lists` is what apt
 # knows: empty until an update has read a repository that carries these packages.
-# The kernel comes as a meta package and a signed package named after the release uname reports.
+# The kernel comes as a meta package and a signed package named after the kernel release.
 PACKAGES = {
     "installed": {
         "pve-manager": "9.2.2-1",
@@ -54,7 +55,6 @@ PACKAGES = {
     },
     "lists": {},
 }
-RUNNING_KERNEL = "7.0.2-6-pve"
 
 
 def fresh_state():
@@ -75,9 +75,6 @@ def fresh_state():
         "inactive": [],
         "packages": json.loads(json.dumps(PACKAGES)),
         "apt_get_runs": 0,
-        "running_kernel": RUNNING_KERNEL,
-        "reboots": 0,
-        "vms": [],
     }
 
 
@@ -132,10 +129,6 @@ def pvesh(state, args):
     parts = path.split("/")
     if path == "/storage":
         print(json.dumps(listing(state)))
-    elif len(parts) == 4 and parts[1] == "nodes" and parts[3] in ("qemu", "lxc"):
-        if parts[2] != NODE:
-            fail(f"500 hostname lookup '{parts[2]}' failed")
-        print(json.dumps(state.get("vms", []) if parts[3] == "qemu" else []))
     elif len(parts) == 4 and parts[1] == "nodes" and parts[3] == "config":
         # As on a real host, /nodes/localhost/config (or any name but the node's own) answers {},
         # and values come back as strings.
@@ -286,15 +279,19 @@ def apt_get(state, args):
         new = sum(1 for p in upgrades if p not in packages["installed"])
         print(f"{len(upgrades) - new} upgraded, {new} newly installed, 0 to remove and 0 not upgraded.")
         for name, version in sorted(upgrades.items()):
-            old = packages["installed"].get(name, "none")
-            print(
-                f"Inst {name} [{old}] ({version} Proxmox:trixie [amd64])"
-                if simulate
-                else f"Unpacking {name} ({version}) over ({old}) ..."
-            )
+            old = packages["installed"].get(name)
+            if simulate:
+                print(f"Inst {name} {f'[{old}] ' if old else ''}({version} Proxmox:trixie [amd64])")
+            else:
+                print(f"Unpacking {name} ({version}) {f'over ({old}) ' if old else ''}...")
         if not simulate and upgrades:
             packages["installed"].update(upgrades)
             state["mutations"] += 1
+            if state.get("dpkg_fails"):
+                print("Errors were encountered while processing:\n " + sorted(upgrades)[0])
+                print("E: Sub-process /usr/bin/dpkg returned an error code (1)", file=sys.stderr)
+                save(state)
+                sys.exit(100)
     else:
         fail(f"fake apt-get: unsupported {args}")
 
@@ -303,35 +300,6 @@ def hostname(state, args):
     if args != ["-s"]:
         fail(f"fake hostname: unsupported {args}")
     print(NODE)
-
-
-def installed_kernels(state):
-    """The kernel releases whose signed package is installed, newest last."""
-    names = [p for p in state["packages"]["installed"] if p.startswith("proxmox-kernel-") and p.endswith("-pve-signed")]
-    releases = [n.removeprefix("proxmox-kernel-").removesuffix("-signed") for n in names]
-    return sorted(releases, key=lambda r: [int(x) for x in r.removesuffix("-pve").replace("-", ".").split(".")])
-
-
-def uname(state, args):
-    if args != ["-r"]:
-        fail(f"fake uname: unsupported {args}")
-    print(state["running_kernel"])
-
-
-def dpkg_query(state, args):
-    """Only the form the role uses: installed status and name of the signed kernel packages."""
-    if args != ["-W", "-f", "${db:Status-Status} ${Package}\\n", "proxmox-kernel-*-pve-signed"]:
-        fail(f"fake dpkg-query: unsupported {args}")
-    for release in installed_kernels(state):
-        print(f"installed proxmox-kernel-{release}-signed")
-
-
-def systemctl(state, args):
-    if args != ["reboot"]:
-        fail(f"fake systemctl: unsupported {args}")
-    state["running_kernel"] = installed_kernels(state)[-1]
-    state["reboots"] = state.get("reboots", 0) + 1
-    state["mutations"] += 1
 
 
 def main():
@@ -343,9 +311,6 @@ def main():
         "pvenode": pvenode,
         "hostname": hostname,
         "apt-get": apt_get,
-        "uname": uname,
-        "dpkg-query": dpkg_query,
-        "systemctl": systemctl,
     }
     tools[tool](state, args)
     save(state)
