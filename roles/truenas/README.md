@@ -31,7 +31,7 @@ The role cannot create its own way in. After installing TrueNAS, and before the 
 
 Then run with `--check` first. Pools are imported with their datasets; shares, services and settings are
 re-applied, since TrueNAS keeps those on the boot drive. This repo's full procedure, for both machines, is in
-`REBUILD.md` at the repo root.
+`scripts/runbooks/REBUILD.md`.
 
 ## Stages and tags
 

@@ -37,9 +37,9 @@ requirements.in          the Python tooling's pins; requirements.txt is its hash
 .github/                 CI (workflows/ci.yml), Dependabot, and the reviewed body of the main-branch ruleset
 tests/unit/              tests for the TrueNAS modules' comparison logic
 tests/policy/            tests of the repo's own rules: the lock, the vault, the ruleset, the leak checks
-scripts/                 the leak checks CI and the git hooks run
+scripts/ci/              the leak checks CI and the git hooks run
+scripts/runbooks/        procedures to follow by hand; REBUILD.md is what to do after a hardware failure
 tests/integration/       idempotence tests against fake TrueNAS and Proxmox
-REBUILD.md               what to do before re-running the playbooks after a hardware failure
 SECURITY.md              how to report a vulnerability privately
 ```
 
@@ -138,9 +138,10 @@ project's pool. Tools name their storage and are unaffected.
 
 ### After a hardware failure
 
-`REBUILD.md` is the recovery procedure. A reinstalled NAS needs a new API user and key and an updated certificate
-pin before Ansible can reach it, and a reinstalled Proxmox host needs root SSH access. Keep a copy of
-`group_vars/all/local.yml` and `.vault_pass` in your password manager: they are the only files not in this repo.
+`scripts/runbooks/REBUILD.md` is the recovery procedure. A reinstalled NAS needs a new API user and key and an
+updated certificate pin before Ansible can reach it, and a reinstalled Proxmox host needs root SSH access. Keep a
+copy of `group_vars/all/local.yml` and `.vault_pass` in your password manager: they are the only files not in this
+repo.
 
 ## Manifests
 
