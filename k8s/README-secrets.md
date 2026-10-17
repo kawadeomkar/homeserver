@@ -69,8 +69,9 @@ kubectl create secret generic photoprism -n photoprism --dry-run=client -o yaml 
 unset db_password
 ```
 
-Read PhotoPrism's admin password afterwards with `sops -d --extract '["stringData"]["PHOTOPRISM_ADMIN_PASSWORD"]'
-k8s/apps/photoprism/photoprism.sops.yaml`, or set your own in its place.
+Read a value afterwards, PhotoPrism's admin password say, with `sops -d --extract
+'["data"]["PHOTOPRISM_ADMIN_PASSWORD"]' k8s/apps/photoprism/photoprism.sops.yaml | base64 -d` (kubectl writes the
+values base64-encoded, under `data`), or set your own in its place.
 
 ## The Secrets the apps need
 
