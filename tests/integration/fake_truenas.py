@@ -70,7 +70,7 @@ def initial_state(address):
             "activity": {"type": "DENY", "activities": []},
         },
         "exported_pools": [
-            {"name": "nvme_gen3", "guid": "1001", "status": "ONLINE", "hostname": "", "children": []},
+            {"name": "persistent", "guid": "1001", "status": "ONLINE", "hostname": "", "children": []},
             {
                 "name": "ephemeral",
                 "guid": "1002",

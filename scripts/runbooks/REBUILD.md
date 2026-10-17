@@ -9,7 +9,7 @@ by their variable in `group_vars/all/local.yml`; the real values live only there
 | Failure | What survives | What Ansible restores | What you do by hand |
 | --- | --- | --- | --- |
 | NAS boot drive | The data pools, with every dataset and its properties | Network, pool import, settings, NFS shares, services | Reinstall, API user and key, certificate pin |
-| One disk of the RAIDZ1 pool (`nvme_gen3`) | The pool, degraded | Nothing until the pool is healthy: the role only imports ONLINE pools | Replace the disk and resilver (see [Known limits](#known-limits)) |
+| One disk of the RAIDZ1 pool (`persistent`) | The pool, degraded | Nothing until the pool is healthy: the role only imports ONLINE pools | Replace the disk and resilver (see [Known limits](#known-limits)) |
 | The single disk of `ephemeral` | Nothing: that pool and the media on it are lost | A new, empty pool on a blank replacement disk, then its datasets and share | Allow pool creation and list the new disk |
 | NAS network card | Everything on disk | Everything, once the NAS is reachable | Update the router's DHCP reservation to the new MAC |
 | Proxmox boot drive | VM disks, on the NAS | The no-subscription repository, the upgrade, Tailscale with its guard, the NFS storages and the start-on-boot delay | Reinstall, root SSH key; with remote access, delete the old machine in Tailscale's admin console and put a new auth key in the vault; recreate VM definitions |
@@ -128,7 +128,7 @@ recreate them empty. There are no Proxmox backups yet; whether to add them is an
 ## Known limits
 
 - **A degraded pool is not imported.** The role imports only pools that report ONLINE, so with one failed disk
-  in `nvme_gen3` it stops with "can be imported but is DEGRADED". Replacing the disk and resilvering the pool is
+  in `persistent` it stops with "can be imported but is DEGRADED". Replacing the disk and resilvering the pool is
   not automated yet (`TODO.md`). Doing it in the web UI breaks the rule that every change goes through Ansible, so
   decide deliberately.
 - **Recreating `ephemeral` erases nothing only on a blank disk.** To create the pool on a replacement disk, set

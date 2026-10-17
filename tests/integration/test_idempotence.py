@@ -180,6 +180,7 @@ def nas_vars(nas):
         "proxmox_address": PROXMOX_ADDRESS,
         "truenas_ui_restart_wait": 0,
         "truenas_api_connect_wait": 5,
+        "vm_storage_ephemeral_reservation": "100G",
     }
 
 
@@ -224,14 +225,15 @@ def test_truenas_role_is_idempotent(nas):
     assert s["interface_snapshot"] is None and s["checkin_waiting"] is None, "the address change was not checked in"
     assert (s["network"]["ipv4gateway"], s["network"]["nameserver1"]) == ("127.0.0.254", "127.0.0.53")
     assert s["sysds_pool"] == "boot-pool", "the system dataset moved off the boot pool"
-    assert sorted(p["name"] for p in s["pools"]) == ["ephemeral", "nvme_gen3"]
+    assert sorted(p["name"] for p in s["pools"]) == ["ephemeral", "persistent"]
     assert all(p["autotrim"]["rawvalue"] == "on" for p in s["pools"])
     assert len(s["scrubs"]) == 2
     ds = s["datasets"]
-    assert ds["nvme_gen3/proxmox/vm"]["sync"]["rawvalue"] == "standard"
+    assert ds["persistent/proxmox/vm"]["sync"]["rawvalue"] == "standard"
     assert ds["ephemeral/proxmox/vm"]["sync"]["rawvalue"] == "disabled"
     assert ds["ephemeral/proxmox"]["quota"]["rawvalue"] == "1099511627776"
-    assert ds["nvme_gen3/proxmox/vm"]["recordsize"]["rawvalue"] == "65536"
+    assert ds["ephemeral/proxmox"]["reservation"]["rawvalue"] == str(100 * 2**30)
+    assert ds["persistent/proxmox/vm"]["recordsize"]["rawvalue"] == "65536"
     # The project pool: a dataset of its own with the ephemeral class's properties.
     pool = ds["ephemeral/proxmox/claude-on-proxmox"]
     assert (pool["sync"]["rawvalue"], pool["recordsize"]["rawvalue"]) == ("disabled", "65536")
@@ -240,7 +242,7 @@ def test_truenas_role_is_idempotent(nas):
     assert sorted(sh["path"] for sh in s["shares"]) == [
         "/mnt/ephemeral/proxmox/claude-on-proxmox",
         "/mnt/ephemeral/proxmox/vm",
-        "/mnt/nvme_gen3/proxmox/vm",
+        "/mnt/persistent/proxmox/vm",
     ]
     assert all(sh["hosts"] == [PROXMOX_ADDRESS] and sh["maproot_user"] == "root" for sh in s["shares"])
     services = {sv["service"]: sv for sv in s["services"]}
@@ -279,6 +281,13 @@ def test_truenas_role_is_idempotent(nas):
     assert all(t["threshold"] == 35 for t in s["scrubs"])
     assert all(n["minpoll"] == 6 for n in s["ntp"])
     assert s["network"]["nameserver1"] == "127.0.0.53"
+
+    # A reservation removed from the configuration is removed on the NAS too: it is sent as 0, none.
+    unreserved = {**extra, "vm_storage_ephemeral_reservation": None}
+    expect(run("truenas.yml", unreserved), "truenas", changed=1, note="the reservation removed")
+    assert read(nas["state"])["datasets"]["ephemeral/proxmox"]["reservation"]["rawvalue"] == "0"
+    expect(run("truenas.yml", unreserved), "truenas", changed=0, note="the reservation removed, second run")
+    expect(run("truenas.yml", extra), "truenas", changed=1, note="the reservation back")
 
     for out in outputs:
         assert fake_truenas.PRIVATE_KEY not in out, "the UI certificate's private key reached Ansible output"
@@ -734,7 +743,7 @@ def test_proxmox_storage_role_refuses_an_export_another_id_mounts(tmp_path):
 
     pairs = (("truenas-persistent", "homeserver-persistent"), ("truenas-ephemeral", "homeserver-ephemeral"))
     s = read(state)
-    s["storage"] += [mounted("truenas-persistent", "/mnt/nvme_gen3/proxmox/vm")]
+    s["storage"] += [mounted("truenas-persistent", "/mnt/persistent/proxmox/vm")]
     s["storage"] += [mounted("truenas-ephemeral", "/mnt/ephemeral/proxmox/vm")]
     write(state, s)
     for check in (True, False):
@@ -746,7 +755,7 @@ def test_proxmox_storage_role_refuses_an_export_another_id_mounts(tmp_path):
         nfs = sorted(e["storage"] for e in s["storage"] if e["type"] == "nfs")
         assert s["mutations"] == 0 and nfs == ["truenas-ephemeral", "truenas-persistent"], "storage was added"
     # The wanted id exists beside the old one, as after a run that added it: the old one still has to go.
-    s["storage"] += [mounted("homeserver-persistent", "/mnt/nvme_gen3/proxmox/vm")]
+    s["storage"] += [mounted("homeserver-persistent", "/mnt/persistent/proxmox/vm")]
     write(state, s)
     rc, _, out = run("proxmox.yml", extra, check=True)
     assert rc != 0 and "is mounted as truenas-persistent, wanted as homeserver-persistent" in out, out[-3000:]

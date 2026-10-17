@@ -32,7 +32,7 @@ truenas_bootstrap_address: 192.0.2.50
 # Disk serials per pool. Only read when a pool has to be created on blank
 # disks (truenas_pool_allow_create); importing an existing pool ignores them.
 truenas_pool_disks:
-  nvme_gen3:
+  persistent:
     - SERIAL-0001
     - SERIAL-0002
     - SERIAL-0003
@@ -40,6 +40,11 @@ truenas_pool_disks:
     - SERIAL-0005
   ephemeral:
     - SERIAL-0006
+# The pools are called persistent (redundant: data that cannot be re-created)
+# and ephemeral (no redundancy: data that can). Name yours here only if they
+# are called something else; the keys of truenas_pool_disks follow suit.
+# truenas_pool_persistent: tank
+# truenas_pool_ephemeral: scratch
 
 # ------------------------------------------------------------------ Proxmox ---
 # The Proxmox host: reached over root SSH, and the only host allowed to mount
