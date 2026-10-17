@@ -65,6 +65,12 @@ def test_an_install_status():
     )
     assert tf.install_status(pending) == {"phase": "pending", "error": "no disk matched"}
     assert tf.install_status("spec:\n  phase: installed\n") == {"phase": "installed", "error": None}
+    # As Talos 1.14.2 prints a pending install: the phase, its zero value, left out; metadata.phase is the resource's.
+    seen = (
+        "metadata:\n  id: unattended-install\n  phase: running\n"
+        "spec:\n  image: x\n  error: no disk matched the selector\n"
+    )
+    assert tf.install_status(seen) == {"phase": "pending", "error": "no disk matched the selector"}
     for nothing in ("", None, "error: rpc error: code = Unavailable", "{not: [yaml", "- a list\n"):
         assert tf.install_status(nothing) == {"phase": None, "error": None}
 

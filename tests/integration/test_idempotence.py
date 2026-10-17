@@ -1530,7 +1530,7 @@ def test_talos_with_a_nas(tmp_path, factory):
     assert all(n["schematic"] == base and n["version"] == "v1.14.2" for n in s["nodes"].values())
     cp, worker = s["nodes"]["127.0.0.30"]["config"], s["nodes"]["127.0.0.31"]["config"]
     assert "# type: controlplane" in cp and "listen-metrics-urls" in cp and "$patch: delete" not in cp
-    assert "# type: worker" in worker and "name: local-path-provisioner" in worker and "_talos-data" in worker
+    assert "# type: worker" in worker and "name: local-path-provisioner" in worker and "_drive-scsi1" in worker
     assert "hostname: homeserver-worker-1" in worker and "kind: WatchdogTimerConfig" in worker
     assert talos_files(tmp_path) == [
         "home/.talos/homeserver/bootstrapped",
@@ -1607,7 +1607,7 @@ def test_talos_without_a_nas(tmp_path, factory):
     expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=0, note="second run")
     config = read(state)["nodes"]["127.0.0.30"]["config"]
     assert "node-role.kubernetes.io/control-plane:\n    $patch: delete" in config, config
-    assert "name: local-path-provisioner" in config and "name: media" in config and "_talos-media" in config
+    assert "name: local-path-provisioner" in config and "name: media" in config and "_drive-scsi2" in config
 
     # A user volume whose disk selector matches nothing is never mounted: the run says so, naming the volume.
     s = read(state)
@@ -1662,7 +1662,7 @@ def test_talos_waits_for_a_slow_node_and_reports_a_failed_install(tmp_path, fact
     write(state, s)
     rc, _, out = run("talos.yml", extra | {"talos_config_dir": str(tmp_path / "home" / "other")}, env=env)
     assert rc != 0 and "homeserver-worker-1 did not install: still pending after 5 tries" in out, out[-3000:]
-    assert ": no disk matched the selector. Pending means no disk matched the install selector" in out, out[-3000:]
+    assert ": no disk matched the selector. No disk matched the install selector" in out, out[-3000:]
     assert read(state)["nodes"]["127.0.0.31"]["mode"] == "configured" and "bootstrap_calls" not in read(state)
 
     talos_state(state)

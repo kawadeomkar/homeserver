@@ -129,13 +129,15 @@
         label: "{{ item.name }}"
 
     # A node given its configuration in maintenance mode answers with the talosconfig at once, but installs in the
-    # background, still running from the ISO: pending until a disk matches the install selector, installing,
-    # waiting-for-reboot, and once rebooted from its system disk, installed. So only its install status says when it
-    # is done, and a selector that matches nothing shows up as a lasting pending, not as a timeout of bootstrap,
-    # which Talos refuses until then. The configuration names the installer image (talosctl gen config writes
-    # --install-image into its UnattendedInstallConfig), which is what makes Talos reboot, and within one boot it
-    # never reports waiting-for-reboot as installed: installed means running from the system disk. While it
-    # reboots it answers nothing.
+    # background, still running from the ISO: pending until a disk matches the install selector (Talos 1.14.2
+    # leaves that zero value out of the YAML and gives the error "no disk matched the selector"; the
+    # talos_install_status filter reads it), installing, waiting-for-reboot, and once rebooted from its system
+    # disk, installed. So only its install status says when it is done, and a selector that matches nothing shows
+    # up as a lasting phase with that error, not as a timeout of bootstrap, which Talos refuses until then. The
+    # configuration names the installer image (talosctl gen config writes --install-image into its
+    # UnattendedInstallConfig), which is what makes Talos reboot, and within one boot it never reports
+    # waiting-for-reboot as installed: installed means running from the system disk. While it reboots it answers
+    # nothing.
     - name: Wait for each node to install and boot from its system disk
       ansible.builtin.command:
         argv:
@@ -169,9 +171,9 @@
           {%- elif _status.phase %} still {{ _status.phase }} after {{ _waited }}{{ ': ' ~ _status.error if _status.error else '' }}.
           {%- else %} no answer for {{ _waited }} since its configuration was applied.
           {%- endif %}
-          {%- if _status.phase == 'pending' %} Pending means no disk matched the install selector, the disk whose by-id
-          link ends in _talos-system (talos_patches_common); talosctl -n {{ item.item.address }} get disks lists what it
-          sees.
+          {%- if 'no disk matched' in _status.error | default('', true) or _status.phase == 'pending' %} No disk matched
+          the install selector (talos_patches_common); talosctl -n {{ item.item.address }} get disks lists the disks and
+          their by-id links.
           {%- endif %}
       when: _status.phase != 'installed'
       vars:

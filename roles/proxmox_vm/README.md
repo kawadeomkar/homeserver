@@ -79,8 +79,9 @@ A VM:
   start: true                         # default
 ```
 
-Every disk is created with `discard=on,ssd=1`. A `serial` names the disk's `/dev/disk/by-id/` link inside the
-guest, which is how a guest that cannot read SCSI serials (Talos on virtio-scsi) finds it.
+Every disk is created with `discard=on,ssd=1`. A `serial` is passed to the guest, but on virtio-scsi Proxmox also
+sets `device_id=drive-<slot>`, which names the disk's `/dev/disk/by-id/` link (`scsi-0QEMU_QEMU_HARDDISK_drive-scsiN`):
+a guest finds a disk by its slot, so keep each disk in its slot.
 
 ## Examples
 

@@ -18,22 +18,24 @@ kubernetes_bridge: vmbr0
 
 # One VM per node. The system disk on the installer's storage; the data disk, which holds the apps' local
 # volumes, on the persistent NAS storage with a NAS (qcow2) and on the installer's storage without one; the media
-# disk without a NAS, never backed up. Each disk's serial names its /dev/disk/by-id/ link, which is how Talos's
-# disk selectors find it. The CD-ROM always holds the current ISO, so a node whose system disk is wiped reaches
+# disk without a NAS, never backed up. Each sits in its slot of kubernetes_disk_slots, whose by-id link Talos's disk
+# selectors match; the serials only name the disks for whoever reads the VM's configuration. The CD-ROM always holds
+# the current ISO, so a node whose system disk is wiped reaches
 # maintenance mode from it; it boots from its system disk first. The control plane starts first, and the
 # workload node gets the host's iGPU when local.yml names its PCI mapping (kubernetes_gpu_mapping).
 proxmox_vm_vms: >-
   {%- set out = [] -%}
   {%- for n in kubernetes_nodes if kubernetes_present -%}
-  {%-   set disks = [{'slot': 'scsi0', 'storage': kubernetes_system_storage, 'size_gib': n.system_disk_gib,
-                      'serial': 'talos-system'}] -%}
+  {%-   set disks = [{'slot': kubernetes_disk_slots.system, 'storage': kubernetes_system_storage,
+                      'size_gib': n.system_disk_gib, 'serial': 'talos-system'}] -%}
   {%-   if n.data_disk_gib | default(0) | int > 0 -%}
-  {%-     set _ = disks.append({'slot': 'scsi1', 'storage': kubernetes_data_storage, 'size_gib': n.data_disk_gib,
-                                'serial': 'talos-data'} | combine({'format': 'qcow2'} if nas_present else {})) -%}
+  {%-     set _ = disks.append({'slot': kubernetes_disk_slots.data, 'storage': kubernetes_data_storage,
+                                'size_gib': n.data_disk_gib, 'serial': 'talos-data'}
+                               | combine({'format': 'qcow2'} if nas_present else {})) -%}
   {%-   endif -%}
   {%-   if n.media_disk_gib | default(0) | int > 0 -%}
-  {%-     set _ = disks.append({'slot': 'scsi2', 'storage': kubernetes_system_storage, 'size_gib': n.media_disk_gib,
-                                'serial': 'talos-media', 'backup': false}) -%}
+  {%-     set _ = disks.append({'slot': kubernetes_disk_slots.media, 'storage': kubernetes_system_storage,
+                                'size_gib': n.media_disk_gib, 'serial': 'talos-media', 'backup': false}) -%}
   {%-   endif -%}
   {%-   set gpu = kubernetes_gpu_mapping | default('', true) and n.name == kubernetes_data_node -%}
   {%-   set _ = out.append({
@@ -41,7 +43,7 @@ proxmox_vm_vms: >-
           'machine': 'q35', 'bios': 'ovmf', 'efidisk_storage': kubernetes_system_storage, 'cpu': 'host',
           'scsihw': 'virtio-scsi-pci', 'disks': disks,
           'net': {'bridge': kubernetes_bridge, 'mac': kubernetes_node_macs[n.name]},
-          'iso': kubernetes_iso_storage ~ ':iso/' ~ kubernetes_iso_filename, 'boot': 'order=scsi0;ide2',
+          'iso': kubernetes_iso_storage ~ ':iso/' ~ kubernetes_iso_filename, 'boot': 'order=' ~ kubernetes_disk_slots.system ~ ';ide2',
           'watchdog': {'model': 'i6300esb', 'action': 'reset'}, 'onboot': true,
           'startup': 'order=' ~ ('1' if n.role == 'controlplane' else '2') ~ ',up=60,down=120',
           'tags': ['talos', 'k8s'],

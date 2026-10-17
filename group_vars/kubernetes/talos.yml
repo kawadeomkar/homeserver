@@ -24,18 +24,18 @@ talos_endpoint: "https://{{ kubernetes_node_addresses[kubernetes_controlplane.na
 talos_extra_sans: "{{ kubernetes_api_sans | default([], true) }}"
 
 # Each node: its hostname, and the volumes on its data and media disks. The workload node gets the GPU schematic and
-# a label for the GPU plugin when local.yml names the host's iGPU mapping. Disks are found by the udev by-id link
-# Proxmox's serial= names, since Talos reads no serial from a virtio-scsi disk.
+# a label for the GPU plugin when local.yml names the host's iGPU mapping. Disks are found by the by-id link QEMU names
+# after their slot (kubernetes_disk_slots, group_vars/all/kubernetes.yml).
 talos_nodes: >-
   {%- set out = [] -%}
   {%- for n in kubernetes_nodes -%}
   {%-   set gpu = kubernetes_gpu_mapping | default('', true) and n.name == kubernetes_data_node -%}
   {%-   set patches = ['apiVersion: v1alpha1\nkind: HostnameConfig\nhostname: ' ~ n.name ~ '\nauto: "off"\n'] -%}
-  {%-   for volume, serial, size in [('local-path-provisioner', 'talos-data', n.data_disk_gib | default(0)),
-                                     ('media', 'talos-media', n.media_disk_gib | default(0))] if size | int > 0 -%}
+  {%-   for volume, slot, size in [('local-path-provisioner', kubernetes_disk_slots.data, n.data_disk_gib | default(0)),
+                                   ('media', kubernetes_disk_slots.media, n.media_disk_gib | default(0))] if size | int > 0 -%}
   {%-     set _ = patches.append('apiVersion: v1alpha1\nkind: UserVolumeConfig\nname: ' ~ volume ~ '\nprovisioning:\n'
                                  ~ '  diskSelector:\n    match: "!system_disk && disk.symlinks.exists(s, s.endsWith(\'_'
-                                 ~ serial ~ '\'))"\n  minSize: 10GiB\n  grow: true\nfilesystem:\n  type: xfs\n') -%}
+                                 ~ 'drive-' ~ slot ~ '\'))"\n  minSize: 10GiB\n  grow: true\nfilesystem:\n  type: xfs\n') -%}
   {%-   endfor -%}
   {%-   if gpu -%}
   {%-     set _ = patches.append('apiVersion: v1alpha1\nkind: KubeNodeConfig\nlabels:\n  homeserver.internal/gpu: intel\n') -%}
@@ -45,15 +45,15 @@ talos_nodes: >-
   {%- endfor -%}
   {{ out }}
 
-# Every node: installed on the disk whose by-id link ends in the system disk's serial, wiped first; and the VM's
-# i6300esb watchdog armed, so a hung node is reset within two minutes.
+# Every node: installed on the disk in the system disk's slot (its by-id link ends in _drive-scsi0), wiped first; and
+# the VM's i6300esb watchdog armed, so a hung node is reset within two minutes.
 talos_patches_common:
   - |
     apiVersion: v1alpha1
     kind: UnattendedInstallConfig
     provisioning:
       diskSelector:
-        match: "disk.symlinks.exists(s, s.endsWith('_talos-system'))"
+        match: "disk.symlinks.exists(s, s.endsWith('_drive-{{ kubernetes_disk_slots.system }}'))"
       wipe: true
   - |
     apiVersion: v1alpha1

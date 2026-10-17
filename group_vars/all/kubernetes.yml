@@ -45,6 +45,11 @@ kubernetes_node_shapes:
     - {name: homeserver-cp-1, role: controlplane, vmid: 300}
 # The keys of a node's size, the only ones kubernetes_node_sizes may set.
 kubernetes_node_size_keys: [cores, memory_mib, system_disk_gib, data_disk_gib, media_disk_gib]
+# The SCSI slot of each node disk, read by the VMs' layout (group_vars/proxmox/vms.yml) and by Talos's disk selectors
+# (group_vars/kubernetes/talos.yml), which find a disk by the by-id link QEMU names after its slot,
+# /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsiN: Proxmox gives each disk device_id=drive-scsiN, which udev
+# prefers to the serial, and Talos reads no serial from a virtio-scsi disk (seen on Proxmox VE 9.2, Talos 1.14.2).
+kubernetes_disk_slots: {system: scsi0, data: scsi1, media: scsi2}
 # The setup's nodes, each with the sizes local.yml gives it laid over the shape's.
 kubernetes_nodes: >-
   {%- set out = [] -%}

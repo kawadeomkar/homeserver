@@ -2,18 +2,18 @@
 
 State is a JSON file named by $FAKE_TALOS_STATE:
 
-- `nodes`: {address: {mode: maintenance | configured | absent, config, config_sha256, version, schematic,
-  install, install_error, install_fails, answers_after, volumes_missing}}. `config` keeps the applied text, so
-  a test can read it. A node given its configuration in maintenance mode is configured at once, answering with a
-  talosconfig, and installs in the background as Talos 1.14 does: `install` holds the phases its install status
-  reports, one per question (installing, waiting-for-reboot, then no answer while it reboots, then installed), and
-  bootstrap is refused until it is installed. A node with `install_error` stays pending with that error, as one
-  whose disk selector matches nothing does; one with `install_fails` fails its install with that error. An absent
-  node with `answers_after` answers in maintenance mode after that many questions. A configured node's user volumes
-  (the UserVolumeConfig documents in its configuration) are ready, except those named in `volumes_missing`, which
-  wait, as a volume whose disk selector matches nothing does. Applying a configuration (no-reboot, or auto, which
-  Talos 1.14 makes no-reboot) always succeeds, as it does in Talos 1.14, unless the state's `apply_fails` holds an
-  error to answer with.
+- `nodes`: {address: {mode: maintenance | configured | absent, config, config_sha256, version, schematic, install,
+  install_error, install_fails, answers_after, volumes_missing}}. `config` keeps the applied text, so a test can
+  read it. A node given its configuration in maintenance mode is configured at once, answering with a talosconfig,
+  and installs in the background as Talos 1.14 does: `install` holds the phases its install status reports, one per
+  question (installing, waiting-for-reboot, then no answer while it reboots, then installed), and bootstrap is
+  refused until it is installed. A node with `install_error` stays pending with that error, as one whose disk
+  selector matches nothing does (Talos 1.14.2 leaves the pending phase out of the YAML); one with `install_fails`
+  fails its install with that error. An absent node with `answers_after` answers in maintenance mode after that many
+  questions. A configured node's user volumes (the UserVolumeConfig documents in its configuration) are ready,
+  except those named in `volumes_missing`, which wait, as a volume whose disk selector matches nothing does.
+  Applying a configuration (no-reboot, or auto, which Talos 1.14 makes no-reboot) always succeeds, as it does in
+  Talos 1.14, unless the state's `apply_fails` holds an error to answer with.
 - `bootstrapped` (etcd running), `k8s_version`, `snapshots`, `pre_pulls`, `mutations`, and the failure switches
   `bootstrap_precondition_count` (bootstrap answers FailedPrecondition that many times first) and
   `operator_never_available` (for kubectl wait).
@@ -243,7 +243,8 @@ def cmd_get(state, globals_, args):
                 f"rpc error: code = Unavailable desc = connection error: dial tcp {address}:50000: "
                 "connect: connection refused"
             )
-        spec = {"phase": phase}
+        # As Talos 1.14.2 prints it: pending, the phase's zero value, is left out of the YAML.
+        spec = {} if phase == "pending" else {"phase": phase}
         if phase in ("pending", "failed"):
             spec["error"] = node.get("install_error") or node.get("install_fails")
         docs = [
@@ -253,6 +254,7 @@ def cmd_get(state, globals_, args):
                     "namespace": "runtime",
                     "type": "UnattendedInstallStatuses.runtime.talos.dev",
                     "id": "unattended-install",
+                    "phase": "running",
                 },
                 "spec": spec,
             }

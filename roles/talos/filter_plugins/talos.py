@@ -45,17 +45,19 @@ def service_state(stdout):
 def install_status(stdout):
     """A node's unattended install, from `talosctl get unattendedinstallstatuses -o yaml`: {phase, error}, each None
     when not reported. The phase is pending (no disk matches the selector), installing, waiting-for-reboot,
-    installed or failed. Output that is not YAML, such as nothing from a node that does not answer, reports
-    neither."""
+    installed or failed; Talos leaves pending, its zero value, out of the YAML (seen on 1.14.2, with the error "no
+    disk matched the selector"), so a status without one is pending. metadata.phase is the resource's own
+    lifecycle (running), never the install's. Output that is not YAML, such as nothing from a node that does not
+    answer, reports neither."""
     try:
         documents = list(yaml.safe_load_all(str(stdout or "")))
     except yaml.YAMLError:
         documents = []
     for document in documents:
-        spec = (document or {}).get("spec") if isinstance(document, dict) else None
-        if isinstance(spec, dict) and spec.get("phase"):
+        spec = document.get("spec") if isinstance(document, dict) else None
+        if isinstance(spec, dict):
             error = next((str(spec[key]) for key in ("error", "message", "reason") if spec.get(key)), None)
-            return {"phase": str(spec["phase"]), "error": error}
+            return {"phase": str(spec.get("phase") or "pending"), "error": error}
     return {"phase": None, "error": None}
 
 

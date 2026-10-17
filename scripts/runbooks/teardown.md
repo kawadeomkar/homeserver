@@ -1,0 +1,86 @@
+# Taking the cluster down again
+
+How to remove a Kubernetes cluster this repository built, such as a test deployment, and everything it brought
+with it, leaving the NAS and the Proxmox host as they were before `make kubernetes`. Nothing here runs by itself;
+do it in this order, top to bottom. Commands on the Proxmox host run as root; addresses and MACs are in
+`group_vars/all/local.yml`.
+
+What stays, since it is not the cluster's: the storage ids under their class names (`homeserver-persistent`,
+`homeserver-ephemeral`, the project pools) and `homeserver-backup`, the NAS's `proxmox/backup` and project datasets,
+the package upgrades `make proxmox` installed, and the age key's public half in `.sops.yaml` (harmless without the
+key).
+
+## 1. Keep what you want from the apps
+
+The apps' own data (databases, settings) lives on the worker's data disk, which step 2 destroys. With a NAS, the
+shared data is on the NAS datasets, which step 4 destroys only if you choose to. Export anything worth keeping
+first: Nextcloud's and PhotoPrism's files through their apps or from the NAS datasets, Grafana's dashboards, and so
+on. The media library (`ephemeral/jellyfin` with a NAS) predates the cluster and is never removed here.
+
+## 2. The VMs
+
+Stop Flux first, so nothing re-creates what you remove, then the VMs:
+
+```bash
+export KUBECONFIG=~/.talos/homeserver/kubeconfig
+flux suspend kustomization --all -n flux-system     # optional: the VMs go anyway
+```
+
+On the Proxmox host:
+
+```bash
+qm stop 301; qm stop 300                     # 301 exists with a NAS only
+qm destroy 301 --purge 1 --destroy-unreferenced-disks 1
+qm destroy 300 --purge 1 --destroy-unreferenced-disks 1
+```
+
+`--purge` also takes the VMs out of the `vm-nightly` backup job and of HA. Then remove their backups, which would
+otherwise make `make kubernetes` refuse to build the VMs anew (`proxmox_vm` reads leftovers as a rebuild):
+
+```bash
+pvesm list homeserver-backup --vmid 300; pvesm list homeserver-backup --vmid 301    # without a NAS: vm_backup_storage
+pvesm free <volid>                           # for each backup listed
+pvesm list local --content iso | grep talos  # the Talos ISOs proxmox_vm downloaded
+pvesm free local:iso/talos-<version>-<schematic>-metal-amd64.iso
+```
+
+The `vm-nightly` job stays, covering `vm_backup_extra_vmids` if any; with none, remove it by hand
+(`pvesh delete /cluster/backup/vm-nightly`), since the role never deletes a job.
+
+## 3. The workstation
+
+```bash
+rm -rf ~/.talos/homeserver                   # talosconfig, kubeconfig, the bootstrap record, etcd snapshots
+```
+
+In `group_vars/all/local.yml`, delete the Kubernetes section (every `kubernetes_*`, `flux_*`, `sops_*` and
+`haos_url` setting): without node addresses the NAS and Proxmox plays leave the cluster's parts alone, and
+`make kubernetes` ends by itself. `make vault-edit` and delete `vault_talos_secrets`: a new cluster gets a new
+bundle. Keep the age key (`~/.config/sops/age/homeserver.agekey`) only if the SOPS files under `k8s/` stay; they
+decrypt with it alone.
+
+## 4. The NAS (with a NAS)
+
+The NAS role creates and never deletes, so this part is by hand, the one exception to "every change goes through
+the role", and needs the owner. With the Kubernetes section gone from `local.yml`, `make check-truenas` shows
+nothing to add back; it then lists what remains for you to remove in the TrueNAS UI:
+
+- **The NFS shares** of `persistent/nextcloud`, `persistent/photoprism`, `ephemeral/frigate` and
+  `ephemeral/jellyfin` (Shares → NFS): the last one exports the media library to the worker; removing the share
+  leaves the library alone.
+- **The snapshot tasks** of `persistent/nextcloud` and `persistent/photoprism` (Data Protection → Periodic Snapshot
+  Tasks), and their snapshots once you no longer want them.
+- **The datasets** `persistent/nextcloud`, `persistent/photoprism` and `ephemeral/frigate`, with what is in them,
+  after step 1 (Datasets → the dataset → Delete). Not `ephemeral/jellyfin`.
+
+The two snapshot tasks of `persistent/proxmox/vm` are the VM storage's, not the cluster's: keep them.
+
+## 5. The router
+
+Remove the nodes' DHCP reservations and the wildcard DNS record for `*.<domain>` from OPNsense, and free MetalLB's
+block.
+
+## 6. Check
+
+`make check-truenas` and `make check-proxmox` report `changed=0`, `make check-kubernetes` says this setup has no
+cluster, and `qm list` shows neither VM.

@@ -206,7 +206,8 @@ export SOPS_AGE_KEY_FILE=~/.config/sops/age/homeserver.agekey    # in your shell
 A node that stays down: `scripts/runbooks/dead-worker.md`. Their disks are never
 moved, shrunk or deleted by the playbook, and it refuses to create a VM over the disks or backups an earlier one
 left under the same VMID: restore it instead (`scripts/runbooks/vm-restore.md`). On thin LVM it also refuses disks
-that would add up to more than the pool holds, other VMs' included.
+that would add up to more than the pool holds, other VMs' included. Taking a cluster down again, a test deployment
+say, and what it brought with it: `scripts/runbooks/teardown.md`.
 
 With a NAS, `make truenas` then creates the datasets the cluster mounts (`persistent/nextcloud`,
 `persistent/photoprism`, `ephemeral/frigate`) and exports them, with the existing media dataset, to the worker
