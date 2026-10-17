@@ -1,0 +1,42 @@
+---
+argument_specs:
+  main:
+    short_description: Hand a Kubernetes cluster to Flux, through the Flux Operator
+    description:
+      - Runs on the controller with kubectl. Installs or upgrades the Flux Operator, and keeps the Secret
+        flux-system/sops-age (the age key), the ConfigMap flux-system/cluster-settings and the FluxInstance flux as
+        configured, each compared with a server-side diff and applied server-side under one field manager, so a
+        key removed from the settings disappears.
+      - Flux 2.9 and later fail a manifest naming a setting that does not exist (strict substitution, on by
+        default), instead of giving it an empty string.
+      - Refuses an age key file that holds anything but one key, or that others can read.
+      - The defaults do nothing.
+    options:
+      flux_bootstrap_kubeconfig:
+        type: str
+        default: ""
+        description: The cluster's kubeconfig.
+      flux_bootstrap_operator_version:
+        type: str
+        default: ""
+        description: The Flux Operator's release, such as v0.61.0.
+      flux_bootstrap_operator_url:
+        type: str
+        default: https://github.com/controlplaneio-fluxcd/flux-operator/releases/download
+        description: Where the operator's releases are; <url>/<version>/install.yaml is applied.
+      flux_bootstrap_instance:
+        type: dict
+        default: {}
+        description: The FluxInstance's Flux version (2.9.x), Git url, ref and path.
+      flux_bootstrap_settings:
+        type: dict
+        default: {}
+        description: The cluster-settings ConfigMap's keys and values, all strings.
+      flux_bootstrap_age_key_file:
+        type: str
+        default: ""
+        description: The age private key file that becomes the Secret flux-system/sops-age. One key, mode 0600.
+      flux_bootstrap_wait_timeout:
+        type: str
+        default: 10m
+        description: How long a real run waits for the operator and for the FluxInstance.

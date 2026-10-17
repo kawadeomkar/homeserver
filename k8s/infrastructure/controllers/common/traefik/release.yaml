@@ -1,0 +1,52 @@
+---
+# The cluster's ingress, the default IngressClass, on one LoadBalancer address (LB_TRAEFIK_IP, from the cluster's
+# settings). Plain HTTP for now: TLS comes with a real domain. Gateway API later, with its CRDs.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: traefik
+  namespace: traefik
+spec:
+  interval: 1h
+  chartRef:
+    kind: OCIRepository
+    name: traefik
+  install:
+    crds: CreateReplace
+  upgrade:
+    crds: CreateReplace
+  values:
+    ingressClass:
+      enabled: true
+      isDefaultClass: true
+      name: traefik
+    providers:
+      kubernetesIngress:
+        enabled: true
+        publishedService:
+          enabled: true
+      kubernetesCRD:
+        enabled: true
+      kubernetesGateway:
+        enabled: false
+    service:
+      annotations:
+        metallb.io/loadBalancerIPs: "${LB_TRAEFIK_IP}"
+      spec:
+        type: LoadBalancer
+        # Keeps clients' addresses; MetalLB announces from the node the pod runs on.
+        externalTrafficPolicy: Local
+        allocateLoadBalancerNodePorts: false
+    ports:
+      websecure:
+        expose:
+          default: false
+      web:
+        transport:
+          respondingTimeouts:
+            # Large uploads (Nextcloud, PhotoPrism, FileBrowser) take longer than the 60-second default.
+            readTimeout: 0
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi

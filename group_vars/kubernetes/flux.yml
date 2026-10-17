@@ -1,0 +1,43 @@
+---
+# How this cluster is handed to Flux, applied by roles/flux_bootstrap after roles/talos. Flux then syncs this
+# repository's k8s/clusters/<setup> and applies everything below it.
+flux_bootstrap_kubeconfig: "{{ talos_config_dir }}/kubeconfig"
+flux_bootstrap_operator_version: v0.61.0
+flux_bootstrap_instance:
+  version: "2.9.x"
+  # The repository this cluster syncs, from local.yml: it has no default, since Flux applies whatever it holds with
+  # cluster-admin rights, and a fork must sync its own (kubernetes_settings_error refuses it missing).
+  url: "{{ flux_sync_url }}"
+  # A validation branch for a test cluster, from local.yml; main otherwise.
+  ref: "{{ flux_sync_ref | default('refs/heads/main', true) }}"
+  path: "k8s/clusters/{{ 'nas' if nas_present else 'local' }}"
+# This cluster's own key, in a file of its own: the whole file goes into the cluster.
+flux_bootstrap_age_key_file: "{{ sops_age_key_file | default('~/.config/sops/age/homeserver.agekey', true) | expanduser }}"
+
+# The settings every Flux Kustomization substitutes (${NAME}): strings only. Addresses come from local.yml and never
+# appear in a manifest. With a NAS, its address, pools and the media dataset; without one, where the media and
+# camera recordings live on the node: its media disk, or the data volume when local.yml keeps them there. HAOS_URL,
+# Home Assistant OS's address for Homepage's tile, only when local.yml sets haos_url. Prometheus scrapes etcd at the
+# control plane's address (never tracked), and keeps less history without a NAS, whose node is smaller. With the
+# host's iGPU passed to the workload node (local.yml's kubernetes_gpu_mapping), Jellyfin and Frigate ask for it
+# (GPU_I915 1) and Frigate detects on it; without, they ask for none (a limit of 0 schedules anywhere) and use the CPU.
+flux_bootstrap_settings: >-
+  {{ {'DOMAIN': kubernetes_domain | default(kubernetes_domain_default, true),
+      'TZ': kubernetes_timezone,
+      'LB_RANGE': kubernetes_lb_range | string,
+      'LB_TRAEFIK_IP': kubernetes_lb_traefik_ip | string,
+      'LB_FRIGATE_IP': kubernetes_lb_frigate_ip | string,
+      'DATA_NODE': kubernetes_data_node}
+     | combine({'NAS_ADDRESS': nas_address, 'NAS_POOL_PERSISTENT': nas_pools.persistent,
+                'NAS_POOL_EPHEMERAL': nas_pools.ephemeral,
+                'MEDIA_DATASET': vm_storage_mount_root ~ '/' ~ nas_pools.ephemeral ~ '/jellyfin'} if nas_present else
+               {'MEDIA_LOCAL_PATH': '/var/mnt/media/library' if kubernetes_media_disk
+                                    else '/var/mnt/local-path-provisioner/static/media',
+                'FRIGATE_LOCAL_PATH': '/var/mnt/media/frigate' if kubernetes_media_disk
+                                      else '/var/mnt/local-path-provisioner/static/frigate-media'})
+     | combine({'GPU_I915': '1' if kubernetes_gpu_mapping | default('', true) else '0',
+                'FRIGATE_DETECTOR_DEVICE': 'GPU' if kubernetes_gpu_mapping | default('', true) else 'CPU'})
+     | combine({'CONTROL_PLANE_ADDRESS': kubernetes_node_addresses[kubernetes_controlplane.name] | trim,
+                'PROMETHEUS_RETENTION': '15d' if nas_present else '7d',
+                'PROMETHEUS_RETENTION_SIZE': '15GB' if nas_present else '5GB'})
+     | combine({'HAOS_URL': haos_url} if haos_url | default('', true) else {}) }}

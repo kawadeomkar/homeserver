@@ -1,0 +1,15 @@
+---
+# Intel's GPU device plugin, which hands the passed-through iGPU (gpu.intel.com/i915) to Jellyfin and Frigate. It
+# runs only on a node labelled homeserver.internal/gpu=intel, which roles/talos gives the workload node when local.yml
+# names the host's iGPU (kubernetes_gpu_mapping); elsewhere nothing runs here. Its manifests are Intel's, vendored
+# (README.md), applied by the Flux Kustomization infra-gpu (k8s/clusters/*/infrastructure.yaml).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: intel-gpu-plugin
+  labels:
+    # The plugin mounts the node's /dev/dri, /sys/class/drm, the kubelet's device-plugin socket directory and
+    # /var/run/cdi as hostPaths, under an SELinux type of its own: beyond baseline, which Talos enforces.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged

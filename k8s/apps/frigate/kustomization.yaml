@@ -1,0 +1,17 @@
+---
+# Frigate (Flux Kustomization apps-frigate). The Secret frigate/frigate is a SOPS file (k8s/README-secrets.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - frigate.sops.yaml
+  - frigate.yaml
+# The template is Frigate's and go2rtc's, whose own ${VAR} Flux must leave alone.
+configMapGenerator:
+  - name: frigate-config-template
+    namespace: frigate
+    files:
+      - config.yml=config.yml.tmpl
+    options:
+      annotations:
+        kustomize.toolkit.fluxcd.io/substitute: disabled

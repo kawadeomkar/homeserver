@@ -1,0 +1,77 @@
+# A node that stays down
+
+The cluster runs on one physical host. With a NAS it has a control plane (VM 300) and a worker (VM 301) that runs
+every app; without one, a single control plane (VM 300) runs everything. Nothing fails over: a node that stays down
+takes its apps with it until it is back. The two setups fail differently, so they have a section each. Run the
+`qm` commands on the Proxmox host as root, and `talosctl` and `kubectl` on the workstation with
+`TALOSCONFIG=~/.talos/homeserver/talosconfig` and `KUBECONFIG=~/.talos/homeserver/kubeconfig`.
+
+## First, in both setups
+
+1. Look at the VM: `qm status <vmid>`. A hung VM is normally reset by its watchdog within about two minutes, plus
+   its boot.
+2. If it is stopped, `qm start <vmid>`. If it hangs, `qm reset <vmid>`. Give it five minutes.
+
+## With a NAS: the worker (VM 301) stays down
+
+- **Leave its pods alone.** The `node.kubernetes.io/out-of-service` taint would delete them, but the only other node
+  is the control plane, which takes no apps, and the apps on `local` volumes wait for their node anyway.
+- **The node answers the Talos API but its system is broken**: wipe its system disk and reinstall it, keeping its
+  data:
+
+  ```bash
+  talosctl reset -n <worker address> --graceful=false --wipe-mode system-disk --reboot
+  make kubernetes
+  ```
+
+  The VM boots the Talos ISO, which stays attached for this, into maintenance mode, and `make kubernetes`
+  installs it again; the data volume, on its own disk, is untouched. Without `--reboot` the reset powers the VM
+  off, and `make kubernetes` starts it. **Never `--wipe-mode all`**: that wipes the user volumes, the apps' data.
+  The node keeps its name, which the local volumes are pinned to.
+- **The node does not answer at all**: `talosctl reset` needs the Talos API, so wipe the system disk from Proxmox
+  instead:
+  1. `qm stop 301`
+  2. Detach the old system disk: `qm set 301 --delete scsi0`. It becomes `unused0`, and Proxmox drops it from the
+     boot order, which is now the ISO alone.
+  3. Give it a fresh one with the same size and serial, on the installer's storage (`local-lvm`, or
+     `proxmox_local_vm_storage` from `local.yml` on a ZFS install; the size is `system_disk_gib` for the worker,
+     64 by default), and put the boot order back, system disk first, or the node would boot the ISO after every
+     install:
+
+     ```bash
+     qm set 301 --scsi0 local-lvm:64,discard=on,ssd=1,serial=talos-system --boot 'order=scsi0;ide2'
+     ```
+
+     `make kubernetes` corrects the boot order too, but on a running VM only from its next restart: Talos's own
+     reboot after installing is not one.
+  4. `qm start 301`. The new disk is blank, so it boots the ISO into maintenance mode; `make kubernetes` installs
+     it. The data disk is untouched.
+  5. Once the node is back: `qm disk unlink 301 --idlist unused0 --force 1`.
+
+  This path is not yet tried on a real host; try it on a test host first.
+- **The VM's disks are lost**: restore it from its backup, `scripts/runbooks/vm-restore.md`.
+
+## Without a NAS: the single node is the control plane
+
+- **Never `--wipe-mode system-disk` or `all`.** The system disk holds etcd. The next run would then refuse to
+  bootstrap again, since a new bootstrap makes a new, empty cluster; forced, Flux would recreate every volume
+  claim, and the apps would start on new, empty directories while their data sat orphaned on the data volume.
+- With its API down, `kubectl` does not answer either: use the Proxmox console and `talosctl`.
+- **To recover, prefer last night's VM backup** (`scripts/runbooks/vm-restore.md`, "One VM, on a host that is
+  still running"): it brings back etcd and the node together, as of 02:00.
+- **If only etcd is lost**, restore it from a snapshot. The snapshot's age is the point every Kubernetes object
+  goes back to: a claim made since is gone, and Flux re-creates it on a new, empty directory while the data
+  written since sits orphaned on the data volume. Snapshots come only from `make etcd-snapshot` and from the
+  start of every `make talos-upgrade`, so take one before any risky change, or run `make etcd-snapshot` on a
+  schedule from the workstation (cron or launchd). Talos recovers etcd only on a node whose etcd waits to be
+  bootstrapped (`Preparing`), so wipe etcd's partition alone first, which leaves the user volumes alone:
+
+  ```bash
+  ls -t ~/.talos/homeserver/etcd/ | head -1                       # the newest snapshot, and its date
+  talosctl reset -n <address> --graceful=false --reboot --system-labels-to-wipe=EPHEMERAL
+  talosctl service etcd -n <address>                              # wait for STATE Preparing
+  talosctl bootstrap -n <address> --recover-from="$HOME/.talos/homeserver/etcd/<that file>"
+  ```
+
+  Never any other `--system-labels-to-wipe` or `--wipe-mode`. `--recover-from` alone, on a node whose etcd is
+  running or failing, is refused. This path is not yet tried on a real host; try it on a test host first.

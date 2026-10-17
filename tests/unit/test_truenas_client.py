@@ -416,3 +416,46 @@ class TestConfigNeverReturnsThePrivateKey:
         assert result["failed"] and "these fields did not take: ['ui_httpsredirect']" in result["msg"]
         assert result["config"] == {"ui_httpsredirect": False, "ui_certificate": 1}
         assert PRIVATE_KEY not in json.dumps(result)
+
+
+# mail.config returns the mail server's password (TrueNAS API v25.10). The module compares it, so a rotated one is
+# sent, but never returns it, and Ansible masks it as a no_log option's value.
+PASSWORD = "FAKE-MAIL-PASSWORD"
+MAIL = {"outgoingserver": "smtp.example.org", "port": 587, "pass": PASSWORD, "id": 1}
+MAIL_ARGS = {
+    "api_host": NAS,
+    "api_key": "a-key",
+    "namespace": "mail",
+    "settings": {"outgoingserver": "smtp.example.org", "port": 587},
+    "secret_settings": {"pass": "FAKE-ROTATED-PASSWORD"},
+}
+
+
+class TestConfigNeverReturnsASecretSetting:
+    @pytest.mark.parametrize("check_mode", [True, False], ids=["check", "apply"])
+    def test_a_rotated_secret_is_sent_and_never_returned(self, nas, run, check_mode):
+        rotated = {**MAIL, "pass": "FAKE-ROTATED-PASSWORD"}
+        fake = nas({"auth.login_with_api_key": True, "mail.config": [MAIL, rotated], "mail.update": None})
+        result = run(config, MAIL_ARGS, check_mode=check_mode)
+        assert not result.get("failed"), result
+        assert result["changed"]
+        assert result["config"]["pass"] == "<secret>"
+        assert result["diff"]["before"]["pass"] == "<secret>"
+        assert result["diff"]["after"]["pass"] == "<secret, changed>"
+        sent = fake.called("mail.update")
+        assert sent == ([] if check_mode else [[{"pass": "FAKE-ROTATED-PASSWORD"}]])
+        assert PASSWORD not in json.dumps(result) and "FAKE-ROTATED-PASSWORD" not in json.dumps(result)
+
+    def test_an_unchanged_secret_changes_nothing(self, nas, run):
+        fake = nas({"auth.login_with_api_key": True, "mail.config": MAIL, "mail.update": None})
+        result = run(config, {**MAIL_ARGS, "secret_settings": {"pass": PASSWORD}})
+        assert not result.get("failed"), result
+        assert not result["changed"] and fake.called("mail.update") == []
+        assert result["diff"]["after"]["pass"] == "<secret>"
+        assert PASSWORD not in json.dumps(result)
+
+    def test_a_secret_that_does_not_take_is_reported_without_its_value(self, nas, run):
+        nas({"auth.login_with_api_key": True, "mail.config": MAIL, "mail.update": None})
+        result = run(config, MAIL_ARGS)
+        assert result["failed"] and "these fields did not take: ['pass']" in result["msg"]
+        assert PASSWORD not in json.dumps(result) and "FAKE-ROTATED-PASSWORD" not in json.dumps(result)

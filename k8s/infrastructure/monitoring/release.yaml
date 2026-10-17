@@ -1,0 +1,122 @@
+---
+# Prometheus, Alertmanager, Grafana, node-exporter and kube-state-metrics, with the community's rules and dashboards.
+# One replica each, their data on local volumes. Retention comes from the cluster's settings (shorter without a NAS,
+# whose node is smaller). The control plane's components serve metrics beyond localhost (roles/talos binds them to
+# 0.0.0.0): the controller manager and scheduler are static pods the chart's Services find by their component label;
+# etcd is not a pod on Talos, so it is named by the control plane's address. Every component requests CPU and memory
+# (make lint-helm checks the rendered chart).
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kube-prometheus-stack
+  namespace: monitoring
+spec:
+  interval: 1h
+  timeout: 15m
+  chartRef:
+    kind: OCIRepository
+    name: kube-prometheus-stack
+  install:
+    crds: CreateReplace
+  upgrade:
+    crds: CreateReplace
+  values:
+    alertmanager:
+      alertmanagerSpec:
+        replicas: 1
+        resources:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+        storage:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: local
+              accessModes: [ReadWriteOnce]
+              resources:
+                requests:
+                  storage: 1Gi
+    grafana:
+      replicas: 1
+      deploymentStrategy:
+        type: Recreate
+      # The chart makes this claim, so Flux's prune annotation cannot guard it: Helm's own keeps it when the release
+      # is uninstalled, as renaming or pruning infra-monitoring would.
+      persistence:
+        enabled: true
+        storageClassName: local
+        size: 5Gi
+        annotations:
+          helm.sh/resource-policy: keep
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+      initChownData:
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+      sidecar:
+        resources:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+      ingress:
+        enabled: true
+        ingressClassName: traefik
+        hosts:
+          - "grafana.${DOMAIN}"
+    prometheusOperator:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+      admissionWebhooks:
+        patch:
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+      prometheusConfigReloader:
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+    prometheus:
+      prometheusSpec:
+        replicas: 1
+        retention: "${PROMETHEUS_RETENTION}"
+        retentionSize: "${PROMETHEUS_RETENTION_SIZE}"
+        resources:
+          requests:
+            cpu: 250m
+            memory: 1Gi
+        # Every ServiceMonitor, PodMonitor and rule in the cluster, not only the chart's.
+        serviceMonitorSelectorNilUsesHelmValues: false
+        podMonitorSelectorNilUsesHelmValues: false
+        ruleSelectorNilUsesHelmValues: false
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: local
+              accessModes: [ReadWriteOnce]
+              resources:
+                requests:
+                  storage: 20Gi
+    kube-state-metrics:
+      resources:
+        requests:
+          cpu: 10m
+          memory: 64Mi
+    prometheus-node-exporter:
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+    kubeEtcd:
+      endpoints:
+        - "${CONTROL_PLANE_ADDRESS}"
+      service:
+        port: 2381
+        targetPort: 2381

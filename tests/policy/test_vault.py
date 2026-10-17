@@ -26,12 +26,15 @@ def test_every_tracked_vault_file_is_encrypted():
 
 
 def vault_init_tree(tmp_path):
-    """The Makefile, ansible.cfg and the tracked vault, which no test password opens, copied into tmp_path."""
+    """The Makefile, ansible.cfg and the tracked vault, which no test password opens, copied into tmp_path, a git
+    repository whose index holds that vault."""
     for name in ("Makefile", "ansible.cfg"):
         shutil.copy(ROOT / name, tmp_path)
     vault = tmp_path / "group_vars" / "all" / "vault.yml"
     vault.parent.mkdir(parents=True)
     shutil.copy(ROOT / "group_vars" / "all" / "vault.yml", vault)
+    for command in (["git", "init", "-q"], ["git", "add", "group_vars/all/vault.yml"]):
+        subprocess.run(command, cwd=tmp_path, check=True, capture_output=True)
     return vault
 
 
@@ -54,10 +57,26 @@ def test_vault_init_makes_a_private_vault(tmp_path):
     assert vault.read_text().startswith(HEADERS)
     view = run_in(tmp_path, str(Path(sys.prefix) / "bin" / "ansible-vault"), "view", "group_vars/all/vault.yml")
     assert view.returncode == 0 and yaml.safe_load(view.stdout) == {}, view.stderr
+    skip = run_in(tmp_path, "git", "ls-files", "-v", "group_vars/all/vault.yml")
+    assert skip.stdout.startswith("S "), skip.stdout + skip.stderr
     before = vault.read_bytes()
     second = vault_init(tmp_path)
     assert second.returncode == 0 and "nothing to do" in second.stdout, second.stdout + second.stderr
     assert vault.read_bytes() == before
+
+
+def test_vault_init_never_replaces_a_vault_of_the_users_own(tmp_path):
+    """A vault that .vault_pass does not open and that is not the tracked one may hold the cluster's secrets
+    bundle, as a user's own vault does once .vault_pass is lost: it is refused, and neither file is written."""
+    vault = vault_init_tree(tmp_path)
+    assert vault_init(tmp_path).returncode == 0
+    (tmp_path / ".vault_pass").unlink()
+    before = vault.read_bytes()
+    refused = vault_init(tmp_path)
+    assert refused.returncode != 0 and "is not the tracked vault" in refused.stdout, refused.stdout + refused.stderr
+    assert vault.read_bytes() == before and not (tmp_path / ".vault_pass").exists()
+    (tmp_path / ".vault_pass").write_text("not the password\n")
+    assert vault_init(tmp_path).returncode != 0 and vault.read_bytes() == before
 
 
 def test_vault_init_leaves_the_vault_alone_when_it_cannot_encrypt(tmp_path):

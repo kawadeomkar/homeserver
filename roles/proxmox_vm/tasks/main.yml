@@ -1,0 +1,369 @@
+---
+# Creates the VMs and corrects the settings it manages, with qm and pvesh over root SSH. The tasks read the node;
+# the proxmox_vm_plan filter (filter_plugins/proxmox_vm.py) works out what to do from what they read, and the
+# tasks run the commands it returns. A disk is never moved, shrunk or detached, a VM is never deleted or
+# restarted, and an ISO is never deleted.
+
+# Needs no connection, so it runs under every tag, and a dry run of the configuration alone catches it.
+- name: Check the role's inputs
+  ansible.builtin.assert:
+    that: _errors | length == 0
+    fail_msg: "{{ _errors | join(' ') }}"
+    quiet: true
+  tags: [always]
+  vars:
+    _errors: "{{ proxmox_vm_vms | proxmox_vm_input_errors(proxmox_vm_isos) }}"
+
+- name: Create and correct the VMs
+  when: proxmox_vm_vms | length > 0 or proxmox_vm_isos | length > 0
+  block:
+    # Proxmox names a node after its short hostname.
+    - name: Find the node's name
+      ansible.builtin.command:
+        argv: [hostname, -s]
+      register: proxmox_vm_hostname
+      changed_when: false
+      check_mode: false
+      when: proxmox_vm_node | length == 0
+
+    - name: Use the node's name
+      ansible.builtin.set_fact:
+        proxmox_vm_node_name: "{{ proxmox_vm_node if proxmox_vm_node | length > 0 else proxmox_vm_hostname.stdout | trim }}"
+
+    - name: Read the storage configuration
+      ansible.builtin.command:
+        argv: [pvesh, get, /storage, --output-format, json]
+      register: proxmox_vm_storage_config
+      changed_when: false
+      check_mode: false
+
+    # ------------------------------------------------------------------------------------------- ISOs ---
+    - name: Refuse an ISO storage that cannot hold ISOs
+      ansible.builtin.assert:
+        that: _problems | length == 0
+        fail_msg: "These storages in proxmox_vm_isos cannot hold ISOs: {{ _problems | join('; ') }}."
+        quiet: true
+      vars:
+        _problems: >-
+          {%- set out = [] -%}
+          {%- for st in proxmox_vm_isos | map(attribute='storage') | unique -%}
+          {%-   set p = st | proxmox_vm_storage_problem(proxmox_vm_storage_config.stdout | from_json, 'iso', false, []) -%}
+          {%-   if p -%}{%- set _ = out.append(p) -%}{%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Read the ISO storages' content
+      ansible.builtin.command:
+        argv: [pvesh, get, "/nodes/{{ proxmox_vm_node_name }}/storage/{{ item }}/content", --content, iso, --output-format, json]
+      register: proxmox_vm_iso_content
+      changed_when: false
+      check_mode: false
+      loop: "{{ proxmox_vm_isos | map(attribute='storage') | unique }}"
+
+    # The version and schematic are in the file name, so a new version is a new file. The Image Factory publishes
+    # no checksum to anyone without a subscription, so there is none to check.
+    - name: Work out the ISOs to download
+      ansible.builtin.set_fact:
+        proxmox_vm_iso_volumes: "{{ _volumes }}"
+        proxmox_vm_iso_missing: >-
+          {%- set have = _volumes | map(attribute='volid') | list -%}
+          {%- set out = [] -%}
+          {%- for iso in proxmox_vm_isos if iso.storage ~ ':iso/' ~ iso.filename not in have -%}
+          {%-   set _ = out.append(iso) -%}
+          {%- endfor -%}
+          {{ out }}
+      vars:
+        _volumes: "{{ proxmox_vm_iso_content.results | map(attribute='stdout') | map('from_json') | flatten }}"
+
+    - name: Show the ISOs to download
+      ansible.builtin.debug:
+        msg: "Would download: {{ proxmox_vm_iso_missing | map(attribute='filename') | join(', ') }}"
+      when: proxmox_vm_iso_missing | length > 0
+      changed_when: ansible_check_mode
+
+    - name: Download the missing ISOs
+      ansible.builtin.command:
+        argv:
+          - pvesh
+          - create
+          - "/nodes/{{ proxmox_vm_node_name }}/storage/{{ item.storage }}/download-url"
+          - --content
+          - iso
+          - --filename
+          - "{{ item.filename }}"
+          - --url
+          - "{{ item.url }}"
+      register: proxmox_vm_downloads
+      loop: "{{ proxmox_vm_iso_missing }}"
+      loop_control:
+        label: "{{ item.filename }}"
+      changed_when: true
+
+    # pvesh can exit 0 for a download task that failed, so each task's own exit status is read.
+    - name: Read each download's result
+      ansible.builtin.command:
+        argv: [pvesh, get, "/nodes/{{ proxmox_vm_node_name }}/tasks/{{ _upid }}/status", --output-format, json]
+      register: proxmox_vm_download_status
+      changed_when: false
+      loop: "{{ proxmox_vm_downloads.results | default([]) | rejectattr('skipped', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.item.filename }}"
+      vars:
+        _upid: "{{ item.stdout | regex_findall('UPID:\\S+') | last }}"
+
+    - name: Refuse a download that failed
+      ansible.builtin.assert:
+        that: (item.stdout | from_json).exitstatus | default('') == 'OK'
+        fail_msg: >-
+          Downloading {{ item.item.item.filename }} from {{ item.item.item.url }} failed:
+          {{ (item.stdout | from_json).exitstatus | default('unknown') }}. Nothing was stored; the next run tries again.
+        quiet: true
+      loop: "{{ proxmox_vm_download_status.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.item.filename }}"
+
+    # -------------------------------------------------------------------------------------- the node ---
+    - name: Read the node's VMs
+      ansible.builtin.command:
+        argv: [pvesh, get, "/nodes/{{ proxmox_vm_node_name }}/qemu", --output-format, json]
+      register: proxmox_vm_qemu
+      changed_when: false
+      check_mode: false
+
+    # A container's VMID is taken too, though it is no VM.
+    - name: Read the node's containers
+      ansible.builtin.command:
+        argv: [pvesh, get, "/nodes/{{ proxmox_vm_node_name }}/lxc", --output-format, json]
+      register: proxmox_vm_lxc
+      changed_when: false
+      check_mode: false
+
+    - name: Work out which VMs exist
+      ansible.builtin.set_fact:
+        proxmox_vm_existing: "{{ _wanted | select('in', _have) | list }}"
+        proxmox_vm_missing: "{{ _wanted | reject('in', _have) | list }}"
+      vars:
+        _have: "{{ proxmox_vm_qemu.stdout | from_json | map(attribute='vmid') | map('string') | list }}"
+        _wanted: "{{ proxmox_vm_vms | map(attribute='vmid') | map('string') | list }}"
+
+    # Proxmox returns the configuration with pending changes already in it, so these show what a restart would
+    # apply; the pending list says what still waits for one.
+    - name: Read each existing VM's configuration
+      ansible.builtin.command:
+        argv: [pvesh, get, "/nodes/{{ proxmox_vm_node_name }}/qemu/{{ item }}/config", --output-format, json]
+      register: proxmox_vm_configs
+      changed_when: false
+      check_mode: false
+      loop: "{{ proxmox_vm_existing }}"
+
+    # Only for the report of ISOs no VM uses: other VMs' CD-ROMs count too.
+    - name: Read the other VMs' configuration
+      ansible.builtin.command:
+        argv: [pvesh, get, "/nodes/{{ proxmox_vm_node_name }}/qemu/{{ item }}/config", --output-format, json]
+      register: proxmox_vm_other_configs
+      changed_when: false
+      check_mode: false
+      loop: "{{ proxmox_vm_qemu.stdout | from_json | map(attribute='vmid') | map('string') | reject('in', proxmox_vm_existing) | list }}"
+
+    - name: Read each existing VM's pending changes
+      ansible.builtin.command:
+        argv: [pvesh, get, "/nodes/{{ proxmox_vm_node_name }}/qemu/{{ item }}/pending", --output-format, json]
+      register: proxmox_vm_pending
+      changed_when: false
+      check_mode: false
+      loop: "{{ proxmox_vm_existing }}"
+
+    - name: Read the node's storages
+      ansible.builtin.command:
+        argv: [pvesh, get, "/nodes/{{ proxmox_vm_node_name }}/storage", --output-format, json]
+      register: proxmox_vm_node_storage
+      changed_when: false
+      check_mode: false
+
+    # A missing VM whose VMID still has disks or backups is being rebuilt, not built: the host was reinstalled or
+    # the VM's configuration lost. Read on every active storage; the plan refuses while an enabled one is not
+    # active, since what it holds cannot be ruled out.
+    - name: Read the volumes each missing VM's VMID still has
+      ansible.builtin.command:
+        argv:
+          - pvesh
+          - get
+          - "/nodes/{{ proxmox_vm_node_name }}/storage/{{ item.1 }}/content"
+          - --vmid
+          - "{{ item.0 }}"
+          - --output-format
+          - json
+      register: proxmox_vm_leftovers
+      changed_when: false
+      check_mode: false
+      loop: "{{ proxmox_vm_missing | product(_active) | list }}"
+      vars:
+        _active: >-
+          {{ proxmox_vm_node_storage.stdout | from_json | selectattr('active', 'defined')
+             | selectattr('active', 'equalto', 1) | map(attribute='storage') | list }}
+
+    # The disk budget is kept on thin LVM and ZFS, the storages every disk on them shares.
+    - name: Work out the storages whose space is budgeted
+      ansible.builtin.set_fact:
+        proxmox_vm_budgeted: >-
+          {{ _config | selectattr('type', 'in', ['lvmthin', 'zfspool']) | map(attribute='storage')
+             | select('in', _targets) | list }}
+      vars:
+        _config: "{{ proxmox_vm_storage_config.stdout | from_json }}"
+        _targets: >-
+          {{ (proxmox_vm_vms | map(attribute='disks') | flatten | map(attribute='storage') | list)
+             + (proxmox_vm_vms | selectattr('efidisk_storage', 'defined') | map(attribute='efidisk_storage') | list) }}
+
+    # Every volume, not only images: Proxmox lists a container's volumes as rootdir, and they share the pool too.
+    - name: Read the volumes on each budgeted storage
+      ansible.builtin.command:
+        argv: [pvesh, get, "/nodes/{{ proxmox_vm_node_name }}/storage/{{ item }}/content", --output-format, json]
+      register: proxmox_vm_budget_content
+      changed_when: false
+      check_mode: false
+      loop: "{{ proxmox_vm_budgeted }}"
+
+    - name: Read each budgeted storage's size
+      ansible.builtin.command:
+        argv: [pvesh, get, "/nodes/{{ proxmox_vm_node_name }}/storage/{{ item }}/status", --output-format, json]
+      register: proxmox_vm_budget_status
+      changed_when: false
+      check_mode: false
+      loop: "{{ proxmox_vm_budgeted }}"
+
+    - name: Read the node's memory
+      ansible.builtin.command:
+        argv: [pvesh, get, "/nodes/{{ proxmox_vm_node_name }}/status", --output-format, json]
+      register: proxmox_vm_node_status
+      changed_when: false
+      check_mode: false
+
+    # --------------------------------------------------------------------------------------- the plan ---
+    - name: Work out what to create, correct, grow and start
+      ansible.builtin.set_fact:
+        proxmox_vm_plan: "{{ proxmox_vm_vms | proxmox_vm_plan(_facts) }}"
+      vars:
+        _facts:
+          check_mode: "{{ ansible_check_mode }}"
+          pending_storages: "{{ proxmox_vm_pending_storages }}"
+          allow_overcommit: "{{ proxmox_vm_allow_overcommit | bool }}"
+          ignore_existing_volumes: "{{ proxmox_vm_ignore_existing_volumes | bool }}"
+          storage_config: "{{ proxmox_vm_storage_config.stdout | from_json }}"
+          qemu: "{{ proxmox_vm_qemu.stdout | from_json }}"
+          lxc: "{{ proxmox_vm_lxc.stdout | from_json }}"
+          node_storage: "{{ proxmox_vm_node_storage.stdout | from_json }}"
+          configs: "{{ dict(proxmox_vm_existing | zip(proxmox_vm_configs.results | map(attribute='stdout') | map('from_json'))) }}"
+          pending: "{{ dict(proxmox_vm_existing | zip(proxmox_vm_pending.results | map(attribute='stdout') | map('from_json'))) }}"
+          volumes: >-
+            {%- set out = {} -%}
+            {%- for r in proxmox_vm_leftovers.results -%}
+            {%-   set _ = out.update({r.item.0: out.get(r.item.0, []) + (r.stdout | from_json)}) -%}
+            {%- endfor -%}
+            {{ out }}
+          contents: "{{ dict(proxmox_vm_budgeted | zip(proxmox_vm_budget_content.results | map(attribute='stdout') | map('from_json'))) }}"
+          totals: >-
+            {{ dict(proxmox_vm_budgeted | zip(proxmox_vm_budget_status.results | map(attribute='stdout') | map('from_json')
+               | map(attribute='total'))) }}
+          memory_total: "{{ ((proxmox_vm_node_status.stdout | from_json).memory | default({})).total | default(0) }}"
+
+    - name: Refuse what the role will not do
+      ansible.builtin.assert:
+        that: proxmox_vm_plan.errors | length == 0
+        fail_msg: "{{ proxmox_vm_plan.errors | join('. ') }}."
+        quiet: true
+
+    # Commands do not run in check mode, so this is what a dry run shows: create, ok, or the changes per VM, and a
+    # storage that an earlier role adds only on a real run. A dry run counts it as a change when there is something
+    # to do; a real run counts the commands instead.
+    - name: Show what each VM needs
+      ansible.builtin.debug:
+        msg: >-
+          {{ {'vms': proxmox_vm_plan.summary}
+             | combine({'storage created by proxmox_storage on a real run': proxmox_vm_plan.pending_storages}
+                       if proxmox_vm_plan.pending_storages else {}) }}
+      changed_when: ansible_check_mode and proxmox_vm_plan.summary.values() | reject('eq', 'ok') | list | length > 0
+
+    - name: Warn about the node's memory and the VMs' MACs
+      ansible.builtin.debug:
+        msg: "{{ proxmox_vm_plan.warnings }}"
+      when: proxmox_vm_plan.warnings | length > 0
+
+    - name: Create the VMs
+      ansible.builtin.command:
+        argv: "{{ item.argv }}"
+      loop: "{{ proxmox_vm_plan.create }}"
+      loop_control:
+        label: "{{ item.vmid }} {{ item.name }}"
+      changed_when: true
+
+    - name: Correct the VMs' settings
+      ansible.builtin.command:
+        argv: "{{ item.argv }}"
+      loop: "{{ proxmox_vm_plan.set }}"
+      loop_control:
+        label: "{{ item.vmid }} {{ item.name }}"
+      changed_when: true
+
+    - name: Grow the disks
+      ansible.builtin.command:
+        argv: [qm, disk, resize, "{{ item.vmid }}", "{{ item.slot }}", "{{ item.size }}"]
+      loop: "{{ proxmox_vm_plan.resize }}"
+      loop_control:
+        label: "{{ item.vmid }} {{ item.slot }} {{ item.size }}"
+      changed_when: true
+
+    - name: Start the VMs
+      ansible.builtin.command:
+        argv: [qm, start, "{{ item.vmid }}"]
+      loop: "{{ proxmox_vm_plan.start }}"
+      loop_control:
+        label: "{{ item.vmid }} {{ item.name }}"
+      changed_when: true
+
+    # ------------------------------------------------------------------------------------- the report ---
+    # Every VM's MAC, for checking against the router's DHCP reservations, and every setting that waits for a
+    # restart: a watchdog added to a running VM, say, does nothing until then. The role never restarts a VM.
+    - name: Read the VMs' configuration and pending changes again
+      ansible.builtin.command:
+        argv: [pvesh, get, "/nodes/{{ proxmox_vm_node_name }}/qemu/{{ item.0 }}/{{ item.1 }}", --output-format, json]
+      register: proxmox_vm_after
+      changed_when: false
+      loop: "{{ proxmox_vm_vms | map(attribute='vmid') | map('string') | product(['config', 'pending']) | list }}"
+      when: not ansible_check_mode
+
+    - name: Show each VM's MAC, and what waits for a restart
+      ansible.builtin.debug:
+        msg: "{{ {'macs': _macs} | combine({'needs a restart (qm shutdown, then qm start)': _restart} if _restart else {}) }}"
+      vars:
+        _after: "{{ proxmox_vm_after.results | default([]) | rejectattr('skipped', 'defined') | list }}"
+        _macs: >-
+          {%- set out = {} -%}
+          {%- for r in _after if r.item.1 == 'config' -%}
+          {%-   set net = (r.stdout | from_json).net0 | default('') -%}
+          {%-   set _ = out.update({(r.stdout | from_json).name | default(r.item.0): net | regex_search('[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}')}) -%}
+          {%- endfor -%}
+          {{ out if _after else proxmox_vm_plan.macs }}
+        _restart: >-
+          {%- set out = {} -%}
+          {%- for r in _after if r.item.1 == 'pending' -%}
+          {%-   set keys = r.stdout | from_json | selectattr('pending', 'defined') | map(attribute='key') | list
+                           + (r.stdout | from_json | selectattr('delete', 'defined') | map(attribute='key') | list) -%}
+          {%-   if keys -%}{%- set _ = out.update({r.item.0: keys | sort}) -%}{%- endif -%}
+          {%- endfor -%}
+          {{ out if _after else proxmox_vm_plan.restart }}
+
+    - name: Show the old ISOs no VM uses
+      ansible.builtin.debug:
+        msg: "Not used by any VM here, remove them by hand when no longer wanted: {{ _unused | join(', ') }}"
+      when: _unused | length > 0
+      vars:
+        _cdroms: >-
+          {%- set out = [] -%}
+          {%- for r in proxmox_vm_configs.results | default([]) + proxmox_vm_other_configs.results | default([]) -%}
+          {%-   for key, value in (r.stdout | from_json).items()
+                  if key is match('(ide|sata|scsi)[0-9]+$') and 'media=cdrom' in value | string -%}
+          {%-     set _ = out.append(value) -%}
+          {%-   endfor -%}
+          {%- endfor -%}
+          {{ out }}
+        _unused: "{{ proxmox_vm_iso_volumes | proxmox_vm_unused_isos(proxmox_vm_isos, _cdroms) }}"

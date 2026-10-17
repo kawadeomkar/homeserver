@@ -1,0 +1,68 @@
+---
+# Each node's machine configuration, rendered into the scratch directory (talos_workspace, which holds
+# secrets.yaml) by talosctl gen config: the patches for every node, then for its role, then its own. Takes
+# talos_render: [{name, role, version, contract, kubernetes_version, install_image, patches}]. A local render, so it
+# runs in check mode too. tests/talos_validate.yml renders through this file as well, for make lint-talos.
+- name: render | Write the shared patches
+  ansible.builtin.copy:
+    content: "{{ item.1 }}"
+    dest: "{{ talos_workspace }}/{{ item.0 }}"
+    mode: "0600"
+  changed_when: false
+  check_mode: false
+  diff: false
+  loop: >-
+    {%- set out = [] -%}
+    {%- for kind, patches in [('common', talos_patches_common), ('controlplane', talos_patches_controlplane),
+                              ('worker', talos_patches_worker)] -%}
+    {%-   for p in patches -%}{%- set _ = out.append([kind ~ '-' ~ loop.index ~ '.yaml', p]) -%}{%- endfor -%}
+    {%- endfor -%}
+    {{ out }}
+  loop_control:
+    label: "{{ item.0 }}"
+
+- name: render | Write each node's own patches
+  ansible.builtin.copy:
+    content: "{{ item.1 }}"
+    dest: "{{ talos_workspace }}/{{ item.0 }}"
+    mode: "0600"
+  changed_when: false
+  check_mode: false
+  diff: false
+  loop: >-
+    {%- set out = [] -%}
+    {%- for n in talos_render -%}
+    {%-   for p in n.patches | default([]) -%}{%- set _ = out.append(['node-' ~ n.name ~ '-' ~ loop.index ~ '.yaml', p]) -%}{%- endfor -%}
+    {%- endfor -%}
+    {{ out }}
+  loop_control:
+    label: "{{ item.0 }}"
+
+- name: render | Render each node's configuration
+  ansible.builtin.command:
+    argv: >-
+      {%- set argv = ['talosctl', 'gen', 'config', talos_cluster_name, talos_endpoint,
+                      '--with-secrets', talos_workspace ~ '/secrets.yaml', '--talos-version', item.contract,
+                      '--kubernetes-version', item.kubernetes_version, '--install-image', item.install_image,
+                      '--with-docs=false', '--with-examples=false'] -%}
+      {#- A set inside a for loop ends with the loop in Jinja, so the list is extended in place. -#}
+      {%- for san in talos_extra_sans -%}{%- set _ = argv.extend(['--additional-sans', san]) -%}{%- endfor -%}
+      {%- for p in talos_patches_common -%}
+      {%-   set _ = argv.extend(['--config-patch', '@' ~ talos_workspace ~ '/common-' ~ loop.index ~ '.yaml']) -%}
+      {%- endfor -%}
+      {%- for p in talos_patches_controlplane -%}
+      {%-   set _ = argv.extend(['--config-patch-control-plane', '@' ~ talos_workspace ~ '/controlplane-' ~ loop.index ~ '.yaml']) -%}
+      {%- endfor -%}
+      {%- for p in talos_patches_worker -%}
+      {%-   set _ = argv.extend(['--config-patch-worker', '@' ~ talos_workspace ~ '/worker-' ~ loop.index ~ '.yaml']) -%}
+      {%- endfor -%}
+      {%- for p in item.patches | default([]) -%}
+      {%-   set _ = argv.extend(['--config-patch', '@' ~ talos_workspace ~ '/node-' ~ item.name ~ '-' ~ loop.index ~ '.yaml']) -%}
+      {%- endfor -%}
+      {{ argv + ['--output-types', item.role, '-o', talos_workspace ~ '/' ~ item.name ~ '.yaml', '--force'] }}
+  no_log: true
+  changed_when: false
+  check_mode: false
+  loop: "{{ talos_render }}"
+  loop_control:
+    label: "{{ item.name }}"

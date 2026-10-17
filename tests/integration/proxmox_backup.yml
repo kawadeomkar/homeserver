@@ -1,0 +1,18 @@
+---
+# roles/proxmox_backup with this repo's own configuration, run against the fake pvesh in fake_pve_bin/. A playbook
+# of its own, not part of proxmox.yml, which the other tests run many times. Addresses, the cluster's nodes
+# included, come from the test as extra vars.
+- name: Back up the fake Proxmox host's VMs
+  hosts: proxmox
+  gather_facts: false
+  vars_files:
+    - ../../group_vars/all/storage.yml
+    - ../../group_vars/all/kubernetes.yml
+    - ../../group_vars/proxmox/storage.yml
+    - ../../group_vars/proxmox/backup.yml
+  environment:
+    PATH: "{{ playbook_dir }}/fake_pve_bin:{{ lookup('ansible.builtin.env', 'PATH') }}"
+    FAKE_PVE_STATE: "{{ fake_pve_state }}"
+    FAKE_PVE_PYTHON: "{{ ansible_playbook_python }}"
+  roles:
+    - role: proxmox_backup

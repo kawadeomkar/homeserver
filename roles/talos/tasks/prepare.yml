@@ -1,0 +1,157 @@
+---
+# What every entry point needs before it talks to a node: the workstation's talosctl checked, the schematics'
+# ids, a scratch directory holding the secrets and a talosconfig made from them, and each node's state. The
+# caller removes the scratch directory (talos_workspace) in a block's always. With talos_prepare_minimal (the etcd
+# snapshot), neither the Image Factory nor any node is asked.
+
+- name: prepare | Find the control plane and the workers
+  ansible.builtin.set_fact:
+    talos_controlplane: "{{ talos_nodes | selectattr('role', 'eq', 'controlplane') | first }}"
+    talos_workers: "{{ talos_nodes | selectattr('role', 'eq', 'worker') | list }}"
+
+# talosctl's defaults (the installer image, the Kubernetes version) follow its own release, so a talosctl of
+# another minor would render other configurations. Read locally; nothing connects.
+- name: prepare | Read the workstation's talosctl version
+  ansible.builtin.command:
+    argv: [talosctl, version, --client, --short]
+  register: talos_client
+  changed_when: false
+  check_mode: false
+
+- name: prepare | Refuse a talosctl of another minor release
+  ansible.builtin.assert:
+    that: talos_client.stdout | talos_client_minor == talos_contract
+    fail_msg: >-
+      talosctl on this machine is {{ talos_client.stdout | talos_client_minor | default('of an unknown version', true) }},
+      but the cluster is pinned to {{ talos_version }}: install talosctl {{ talos_contract }}.x (brew install
+      siderolabs/tap/talosctl, or the release from github.com/siderolabs/talos), so it renders what the pins say.
+    quiet: true
+
+# A schematic's id is the hash of its content, so asking for it again changes nothing: safe in check mode.
+- name: prepare | Ask the Image Factory for each schematic's id
+  ansible.builtin.uri:
+    url: "{{ talos_image_factory_url }}/schematics"
+    method: POST
+    body_format: raw
+    body: "{{ {'customization': {'systemExtensions': {'officialExtensions': talos_schematics[item]}}} | to_nice_yaml }}"
+    headers:
+      Content-Type: application/yaml
+    status_code: [200, 201]
+    return_content: true
+  register: talos_factory
+  changed_when: false
+  check_mode: false
+  when: not talos_prepare_minimal | default(false)
+  loop: "{{ talos_nodes | map(attribute='schematic') | unique | sort }}"
+
+- name: prepare | Keep the schematics' ids
+  ansible.builtin.set_fact:
+    talos_schematic_ids: "{{ dict(talos_factory.results | map(attribute='item') | zip(talos_factory.results | map(attribute='json.id'))) }}"
+    talos_installer: "{{ talos_image_factory_url | urlsplit('hostname') }}/metal-installer"
+  when: not talos_prepare_minimal | default(false)
+
+# talos_config_dir belongs to one cluster. A talosconfig or kubeconfig there that names another control plane, or
+# was signed by another CA than the secrets bundle's, is another cluster's: the home cluster's on a test host whose
+# local.yml leaves kubernetes_talos_config_dir unset, say. Kept, it would answer for that cluster (its Kubernetes
+# version read, Flux handed to it); replaced, that cluster would lose its credentials. So the run stops first.
+- name: prepare | Look for the credentials an earlier run kept
+  ansible.builtin.stat:
+    path: "{{ talos_config_dir }}/{{ item }}"
+  register: talos_kept
+  loop: [talosconfig, kubeconfig]
+
+- name: prepare | Compare them with this cluster
+  ansible.builtin.set_fact:
+    talos_foreign: "{{ _foreign }}"
+  no_log: true
+  vars:
+    _kept: "{{ talos_kept.results | selectattr('stat.exists') | map(attribute='item') | list }}"
+    _certs: "{{ (talos_secrets | from_yaml).certs }}"
+    _foreign: >-
+      {%- set out = [] -%}
+      {%- if 'talosconfig' in _kept -%}
+      {%-   set c = lookup('ansible.builtin.file', talos_config_dir ~ '/talosconfig') | from_yaml -%}
+      {%-   set ctx = c.contexts[c.context] -%}
+      {%-   if ctx.endpoints | default([]) != [talos_controlplane.address] -%}
+      {%-     set _ = out.append('its talosconfig names the endpoint ' ~ (ctx.endpoints | default([]) | join(', ') or 'none')
+                                 ~ ', not ' ~ talos_controlplane.address) -%}
+      {%-   endif -%}
+      {%-   if (ctx.ca | default('') | b64decode | trim) != (_certs.os.crt | b64decode | trim) -%}
+      {%-     set _ = out.append("its talosconfig trusts another CA than the secrets bundle's") -%}
+      {%-   endif -%}
+      {%- endif -%}
+      {%- if 'kubeconfig' in _kept -%}
+      {%-   set k = (lookup('ansible.builtin.file', talos_config_dir ~ '/kubeconfig') | from_yaml).clusters[0].cluster -%}
+      {%-   if k.server | default('') != talos_endpoint -%}
+      {%-     set _ = out.append('its kubeconfig names the server ' ~ (k.server | default('none')) ~ ', not ' ~ talos_endpoint) -%}
+      {%-   endif -%}
+      {%-   if (k['certificate-authority-data'] | default('') | b64decode | trim) != (_certs.k8s.crt | b64decode | trim) -%}
+      {%-     set _ = out.append("its kubeconfig trusts another CA than the secrets bundle's") -%}
+      {%-   endif -%}
+      {%- endif -%}
+      {{ out }}
+
+- name: prepare | Refuse another cluster's credentials
+  ansible.builtin.assert:
+    that: talos_foreign | length == 0
+    fail_msg: >-
+      {{ talos_config_dir }} holds another cluster's credentials: {{ talos_foreign | join('; ') }}. Each cluster needs
+      a directory of its own: for a test host or a second cluster, set kubernetes_talos_config_dir in its local.yml
+      (scripts/runbooks/talos.md). If they are this cluster's and its control plane's address or its secrets bundle
+      changed, move talosconfig and kubeconfig out of {{ talos_config_dir }}, keeping bootstrapped and etcd/, and the
+      next run writes new ones.
+    quiet: true
+
+# Local scratch work: made in check mode too, and never reported as a change, so a dry run renders and a second
+# run stays at changed=0.
+- name: prepare | Make a scratch directory
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: .talos
+  register: talos_scratch
+  changed_when: false
+  check_mode: false
+
+- name: prepare | Use it
+  ansible.builtin.set_fact:
+    talos_workspace: "{{ talos_scratch.path }}"
+
+- name: prepare | Write the secrets bundle there
+  ansible.builtin.copy:
+    content: "{{ talos_secrets }}"
+    dest: "{{ talos_workspace }}/secrets.yaml"
+    mode: "0600"
+  no_log: true
+  changed_when: false
+  check_mode: false
+
+# The probes use a talosconfig made from the secrets for this run alone, with the control plane as its endpoint, so
+# they work on a new workstation and in check mode alike.
+- name: prepare | Make a talosconfig for this run
+  ansible.builtin.command:
+    argv:
+      - talosctl
+      - gen
+      - config
+      - "{{ talos_cluster_name }}"
+      - "{{ talos_endpoint }}"
+      - --with-secrets
+      - "{{ talos_workspace }}/secrets.yaml"
+      - --output-types
+      - talosconfig
+      - -o
+      - "{{ talos_workspace }}/talosconfig"
+      - --force
+  changed_when: false
+  check_mode: false
+
+- name: prepare | Give it the control plane as endpoint and node
+  ansible.builtin.command:
+    argv: [talosctl, --talosconfig, "{{ talos_workspace }}/talosconfig", config, "{{ item }}", "{{ talos_controlplane.address }}"]
+  changed_when: false
+  check_mode: false
+  loop: [endpoint, node]
+
+- name: prepare | Find out what each node runs
+  ansible.builtin.import_tasks: probe.yml
+  when: not talos_prepare_minimal | default(false)

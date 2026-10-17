@@ -2,10 +2,10 @@
 # This Proxmox host's storage, applied by roles/proxmox_storage. The NAS's address comes from
 # group_vars/all/local.yml, the VM storage layout and the NAS switch from group_vars/all/storage.yml.
 
-# The NFS storages mount the NAS at its static address. The bootstrap address is a DHCP lease that the NAS
-# play replaces, so it is never used here: with only that address, the role refuses to run, naming this
-# variable.
-proxmox_storage_nfs_server: "{{ truenas_static_address | default('', true) | trim | split('/') | first }}"
+# The NFS storages mount the NAS at its static address (nas_address, group_vars/all/storage.yml). The bootstrap
+# address is a DHCP lease that the NAS play replaces, so it is never used here: with only that address, the role
+# refuses to run, naming this variable.
+proxmox_storage_nfs_server: "{{ nas_address }}"
 # With a NAS, its shares, one per VM class and per project pool; without one, nothing to add.
 proxmox_storage_nfs: "{{ vm_storage_nfs_exports if nas_present else [] }}"
 # Without a NAS, the installer's storage, which is then the ephemeral class and the only one, must be able to

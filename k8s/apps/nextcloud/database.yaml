@@ -1,0 +1,103 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nextcloud-db
+  namespace: nextcloud
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local
+  resources:
+    requests:
+      storage: 10Gi
+---
+# Nextcloud's database (LinuxServer.io MariaDB), its credentials from the SOPS Secret nextcloud-db. Its first start
+# creates the database and user with networking off, so the probe fails then on purpose; a restart then would find a
+# data directory and skip creating them, hence ten minutes of startup probe. mariadb-admin ping exits 0 whenever the
+# server runs, even when it refuses the login.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nextcloud-db
+  namespace: nextcloud
+  labels:
+    app.kubernetes.io/name: nextcloud-db
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nextcloud-db
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nextcloud-db
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 120
+      containers:
+        # LinuxServer.io: starts as root, and s6 drops to PUID and PGID; it needs the default capabilities.
+        - name: mariadb
+          image: lscr.io/linuxserver/mariadb:11.4.12-r0-ls224
+          env:
+            - name: PUID
+              value: "1000"
+            - name: PGID
+              value: "1000"
+            - name: TZ
+              value: "${TZ}"
+          envFrom:
+            - secretRef:
+                name: nextcloud-db
+          ports:
+            - name: mysql
+              containerPort: 3306
+          securityContext:
+            allowPrivilegeEscalation: false
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          startupProbe:
+            exec:
+              command: [mariadb-admin, ping, -h, 127.0.0.1]
+            periodSeconds: 10
+            failureThreshold: 60
+          livenessProbe:
+            exec:
+              command: [mariadb-admin, ping, -h, 127.0.0.1]
+            periodSeconds: 30
+            failureThreshold: 5
+          readinessProbe:
+            exec:
+              command: [mariadb-admin, ping, -h, 127.0.0.1]
+          volumeMounts:
+            - name: data
+              mountPath: /config
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: nextcloud-db
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nextcloud-db
+  namespace: nextcloud
+  labels:
+    app.kubernetes.io/name: nextcloud-db
+spec:
+  selector:
+    app.kubernetes.io/name: nextcloud-db
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql

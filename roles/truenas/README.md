@@ -42,7 +42,9 @@ re-applied, since TrueNAS keeps those on the boot drive. This repo's full proced
 | `truenas_pools` | Pins the system dataset, imports (or creates on blank disks) pools, sets auto-trim and scrub | `truenas_pools`, `truenas_pool_*`, `truenas_system_dataset_pool` |
 | `truenas_system` | General settings (UI, timezone, ...), NTP servers | `truenas_general_settings`, `truenas_ntp_servers` |
 | `truenas_datasets` | Creates datasets or corrects their properties | `truenas_datasets` |
+| `truenas_snapshots` | Creates periodic snapshot tasks or corrects them, never deletes one | `truenas_snapshot_tasks` |
 | `truenas_nfs` | NFS service settings and shares | `truenas_nfs_settings`, `truenas_nfs_shares` |
+| `truenas_alerts` | The outgoing mail server (its password compared but never printed), and alert services | `truenas_mail`, `truenas_mail_password`, `truenas_alert_services` |
 | `truenas_services` | Enables, disables, starts and stops services, last | `truenas_services` |
 
 `defaults/main.yml` and `meta/argument_specs.yml` describe every variable. Run with `--check --diff`
@@ -74,6 +76,18 @@ truenas_datasets:
   - name: tank/vm
     properties: {sync: STANDARD, recordsize: 64K, compression: LZ4, acltype: POSIX, aclmode: DISCARD}
 
+truenas_snapshot_tasks:
+  - dataset: tank/vm
+    naming_schema: daily-%Y-%m-%d_%H-%M
+    lifetime_value: 7
+    lifetime_unit: DAY
+    schedule: {minute: "00", hour: "00", dom: "*", month: "*", dow: "*"}
+
+truenas_mail: {outgoingserver: smtp.example.org, port: 587, security: TLS, smtp: true, user: nas, fromemail: nas@example.org}
+truenas_mail_password: "{{ vault_truenas_mail_password }}"
+truenas_alert_services:
+  - {name: Email, attributes: {type: Mail, email: admin@example.org}, level: WARNING, enabled: true}
+
 truenas_nfs_shares:
   - path: /mnt/tank/vm
     hosts: ["192.0.2.20"]
@@ -88,7 +102,7 @@ truenas_services:
 ## Notes
 
 - TrueNAS allows 20 logins per minute from one address, and each module run logs in once. The modules
-  take whole lists, so a full run logs in about 13 times. The client waits out the limit when it is hit.
+  take whole lists, so a full run logs in about 16 times. The client waits out the limit when it is hit.
 - On a fresh install, importing a pool moves the system dataset onto that pool unless it was chosen
   explicitly. The role pins it to `truenas_system_dataset_pool` (`boot-pool`) before importing.
 - An existing dataset's `acltype` or `aclmode` is changed only when its entry sets `allow_acl_change`.

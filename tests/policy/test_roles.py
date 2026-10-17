@@ -6,12 +6,14 @@
 - Each custom module documents its check-mode, diff-mode and platform support as `attributes`, and the
   check-mode support it documents is what its AnsibleModule declares.
 - The tracked configuration and examples pass the roles' argument specs and input checks: site.yml runs
-  with only the always-tagged validation, against inventory.example and local.yml.example, and again
-  against a local.yml that names only the Proxmox host, so the NAS play must end by itself. Without a NAS,
-  the storage both VM classes use is the one local.yml names, which no tracked file overrides. A TrueNAS
-  section that keeps other settings but gives no address stops both playbooks, and so does nas_present given
-  on the command line. Deleting the truenas host from the inventory, which inventory.example advises
-  against, still gives a working run without a NAS.
+  with only the always-tagged validation, against inventory.example, in each of the four setups two switches
+  make, with and without a NAS and with and without a cluster: local.yml.example (its placeholders filled in),
+  the example without its Kubernetes section, and a local.yml that names only the Proxmox host, with and
+  without one, where the NAS play must end by itself. Without a NAS, the storage both VM classes use is the
+  one local.yml names, which no tracked file overrides. A TrueNAS section that keeps other settings but gives
+  no address stops both playbooks, and so does nas_present given on the command line; an incomplete
+  Kubernetes section stops them too, with a message per problem. Deleting the truenas host from the
+  inventory, which inventory.example advises against, still gives a working run without a NAS.
 - Every task that calls a custom module passes only options the module accepts. ansible-lint's args rule
   cannot load these modules, so nothing else checks it.
 - Every option whose name looks like a secret is no_log, in the modules and in the roles' argument specs.
@@ -25,11 +27,7 @@ nothing connects anywhere.
 import contextlib
 import importlib.util
 import json
-import os
 import re
-import shutil
-import subprocess
-import sys
 from pathlib import Path
 from unittest import mock
 
@@ -39,6 +37,20 @@ import yaml
 from ansible.plugins.loader import fragment_loader, init_plugin_loader
 from ansible.utils.collection_loader import AnsibleCollectionConfig
 from ansible.utils.plugin_docs import get_docstring
+from helpers import (
+    CLUSTER_ARGS,
+    CLUSTER_VARS,
+    PROXMOX_ONLY_CLUSTER_LOCAL_YML,
+    PROXMOX_ONLY_LOCAL_YML,
+    ansible_cli,
+    as_local_yml,
+    blank_nas_local_yml,
+    example,
+    example_tree,
+    example_without_kubernetes,
+    mac,
+    resolve_on,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 ROLES = sorted(path.parents[1] for path in ROOT.glob("roles/*/meta/argument_specs.yml"))
@@ -49,6 +61,7 @@ SECRET_NAME = re.compile(r"pass(?!ive)|secret|token|key", re.IGNORECASE)
 # Options whose names match it but hold nothing secret, as (module or role, option): why.
 NOT_SECRET = {
     ("truenas_resource", "key"): "the names of the fields that identify an entry",
+    ("flux_bootstrap", "flux_bootstrap_age_key_file"): "the key file's path; the role reads the key, never prints it",
 }
 
 # The modules import their role's module_utils as ansible.module_utils.<name>, as Ansible ships them.
@@ -172,51 +185,6 @@ def test_module_attributes_match_ansible_module(path):
     )
 
 
-# A local.yml with only the Proxmox host's address (an RFC 5737 placeholder): no NAS.
-PROXMOX_ONLY_LOCAL_YML = "---\nproxmox_address: 192.0.2.20\n"
-
-
-def blank_nas_local_yml():
-    """local.yml.example with every TrueNAS value left blank after its colon, which the example allows,
-    and the bootstrap address only a space."""
-    example = yaml.safe_load((ROOT / "group_vars" / "all" / "local.yml.example").read_text())
-    lines = ["---"]
-    for name, value in example.items():
-        if name == "truenas_bootstrap_address":
-            lines.append(f'{name}: " "')
-        elif name.startswith("truenas_"):
-            lines.append(f"{name}:")
-        else:
-            lines.append(yaml.safe_dump({name: value}, default_flow_style=True).strip()[1:-1])
-    return "\n".join(lines) + "\n"
-
-
-def example_tree(tmp_path, local_yml=None):
-    """The roles, group_vars and playbooks copied into tmp_path, with local.yml.example or `local_yml` as
-    local.yml, and an ansible.cfg that names no vault password file."""
-    for name in ["roles", "group_vars"]:
-        shutil.copytree(ROOT / name, tmp_path / name, ignore=shutil.ignore_patterns("local.yml", "vault.yml"))
-    for playbook in ROOT.glob("*.yml"):
-        shutil.copy(playbook, tmp_path)
-    shutil.copy(ROOT / "inventory.example", tmp_path)
-    local = tmp_path / "group_vars" / "all" / "local.yml"
-    if local_yml is None:
-        shutil.copy(ROOT / "group_vars" / "all" / "local.yml.example", local)
-    else:
-        local.write_text(local_yml)
-    (tmp_path / "ansible.cfg").write_text("[defaults]\nretry_files_enabled = false\n")
-    return tmp_path
-
-
-def ansible_cli(tree, tool, *args):
-    """Run one of the ansible CLIs in `tree`; return its exit code and combined output."""
-    env = {**os.environ, "ANSIBLE_CONFIG": str(tree / "ansible.cfg"), "ANSIBLE_NOCOLOR": "1"}
-    env.pop("ANSIBLE_FORCE_COLOR", None)
-    command = [str(Path(sys.executable).parent / tool), *args]
-    result = subprocess.run(command, cwd=tree, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
-    return result.returncode, result.stdout + result.stderr
-
-
 def argspec_pass(tree, playbook="site.yml", *extra):
     """Run `playbook` with only the tasks tagged `always`: the argument-spec validation Ansible adds to each
     role, and the roles' and playbooks' own input checks. truenas_info, also always, would connect to the NAS."""
@@ -224,41 +192,45 @@ def argspec_pass(tree, playbook="site.yml", *extra):
         tree,
         "ansible-playbook",
         *["-i", "inventory.example", playbook, "--tags", "__argspec_only__", "--skip-tags", "truenas_info"],
-        *["-e", "ansible_connection=local", "-e", "vault_truenas_api_key=stub", *extra],
+        *["-e", "ansible_connection=local", "-e", "vault_truenas_api_key=stub"],
+        *["-e", "vault_truenas_mail_password=stub", "-e", json.dumps({"vault_talos_secrets": "certs: {}\n"}), *extra],
     )
 
 
+NAS_PLAY_RUNS = ["validate | Check the connection settings", "skipping: [truenas]"]
+NAS_PLAY_ENDS = ["Skip the NAS when local.yml gives it no address", "ok: [truenas]"]
+NAS_ROLE = ["TASK [truenas :", "validate | Check the connection settings"]
+# What the Proxmox play says when a VM has no backup: without a NAS, a cluster and no vm_backup_storage.
+NO_BACKUP = "are not backed up, because this setup has no NAS"
+
+
+# Two switches, four setups: a NAS or not (the NAS addresses), a cluster or not (the node addresses). Each
+# states how many roles validate their arguments.
 @pytest.mark.parametrize(
-    ("local_yml", "validations", "present", "absent"),
+    ("local_yml", "extra", "validations", "present", "absent"),
     [
+        pytest.param(None, CLUSTER_ARGS, 7, NAS_PLAY_RUNS, [NO_BACKUP], id="nas-cluster"),
+        pytest.param(example_without_kubernetes(), (), 5, NAS_PLAY_RUNS, [NO_BACKUP], id="nas"),
         pytest.param(
-            None,
-            3,
-            ["validate | Check the connection settings", "skipping: [truenas]"],
-            [],
-            id="nas",
+            PROXMOX_ONLY_CLUSTER_LOCAL_YML,
+            CLUSTER_ARGS,
+            6,
+            [*NAS_PLAY_ENDS, NO_BACKUP],
+            NAS_ROLE,
+            id="proxmox-only-cluster",
         ),
+        pytest.param(PROXMOX_ONLY_LOCAL_YML, (), 4, NAS_PLAY_ENDS, [*NAS_ROLE, NO_BACKUP], id="proxmox-only"),
         pytest.param(
-            PROXMOX_ONLY_LOCAL_YML,
-            2,
-            ["Skip the NAS when local.yml gives it no address", "ok: [truenas]"],
-            ["TASK [truenas :", "validate | Check the connection settings"],
-            id="proxmox-only",
-        ),
-        pytest.param(
-            blank_nas_local_yml(),
-            2,
-            ["Skip the NAS when local.yml gives it no address", "ok: [truenas]"],
-            ["TASK [truenas :", "validate | Check the connection settings"],
-            id="proxmox-only-blank-values",
+            blank_nas_local_yml(), (), 4, NAS_PLAY_ENDS, [*NAS_ROLE, NO_BACKUP], id="proxmox-only-blank-values"
         ),
     ],
 )
-def test_examples_satisfy_argument_specs(tmp_path, local_yml, validations, present, absent):
-    """The tracked configuration passes every role's checks: with local.yml.example for local.yml, and with a
-    local.yml that names only the Proxmox host or leaves every TrueNAS value blank, where the NAS play must
-    end before its role runs."""
-    rc, out = argspec_pass(example_tree(tmp_path, local_yml))
+def test_examples_satisfy_argument_specs(tmp_path, local_yml, extra, validations, present, absent):
+    """The tracked configuration passes every role's checks in each setup: with local.yml.example for
+    local.yml (its MAC and repository placeholders filled in), without its Kubernetes section, and with a
+    local.yml that names only the Proxmox host, with a Kubernetes section or without, or leaves every TrueNAS
+    value blank, where the NAS play must end before its role runs."""
+    rc, out = argspec_pass(example_tree(tmp_path, local_yml), "site.yml", *extra)
     assert rc == 0, out[-3000:]
     assert out.count("Validating arguments against arg spec 'main'") == validations, out[-3000:]
     for text in present:
@@ -291,7 +263,27 @@ def test_inventory_without_the_nas_host(tmp_path):
     rc, out = argspec_pass(tree)
     assert rc == 0, out[-3000:]
     assert "skipping: no hosts matched" in out, out[-3000:]
-    assert out.count("Validating arguments against arg spec 'main'") == 2, out[-3000:]
+    assert out.count("Validating arguments against arg spec 'main'") == 4, out[-3000:]
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "extra", "refused"),
+    [
+        pytest.param(PROXMOX_ONLY_LOCAL_YML, (), False, id="no-cluster"),
+        pytest.param(PROXMOX_ONLY_CLUSTER_LOCAL_YML, CLUSTER_ARGS, True, id="cluster"),
+    ],
+)
+def test_inventory_without_the_kubernetes_group(tmp_path, local_yml, extra, refused):
+    """An inventory made before the cluster has no kubernetes group. Without a cluster it still works; with one the
+    run is refused before any VM is made, rather than creating the VMs and matching no host to build Talos on."""
+    tree = example_tree(tmp_path, local_yml)
+    inventory = tree / "inventory.example"
+    inventory.write_text(re.sub(r"(?ms)^# The Kubernetes cluster.*\Z", "", inventory.read_text()))
+    assert "kubernetes" not in inventory.read_text()
+    rc, out = argspec_pass(tree, "site.yml", *extra)
+    assert (rc != 0) == refused, out[-3000:]
+    if refused:
+        assert "add [kubernetes] and homeserver-k8s to" in out and "TASK [proxmox_vm" not in out, out[-3000:]
 
 
 @pytest.mark.parametrize("playbook", ["site.yml", "proxmox.yml"])
@@ -326,19 +318,6 @@ def test_local_yml_names_the_installer_storage(tmp_path, setting, storage):
     assert re.search(rf'"proxmox_storage_local": \[\s*"{storage}"\s*\]', out), out[-3000:]
 
 
-def resolve_on(tree, host, expression):
-    """What a Jinja expression resolves to for `host`, through ansible.builtin.debug: the first JSON object in
-    the output, so warnings printed after it do not matter."""
-    rc, out = ansible_cli(
-        tree,
-        "ansible",
-        *["-i", "inventory.example", host, "-m", "ansible.builtin.debug", "-a", f"msg={{{{ {expression} }}}}"],
-        *["-e", "ansible_connection=local"],
-    )
-    assert rc == 0, out[-3000:]
-    return json.JSONDecoder().raw_decode(out[out.index("{") :])[0]["msg"]
-
-
 @pytest.mark.parametrize(
     ("local_yml", "classes", "exports", "local"),
     [
@@ -346,9 +325,10 @@ def resolve_on(tree, host, expression):
             None,
             ["persistent", "ephemeral"],
             [
-                {"id": "homeserver-persistent", "export": "/mnt/nvme_gen3/proxmox/vm"},
+                {"id": "homeserver-persistent", "export": "/mnt/persistent/proxmox/vm"},
                 {"id": "homeserver-ephemeral", "export": "/mnt/ephemeral/proxmox/vm"},
                 {"id": "claude-on-proxmox-ephemeral", "export": "/mnt/ephemeral/proxmox/claude-on-proxmox"},
+                {"id": "homeserver-backup", "content": ["backup"], "export": "/mnt/persistent/proxmox/backup"},
             ],
             [],
             id="nas",
@@ -367,11 +347,123 @@ def test_layout_resolves_per_setup(tmp_path, local_yml, classes, exports, local)
     assert layout == {"classes": classes, "nfs": exports, "local": local}
 
 
+@pytest.mark.parametrize(
+    ("local_yml", "nodes"),
+    [
+        pytest.param(
+            None, {"homeserver-cp-1": (300, 32, None, None), "homeserver-worker-1": (301, 64, 200, None)}, id="nas"
+        ),
+        pytest.param(PROXMOX_ONLY_CLUSTER_LOCAL_YML, {"homeserver-cp-1": (300, 32, 20, 100)}, id="proxmox-only"),
+    ],
+)
+def test_vms_resolve_on_the_proxmox_host(tmp_path, local_yml, nodes):
+    """The cluster's VMs and ISO resolve on the Proxmox host through the real inventory layout, from what that host's
+    groups see: the version pins live in group_vars/all, since the Proxmox host never sees group_vars/kubernetes.
+    With a NAS the worker's data disk is on the persistent NAS storage, in qcow2; without one, every disk is on
+    local-lvm and the media disk is never backed up."""
+    tree = example_tree(tmp_path, local_yml)
+    isos, vms = resolve_on(tree, "homeserver", "[proxmox_vm_isos, proxmox_vm_vms]", *CLUSTER_ARGS)
+    assert [iso["filename"] for iso in isos] == ["talos-v1.14.2-ce4c9805-metal-amd64.iso"]
+    found = {}
+    for vm in vms:
+        disks = {d["slot"]: d for d in vm["disks"]}
+        found[vm["name"]] = (
+            vm["vmid"],
+            disks["scsi0"]["size_gib"],
+            disks.get("scsi1", {}).get("size_gib"),
+            disks.get("scsi2", {}).get("size_gib"),
+        )
+        assert vm["net"]["mac"] == CLUSTER_VARS["kubernetes_node_macs"][vm["name"]]
+        assert vm["iso"] == "local:iso/talos-v1.14.2-ce4c9805-metal-amd64.iso" and vm["hostpci"] == []
+        assert disks["scsi0"]["storage"] == "local-lvm" and vm["efidisk_storage"] == "local-lvm"
+        if "scsi1" in disks:
+            nas = local_yml is None
+            assert (disks["scsi1"]["storage"], disks["scsi1"].get("format")) == (
+                ("homeserver-persistent", "qcow2") if nas else ("local-lvm", None)
+            )
+        if "scsi2" in disks:
+            assert disks["scsi2"]["backup"] is False
+    assert found == nodes
+
+
+def test_talos_pins_match_the_makefile_and_ci():
+    """The Kubernetes version Talos runs is the one kubeconform validates the manifests against, and the talosctl CI
+    validates the Talos configurations with is the pinned release."""
+    pins = yaml.safe_load((ROOT / "group_vars" / "all" / "kubernetes.yml").read_text())
+    makefile = (ROOT / "Makefile").read_text()
+    assert re.search(rf"^KUBERNETES_VERSION \?= {re.escape(str(pins['talos_kubernetes_version']))}$", makefile, re.M)
+    assert pins["talos_contract"] == ".".join(pins["talos_version"].split(".")[:2])
+    ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    assert "v" + ci["env"]["TALOSCTL_VERSION"] == pins["talos_version"]
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "nodes"),
+    [
+        pytest.param(None, {"homeserver-cp-1": ("controlplane", 1), "homeserver-worker-1": ("worker", 2)}, id="nas"),
+        pytest.param(PROXMOX_ONLY_CLUSTER_LOCAL_YML, {"homeserver-cp-1": ("controlplane", 3)}, id="proxmox-only"),
+    ],
+)
+def test_talos_nodes_resolve_on_the_kubernetes_host(tmp_path, local_yml, nodes):
+    """The Talos nodes resolve on the kubernetes host through the real inventory layout, from what its groups see:
+    the version pins and the NAS address are in group_vars/all, since this host never sees group_vars/proxmox.
+    Without a worker, the control plane's patches delete its taint."""
+    tree = example_tree(tmp_path, local_yml)
+    found = resolve_on(
+        tree,
+        "homeserver-k8s",
+        "{'nodes': talos_nodes, 'endpoint': talos_endpoint, 'version': talos_version, "
+        "'cp': talos_patches_controlplane | join('\\n')}",
+        *CLUSTER_ARGS,
+    )
+    assert {n["name"]: (n["role"], len(n["patches"])) for n in found["nodes"]} == nodes
+    assert found["endpoint"] == "https://192.0.2.30:6443" and found["version"] == "v1.14.2"
+    assert ("$patch: delete" in found["cp"]) == (local_yml is not None)
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "path", "storage_keys"),
+    [
+        pytest.param(
+            None,
+            "k8s/clusters/nas",
+            {"NAS_ADDRESS", "NAS_POOL_PERSISTENT", "NAS_POOL_EPHEMERAL", "MEDIA_DATASET"},
+            id="nas",
+        ),
+        pytest.param(
+            PROXMOX_ONLY_CLUSTER_LOCAL_YML,
+            "k8s/clusters/local",
+            {"MEDIA_LOCAL_PATH", "FRIGATE_LOCAL_PATH"},
+            id="proxmox-only",
+        ),
+    ],
+)
+def test_flux_settings_resolve_on_the_kubernetes_host(tmp_path, local_yml, path, storage_keys):
+    """Flux's settings resolve on the kubernetes host through the real inventory layout: the NAS's address is in
+    group_vars/all, since this host never sees group_vars/proxmox. Each setup syncs its own cluster directory, and
+    every value is a string, since Flux substitutes text."""
+    tree = example_tree(tmp_path, local_yml)
+    settings, instance = resolve_on(
+        tree, "homeserver-k8s", "[flux_bootstrap_settings, flux_bootstrap_instance]", *CLUSTER_ARGS
+    )
+    common = {"DOMAIN", "TZ", "LB_RANGE", "LB_TRAEFIK_IP", "LB_FRIGATE_IP", "DATA_NODE", "CONTROL_PLANE_ADDRESS"}
+    common |= {"GPU_I915", "FRIGATE_DETECTOR_DEVICE"}
+    assert set(settings) == common | {"PROMETHEUS_RETENTION", "PROMETHEUS_RETENTION_SIZE"} | storage_keys
+    assert settings["CONTROL_PLANE_ADDRESS"] == "192.0.2.30"
+    assert all(isinstance(value, str) and value for value in settings.values()), settings
+    assert instance["path"] == path and instance["url"] == CLUSTER_VARS["flux_sync_url"]
+    if local_yml is None:
+        assert settings["NAS_ADDRESS"] == "192.0.2.10" and settings["DATA_NODE"] == "homeserver-worker-1"
+        assert (settings["PROMETHEUS_RETENTION"], settings["PROMETHEUS_RETENTION_SIZE"]) == ("15d", "15GB")
+    else:
+        assert settings["MEDIA_LOCAL_PATH"] == "/var/mnt/media/library" and settings["DATA_NODE"] == "homeserver-cp-1"
+
+
 def test_nas_gets_a_dataset_and_share_per_vm_storage(tmp_path):
     """With a NAS, the NAS configuration derives one dataset and one share for each VM class and each project
     pool, so an export and the storage that mounts it come from one entry. A project pool gets the ephemeral
-    class's properties."""
-    tree = example_tree(tmp_path)
+    class's properties. Without a cluster, nothing is created or exported for one."""
+    tree = example_tree(tmp_path, example_without_kubernetes())
     nas = resolve_on(
         tree,
         "truenas",
@@ -381,18 +473,399 @@ def test_nas_gets_a_dataset_and_share_per_vm_storage(tmp_path):
         " 'shares': truenas_nfs_shares | map(attribute='path') | list}",
     )
     assert nas["datasets"] == [
-        "nvme_gen3/proxmox",
-        "nvme_gen3/proxmox/vm",
+        "persistent/proxmox",
+        "persistent/proxmox/vm",
+        "persistent/proxmox/backup",
         "ephemeral/proxmox",
         "ephemeral/proxmox/vm",
         "ephemeral/proxmox/claude-on-proxmox",
     ]
-    assert nas["pool"] == {"sync": "DISABLED", "recordsize": "64K"}
+    assert nas["pool"] == {"sync": "DISABLED", "recordsize": "64K", "quota": 0}
     assert nas["shares"] == [
-        "/mnt/nvme_gen3/proxmox/vm",
+        "/mnt/persistent/proxmox/vm",
         "/mnt/ephemeral/proxmox/vm",
+        "/mnt/persistent/proxmox/backup",
         "/mnt/ephemeral/proxmox/claude-on-proxmox",
     ]
+
+
+def test_nas_gets_a_dataset_and_share_per_cluster_volume(tmp_path):
+    """With a NAS and a cluster, the datasets the cluster mounts are created with their properties, apart from
+    the media dataset, which exists already and is created only when missing (a lost pool made anew), and each is
+    exported to the worker alone."""
+    tree = example_tree(tmp_path)
+    nas = resolve_on(
+        tree,
+        "truenas",
+        "{'datasets': truenas_datasets_kubernetes, 'shares': truenas_nfs_shares_kubernetes,"
+        " 'all': truenas_datasets | map(attribute='name') | list}",
+    )
+    common = {"compression": "LZ4", "atime": "OFF", "acltype": "POSIX", "aclmode": "DISCARD", "recordsize": "1M"}
+    assert nas["datasets"] == [
+        {"name": "persistent/nextcloud", "properties": {**common, "sync": "STANDARD", "quota": 0}},
+        {"name": "persistent/photoprism", "properties": {**common, "sync": "STANDARD", "quota": 0}},
+        {"name": "ephemeral/frigate", "properties": {**common, "sync": "DISABLED", "quota": "500G"}},
+        {"name": "ephemeral/jellyfin", "properties": {**common, "sync": "DISABLED", "quota": 0}, "create_only": True},
+    ]
+    assert "ephemeral/jellyfin" in nas["all"]
+    worker = example()["kubernetes_node_addresses"]["homeserver-worker-1"]
+    assert [(s["path"], s["hosts"]) for s in nas["shares"]] == [
+        ("/mnt/persistent/nextcloud", [worker]),
+        ("/mnt/persistent/photoprism", [worker]),
+        ("/mnt/ephemeral/frigate", [worker]),
+        ("/mnt/ephemeral/jellyfin", [worker]),
+    ]
+
+
+def test_vm_reservation_on_the_ephemeral_pool(tmp_path):
+    """The VMs' dataset on the ephemeral pool gets a reservation when one is set, so the media dataset beside it
+    cannot fill the pool under them; a reservation counts the descendants, where the VMs' disks are. Unset, it is
+    sent as 0, none, so a reservation removed from the configuration is removed on the NAS too."""
+    tree = example_tree(tmp_path)
+    expression = "(truenas_datasets | selectattr('name', 'equalto', 'ephemeral/proxmox') | first).properties"
+    assert resolve_on(tree, "truenas", expression)["reservation"] == 0
+    properties = resolve_on(tree, "truenas", expression, "-e", "vm_storage_ephemeral_reservation=200G")
+    assert properties["reservation"] == "200G" and "refreservation" not in properties
+
+
+def test_pool_names_follow_local_yml(tmp_path):
+    """The pools are named by class unless local.yml names them otherwise, and every pool, dataset, share and
+    Proxmox export follows those names, so no tracked file has to name anyone's hardware."""
+    pools = "truenas_pool_persistent: tank\ntruenas_pool_ephemeral: scratch\n"
+    tree = example_tree(tmp_path, (ROOT / "group_vars" / "all" / "local.yml.example").read_text() + pools)
+    nas = resolve_on(
+        tree,
+        "truenas",
+        "{'pools': truenas_pools | map(attribute='name') | list,"
+        " 'datasets': truenas_datasets | map(attribute='name') | list}",
+    )
+    assert nas == {
+        "pools": ["tank", "scratch"],
+        "datasets": [
+            "tank/proxmox",
+            "tank/proxmox/vm",
+            "tank/proxmox/backup",
+            "scratch/proxmox",
+            "scratch/proxmox/vm",
+            "scratch/proxmox/claude-on-proxmox",
+            "tank/nextcloud",
+            "tank/photoprism",
+            "scratch/frigate",
+            "scratch/jellyfin",
+        ],
+    }
+    exports = resolve_on(tree, "homeserver", "proxmox_storage_nfs | map(attribute='export') | list")
+    assert exports == [
+        "/mnt/tank/proxmox/vm",
+        "/mnt/scratch/proxmox/vm",
+        "/mnt/scratch/proxmox/claude-on-proxmox",
+        "/mnt/tank/proxmox/backup",
+    ]
+
+
+@pytest.mark.parametrize(
+    "setting", ["truenas_pool_persistent: tank", "truenas_mail_server: smtp.example.org", "truenas_alert_email: a@b.c"]
+)
+def test_nas_settings_given_without_an_address_are_refused(tmp_path, setting):
+    """Pool names and the alert mail are TrueNAS settings: given without a NAS address they read as a misspelt
+    address."""
+    tree = example_tree(tmp_path, PROXMOX_ONLY_LOCAL_YML + setting + "\n")
+    rc, out = argspec_pass(tree, "proxmox.yml")
+    assert rc != 0, out[-3000:]
+    assert "but neither truenas_static_address nor truenas_bootstrap_address" in out, out[-3000:]
+    assert setting.split(":")[0] in out, out[-3000:]
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "datasets"),
+    [
+        pytest.param(None, ["persistent/proxmox/vm", "persistent/nextcloud", "persistent/photoprism"], id="cluster"),
+        pytest.param(example_without_kubernetes(), ["persistent/proxmox/vm"], id="no-cluster"),
+    ],
+)
+def test_snapshot_tasks_per_setup(tmp_path, local_yml, datasets):
+    """The persistent VMs' disks are snapshotted hourly and daily; with a cluster, its irreplaceable datasets
+    hourly, daily and weekly; nothing on the ephemeral pool, ever. Every task that keeps snapshots longer than the
+    hourly ones allows empty snapshots: the daily and weekly tasks fire with an hourly one, and TrueNAS destroys a
+    batch whose snapshots are all empty unless one of its tasks allows them, so an idle dataset would keep none."""
+    tasks = resolve_on(example_tree(tmp_path, local_yml), "truenas", "truenas_snapshot_tasks")
+    found = sorted(
+        {
+            (t["dataset"], t["naming_schema"].split("-")[0], t["lifetime_value"], t["lifetime_unit"], t["allow_empty"])
+            for t in tasks
+        }
+    )
+    expected = [
+        ("persistent/proxmox/vm", "daily", 7, "DAY", True),
+        ("persistent/proxmox/vm", "hourly", 1, "DAY", False),
+    ]
+    for d in datasets[1:]:
+        expected += [(d, "daily", 30, "DAY", True), (d, "hourly", 2, "DAY", False), (d, "weekly", 12, "WEEK", True)]
+    assert found == sorted(expected)
+    assert not [t for t in tasks if t["dataset"].startswith("ephemeral/")]
+
+
+@pytest.mark.parametrize(
+    ("given", "message"),
+    [
+        (
+            {"truenas_mail_server": "smtp.example.org", "truenas_mail_user": "nas"},
+            "sets truenas_mail_server but no sender address",
+        ),
+        ({"truenas_alert_email": "a@b.c"}, "sets truenas_alert_email but no truenas_mail_server"),
+    ],
+)
+def test_alert_mail_needs_a_sender_and_a_server(tmp_path, given, message):
+    """TrueNAS refuses mail settings without a sender address, and an alert address has nothing to go through
+    without a server: both are refused before the NAS play runs, and pass once completed."""
+    tree = example_tree(tmp_path)
+    assert message in resolve_on(tree, "truenas", "nas_section_error", "-e", json.dumps(given))
+    completed = given | {"truenas_mail_server": "smtp.example.org", "truenas_mail_from": "nas@example.org"}
+    assert resolve_on(tree, "truenas", "nas_section_error", "-e", json.dumps(completed)) == ""
+
+
+def test_alert_mail_follows_local_yml(tmp_path):
+    """No mail server in local.yml, no mail settings and no alert service; with one, both, with authentication
+    only when a user is given. The password comes from the vault."""
+    tree = example_tree(tmp_path, example_without_kubernetes())
+    assert resolve_on(tree, "truenas", "[truenas_mail, truenas_alert_services]") == [{}, []]
+    given = {
+        "truenas_mail_server": "smtp.example.org",
+        "truenas_mail_user": "nas@example.org",
+        "truenas_alert_email": "a@b.c",
+    }
+    mail, alerts = resolve_on(tree, "truenas", "[truenas_mail, truenas_alert_services]", "-e", json.dumps(given))
+    assert mail == {
+        "outgoingserver": "smtp.example.org",
+        "port": 587,
+        "security": "TLS",
+        "smtp": True,
+        "user": "nas@example.org",
+        "fromemail": "nas@example.org",
+    }
+    assert alerts == [
+        {"name": "Email", "attributes": {"type": "Mail", "email": "a@b.c"}, "level": "WARNING", "enabled": True}
+    ]
+
+
+def without(settings, *names):
+    return {name: value for name, value in settings.items() if name not in names}
+
+
+# Each problem with local.yml's Kubernetes section, and what the message says. Most are checked by resolving
+# kubernetes_settings_error; the playbooks' assert on it is checked below.
+@pytest.mark.parametrize(
+    ("local_yml", "extra", "expected"),
+    [
+        pytest.param(None, CLUSTER_VARS, [], id="example-filled-in"),
+        pytest.param(
+            as_local_yml(example() | {"kubernetes_node_addresses": {"homeserver-cp-1": "192.0.2.30"}}),
+            CLUSTER_VARS,
+            [
+                "kubernetes_node_addresses must give an address to each node of this setup (with a NAS)",
+                "It gives none to homeserver-worker-1.",
+            ],
+            id="nas-without-the-worker",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS
+            | {
+                "kubernetes_node_macs": {
+                    "homeserver-cp-1": mac(0xAB).upper(),
+                    "homeserver-worker-1": "00:" + mac(2)[3:],
+                }
+            },
+            [
+                "kubernetes_node_macs must give each node a locally administered MAC",
+                "Missing or not of that form: homeserver-cp-1, homeserver-worker-1.",
+            ],
+            id="mac-upper-case-or-universal",
+        ),
+        pytest.param(
+            None,
+            without(CLUSTER_VARS, "flux_sync_url"),
+            ["flux_sync_url must name the Git repository this cluster syncs"],
+            id="flux-url-placeholder",
+        ),
+        pytest.param(
+            as_local_yml(without(example(), "flux_sync_url", "kubernetes_lb_frigate_ip")),
+            without(CLUSTER_VARS, "flux_sync_url"),
+            ["flux_sync_url must name the Git repository", "set kubernetes_lb_frigate_ip in group_vars/all/local.yml"],
+            id="flux-url-and-an-lb-address-missing",
+        ),
+        pytest.param(PROXMOX_ONLY_CLUSTER_LOCAL_YML, CLUSTER_VARS, [], id="proxmox-only-sized"),
+        pytest.param(
+            PROXMOX_ONLY_CLUSTER_LOCAL_YML.replace("kubernetes_node_sizes:", "unused_sizes:"),
+            CLUSTER_VARS,
+            [
+                "kubernetes_node_sizes must give homeserver-cp-1 cores, memory_mib, system_disk_gib, data_disk_gib, "
+                "media_disk_gib"
+            ],
+            id="proxmox-only-unsized",
+        ),
+        pytest.param(
+            PROXMOX_ONLY_CLUSTER_LOCAL_YML.replace("media_disk_gib: 100", "media_disk_gib: 0"),
+            CLUSTER_VARS,
+            ["set media_disk_gib in kubernetes_node_sizes above 0, or set kubernetes_media_on_data_volume: true"],
+            id="proxmox-only-no-media-disk",
+        ),
+        pytest.param(
+            PROXMOX_ONLY_CLUSTER_LOCAL_YML.replace("media_disk_gib: 100", "media_disk_gib: 0")
+            + "kubernetes_media_on_data_volume: true\n",
+            CLUSTER_VARS,
+            [],
+            id="proxmox-only-media-on-the-data-volume",
+        ),
+        pytest.param(
+            PROXMOX_ONLY_CLUSTER_LOCAL_YML.replace(
+                "{homeserver-cp-1: 192.0.2.30}", "{homeserver-cp-1: 192.0.2.30, homeserver-worker-1: 192.0.2.31}"
+            ).replace("cores: 4", "cores: four"),
+            CLUSTER_VARS,
+            [
+                "It names homeserver-worker-1, which this setup does not have.",
+                "kubernetes_node_sizes: homeserver-cp-1: cores must be a whole number.",
+            ],
+            id="proxmox-only-with-a-worker-and-a-bad-size",
+        ),
+        pytest.param(
+            PROXMOX_ONLY_LOCAL_YML + "kubernetes_node_adresses: {homeserver-cp-1: 192.0.2.30}\n"
+            "flux_sync_url: https://example.invalid/homeserver.git\n",
+            {},
+            ["group_vars/all/local.yml sets flux_sync_url but no kubernetes_node_addresses"],
+            id="misspelt-addresses",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_api_sans": "k8s-api.home.arpa"},
+            ["kubernetes_api_sans must be a list of names, not a string."],
+            id="api-sans-a-string",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_node_sizes": ["homeserver-worker-1"]},
+            ["kubernetes_node_sizes must map node names to their sizes."],
+            id="sizes-not-a-mapping",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"disk_gib": 10, "cores": -1}}},
+            [
+                "homeserver-worker-1: disk_gib is not a size (cores, memory_mib",
+                "homeserver-worker-1: cores must be a whole number",
+            ],
+            id="unknown-and-negative-sizes",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"data_disk_gib": 5}}},
+            ["homeserver-worker-1: data_disk_gib must be 0 or at least 10, the least its Talos volume takes"],
+            id="data-disk-under-the-volume-minimum",
+        ),
+        pytest.param(
+            PROXMOX_ONLY_CLUSTER_LOCAL_YML.replace("data_disk_gib: 20", "data_disk_gib: 0"),
+            CLUSTER_VARS,
+            ["Without a NAS, homeserver-cp-1 needs a data disk for the apps"],
+            id="proxmox-only-no-data-disk",
+        ),
+        pytest.param(
+            PROXMOX_ONLY_CLUSTER_LOCAL_YML.replace(", media_disk_gib: 100", "")
+            + "kubernetes_media_on_data_volume: true\n",
+            CLUSTER_VARS,
+            [],
+            id="proxmox-only-media-on-the-data-volume-no-media-size",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_node_addresses": ["192.0.2.30", "192.0.2.31"]},
+            ["kubernetes_node_addresses must map each node to its address"],
+            id="addresses-a-list",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS
+            | {"kubernetes_node_addresses": {"homeserver-cp-1": "192.0.2.30", "homeserver-worker-1": "192.0.2.30"}},
+            ["kubernetes_node_addresses gives two nodes the same address."],
+            id="one-address-twice",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_node_macs": {"homeserver-cp-1": mac(1), "homeserver-worker-1": mac(1)}},
+            ["kubernetes_node_macs gives two nodes the same MAC"],
+            id="one-mac-twice",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"flux_sync_ref": "small-host"},
+            ["flux_sync_ref must be a full reference, such as refs/heads/small-host"],
+            id="flux-ref-a-branch-name",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"flux_sync_url": "git@github.com:someone/homeserver.git"},
+            ["flux_sync_url must name the Git repository this cluster syncs, over HTTPS"],
+            id="flux-url-over-ssh",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_lb_traefik_ip": "192.0.2.50"},
+            ["kubernetes_lb_traefik_ip 192.0.2.50 is outside kubernetes_lb_range 192.0.2.40-192.0.2.49"],
+            id="lb-address-outside-the-range",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_lb_frigate_ip": "192.0.2.40"},
+            ["kubernetes_lb_traefik_ip and kubernetes_lb_frigate_ip must differ"],
+            id="lb-address-twice",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_lb_range": "192.0.2.24/28"},
+            ["kubernetes_lb_range 192.0.2.24/28 includes node addresses 192.0.2.30"],
+            id="lb-range-over-a-node-cidr",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_lb_range": "192.0.2.40/29"},
+            [],
+            id="lb-range-a-cidr",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_lb_range": "pool-a"},
+            ["kubernetes_lb_range must be IPv4 addresses as first-last"],
+            id="lb-range-not-addresses",
+        ),
+    ],
+)
+def test_kubernetes_settings_are_checked(tmp_path, local_yml, extra, expected):
+    errors = resolve_on(
+        example_tree(tmp_path, local_yml), "homeserver", "kubernetes_settings_error", "-e", json.dumps(extra)
+    )
+    if not expected:
+        assert errors == []
+    for text in expected:
+        assert any(text in error for error in errors), f"{text!r} not in {errors}"
+
+
+@pytest.mark.parametrize("playbook", ["site.yml", "truenas.yml", "proxmox.yml"])
+def test_example_left_unchanged_is_refused(tmp_path, playbook):
+    """local.yml.example copied as it is: its <mac> and <you> placeholders stop every playbook before any role
+    runs, naming the variables, and never reach a VM's configuration."""
+    rc, out = argspec_pass(example_tree(tmp_path), playbook)
+    assert rc != 0, out[-3000:]
+    assert "kubernetes_node_macs must give each node" in out and "flux_sync_url must name" in out, out[-3000:]
+    assert "TASK [truenas :" not in out and "TASK [proxmox_" not in out, out[-3000:]
+
+
+@pytest.mark.parametrize("playbook", ["site.yml", "proxmox.yml"])
+def test_kubernetes_present_cannot_be_set(tmp_path, playbook):
+    """kubernetes_present is worked out from the node addresses; given with -e, "false" would count as true."""
+    tree = example_tree(tmp_path, example_without_kubernetes())
+    rc, out = argspec_pass(tree, playbook, "-e", "kubernetes_present=false")
+    assert rc != 0, out[-3000:]
+    assert "kubernetes_present is worked out from kubernetes_node_addresses" in out, out[-3000:]
+    assert "TASK [truenas :" not in out and "TASK [proxmox_" not in out, out[-3000:]
 
 
 def test_task_arguments_match_module_specs():
@@ -440,3 +913,74 @@ def test_secret_options_are_no_log():
                 flagged.append(f"{owner}: {dotted}")
     assert flagged == [], "options that look like secrets but are not no_log"
     assert excepted == set(NOT_SECRET), "NOT_SECRET names an option that no longer exists or is now no_log"
+
+
+def test_home_assistant_url_is_a_setting_only_when_given(tmp_path):
+    """Homepage's tile reads ${HAOS_URL:=}: the setting exists only when local.yml names Home Assistant OS's address,
+    which is never tracked."""
+    tree = example_tree(tmp_path)
+    assert "HAOS_URL" not in resolve_on(tree, "homeserver-k8s", "flux_bootstrap_settings", *CLUSTER_ARGS)
+    given = json.dumps({**CLUSTER_VARS, "haos_url": "http://homeassistant.home.arpa:8123"})
+    settings = resolve_on(tree, "homeserver-k8s", "flux_bootstrap_settings", "-e", given)
+    assert settings["HAOS_URL"] == "http://homeassistant.home.arpa:8123"
+
+
+def test_flux_is_new_enough_to_substitute_strictly(tmp_path):
+    """Strict substitution, which fails a manifest naming a setting that does not exist rather than giving it an empty
+    string, is kustomize-controller's default from Flux 2.9; roles/flux_bootstrap sets no feature gate for it."""
+    tree = example_tree(tmp_path)
+    version = resolve_on(tree, "homeserver-k8s", "flux_bootstrap_instance.version", *CLUSTER_ARGS)
+    major, minor = (int(part) for part in str(version).split(".")[:2])
+    assert (major, minor) >= (2, 9), version
+
+
+@pytest.mark.parametrize(("where", "refused"), [("homeserver/.talos", True), ("homeserver-talos", False)])
+def test_talos_config_dir_must_be_outside_the_repository(tmp_path, where, refused):
+    """talosconfig and kubeconfig never go inside the repository; a sibling directory whose name merely starts with
+    the repository's is outside it."""
+    tree = tmp_path / "homeserver"
+    tree.mkdir()
+    example_tree(tree)
+    rc, out = argspec_pass(
+        tree, "kubernetes.yml", *CLUSTER_ARGS, "-e", f"kubernetes_talos_config_dir={tmp_path / where}"
+    )
+    assert ("talos_config_dir must be outside the repository" in out) == refused, out[-3000:]
+    assert (rc != 0) == refused, out[-3000:]
+
+
+@pytest.mark.parametrize(("given", "expected"), [(None, ".talos/homeserver"), ("~/.talos/test", ".talos/test")])
+def test_talos_config_dir_follows_local_yml(tmp_path, given, expected):
+    """Where the cluster's credentials live comes from local.yml's kubernetes_talos_config_dir, with ~ expanded, and
+    is ~/.talos/homeserver otherwise. A talos_config_dir written in local.yml would lose to group_vars/kubernetes,
+    which outranks group_vars/all, hence a setting of its own: a test host must never share the home cluster's."""
+    local_yml = (ROOT / "group_vars" / "all" / "local.yml.example").read_text()
+    if given:
+        local_yml += f"kubernetes_talos_config_dir: {given}\n"
+    tree = example_tree(tmp_path, local_yml)
+    assert resolve_on(tree, "homeserver-k8s", "talos_config_dir", *CLUSTER_ARGS) == str(Path.home() / expected)
+    assert resolve_on(tree, "homeserver-k8s", "flux_bootstrap_kubeconfig", *CLUSTER_ARGS) == str(
+        Path.home() / expected / "kubeconfig"
+    )
+
+
+@pytest.mark.parametrize("local_yml", [None, PROXMOX_ONLY_CLUSTER_LOCAL_YML], ids=["nas", "proxmox-only"])
+@pytest.mark.parametrize("mapping", ["", "igpu"], ids=["no-gpu", "gpu"])
+def test_gpu_follows_local_yml(tmp_path, local_yml, mapping):
+    """Whether the host passes an iGPU through is per host: local.yml's kubernetes_gpu_mapping. The workload node alone
+    gets the PCI device, the GPU schematic and its label, and the apps' settings ask for the device or for none; the
+    manifests stay the same either way."""
+    tree = example_tree(tmp_path, local_yml)
+    given = json.dumps({**CLUSTER_VARS, "kubernetes_gpu_mapping": mapping})
+    vms = resolve_on(tree, "homeserver", "proxmox_vm_vms", "-e", given)
+    workload = "homeserver-worker-1" if local_yml is None else "homeserver-cp-1"
+    assert {vm["name"]: vm["hostpci"] for vm in vms} == {
+        vm["name"]: ([{"mapping": "igpu", "pcie": True}] if mapping and vm["name"] == workload else []) for vm in vms
+    }
+    nodes = resolve_on(tree, "homeserver-k8s", "talos_nodes", "-e", given)
+    assert {n["name"]: n["schematic"] for n in nodes} == {
+        n["name"]: ("gpu" if mapping and n["name"] == workload else "base") for n in nodes
+    }
+    labelled = [n["name"] for n in nodes if any("homeserver.internal/gpu: intel" in p for p in n["patches"])]
+    assert labelled == ([workload] if mapping else [])
+    settings = resolve_on(tree, "homeserver-k8s", "flux_bootstrap_settings", "-e", given)
+    assert (settings["GPU_I915"], settings["FRIGATE_DETECTOR_DEVICE"]) == (("1", "GPU") if mapping else ("0", "CPU"))

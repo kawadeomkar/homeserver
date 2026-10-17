@@ -7,7 +7,8 @@ argument_specs:
         nothing goes over SSH.
       - Stages, each under its own tag - truenas_network (network settings, static address),
         truenas_pools (import or create, auto-trim, scrub), truenas_system (general settings, NTP),
-        truenas_datasets, truenas_nfs (service settings, shares), truenas_services.
+        truenas_datasets, truenas_snapshots (periodic snapshot tasks), truenas_nfs (service settings,
+        shares), truenas_alerts (outgoing mail, alert services), truenas_services.
       - The defaults change nothing. Every stage acts only on what its variables declare, and an
         empty list or dict (or a null value) leaves that part of the NAS alone.
       - Never destroys, wipes, exports or upgrades a pool, never deletes a dataset, and refuses an
@@ -144,6 +145,13 @@ argument_specs:
         elements: dict
         default: []
         description: Datasets, each with name and properties as pool.dataset.create takes them.
+      truenas_snapshot_tasks:
+        type: list
+        elements: dict
+        default: []
+        description: >-
+          Periodic snapshot tasks, each with dataset and naming_schema, which identify it, and the fields of
+          pool.snapshottask.create. Never deleted.
       truenas_nfs_settings:
         type: dict
         default: {}
@@ -157,6 +165,20 @@ argument_specs:
         type: dict
         default: {}
         description: Fields laid under every share.
+      truenas_mail:
+        type: dict
+        default: {}
+        description: Fields for mail.update (outgoingserver, port, security, smtp, user, fromemail). Empty leaves mail alone.
+      truenas_mail_password:
+        type: str
+        default: ""
+        no_log: true
+        description: The mail server's password, compared on every run and never printed.
+      truenas_alert_services:
+        type: list
+        elements: dict
+        default: []
+        description: Alert services, each with name, which identifies it, and the fields of alertservice.create. Never deleted.
       truenas_services:
         type: dict
         default: {}

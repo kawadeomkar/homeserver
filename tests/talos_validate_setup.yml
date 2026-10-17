@@ -1,0 +1,66 @@
+---
+# One setup of tests/talos_validate.yml, its settings given as the include's vars: its nodes rendered with the pins
+# and validated.
+- name: tests | talos_validate_setup | Render and validate one setup
+  block:
+    - name: tests | talos_validate_setup | Make a scratch directory
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .talos-validate
+      register: talos_validate_dir
+
+    - name: tests | talos_validate_setup | Make a throwaway secrets bundle
+      ansible.builtin.command:
+        argv: [talosctl, gen, secrets, -o, "{{ talos_validate_dir.path }}/secrets.yaml"]
+      changed_when: false
+
+    - name: tests | talos_validate_setup | Render the nodes with the pins, as a first install does
+      ansible.builtin.include_role:
+        name: talos
+        tasks_from: render.yml
+      vars:
+        talos_workspace: "{{ talos_validate_dir.path }}"
+        talos_render: >-
+          {%- set out = [] -%}
+          {%- for n in talos_nodes -%}
+          {%-   set _ = out.append(n | combine({'version': talos_version, 'contract': talos_contract,
+                  'kubernetes_version': talos_kubernetes_version,
+                  'install_image': 'factory.talos.dev/metal-installer/' ~ kubernetes_iso_schematic ~ ':' ~ talos_version})) -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: tests | talos_validate_setup | Validate each rendered configuration
+      ansible.builtin.command:
+        argv: [talosctl, validate, --mode, metal, --strict, --config, "{{ talos_validate_dir.path }}/{{ item.name }}.yaml"]
+      changed_when: false
+      loop: "{{ talos_nodes }}"
+      loop_control:
+        label: "{{ setup.name }}: {{ item.name }}"
+
+    # roles/talos waits for an installed node to report installed, which Talos does once it has rebooted from its
+    # system disk. It reboots after an unattended install only when the UnattendedInstallConfig names its installer
+    # image, which talosctl gen config writes there from --install-image.
+    - name: tests | talos_validate_setup | Check that each node installs its own image and reboots into it
+      ansible.builtin.assert:
+        that:
+          - _install | length == 1
+          - (_install | first).installer.image | default('') == _image
+          - (_install | first).reboot | default(true)
+        fail_msg: >-
+          {{ setup.name }}: {{ item.name }}'s UnattendedInstallConfig must name the installer image {{ _image }} and
+          leave reboot on, or Talos would not reboot after installing and roles/talos would wait in vain.
+        quiet: true
+      vars:
+        _install: >-
+          {{ lookup('ansible.builtin.file', talos_validate_dir.path ~ '/' ~ item.name ~ '.yaml') | from_yaml_all
+             | selectattr('kind', 'defined') | selectattr('kind', 'eq', 'UnattendedInstallConfig') | list }}
+        _image: "{{ 'factory.talos.dev/metal-installer/' ~ kubernetes_iso_schematic ~ ':' ~ talos_version }}"
+      loop: "{{ talos_nodes }}"
+      loop_control:
+        label: "{{ setup.name }}: {{ item.name }}"
+  always:
+    - name: tests | talos_validate_setup | Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ talos_validate_dir.path }}"
+        state: absent
+      when: talos_validate_dir.path is defined

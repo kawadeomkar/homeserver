@@ -1,0 +1,84 @@
+---
+# Bootstrapping etcd makes a cluster; on a control plane that lost its etcd (a reinstalled system disk, a VM
+# re-created after a host loss) it makes a new, empty one, over which Flux would recreate every volume empty while
+# the old data sat orphaned. So it happens once: the marker in talos_config_dir records it, and with the marker
+# and no running etcd the role stops and names the ways back. Back talos_config_dir up: on a new workstation
+# without it the role cannot tell a first build from a lost cluster.
+- name: bootstrap | Look for the record of an earlier bootstrap
+  ansible.builtin.stat:
+    path: "{{ talos_config_dir }}/bootstrapped"
+  register: talos_marker
+
+- name: bootstrap | Read etcd's state on the control plane
+  ansible.builtin.command:
+    argv:
+      - talosctl
+      - --talosconfig
+      - "{{ talos_workspace }}/talosconfig"
+      - -e
+      - "{{ talos_controlplane.address }}"
+      - -n
+      - "{{ talos_controlplane.address }}"
+      - service
+      - etcd
+  register: talos_etcd
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  # etcd takes a moment to start after a boot; a dry run asks once.
+  until: talos_etcd.stdout | talos_service_state == 'Running'
+  retries: "{{ 0 if ansible_check_mode else talos_probe_retries }}"
+  delay: "{{ talos_probe_delay }}"
+  when:
+    - talos_marker.stat.exists
+    - talos_state[talos_controlplane.name].state == 'configured' or not ansible_check_mode
+
+- name: bootstrap | Refuse to bootstrap a cluster that was bootstrapped before
+  ansible.builtin.assert:
+    that: talos_etcd.stdout | talos_service_state == 'Running' or talos_allow_bootstrap | bool
+    fail_msg: >-
+      This cluster was bootstrapped before ({{ talos_config_dir }}/bootstrapped), but etcd is not running on
+      {{ talos_controlplane.name }} ({{ talos_etcd.stdout | talos_service_state | default('no answer', true) }}):
+      its control plane lost its etcd. Bootstrapping now would make a new, empty cluster. Restore etcd from a
+      snapshot (talosctl bootstrap --recover-from=<snapshot>; snapshots are in {{ talos_config_dir }}/etcd/), or
+      restore the VM from its backup (scripts/runbooks/vm-restore.md), or, for a new cluster on purpose, run
+      make kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'.
+    quiet: true
+  when: talos_etcd is not skipped
+
+- name: bootstrap | Say the cluster would be bootstrapped
+  ansible.builtin.debug:
+    msg: Would bootstrap etcd on {{ talos_controlplane.name }}, then record it in {{ talos_config_dir }}/bootstrapped.
+  changed_when: true
+  when:
+    - ansible_check_mode
+    - not talos_marker.stat.exists or talos_allow_bootstrap | bool
+
+# The first call after an install may find the node not ready yet (FailedPrecondition) and is retried. A cluster
+# bootstrapped by a run that failed before writing the marker answers AlreadyExists, which is fine.
+- name: bootstrap | Bootstrap etcd on the control plane
+  ansible.builtin.command:
+    argv:
+      - talosctl
+      - --talosconfig
+      - "{{ talos_workspace }}/talosconfig"
+      - -e
+      - "{{ talos_controlplane.address }}"
+      - -n
+      - "{{ talos_controlplane.address }}"
+      - bootstrap
+  register: talos_bootstrap
+  changed_when: talos_bootstrap.rc == 0
+  failed_when: talos_bootstrap.rc != 0 and 'AlreadyExists' not in talos_bootstrap.stderr
+  until: talos_bootstrap.rc == 0 or 'AlreadyExists' in talos_bootstrap.stderr
+  retries: "{{ talos_probe_retries }}"
+  delay: "{{ talos_probe_delay }}"
+  when:
+    - not talos_marker.stat.exists or (talos_allow_bootstrap | bool and talos_etcd.stdout | default('') | talos_service_state != 'Running')
+
+- name: bootstrap | Record the bootstrap
+  ansible.builtin.copy:
+    content: "{{ talos_cluster_name }} bootstrapped {{ now(utc=true).isoformat() }}\n"
+    dest: "{{ talos_config_dir }}/bootstrapped"
+    mode: "0600"
+  when: talos_bootstrap is not skipped

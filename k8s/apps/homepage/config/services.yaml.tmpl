@@ -1,0 +1,47 @@
+- Media:
+    - Jellyfin:
+        icon: jellyfin
+        href: http://jellyfin.${DOMAIN}/
+        siteMonitor: http://jellyfin.media.svc.cluster.local:8096/health
+    - Seerr:
+        icon: jellyseerr
+        href: http://seerr.${DOMAIN}/
+        siteMonitor: http://seerr.media.svc.cluster.local:5055/api/v1/status
+    - Sonarr:
+        icon: sonarr
+        href: http://sonarr.${DOMAIN}/
+        siteMonitor: http://sonarr.media.svc.cluster.local:8989/ping
+    - Radarr:
+        icon: radarr
+        href: http://radarr.${DOMAIN}/
+        siteMonitor: http://radarr.media.svc.cluster.local:7878/ping
+    - Prowlarr:
+        icon: prowlarr
+        href: http://prowlarr.${DOMAIN}/
+        siteMonitor: http://prowlarr.media.svc.cluster.local:9696/ping
+    - SABnzbd:
+        icon: sabnzbd
+        href: http://sabnzbd.${DOMAIN}/
+        siteMonitor: http://sabnzbd.media.svc.cluster.local:8080/api?mode=version
+    - FileBrowser:
+        icon: filebrowser
+        href: http://filebrowser.${DOMAIN}/
+        siteMonitor: http://filebrowser.media.svc.cluster.local:8080/health
+- Cloud:
+    - Nextcloud:
+        icon: nextcloud
+        href: http://nextcloud.${DOMAIN}/
+        siteMonitor: http://nextcloud.nextcloud.svc.cluster.local/status.php
+    - PhotoPrism:
+        icon: photoprism
+        href: http://photoprism.${DOMAIN}/
+        siteMonitor: http://photoprism.photoprism.svc.cluster.local:2342/api/v1/status
+- Home:
+    # Home Assistant OS, a VM of its own outside the cluster; local.yml's haos_url, when set.
+    - Home Assistant:
+        icon: home-assistant
+        href: ${HAOS_URL:=}
+    - Frigate:
+        icon: frigate
+        href: http://frigate.${DOMAIN}/
+        siteMonitor: http://frigate.frigate.svc.cluster.local:8971/

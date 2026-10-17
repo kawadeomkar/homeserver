@@ -1,0 +1,275 @@
+---
+# The Kubernetes cluster: its shape, and the settings more than one play reads. The NAS play exports the
+# datasets the cluster mounts, the Proxmox play creates its VMs, and the kubernetes play builds Talos and hands
+# the cluster to Flux. A host sees only its own groups' files, so whatever two plays read lives here, in
+# group_vars/all/. Names only: the nodes' addresses and MACs, MetalLB's addresses and the domain come from
+# local.yml.
+#
+# This file sorts before local.yml, so a value local.yml sets wins over one set here, but a dict set there
+# replaces the whole dict, never merges into it. Never set here what local.yml is meant to set.
+
+# True when local.yml names the cluster's nodes. Worked out, never set: the addresses are the switch, like
+# nas_present. A value left blank (YAML null) or only whitespace is no address. Without one, the kubernetes play
+# ends by itself, the Proxmox play creates no VM and the NAS play exports nothing to a cluster.
+kubernetes_present: >-
+  {{ ((kubernetes_node_addresses | default({}, true)) | dict2items | selectattr('value')
+      | map(attribute='value') | map('string') | map('trim') | select | list | length > 0)
+     if (kubernetes_node_addresses | default({}, true)) is mapping
+     else ((kubernetes_node_addresses | default({}, true)) | length > 0) }}
+
+# Version pins. Both of kubernetes.yml's plays read them: the first, on the Proxmox host, downloads the ISO of
+# talos_version (proxmox_vm; proxmox.yml never does, so after a host reinstall the restored VMs' CD-ROM names a
+# missing ISO until make kubernetes runs), and the second renders the nodes' configurations. A running node keeps
+# its versions until `make talos-upgrade` moves it to these. talos_kubernetes_version is the Makefile's
+# KUBERNETES_VERSION too (a policy test checks), and talosctl on the workstation must have talos_version's major
+# and minor. Bump them together, quarterly.
+talos_version: v1.14.2
+# The configuration contract talosctl renders for, fixed so a newer talosctl renders the same configuration.
+talos_contract: v1.14
+talos_kubernetes_version: 1.37.1
+# The Image Factory schematic of the ISO the VMs first boot: Talos with the QEMU guest agent. Its id is the
+# sha256 of the schematic, so it never changes with the version.
+kubernetes_iso_schematic: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
+
+# The cluster's shape. With a NAS: a control plane and a worker that runs every app. Without one: a single
+# control plane that runs everything, sized to the host by local.yml (kubernetes_node_sizes is required then).
+# Sizes can be changed per node in local.yml's kubernetes_node_sizes, never here. Whether a node gets the host's
+# iGPU is per host too, so it comes from local.yml (kubernetes_gpu_mapping).
+kubernetes_node_shapes:
+  nas:
+    - {name: homeserver-cp-1, role: controlplane, vmid: 300, cores: 2, memory_mib: 4096,
+       system_disk_gib: 32, data_disk_gib: 0, media_disk_gib: 0}
+    - {name: homeserver-worker-1, role: worker, vmid: 301, cores: 8, memory_mib: 24576,
+       system_disk_gib: 64, data_disk_gib: 200, media_disk_gib: 0}
+  local:
+    - {name: homeserver-cp-1, role: controlplane, vmid: 300}
+# The keys of a node's size, the only ones kubernetes_node_sizes may set.
+kubernetes_node_size_keys: [cores, memory_mib, system_disk_gib, data_disk_gib, media_disk_gib]
+# The setup's nodes, each with the sizes local.yml gives it laid over the shape's.
+kubernetes_nodes: >-
+  {%- set out = [] -%}
+  {%- for n in kubernetes_node_shapes['nas' if nas_present else 'local'] -%}
+  {%-   set _ = out.append(n | combine((kubernetes_node_sizes | default({}, true)).get(n.name, {}))) -%}
+  {%- endfor -%}
+  {{ out }}
+# The nodes that run the apps: the workers, or the control plane when there is no worker.
+kubernetes_workload_nodes: >-
+  {{ kubernetes_nodes | selectattr('role', 'equalto', 'worker') | list or kubernetes_nodes }}
+# The node whose data volume holds the apps' local volumes.
+kubernetes_data_node: "{{ (kubernetes_workload_nodes | first).name }}"
+# Whether that node has a media disk of its own (without a NAS, unless media lives on the data volume).
+kubernetes_media_disk: "{{ ((kubernetes_workload_nodes | first).media_disk_gib | default(0) | int) > 0 }}"
+
+# Where the VMs' disks go. System disks on the installer's storage in both setups; the worker's data disk on the
+# NAS's persistent storage with a NAS, on the installer's storage without one. On thin LVM the disks' provisioned
+# sizes, other VMs' included, never add up to more than the pool (proxmox_vm's disk budget).
+kubernetes_system_storage: "{{ proxmox_local_vm_storage | default('local-lvm', true) }}"
+kubernetes_data_storage: "{{ vm_storage_classes.persistent.proxmox_id if nas_present else kubernetes_system_storage }}"
+
+# The apps answer at <app>.<domain>, unless local.yml names another domain (kubernetes_domain).
+kubernetes_domain_default: homeserver.internal
+kubernetes_timezone: America/Los_Angeles
+
+# Problems with the Kubernetes section of local.yml, one message each, naming the variable to change. Every
+# playbook asserts this is empty first, as it does nas_section_error, because the NAS and Proxmox plays read
+# kubernetes_present too. It refuses:
+#   - kubernetes_present given with -e, where "false" is a non-empty string and counts as true;
+#   - without a cluster, the section's other settings: what a misspelt kubernetes_node_addresses looks like;
+#   - with a cluster, node addresses that are not a mapping or not this setup's nodes, two nodes with one address
+#     or one MAC, a node without a locally administered MAC, no repository for Flux to sync or one not over
+#     HTTPS, MetalLB's addresses missing, a LoadBalancer address outside MetalLB's range or used twice, a node
+#     address inside that range, sizes that are not whole numbers, and a data or media disk under the 10 GiB its
+#     Talos volume needs;
+#   - without a NAS, a node without every size, a data disk, or a media disk (unless media goes on the data
+#     volume, when its size may be left out).
+kubernetes_settings_error: >-
+  {%- set out = [] -%}
+  {%- set given = {'kubernetes_node_macs': kubernetes_node_macs | default(''),
+                   'kubernetes_node_sizes': kubernetes_node_sizes | default(''),
+                   'kubernetes_lb_range': kubernetes_lb_range | default(''),
+                   'kubernetes_lb_traefik_ip': kubernetes_lb_traefik_ip | default(''),
+                   'kubernetes_lb_frigate_ip': kubernetes_lb_frigate_ip | default(''),
+                   'kubernetes_domain': kubernetes_domain | default(''),
+                   'kubernetes_media_on_data_volume': kubernetes_media_on_data_volume | default(''),
+                   'kubernetes_gpu_mapping': kubernetes_gpu_mapping | default(''),
+                   'kubernetes_api_sans': kubernetes_api_sans | default(''),
+                   'kubernetes_talos_config_dir': kubernetes_talos_config_dir | default(''),
+                   'sops_age_key_file': sops_age_key_file | default(''),
+                   'flux_sync_url': flux_sync_url | default(''),
+                   'flux_sync_ref': flux_sync_ref | default(''),
+                   'haos_url': haos_url | default('')}
+                  | dict2items | selectattr('value') | map(attribute='key') | list -%}
+  {%- if kubernetes_present is not boolean -%}
+  {%-   set _ = out.append('kubernetes_present is worked out from kubernetes_node_addresses in group_vars/all/local.yml, '
+                           ~ 'not set: given with -e it is a string, which counts as true whatever it says. To run '
+                           ~ 'without a cluster, delete the Kubernetes section there.') -%}
+  {%- elif not kubernetes_present -%}
+  {%-   if given -%}
+  {%-     set _ = out.append('group_vars/all/local.yml sets ' ~ given | join(', ') ~ ' but no kubernetes_node_addresses, '
+                             ~ 'which usually means it is misspelt. Correct it, or delete the whole Kubernetes section '
+                             ~ 'to run without a cluster.') -%}
+  {%-   endif -%}
+  {%- else -%}
+  {%-   set setup = 'with a NAS' if nas_present else 'without a NAS' -%}
+  {%-   set shape = kubernetes_node_shapes['nas' if nas_present else 'local'] -%}
+  {%-   set names = shape | map(attribute='name') | list -%}
+  {%-   set addresses = kubernetes_node_addresses if kubernetes_node_addresses is mapping else {} -%}
+  {%-   if kubernetes_node_addresses is not mapping -%}
+  {%-     set _ = out.append('kubernetes_node_addresses must map each node to its address, such as '
+                             ~ '{homeserver-cp-1: 192.0.2.30}, not a list or a string.') -%}
+  {%-   endif -%}
+  {%-   set addressed = [] -%}
+  {%-   for n, a in addresses.items() if a is not none and (a | string | trim) -%}
+  {%-     set _ = addressed.append(n) -%}
+  {%-   endfor -%}
+  {%-   set node_ips = addressed | map('extract', addresses) | map('string') | map('trim') | list -%}
+  {%-   if node_ips | unique | length != node_ips | length -%}
+  {%-     set _ = out.append('kubernetes_node_addresses gives two nodes the same address.') -%}
+  {%-   endif -%}
+  {%-   set missing = names | reject('in', addressed) | list -%}
+  {%-   set extra = addressed | reject('in', names) | list -%}
+  {%-   if missing or extra -%}
+  {%-     set _ = out.append('kubernetes_node_addresses must give an address to each node of this setup (' ~ setup ~ '): '
+                             ~ names | join(', ') ~ ', and to no other.'
+                             ~ (' It gives none to ' ~ missing | join(', ') ~ '.' if missing else '')
+                             ~ (' It names ' ~ extra | join(', ') ~ ', which this setup does not have.' if extra else '')) -%}
+  {%-   endif -%}
+  {%-   set macs = kubernetes_node_macs | default({}, true) -%}
+  {%-   set badmacs = [] -%}
+  {%-   for n in names if not (macs is mapping and (macs.get(n) | string) is match('^[0-9a-f][26ae](:[0-9a-f]{2}){5}$')) -%}
+  {%-     set _ = badmacs.append(n) -%}
+  {%-   endfor -%}
+  {%-   if badmacs -%}
+  {%-     set _ = out.append('kubernetes_node_macs must give each node a locally administered MAC in lower case, its '
+                             ~ 'second hex digit 2, 6, a or e (02:... for instance), chosen by you and reserved in the '
+                             ~ "router's DHCP for the node's address before the first run. Missing or not of that form: "
+                             ~ badmacs | join(', ') ~ '.') -%}
+  {%-   elif macs is mapping and (names | map('extract', macs) | unique | list | length) != names | length -%}
+  {%-     set _ = out.append('kubernetes_node_macs gives two nodes the same MAC: each VM needs its own, or both lease '
+                             ~ 'one address.') -%}
+  {%-   endif -%}
+  {%-   if flux_sync_ref | default('', true) and (flux_sync_ref | string) is not match('refs/') -%}
+  {%-     set _ = out.append('flux_sync_ref must be a full reference, such as refs/heads/' ~ flux_sync_ref
+                             ~ ': Flux resolves nothing else, and would wait for its source until it times out.') -%}
+  {%-   endif -%}
+  {%-   set url = flux_sync_url | default('', true) | string | trim -%}
+  {%-   if not url or '<' in url or '>' in url or url is not match('https://') -%}
+  {%-     set _ = out.append('flux_sync_url must name the Git repository this cluster syncs, over HTTPS (https://...), '
+                             ~ 'such as your own copy of this one. Flux applies whatever it holds with cluster-admin '
+                             ~ 'rights, so it has no default: a fork syncs its own repository.') -%}
+  {%-   endif -%}
+  {%-   set lb = ['kubernetes_lb_range', 'kubernetes_lb_traefik_ip', 'kubernetes_lb_frigate_ip']
+               | reject('in', given) | list -%}
+  {%-   if lb -%}
+  {%-     set _ = out.append('MetalLB needs addresses on your network outside the DHCP range: set ' ~ lb | join(', ')
+                             ~ ' in group_vars/all/local.yml.') -%}
+  {%-   else -%}
+  {#-     MetalLB hands out only addresses in its pool, so a LoadBalancer address outside it stays pending, and
+          Flux counts the Service ready all the same. IPv4, as a first-last range or a CIDR. -#}
+  {%-     set ipv4 = '^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$' -%}
+  {%-     set range = kubernetes_lb_range | string | trim -%}
+  {%-     set ends = range.split('-') if '-' in range else [range.split('/')[0]] -%}
+  {%-     set bounds = [] -%}
+  {%-     for e in ends | map('trim') if e is match(ipv4) -%}
+  {%-       set p = e.split('.') | map('int') | list -%}
+  {%-       set _ = bounds.append(p[0] * 16777216 + p[1] * 65536 + p[2] * 256 + p[3]) -%}
+  {%-     endfor -%}
+  {%-     if '/' in range and bounds | length == 1 and range.split('/')[1] is match('^\\d{1,2}$') -%}
+  {%-       set block = 2 ** (32 - range.split('/')[1] | int) -%}
+  {%-       set bounds = [(bounds[0] // block) * block, (bounds[0] // block) * block + block - 1] -%}
+  {%-     endif -%}
+  {%-     if bounds | length != 2 or bounds[0] > bounds[1] -%}
+  {%-       set _ = out.append('kubernetes_lb_range must be IPv4 addresses as first-last (192.0.2.40-192.0.2.49) or a '
+                               ~ 'CIDR (192.0.2.40/29).') -%}
+  {%-     else -%}
+  {%-       set within = [] -%}
+  {%-       for name in ['kubernetes_lb_traefik_ip', 'kubernetes_lb_frigate_ip', 'node addresses'] -%}
+  {%-         for ip in (node_ips if name == 'node addresses' else [lookup('vars', name) | string | trim]) -%}
+  {%-           set p = ip.split('.') | map('int') | list if ip is match(ipv4) else [] -%}
+  {%-           set n = p[0] * 16777216 + p[1] * 65536 + p[2] * 256 + p[3] if p else -1 -%}
+  {%-           if (n >= bounds[0] and n <= bounds[1]) != (name != 'node addresses') -%}
+  {%-             set _ = within.append(name ~ ' ' ~ ip) -%}
+  {%-           endif -%}
+  {%-         endfor -%}
+  {%-       endfor -%}
+  {%-       for bad in within -%}
+  {%-         set _ = out.append(('kubernetes_lb_range ' ~ range ~ ' includes ' ~ bad ~ ': a node keeps its address, '
+                                  ~ 'which MetalLB would hand out again.') if bad.startswith('node addresses')
+                                 else (bad ~ ' is outside kubernetes_lb_range ' ~ range ~ ': MetalLB hands out only '
+                                       ~ 'addresses in its range, so the Service would stay pending.')) -%}
+  {%-       endfor -%}
+  {%-       if (kubernetes_lb_traefik_ip | string | trim) == (kubernetes_lb_frigate_ip | string | trim) -%}
+  {%-         set _ = out.append('kubernetes_lb_traefik_ip and kubernetes_lb_frigate_ip must differ: two Services '
+                                 ~ 'cannot share one address here.') -%}
+  {%-       endif -%}
+  {%-     endif -%}
+  {%-   endif -%}
+  {%-   if kubernetes_api_sans | default([], true) is string -%}
+  {%-     set _ = out.append('kubernetes_api_sans must be a list of names, not a string.') -%}
+  {%-   endif -%}
+  {%-   set sizes = kubernetes_node_sizes | default({}, true) -%}
+  {%-   if sizes is not mapping -%}
+  {%-     set _ = out.append('kubernetes_node_sizes must map node names to their sizes.') -%}
+  {%-     set sizes = {} -%}
+  {%-   endif -%}
+  {%-   set badsizes = [] -%}
+  {%-   for n, s in sizes.items() -%}
+  {%-     if n not in names -%}
+  {%-       set _ = badsizes.append(n ~ ' is not a node of this setup') -%}
+  {%-     elif s is not mapping -%}
+  {%-       set _ = badsizes.append(n ~ ' must map size names to numbers') -%}
+  {%-     else -%}
+  {%-       for k, v in s.items() -%}
+  {%-         if k not in kubernetes_node_size_keys -%}
+  {%-           set _ = badsizes.append(n ~ ': ' ~ k ~ ' is not a size (' ~ kubernetes_node_size_keys | join(', ') ~ ')') -%}
+  {%-         elif v is not integer or v is boolean or v < 0 -%}
+  {%-           set _ = badsizes.append(n ~ ': ' ~ k ~ ' must be a whole number') -%}
+  {%-         elif k in ['data_disk_gib', 'media_disk_gib'] and 0 < v < 10 -%}
+  {%-           set _ = badsizes.append(n ~ ': ' ~ k ~ ' must be 0 or at least 10, the least its Talos volume takes') -%}
+  {%-         endif -%}
+  {%-       endfor -%}
+  {%-     endif -%}
+  {%-   endfor -%}
+  {%-   if badsizes -%}
+  {%-     set _ = out.append('kubernetes_node_sizes: ' ~ badsizes | join('; ') ~ '.') -%}
+  {%-   endif -%}
+  {%-   if not nas_present -%}
+  {%-     set own = sizes.get('homeserver-cp-1', {}) if sizes.get('homeserver-cp-1') is mapping else {} -%}
+  {%-     set unsized = kubernetes_node_size_keys | reject('in', own)
+                      | reject('eq', 'media_disk_gib' if kubernetes_media_on_data_volume | default(false) | bool else '')
+                      | list -%}
+  {%-     if unsized -%}
+  {%-       set _ = out.append('Without a NAS, the single node runs every app and is sized to the host: '
+                               ~ 'kubernetes_node_sizes must give homeserver-cp-1 ' ~ unsized | join(', ') ~ '. The apps '
+                               ~ 'and the platform request about 3 vCPU and 8.5 GiB together, and the control plane about '
+                               ~ '1.5 GiB more, so give it at least 4 cores and 12 GiB, more for transcoding and photo '
+                               ~ 'indexing; scripts/runbooks/talos.md shows a smaller node for a test host.') -%}
+  {%-     else -%}
+  {%-       if (own.data_disk_gib | int) < 1 -%}
+  {%-         set _ = out.append('Without a NAS, homeserver-cp-1 needs a data disk for the apps: set data_disk_gib in '
+                                 ~ 'kubernetes_node_sizes above 0.') -%}
+  {%-       endif -%}
+  {%-       if (own.media_disk_gib | default(0) | int) < 1 and not (kubernetes_media_on_data_volume | default(false) | bool) -%}
+  {%-         set _ = out.append('Without a NAS, the media and the camera recordings go on a media disk of their own, '
+                                 ~ 'never backed up: set media_disk_gib in kubernetes_node_sizes above 0, or set '
+                                 ~ 'kubernetes_media_on_data_volume: true to keep them on the data volume, backed up '
+                                 ~ 'and sharing its space.') -%}
+  {%-       endif -%}
+  {%-     endif -%}
+  {%-   endif -%}
+  {%- endif -%}
+  {{ out }}
+
+# The NAS datasets the cluster mounts, with a NAS and a cluster only. Read by the NAS play, which creates,
+# exports and snapshots them, and by the kubernetes play, which hands their paths to Flux. No owner or mode
+# here: each app's pod makes its mount point uid 1000 itself, through the shares' maproot root. A dataset
+# that is not managed exists already and is only exported: its properties and ACLs are left as they are.
+kubernetes_nas_datasets:
+  # Nextcloud's files and PhotoPrism's originals and imports: data that cannot be re-created, on the redundant
+  # pool, with snapshots.
+  - {name: "{{ nas_pools.persistent }}/nextcloud", managed: true, sync: STANDARD, snapshots: true}
+  - {name: "{{ nas_pools.persistent }}/photoprism", managed: true, sync: STANDARD, snapshots: true}
+  # Camera recordings: on the single-disk pool, capped, never snapshotted.
+  - {name: "{{ nas_pools.ephemeral }}/frigate", managed: true, sync: DISABLED, snapshots: false, quota: 500G}
+  # The media library, from before this repo: every media app mounts it at /data.
+  - {name: "{{ nas_pools.ephemeral }}/jellyfin", managed: false, snapshots: false}

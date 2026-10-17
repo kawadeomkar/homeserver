@@ -23,6 +23,9 @@ POETRY_FOUND = @command -v $(POETRY) >/dev/null || { echo "Poetry is not on PATH
 # Narrow a run to stages, e.g. make check-truenas TAGS=truenas_pools
 TAGS    ?=
 TAG_ARGS := $(if $(TAGS),--tags $(TAGS),)
+# Anything else for ansible-playbook, such as a variable for one run:
+#   make kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'
+# (make's own -e is not that: it is make's --environment-overrides, and passes nothing to Ansible).
 ANSIBLE_ARGS ?=
 PLAYBOOK := $(BIN)/ansible-playbook
 # Every playbook run is also written to its own log (git-ignored: it holds addresses), named after
@@ -42,7 +45,16 @@ RUN      = @test -x $(PLAYBOOK) || { echo "$(PLAYBOOK) not found: activate the p
 KUBERNETES_VERSION ?= 1.37.1
 KUBE_SCHEMA_REF    ?= 8df8a883b68a24a104b4a9e43c1288090ae60b3b
 KUBE_SCHEMAS := https://raw.githubusercontent.com/yannh/kubernetes-json-schema/$(KUBE_SCHEMA_REF)/{{.NormalizedKubernetesVersion}}-standalone{{.StrictSuffix}}/{{.ResourceKind}}{{.KindSuffix}}.json
+# Custom resources (Flux's, MetalLB's, cert-manager's...) are validated against the CRD schemas of
+# datreeio/CRDs-catalog, pinned to one commit like the Kubernetes schemas.
+KUBE_CRD_SCHEMA_REF ?= 63669a570e231d4f1f8396d229a1de512bcf0a34
+KUBE_CRD_SCHEMAS := https://raw.githubusercontent.com/datreeio/CRDs-catalog/$(KUBE_CRD_SCHEMA_REF)/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
 KUBE_CACHE   ?= .cache/kubeconform
+KUBECONFORM   = kubeconform -strict -summary -cache $(KUBE_CACHE) -kubernetes-version $(KUBERNETES_VERSION) \
+                -schema-location '$(KUBE_SCHEMAS)' -schema-location '$(KUBE_CRD_SCHEMAS)'
+# What make lint-helm renders the charts into, and make lint-kube-linter each setup's manifests.
+HELM_RENDERED ?= .cache/helm-rendered
+K8S_RENDERED  ?= .cache/k8s-rendered
 # Every role's custom modules, as paths.
 MODULES := $(wildcard roles/*/library/*.py)
 
@@ -110,8 +122,9 @@ lint-module-docs: ## Every custom module's DOCUMENTATION parses (each failure is
 	  $(BIN)/ansible-doc -t module -M $$(dirname $$m) --json $$(basename $$m .py) </dev/null >/dev/null || rc=1; \
 	done; exit $$rc
 
-lint-github: ## dependabot.yml and the workflows against their published schemas (bundled, so offline)
+lint-github: ## dependabot.yml, renovate.json and the workflows against their published schemas (bundled, so offline)
 	$(BIN)/check-jsonschema --builtin-schema vendor.dependabot .github/dependabot.yml
+	$(BIN)/check-jsonschema --builtin-schema vendor.renovate renovate.json
 	$(BIN)/check-jsonschema --builtin-schema vendor.github-workflows .github/workflows/*.yml
 
 test: ## The unit tests, and the policy tests that check the repo's own rules, with a coverage report
@@ -125,31 +138,72 @@ test-gitleaks-rules: ## .gitleaks.toml against generated fixtures (gitleaks from
 GITLEAKS_FOUND = @command -v gitleaks >/dev/null || { echo "gitleaks is not on PATH (brew install gitleaks)"; exit 1; }
 
 .PHONY: secrets-staged secrets-push
-secrets-staged: ## gitleaks over the staged changes (the pre-commit hook)
+secrets-staged: ## gitleaks over the staged changes, and no unencrypted *.sops.yaml (the pre-commit hook)
 	$(GITLEAKS_FOUND)
 	gitleaks git --pre-commit --staged --config .gitleaks.toml --ignore-gitleaks-allow --redact --verbose --no-banner
+	scripts/ci/check-sops-staged.sh
 
 secrets-push: ## Secrets and identifiers in the commits being pushed (the pre-push hook)
 	$(GITLEAKS_FOUND)
 	BASE="$${PRE_COMMIT_FROM_REF:-}" HEAD="$${PRE_COMMIT_TO_REF:-HEAD}" scripts/ci/check-range.sh
 
 .PHONY: test-idempotence
-test-idempotence: ## Run each role repeatedly against local fakes of TrueNAS and Proxmox
-	$(BIN)/pytest -q tests/integration
+# CI runs the tests marked cluster (the VM, backup, Talos and Flux playbooks) in a job of their own, on one
+# Python, and the rest on each: PYTEST_ARGS='-m cluster' or PYTEST_ARGS='-m "not cluster"'. Empty runs them all.
+PYTEST_ARGS ?=
+test-idempotence: ## Run each role repeatedly against local fakes (PYTEST_ARGS narrows it, e.g. -m cluster)
+	$(BIN)/pytest -q $(PYTEST_ARGS) tests/integration
 
 .PHONY: lint-kubeconform
 # kubeconform retries each schema download itself (twice, with backoff), so an invalid manifest fails
 # at once and nothing here retries.
-lint-kubeconform: ## kubeconform, strict, against Talos's Kubernetes version (kubeconform from PATH)
+# Every file as it is, before kustomize and Flux's substitution: kustomization.yaml files are kustomize's, not
+# objects, and SOPS files carry their own top-level sops: key.
+lint-kubeconform: ## kubeconform, strict, against Talos's Kubernetes version and the pinned CRD schemas (kubeconform from PATH)
 	@mkdir -p $(KUBE_CACHE)
-	kubeconform -strict -summary -cache $(KUBE_CACHE) -kubernetes-version $(KUBERNETES_VERSION) \
-	  -schema-location '$(KUBE_SCHEMAS)' k8s
+	$(KUBECONFORM) -ignore-filename-pattern 'kustomization\.yaml$$' -ignore-filename-pattern '\.sops\.yaml$$' k8s
+
+# Each kustomize directory as Flux builds it, so a patch that no longer applies, or a resource listed and missing,
+# fails here. The SOPS-encrypted Secrets are skipped: their sops: key is not a Secret's (test_k8s.py checks them).
+.PHONY: lint-kustomize
+lint-kustomize: ## kustomize build of every directory under k8s/ with a kustomization.yaml, then kubeconform (kustomize from PATH)
+	@command -v kustomize >/dev/null || { echo "kustomize is not on PATH (brew install kustomize)"; exit 1; }
+	@mkdir -p $(KUBE_CACHE)
+	@rc=0; for k in $$(find k8s -name kustomization.yaml | sort); do d=$$(dirname "$$k"); \
+	  echo "$$d"; kustomize build --load-restrictor=LoadRestrictionsNone "$$d" > $(KUBE_CACHE)/build.yaml \
+	  && $(KUBECONFORM) -skip=Secret $(KUBE_CACHE)/build.yaml || rc=1; done; exit $$rc
+
+# The charts the HelmReleases install, rendered at their pins with each setup's placeholder settings, then checked as
+# the repo's own manifests are: kubeconform (a chart's own CRD definitions aside), kube-linter's request and image
+# checks, and test_k8s.py's host paths and privilege rules. A chart bump that adds a hostPath or a privileged pod, or a misspelt values key a chart's
+# schema refuses, fails before it merges.
+.PHONY: lint-helm
+lint-helm: ## Render every HelmRelease's chart and check what it renders (helm from PATH)
+	@command -v helm >/dev/null || { echo "helm is not on PATH (brew install helm)"; exit 1; }
+	$(BIN)/python scripts/ci/render_helm.py --out $(HELM_RENDERED) --kube-version $(KUBERNETES_VERSION)
+	$(KUBECONFORM) -skip=CustomResourceDefinition $(HELM_RENDERED)
+	kube-linter lint --config .kube-linter-charts.yaml --fail-if-no-objects-found $(HELM_RENDERED)
+	HELM_RENDERED=$(HELM_RENDERED) $(BIN)/pytest -q -p no:cacheprovider tests/policy/test_k8s.py -k chart
 
 .PHONY: lint-kube-linter lint-k8s
-lint-kube-linter: ## kube-linter with the repo's checks, .kube-linter.yaml (kube-linter from PATH)
-	kube-linter lint --config .kube-linter.yaml --fail-if-no-objects-found k8s
+# On each setup's manifests as Flux applies them, built and with the settings substituted: kube-linter silently skips
+# an object it cannot decode, such as a resource limit of "${GPU_I915}" (scripts/ci/render_manifests.py).
+lint-kube-linter: ## kube-linter with the repo's checks, .kube-linter.yaml, on each setup's built manifests (kube-linter and kustomize from PATH)
+	$(BIN)/python scripts/ci/render_manifests.py --out $(K8S_RENDERED)
+	@rc=0; for d in $(K8S_RENDERED)/*/; do echo "$$d"; \
+	  kube-linter lint --config .kube-linter.yaml --fail-if-no-objects-found "$$d" || rc=1; done; exit $$rc
 
-lint-k8s: lint-kubeconform lint-kube-linter ## Both manifest checks
+# The Talos machine configurations of every setup, rendered by roles/talos's own render tasks and validated by
+# talosctl, which catches what rendering lets through (a misspelt field). Needs no cluster and no vault. talosctl
+# comes from PATH, pinned in CI with talos_version; without it the check is skipped locally, saying so, and fails
+# in CI (CI set), as the gitleaks tests do.
+.PHONY: lint-talos
+lint-talos: ## Render every node's Talos configuration and validate it (talosctl from PATH)
+	@command -v talosctl >/dev/null || { if [ -n "$$CI" ]; then echo "talosctl is not on PATH: the CI job must install it"; exit 1; fi; \
+	  echo "talosctl is not on PATH: lint-talos skipped (CI runs it)"; exit 0; }; \
+	  ANSIBLE_CONFIG=tests/integration/ansible.cfg ANSIBLE_NOCOLOR=1 $(PLAYBOOK) tests/talos_validate.yml </dev/null
+
+lint-k8s: lint-kubeconform lint-kustomize lint-kube-linter lint-helm lint-talos ## Every manifest check, the charts, and the Talos configurations
 
 .PHONY: ci
 ci: lint test-idempotence lint-k8s ## Everything the CI gate runs, apart from linting the workflows
@@ -169,6 +223,26 @@ check-proxmox: ## Dry-run the Proxmox host's repositories, upgrade and storage
 .PHONY: proxmox
 proxmox: ## Configure the Proxmox host: repositories and upgrade, then VM storage (the NAS's shares, or a check of its own)
 	$(RUN) proxmox.yml --diff $(ANSIBLE_ARGS)
+
+.PHONY: check-kubernetes
+check-kubernetes: ## Dry-run the Kubernetes cluster: its VMs, then Talos and Flux
+	$(RUN) kubernetes.yml --check --diff $(TAG_ARGS) $(ANSIBLE_ARGS)
+
+.PHONY: kubernetes
+kubernetes: ## Build or correct the Kubernetes cluster: its VMs, then Talos and Flux (needs proxmox first; never upgrades)
+	$(RUN) kubernetes.yml --diff $(TAG_ARGS) $(ANSIBLE_ARGS)
+
+.PHONY: check-talos-upgrade
+check-talos-upgrade: ## Show what talos-upgrade would move, with Kubernetes's own upgrade dry run
+	$(RUN) talos-upgrade.yml --check --diff $(ANSIBLE_ARGS)
+
+.PHONY: talos-upgrade
+talos-upgrade: ## Move the running cluster to the pinned Talos and Kubernetes versions (etcd snapshot first)
+	$(RUN) talos-upgrade.yml --diff $(ANSIBLE_ARGS)
+
+.PHONY: etcd-snapshot
+etcd-snapshot: ## Snapshot etcd into ~/.talos/homeserver/etcd/
+	$(RUN) etcd-snapshot.yml $(ANSIBLE_ARGS)
 
 .PHONY: check
 check: ## Dry-run everything
@@ -194,6 +268,12 @@ vault-init: ## Without a NAS: an empty vault of your own, with a new .vault_pass
 	@test -x $(BIN)/ansible-vault || { echo "ansible-vault is not in $(VENV): activate the project's virtualenv, or pass VENV=<path>"; exit 1; }
 	@if [ -f .vault_pass ] && $(BIN)/ansible-vault view group_vars/all/vault.yml >/dev/null 2>&1; then \
 	  echo "group_vars/all/vault.yml already opens with .vault_pass: nothing to do."; \
+	elif [ -f group_vars/all/vault.yml ] && ! { tracked=$$(git rev-parse -q --verify :group_vars/all/vault.yml 2>/dev/null) \
+	    && [ -n "$$tracked" ] && [ "$$(git hash-object group_vars/all/vault.yml)" = "$$tracked" ]; }; then \
+	  echo "group_vars/all/vault.yml does not open with .vault_pass and is not the tracked vault, so it may be yours," \
+	    "with the cluster's secrets in it: restore the .vault_pass that opens it rather than replace it. To start" \
+	    "afresh all the same, move the file out of the repository first."; \
+	  exit 1; \
 	else \
 	  umask 077 && { [ -f .vault_pass ] || openssl rand -hex 32 > .vault_pass; } \
 	  && printf -- '---\n{}\n' | $(BIN)/ansible-vault encrypt --output group_vars/all/vault.yml \

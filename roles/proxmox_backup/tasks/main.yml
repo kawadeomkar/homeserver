@@ -1,0 +1,189 @@
+---
+# Uses pvesh over root SSH. Backup jobs are the cluster's, under /cluster/backup, which neither pvesm nor qm
+# manage, and community.proxmox has no module for them.
+
+# Each problem gets its own sentence, naming the variable to change. Needs no connection, so it runs under
+# every tag, and a dry run of the configuration alone catches it.
+- name: Check the role's inputs
+  ansible.builtin.assert:
+    that: _errors | length == 0
+    fail_msg: "{{ _errors | join(' ') }}"
+    quiet: true
+  tags: [always]
+  vars:
+    _ids: "{{ proxmox_backup_jobs | map(attribute='id', default='') | map('string') | list }}"
+    _errors: >-
+      {%- set out = [] -%}
+      {%- if _ids | unique | list | length != _ids | length -%}
+      {%-   set _ = out.append('Each job in proxmox_backup_jobs needs an id of its own.') -%}
+      {%- endif -%}
+      {%- for job in proxmox_backup_jobs -%}
+      {%-   set id = job.id | default('') | string -%}
+      {%-   if id is not match('^[a-z][a-z0-9_-]+$', ignorecase=True) -%}
+      {%-     set _ = out.append('Proxmox takes a backup job id of two or more letters, digits, hyphens and underscores, '
+                                 ~ 'starting with a letter; proxmox_backup_jobs has ' ~ (id or 'one without an id') ~ '.') -%}
+      {%-   endif -%}
+      {%-   if not job.storage | default('') or not job.schedule | default('') -%}
+      {%-     set _ = out.append('Backup job ' ~ id ~ ' in proxmox_backup_jobs needs a storage and a schedule.') -%}
+      {%-   endif -%}
+      {%-   set vmids = job.vmid | default([]) -%}
+      {%-   if vmids is string or vmids is not sequence or not vmids
+              or vmids | reject('integer') | reject('match', '^[0-9]+$') | list -%}
+      {%-     set _ = out.append('Backup job ' ~ id ~ ' in proxmox_backup_jobs needs vmid, a list of VMIDs.') -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Read the storage configuration
+  ansible.builtin.command:
+    argv: [pvesh, get, /storage, --output-format, json]
+  register: proxmox_backup_storage
+  changed_when: false
+  check_mode: false
+  when: proxmox_backup_jobs | length > 0
+
+- name: Read the backup jobs
+  ansible.builtin.command:
+    argv: [pvesh, get, /cluster/backup, --output-format, json]
+  register: proxmox_backup_existing
+  changed_when: false
+  check_mode: false
+  when: proxmox_backup_jobs | length > 0
+
+# What each job's storage lacks. A storage of type dir or btrfs must be a checked mount point (is_mountpoint not
+# no, off, 0 or false, which Proxmox all read as unset): without it, a USB
+# disk that is unplugged leaves the storage looking available, and vzdump then writes into the empty directory on
+# the node's root filesystem until it is full, which takes the cluster filesystem and every VM down with it.
+- name: Work out the wanted jobs and what their storage lacks
+  ansible.builtin.set_fact:
+    proxmox_backup_wanted: "{{ _wanted }}"
+    proxmox_backup_storage_problems: "{{ _problems }}"
+    proxmox_backup_storage_pending: "{{ _pending }}"
+    proxmox_backup_plan: "{{ _plan }}"
+  when: proxmox_backup_jobs | length > 0
+  vars:
+    _have: "{{ dict(proxmox_backup_storage.stdout | from_json | map(attribute='storage')
+                    | zip(proxmox_backup_storage.stdout | from_json)) }}"
+    _missing: "{{ proxmox_backup_jobs | map(attribute='storage') | unique | reject('in', _have) | list }}"
+    _pending: "{{ _missing | select('in', proxmox_backup_pending_storages) | list if ansible_check_mode else [] }}"
+    _problems: >-
+      {%- set out = [] -%}
+      {%- for id in proxmox_backup_jobs | map(attribute='storage') | unique -%}
+      {%-   if id not in _have -%}
+      {%-     if id not in _pending -%}
+      {%-       set _ = out.append(id ~ ': does not exist') -%}
+      {%-     endif -%}
+      {%-   else -%}
+      {%-     set s = _have[id] -%}
+      {%-     if s.disable | default(0) | int == 1 -%}
+      {%-       set _ = out.append(id ~ ': is disabled') -%}
+      {%-     endif -%}
+      {%-     if 'backup' not in (s.content | default('')).split(',') -%}
+      {%-       set _ = out.append(id ~ ': has no backup in its content (pvesm set ' ~ id ~ ' --content backup,...)') -%}
+      {%-     endif -%}
+      {%-     if s.type in ['dir', 'btrfs'] and (s.is_mountpoint | default('no') | string | lower)
+                in ['no', '0', 'false', 'off', ''] -%}
+      {%-       set _ = out.append(id ~ ': is a directory that is not a checked mount point, so with its disk missing '
+                                 ~ "vzdump would fill the node's root filesystem. Set pvesm set " ~ id
+                                 ~ ' --is_mountpoint yes --create-base-path 0') -%}
+      {%-     endif -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ out }}
+    # Each job's managed settings as pvesh takes and shows them; optional ones left empty are not managed.
+    _wanted: >-
+      {%- set out = {} -%}
+      {%- for job in proxmox_backup_jobs -%}
+      {%-   set fields = {'schedule': job.schedule | string, 'storage': job.storage,
+                          'vmid': job.vmid | map('int') | sort | map('string') | join(','),
+                          'mode': job.mode | default('snapshot'), 'compress': job.compress | default('zstd'),
+                          'enabled': '1' if job.enabled | default(true) | bool else '0'} -%}
+      {%-   if job.prune_backups | default('') -%}
+      {%-     set _ = fields.update({'prune-backups': job.prune_backups.split(',') | map('trim') | sort | join(',')}) -%}
+      {%-   endif -%}
+      {%-   if job.notes_template | default('') -%}
+      {%-     set _ = fields.update({'notes-template': job.notes_template}) -%}
+      {%-   endif -%}
+      {%-   set _ = out.update({job.id: fields}) -%}
+      {%- endfor -%}
+      {{ out }}
+    # create, ok, or the settings that differ. pvesh may give prune-backups as text or as an object, VMIDs in any
+    # order, and the enabled flag as a number or not at all.
+    _plan: >-
+      {%- set existing = proxmox_backup_existing.stdout | from_json -%}
+      {%- set have = dict(existing | map(attribute='id') | zip(existing)) -%}
+      {%- set plan = {} -%}
+      {%- for id, fields in _wanted.items() -%}
+      {%-   if id not in have -%}
+      {%-     set _ = plan.update({id: 'create'}) -%}
+      {%-   else -%}
+      {%-     set h = have[id] -%}
+      {%-     set prune = h['prune-backups'] | default('') -%}
+      {%-     if prune is mapping -%}
+      {%-       set pairs = [] -%}
+      {%-       for k, v in prune.items() -%}
+      {%-         set _ = pairs.append(k ~ '=' ~ v) -%}
+      {%-       endfor -%}
+      {%-       set prune = pairs | sort | join(',') -%}
+      {%-     else -%}
+      {%-       set prune = prune.split(',') | map('trim') | select | sort | join(',') -%}
+      {%-     endif -%}
+      {%-     set current = {'schedule': h.schedule | default('') | string, 'storage': h.storage | default(''),
+                             'vmid': (h.vmid | default('') | string).split(',') | select | map('int') | sort
+                                     | map('string') | join(','),
+                             'mode': h.mode | default('snapshot'), 'compress': h.compress | default('0') | string,
+                             'enabled': h.enabled | default(1) | string, 'prune-backups': prune,
+                             'notes-template': h['notes-template'] | default('')} -%}
+      {%-     set differ = [] -%}
+      {%-     for key, value in fields.items() if current[key] != value -%}
+      {%-       set _ = differ.append(key) -%}
+      {%-     endfor -%}
+      {%-     set _ = plan.update({id: differ or 'ok'}) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ plan }}
+
+- name: Refuse a backup storage that cannot take the backups
+  ansible.builtin.assert:
+    that: proxmox_backup_storage_problems | length == 0
+    fail_msg: >-
+      These storages in proxmox_backup_jobs cannot take backups: {{ proxmox_backup_storage_problems | join('; ') }}.
+      Storage configured in Proxmox: {{ proxmox_backup_storage.stdout | from_json | map(attribute='storage') | sort | join(', ') }}.
+    quiet: true
+  when: proxmox_backup_jobs | length > 0
+
+# Commands do not run in check mode, so this is what a dry run shows: create, ok, or the settings to correct, per
+# job, and a storage that an earlier role adds only on a real run. A dry run counts it as a change when there is
+# something to do, so its recap says so; a real run counts the commands instead.
+- name: Show the backup jobs to create or correct
+  ansible.builtin.debug:
+    msg: >-
+      {{ {'jobs': proxmox_backup_plan}
+         | combine({'storage created by proxmox_storage on a real run': proxmox_backup_storage_pending}
+                   if proxmox_backup_storage_pending else {}) }}
+  when: proxmox_backup_jobs | length > 0
+  changed_when: ansible_check_mode and proxmox_backup_plan.values() | reject('eq', 'ok') | list | length > 0
+
+- name: Create the backup jobs
+  ansible.builtin.command:
+    argv: >-
+      {{ ['pvesh', 'create', '/cluster/backup', '--id', item.key]
+         + (item.value | dict2items | map(attribute='key') | map('regex_replace', '^', '--')
+            | zip(item.value | dict2items | map(attribute='value')) | flatten) }}
+  loop: "{{ proxmox_backup_wanted | default({}) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: proxmox_backup_plan[item.key] == 'create'
+  changed_when: true
+
+- name: Correct the backup jobs' settings that drifted
+  ansible.builtin.command:
+    argv: >-
+      {{ ['pvesh', 'set', '/cluster/backup/' ~ item.key]
+         + (proxmox_backup_plan[item.key] | map('regex_replace', '^', '--')
+            | zip(proxmox_backup_plan[item.key] | map('extract', item.value)) | flatten) }}
+  loop: "{{ proxmox_backup_wanted | default({}) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: proxmox_backup_plan[item.key] is not string
+  changed_when: true

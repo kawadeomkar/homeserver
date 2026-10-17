@@ -10,12 +10,12 @@ truenas_network_settings:
 # truenas_static_address, truenas_gateway and truenas_nameservers are set in local.yml.
 
 # --------------------------------------------------------------------- pools ---
-# Both pools already exist and are imported. Their disks, for creation on blank disks only, are
-# listed by serial in local.yml (truenas_pool_disks).
+# Named by class (nas_pools, group_vars/all/storage.yml): imported when they exist, created on blank disks
+# only with truenas_pool_allow_create. Their disks are listed by serial in local.yml (truenas_pool_disks).
 truenas_pools:
-  - name: nvme_gen3
+  - name: "{{ nas_pools.persistent }}"
     layout: RAIDZ1
-  - name: ephemeral
+  - name: "{{ nas_pools.ephemeral }}"
     layout: STRIPE
 # Both pools are SSDs.
 truenas_pool_autotrim: "ON"
@@ -43,29 +43,73 @@ truenas_ntp_server_defaults: {iburst: true, burst: false, prefer: false, minpoll
 # 64K records match qcow2's cluster size and waste no padding on a five-wide RAIDZ1 at ashift 12.
 # POSIX ACLs (which TrueNAS pairs with aclmode DISCARD) suit root-owned disk images served to a
 # Linux client; the pools' roots carry NFSv4 ACLs from TrueNAS CORE.
-truenas_datasets: "{{ truenas_datasets_vm_classes + truenas_datasets_vm_consumers }}"
+truenas_datasets: "{{ truenas_datasets_vm_classes + truenas_datasets_vm_consumers + truenas_datasets_kubernetes }}"
 truenas_datasets_vm_classes:
   - name: "{{ vm_storage.persistent.dataset | dirname }}"
     properties: {compression: LZ4, atime: "OFF", acltype: POSIX, aclmode: DISCARD}
   - name: "{{ vm_storage.persistent.dataset }}"
     # There is no UPS, so persistent VMs keep synchronous writes synchronous.
     properties: {sync: STANDARD, recordsize: 64K}
+  - name: "{{ vm_storage_backup.dataset }}"
+    # vzdump archives: large files written once. Never a snapshot task: it holds backups already.
+    properties: {sync: STANDARD, recordsize: 1M}
   - name: "{{ vm_storage.ephemeral.dataset | dirname }}"
     # 1 TiB. The pool also holds the media dataset and has no redundancy; the quota stops a
-    # runaway VM filling it.
-    properties: {compression: LZ4, atime: "OFF", acltype: POSIX, aclmode: DISCARD, quota: 1099511627776}
+    # runaway VM filling it, and the reservation, when group_vars/all/storage.yml sets one, stops the
+    # media filling the pool under the VMs.
+    # The reservation is always sent, 0 for none, so removing it from storage.yml reaches the NAS.
+    properties: >-
+      {{ {'compression': 'LZ4', 'atime': 'OFF', 'acltype': 'POSIX', 'aclmode': 'DISCARD', 'quota': 1099511627776,
+          'reservation': vm_storage_ephemeral_reservation or 0} }}
   - name: "{{ vm_storage.ephemeral.dataset }}"
     # A crash can lose the last seconds of writes, accepted for throwaway VMs. Never give this
     # dataset a snapshot task: snapshots would keep deleted VMs' data.
     properties: {sync: DISABLED, recordsize: 64K}
 # A project's pool holds throwaway VMs like the ephemeral class, so it gets the same sync and record size,
-# and never a snapshot task either. A quota, when the entry sets one, caps that project alone.
+# and never a snapshot task either. A quota, when the entry sets one, caps that project alone; without one the
+# quota is 0, none, so a quota removed here is removed on the NAS too.
 truenas_datasets_vm_consumers: >-
   {%- set out = [] -%}
   {%- for c in vm_storage_consumers -%}
-  {%-   set props = {'sync': 'DISABLED', 'recordsize': '64K'} -%}
-  {%-   if c.quota is defined -%}{%- set _ = props.update({'quota': c.quota}) -%}{%- endif -%}
+  {%-   set props = {'sync': 'DISABLED', 'recordsize': '64K', 'quota': c.quota | default(0)} -%}
   {%-   set _ = out.append({'name': c.dataset, 'properties': props}) -%}
+  {%- endfor -%}
+  {{ out }}
+# The datasets the Kubernetes cluster mounts (kubernetes_nas_datasets, group_vars/all/kubernetes.yml), with a
+# cluster only. Large files, so 1M records. An entry that is not managed is created only when it is missing (after
+# its pool was lost and made anew, say), since its share cannot be made without it, and is otherwise left exactly
+# as it is: its properties and NFSv4 ACLs are the owner's.
+truenas_datasets_kubernetes: >-
+  {%- set out = [] -%}
+  {%- for d in kubernetes_nas_datasets if kubernetes_present -%}
+  {%-   set props = {'compression': 'LZ4', 'atime': 'OFF', 'acltype': 'POSIX', 'aclmode': 'DISCARD',
+                     'sync': d.sync | default('DISABLED'), 'recordsize': '1M', 'quota': d.quota | default(0)} -%}
+  {%-   set _ = out.append({'name': d.name, 'properties': props} | combine({} if d.managed else {'create_only': true})) -%}
+  {%- endfor -%}
+  {{ out }}
+
+# ----------------------------------------------------------------- snapshots ---
+# The cluster's irreplaceable datasets keep hourly snapshots for 2 days, daily for 30 and weekly for 12 weeks.
+# The persistent VMs' disks keep hourly for a day and daily for a week, no longer: they hold a worker's whole data
+# disk, whose scratch data (transcodes, compactions) older snapshots would pin, and the nightly VM backup keeps
+# the longer history. Nothing on the ephemeral pool is ever snapshotted. The daily and weekly tasks keep a snapshot
+# even when nothing was written since the last one: they fire at midnight with an hourly one, and TrueNAS destroys a
+# batch of snapshots that are all empty unless a task in it allows empty ones, so on a dataset left alone after 23:00
+# no daily or weekly snapshot would ever survive. An empty snapshot costs nothing; the hourly ones still skip them.
+truenas_snapshot_tasks: >-
+  {%- set hourly = {'naming_schema': 'hourly-%Y-%m-%d_%H-%M', 'lifetime_unit': 'DAY', 'allow_empty': false,
+                    'schedule': {'minute': '00', 'hour': '*', 'dom': '*', 'month': '*', 'dow': '*'}} -%}
+  {%- set daily = {'naming_schema': 'daily-%Y-%m-%d_%H-%M', 'lifetime_unit': 'DAY', 'allow_empty': true,
+                   'schedule': {'minute': '00', 'hour': '00', 'dom': '*', 'month': '*', 'dow': '*'}} -%}
+  {%- set weekly = {'naming_schema': 'weekly-%Y-%m-%d_%H-%M', 'lifetime_unit': 'WEEK', 'allow_empty': true,
+                    'schedule': {'minute': '00', 'hour': '00', 'dom': '*', 'month': '*', 'dow': '7'}} -%}
+  {%- set common = {'recursive': false, 'enabled': true} -%}
+  {%- set out = [common | combine(hourly, {'dataset': vm_storage.persistent.dataset, 'lifetime_value': 1}),
+                 common | combine(daily, {'dataset': vm_storage.persistent.dataset, 'lifetime_value': 7})] -%}
+  {%- for d in kubernetes_nas_datasets if kubernetes_present and d.snapshots -%}
+  {%-   set _ = out.extend([common | combine(hourly, {'dataset': d.name, 'lifetime_value': 2}),
+                            common | combine(daily, {'dataset': d.name, 'lifetime_value': 30}),
+                            common | combine(weekly, {'dataset': d.name, 'lifetime_value': 12})]) -%}
   {%- endfor -%}
   {{ out }}
 
@@ -73,19 +117,31 @@ truenas_datasets_vm_consumers: >-
 truenas_nfs_settings:
   # Proxmox checks an NFSv4 storage with rpcinfo, which needs the port mapper NFSv3 brings.
   protocols: [NFSV3, NFSV4]
-truenas_nfs_shares: "{{ truenas_nfs_shares_vm_classes + truenas_nfs_shares_vm_consumers }}"
+truenas_nfs_shares: "{{ truenas_nfs_shares_vm_classes + truenas_nfs_shares_vm_consumers + truenas_nfs_shares_kubernetes }}"
 truenas_nfs_shares_vm_classes:
   - path: "{{ vm_storage_mount_root }}/{{ vm_storage.persistent.dataset }}"
     comment: Proxmox disks, persistent VMs
   - path: "{{ vm_storage_mount_root }}/{{ vm_storage.ephemeral.dataset }}"
     comment: Proxmox disks, ephemeral VMs
+  - path: "{{ vm_storage_mount_root }}/{{ vm_storage_backup.dataset }}"
+    comment: Proxmox backups
 truenas_nfs_shares_vm_consumers: >-
   {%- set out = [] -%}
   {%- for c in vm_storage_consumers -%}
   {%-   set _ = out.append({'path': vm_storage_mount_root ~ '/' ~ c.dataset, 'comment': 'Proxmox disks, ' ~ c.proxmox_id}) -%}
   {%- endfor -%}
   {{ out }}
-# Only the Proxmox host may mount them, and it writes disk images as root.
+# Each dataset the cluster mounts, to the nodes that run the apps alone. Root stays root over these shares too
+# (the defaults below), which is how each app's pod makes its own mount point uid 1000.
+truenas_nfs_shares_kubernetes: >-
+  {%- set out = [] -%}
+  {%- for d in kubernetes_nas_datasets if kubernetes_present -%}
+  {%-   set _ = out.append({'path': vm_storage_mount_root ~ '/' ~ d.name, 'comment': 'Kubernetes, ' ~ (d.name | basename),
+                            'hosts': kubernetes_workload_nodes | map(attribute='name')
+                                     | map('extract', kubernetes_node_addresses) | map('string') | map('trim') | list}) -%}
+  {%- endfor -%}
+  {{ out }}
+# Only the Proxmox host may mount the VM and backup shares, and it writes disk images and backups as root.
 truenas_nfs_share_defaults:
   hosts: ["{{ proxmox_address }}"]
   networks: []
@@ -93,6 +149,20 @@ truenas_nfs_share_defaults:
   maproot_user: root
   maproot_group: root
   enabled: true
+
+# -------------------------------------------------------------------- alerts ---
+# Alert e-mail, when local.yml names a mail server: the NAS mails warnings and worse (a degraded pool, a pool
+# filling up, a failed snapshot task) to truenas_alert_email. The password is vault_truenas_mail_password.
+truenas_mail: >-
+  {{ {} if not truenas_mail_server | default('', true) else
+     {'outgoingserver': truenas_mail_server, 'port': truenas_mail_port | default(587, true) | int,
+      'security': truenas_mail_security | default('TLS', true), 'smtp': truenas_mail_user | default('', true) | length > 0,
+      'user': truenas_mail_user | default(none, true),
+      'fromemail': truenas_mail_from | default(truenas_mail_user, true) | default('', true)} }}
+truenas_mail_password: "{{ vault_truenas_mail_password | default('') }}"
+truenas_alert_services: >-
+  {{ [] if not truenas_alert_email | default('', true) else
+     [{'name': 'Email', 'attributes': {'type': 'Mail', 'email': truenas_alert_email}, 'level': 'WARNING', 'enabled': true}] }}
 
 # ------------------------------------------------------------------ services ---
 truenas_services:

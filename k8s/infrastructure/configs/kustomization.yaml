@@ -1,0 +1,7 @@
+---
+# Objects that need the controllers' definitions (CRDs), applied once infra-controllers is ready: MetalLB's address
+# pool now; the ClusterIssuer and TLSStore later. Never a Namespace: each lives with its controller.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - metallb.yaml

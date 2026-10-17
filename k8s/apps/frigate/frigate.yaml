@@ -1,0 +1,223 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: frigate-config
+  namespace: frigate
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local
+  resources:
+    requests:
+      storage: 5Gi
+---
+# The recordings: the static PersistentVolume frigate-media, on the NAS's ephemeral/frigate with a NAS (capped, never
+# snapshotted) and on the node's media disk without one (never backed up).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: frigate-media
+  namespace: frigate
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ""
+  volumeName: frigate-media
+  resources:
+    requests:
+      storage: 500Gi
+---
+# Frigate (s6 as root, no USER in its image). /config holds config.yml, frigate.db and the model cache on a local
+# volume. Port 5000 is the internal API the probes use, 8971 the authenticated UI behind Traefik. Object detection on
+# the iGPU when the host passes one through, on the CPU otherwise; the first configuration is seeded with the device,
+# so adding a GPU later means changing it in Frigate's editor too. Its first start downloads and builds models: five
+# minutes of startup probe.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frigate
+  namespace: frigate
+  labels:
+    app.kubernetes.io/name: frigate
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: frigate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: frigate
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # The first configuration, only when there is none; the detector's device filled in as it is copied.
+        - name: seed-config
+          image: docker.io/library/busybox:1.38.0@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
+          command: [sh, -c, '[ -e /config/config.yml ] || sed "s/DETECTOR_DEVICE/$DETECTOR_DEVICE/" /seed/config.yml > /config/config.yml']
+          env:
+            - name: DETECTOR_DEVICE
+              value: "${FRIGATE_DETECTOR_DEVICE}"
+          securityContext:
+            allowPrivilegeEscalation: false
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: seed
+              mountPath: /seed
+      containers:
+        - name: frigate
+          image: ghcr.io/blakeblackshear/frigate:0.17.2
+          env:
+            - name: TZ
+              value: "${TZ}"
+            # Flux fills in the address here; the configuration refers to it as ${FRIGATE_WEBRTC_CANDIDATE}, which
+            # go2rtc expands from its environment.
+            - name: FRIGATE_WEBRTC_CANDIDATE
+              value: "${LB_FRIGATE_IP}:8555"
+          envFrom:
+            - secretRef:
+                name: frigate
+          ports:
+            - name: api
+              containerPort: 5000
+            - name: ui
+              containerPort: 8971
+            - name: rtsp
+              containerPort: 8554
+            - name: webrtc-tcp
+              containerPort: 8555
+            - name: webrtc-udp
+              containerPort: 8555
+              protocol: UDP
+          securityContext:
+            allowPrivilegeEscalation: false
+          resources:
+            # 2Gi over the process's own budget: the two memory-backed emptyDirs (1Gi each) count against it.
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: "4"
+              # The iGPU when the host passes one through (GPU_I915 1), none otherwise: a limit of 0 asks for no
+              # device, so the pod schedules on a node without the plugin.
+              gpu.intel.com/i915: "${GPU_I915}"
+              memory: 6Gi
+          startupProbe:
+            httpGet:
+              path: /api/version
+              port: api
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /api/version
+              port: api
+            periodSeconds: 30
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /api/version
+              port: api
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: media
+              mountPath: /media/frigate
+            - name: cache
+              mountPath: /tmp/cache
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: frigate-config
+        - name: media
+          persistentVolumeClaim:
+            claimName: frigate-media
+        - name: seed
+          configMap:
+            name: frigate-config-template
+        - name: cache
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frigate
+  namespace: frigate
+  labels:
+    app.kubernetes.io/name: frigate
+spec:
+  selector:
+    app.kubernetes.io/name: frigate
+  ports:
+    - name: ui
+      port: 8971
+      targetPort: ui
+---
+# The camera streams, for clients outside the cluster (RTSP restreams and WebRTC), on their own LoadBalancer address
+# (LB_FRIGATE_IP). No node ports: MetalLB announces the address.
+apiVersion: v1
+kind: Service
+metadata:
+  name: frigate-rtsp
+  namespace: frigate
+  labels:
+    app.kubernetes.io/name: frigate
+  annotations:
+    metallb.io/loadBalancerIPs: "${LB_FRIGATE_IP}"
+spec:
+  type: LoadBalancer
+  allocateLoadBalancerNodePorts: false
+  selector:
+    app.kubernetes.io/name: frigate
+  ports:
+    - name: rtsp
+      port: 8554
+      targetPort: rtsp
+    - name: webrtc-tcp
+      port: 8555
+      targetPort: webrtc-tcp
+    - name: webrtc-udp
+      port: 8555
+      targetPort: webrtc-udp
+      protocol: UDP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: frigate
+  namespace: frigate
+  labels:
+    app.kubernetes.io/name: frigate
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: frigate.${DOMAIN}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frigate
+                port:
+                  name: ui

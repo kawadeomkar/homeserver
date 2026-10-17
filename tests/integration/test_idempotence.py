@@ -16,16 +16,21 @@ directory.
 Needs the project virtualenv and openssl. Run: make test-idempotence
 """
 
+import base64
+import hashlib
+import http.server
 import json
 import os
 import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 import pytest
+import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -36,6 +41,12 @@ RECAP = re.compile(r"^(\S+)\s+:\s+ok=(\d+)\s+changed=(\d+)\s+unreachable=(\d+)\s
 PLAYBOOK = str(Path(sys.executable).parent / "ansible-playbook")
 NAS_ADDRESS = "127.0.0.1"
 PROXMOX_ADDRESS = "127.0.0.20"
+# The cluster's nodes, with a NAS: the worker alone mounts the NAS's datasets.
+NODE_ADDRESSES = {"homeserver-cp-1": "127.0.0.30", "homeserver-worker-1": "127.0.0.31"}
+WORKER_ADDRESS = NODE_ADDRESSES["homeserver-worker-1"]
+# Sentinels that must never reach Ansible's output.
+MAIL_PASSWORD = "mail-password-sentinel-6c1f"
+ROTATED_MAIL_PASSWORD = "mail-password-sentinel-rotated-91ad"
 
 
 def free_port():
@@ -44,11 +55,12 @@ def free_port():
         return s.getsockname()[1]
 
 
-def run(playbook, extra, check=False):
-    """Run a test playbook; return (return code, {host: stats}, combined output)."""
+def run(playbook, extra, check=False, env=None):
+    """Run a test playbook; return (return code, {host: stats}, combined output). `env` adds to the environment,
+    such as a HOME of the test's own."""
     # ANSIBLE_FORCE_COLOR overrides ANSIBLE_NOCOLOR, and a coloured PLAY RECAP does not match RECAP.
-    env = {k: v for k, v in os.environ.items() if k != "ANSIBLE_FORCE_COLOR"}
-    env |= {"ANSIBLE_CONFIG": str(HERE / "ansible.cfg"), "ANSIBLE_NOCOLOR": "1"}
+    environment = {k: v for k, v in os.environ.items() if k != "ANSIBLE_FORCE_COLOR"}
+    environment |= {"ANSIBLE_CONFIG": str(HERE / "ansible.cfg"), "ANSIBLE_NOCOLOR": "1", **(env or {})}
     cmd = [
         PLAYBOOK,
         str(HERE / playbook),
@@ -58,7 +70,7 @@ def run(playbook, extra, check=False):
     ]
     if check:
         cmd.append("--check")
-    proc = subprocess.run(cmd, env=env, cwd=HERE, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    proc = subprocess.run(cmd, env=environment, cwd=HERE, capture_output=True, text=True, stdin=subprocess.DEVNULL)
     out = proc.stdout + proc.stderr
     stats = {
         h: {"ok": int(o), "changed": int(c), "unreachable": int(u), "failed": int(f)}
@@ -180,6 +192,12 @@ def nas_vars(nas):
         "proxmox_address": PROXMOX_ADDRESS,
         "truenas_ui_restart_wait": 0,
         "truenas_api_connect_wait": 5,
+        "kubernetes_node_addresses": NODE_ADDRESSES,
+        "vm_storage_ephemeral_reservation": "100G",
+        "truenas_mail_server": "smtp.example.org",
+        "truenas_mail_user": "nas@example.org",
+        "truenas_alert_email": "admin@example.org",
+        "vault_truenas_mail_password": MAIL_PASSWORD,
     }
 
 
@@ -194,6 +212,20 @@ def write(path, state):
 def semantic(state):
     """The state without job bookkeeping, which read-only jobs (pool.import_find) also touch."""
     return {k: v for k, v in state.items() if k not in ("jobs", "next_id")}
+
+
+# Every share the NAS ends up with, and the hosts it is exported to: the VM shares to the Proxmox host, the
+# cluster's to its worker.
+EXPECTED_SHARES = {
+    "/mnt/persistent/proxmox/vm": [PROXMOX_ADDRESS],
+    "/mnt/ephemeral/proxmox/vm": [PROXMOX_ADDRESS],
+    "/mnt/ephemeral/proxmox/claude-on-proxmox": [PROXMOX_ADDRESS],
+    "/mnt/persistent/proxmox/backup": [PROXMOX_ADDRESS],
+    "/mnt/persistent/nextcloud": [WORKER_ADDRESS],
+    "/mnt/persistent/photoprism": [WORKER_ADDRESS],
+    "/mnt/ephemeral/frigate": [WORKER_ADDRESS],
+    "/mnt/ephemeral/jellyfin": [WORKER_ADDRESS],
+}
 
 
 def test_truenas_role_is_idempotent(nas):
@@ -224,25 +256,53 @@ def test_truenas_role_is_idempotent(nas):
     assert s["interface_snapshot"] is None and s["checkin_waiting"] is None, "the address change was not checked in"
     assert (s["network"]["ipv4gateway"], s["network"]["nameserver1"]) == ("127.0.0.254", "127.0.0.53")
     assert s["sysds_pool"] == "boot-pool", "the system dataset moved off the boot pool"
-    assert sorted(p["name"] for p in s["pools"]) == ["ephemeral", "nvme_gen3"]
+    assert sorted(p["name"] for p in s["pools"]) == ["ephemeral", "persistent"]
     assert all(p["autotrim"]["rawvalue"] == "on" for p in s["pools"])
     assert len(s["scrubs"]) == 2
     ds = s["datasets"]
-    assert ds["nvme_gen3/proxmox/vm"]["sync"]["rawvalue"] == "standard"
+    assert ds["persistent/proxmox/vm"]["sync"]["rawvalue"] == "standard"
     assert ds["ephemeral/proxmox/vm"]["sync"]["rawvalue"] == "disabled"
     assert ds["ephemeral/proxmox"]["quota"]["rawvalue"] == "1099511627776"
-    assert ds["nvme_gen3/proxmox/vm"]["recordsize"]["rawvalue"] == "65536"
+    assert ds["ephemeral/proxmox"]["reservation"]["rawvalue"] == str(100 * 2**30)
+    assert ds["persistent/proxmox/backup"]["recordsize"]["rawvalue"] == "1048576"
+    assert ds["persistent/proxmox/vm"]["recordsize"]["rawvalue"] == "65536"
     # The project pool: a dataset of its own with the ephemeral class's properties.
     pool = ds["ephemeral/proxmox/claude-on-proxmox"]
     assert (pool["sync"]["rawvalue"], pool["recordsize"]["rawvalue"]) == ("disabled", "65536")
     assert ds["ephemeral/proxmox"]["acltype"]["rawvalue"] == "posix"
-    assert ds["ephemeral/jellyfin"]["acltype"]["rawvalue"] == "nfsv4", "an undeclared dataset was touched"
-    assert sorted(sh["path"] for sh in s["shares"]) == [
-        "/mnt/ephemeral/proxmox/claude-on-proxmox",
-        "/mnt/ephemeral/proxmox/vm",
-        "/mnt/nvme_gen3/proxmox/vm",
-    ]
-    assert all(sh["hosts"] == [PROXMOX_ADDRESS] and sh["maproot_user"] == "root" for sh in s["shares"])
+    assert ds["ephemeral/jellyfin"]["acltype"]["rawvalue"] == "nfsv4", "the media dataset's ACLs were changed"
+    # The cluster's datasets: 1M records, the media dataset left as it was and only exported.
+    for name, sync in (("persistent/nextcloud", "standard"), ("persistent/photoprism", "standard")):
+        assert (ds[name]["sync"]["rawvalue"], ds[name]["recordsize"]["rawvalue"]) == (sync, "1048576")
+    assert ds["ephemeral/frigate"]["quota"]["rawvalue"] == str(500 * 2**30)
+    assert ds["ephemeral/frigate"]["sync"]["rawvalue"] == "disabled"
+    assert sorted(sh["path"] for sh in s["shares"]) == sorted(EXPECTED_SHARES)
+    assert {sh["path"]: sh["hosts"] for sh in s["shares"]} == EXPECTED_SHARES
+    assert all(sh["maproot_user"] == "root" for sh in s["shares"])
+    # Snapshot tasks: the persistent VMs' disks hourly and daily, the cluster's irreplaceable datasets hourly, daily
+    # and weekly, nothing on the ephemeral pool.
+    tasks = {(t["dataset"], t["naming_schema"].split("-")[0]): t for t in s["snapshot_tasks"]}
+    assert sorted(tasks) == sorted(
+        [("persistent/proxmox/vm", "hourly"), ("persistent/proxmox/vm", "daily")]
+        + [
+            (d, kind)
+            for d in ("persistent/nextcloud", "persistent/photoprism")
+            for kind in ("hourly", "daily", "weekly")
+        ]
+    )
+    assert (
+        tasks[("persistent/nextcloud", "daily")]["lifetime_value"],
+        tasks[("persistent/nextcloud", "daily")]["lifetime_unit"],
+    ) == (30, "DAY")
+    assert tasks[("persistent/photoprism", "weekly")]["schedule"]["dow"] == "7"
+    assert {key: t["allow_empty"] for key, t in tasks.items()} == {key: key[1] != "hourly" for key in tasks}
+    # Alert mail, with the password from the vault.
+    assert (s["mail"]["outgoingserver"], s["mail"]["smtp"], s["mail"]["pass"]) == (
+        "smtp.example.org",
+        True,
+        MAIL_PASSWORD,
+    )
+    assert [(a["name"], a["attributes"]["email"]) for a in s["alert_services"]] == [("Email", "admin@example.org")]
     services = {sv["service"]: sv for sv in s["services"]}
     assert services["nfs"]["enable"] and services["nfs"]["state"] == "RUNNING"
     assert not services["ssh"]["enable"] and services["ssh"]["state"] == "STOPPED"
@@ -259,6 +319,8 @@ def test_truenas_role_is_idempotent(nas):
     s["scrubs"][0]["threshold"] = 7
     s["ntp"][0]["minpoll"] = 4
     s["network"]["nameserver1"] = "127.0.0.99"
+    s["snapshot_tasks"][0]["lifetime_value"] = 9
+    s["alert_services"][0]["level"] = "CRITICAL"
     write(nas["state"], s)
 
     result = run("truenas.yml", extra)
@@ -271,7 +333,7 @@ def test_truenas_role_is_idempotent(nas):
     s = read(nas["state"])
     assert s["datasets"]["ephemeral/proxmox/vm"]["sync"]["rawvalue"] == "disabled"
     assert s["datasets"]["ephemeral/proxmox"]["quota"]["rawvalue"] == "1099511627776"
-    assert all(sh["hosts"] == [PROXMOX_ADDRESS] for sh in s["shares"])
+    assert {sh["path"]: sh["hosts"] for sh in s["shares"]} == EXPECTED_SHARES
     assert next(sv for sv in s["services"] if sv["service"] == "ssh")["state"] == "STOPPED"
     assert sorted(s["nfs"]["protocols"]) == ["NFSV3", "NFSV4"]
     assert s["general"]["ui_httpsredirect"] is True
@@ -279,10 +341,49 @@ def test_truenas_role_is_idempotent(nas):
     assert all(t["threshold"] == 35 for t in s["scrubs"])
     assert all(n["minpoll"] == 6 for n in s["ntp"])
     assert s["network"]["nameserver1"] == "127.0.0.53"
+    assert s["snapshot_tasks"][0]["lifetime_value"] == 1 and s["alert_services"][0]["level"] == "WARNING"
+
+    # A new alert address in local.yml: alertservice.update takes the whole service, which the fake enforces.
+    moved = {**extra, "truenas_alert_email": "alerts@example.org"}
+    expect(run("truenas.yml", moved), "truenas", changed=1, note="a new alert address")
+    assert [a["attributes"]["email"] for a in read(nas["state"])["alert_services"]] == ["alerts@example.org"]
+    expect(run("truenas.yml", extra), "truenas", changed=1, note="the alert address back")
+
+    # The single disk of the ephemeral pool lost and the pool made anew: the media dataset, which the role otherwise
+    # leaves alone, is created again so that its share can be.
+    s = read(nas["state"])
+    del s["datasets"]["ephemeral/jellyfin"]
+    s["shares"] = [sh for sh in s["shares"] if sh["path"] != "/mnt/ephemeral/jellyfin"]
+    write(nas["state"], s)
+    expect(run("truenas.yml", extra), "truenas", changed=True, note="the media dataset lost")
+    s = read(nas["state"])
+    assert s["datasets"]["ephemeral/jellyfin"]["recordsize"]["rawvalue"] == "1048576"
+    assert {sh["path"]: sh["hosts"] for sh in s["shares"]} == EXPECTED_SHARES
+    expect(run("truenas.yml", extra), "truenas", changed=0, note="the media dataset made again, second run")
+
+    # A reservation removed from the configuration is removed on the NAS too: it is sent as 0, none.
+    unreserved = {**extra, "vm_storage_ephemeral_reservation": None}
+    expect(run("truenas.yml", unreserved), "truenas", changed=1, note="the reservation removed")
+    assert read(nas["state"])["datasets"]["ephemeral/proxmox"]["reservation"]["rawvalue"] == "0"
+    expect(run("truenas.yml", unreserved), "truenas", changed=0, note="the reservation removed, second run")
+    expect(run("truenas.yml", extra), "truenas", changed=1, note="the reservation back")
+
+    # A rotated mail password reaches the NAS on the next run, as a change, and the run after changes nothing.
+    rotated = {**extra, "vault_truenas_mail_password": ROTATED_MAIL_PASSWORD}
+    result = run("truenas.yml", rotated, check=True)
+    outputs.append(result[2])
+    expect(result, "truenas", changed=1, note="dry run with a rotated mail password")
+    assert "<secret, changed>" in result[2], result[2][-3000:]
+    for n in (1, 2):
+        result = run("truenas.yml", rotated)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=1 if n == 1 else 0, note=f"run {n} with a rotated mail password")
+    assert read(nas["state"])["mail"]["pass"] == ROTATED_MAIL_PASSWORD
 
     for out in outputs:
         assert fake_truenas.PRIVATE_KEY not in out, "the UI certificate's private key reached Ansible output"
         assert fake_truenas.API_KEY not in out, "the API key reached Ansible output"
+        assert MAIL_PASSWORD not in out and ROTATED_MAIL_PASSWORD not in out, "the mail password reached Ansible output"
 
 
 def test_truenas_role_with_defaults_changes_nothing(nas):
@@ -357,7 +458,7 @@ def test_proxmox_storage_role_is_idempotent(tmp_path):
 
     result = run("proxmox.yml", extra, check=True)
     expect(result, "homeserver", note="dry run")
-    for sid in ("homeserver-persistent", "homeserver-ephemeral", "claude-on-proxmox-ephemeral"):
+    for sid in ("homeserver-persistent", "homeserver-ephemeral", "claude-on-proxmox-ephemeral", "homeserver-backup"):
         assert re.search(rf'{sid}"?:\s*"?add', result[2]), (
             f"the dry run does not plan to add {sid}\n{result[2][-3000:]}"
         )
@@ -370,15 +471,21 @@ def test_proxmox_storage_role_is_idempotent(tmp_path):
 
     s = read(state)
     nfs = {e["storage"]: e for e in s["storage"] if e["type"] == "nfs"}
-    assert sorted(nfs) == ["claude-on-proxmox-ephemeral", "homeserver-ephemeral", "homeserver-persistent"]
-    for entry in nfs.values():
+    assert sorted(nfs) == [
+        "claude-on-proxmox-ephemeral",
+        "homeserver-backup",
+        "homeserver-ephemeral",
+        "homeserver-persistent",
+    ]
+    for sid, entry in nfs.items():
         assert (entry["server"], entry["content"], entry["format"], entry["options"]) == (
             "127.0.0.10",
-            "images",
+            "backup" if sid == "homeserver-backup" else "images",
             "qcow2",
             "vers=4.2",
         )
         assert "disable" not in entry
+    assert nfs["homeserver-backup"]["export"] == "/mnt/persistent/proxmox/backup"
     assert nfs["homeserver-ephemeral"]["export"] == "/mnt/ephemeral/proxmox/vm"
     assert nfs["claude-on-proxmox-ephemeral"]["export"] == "/mnt/ephemeral/proxmox/claude-on-proxmox"
     assert s["node"]["startall-onboot-delay"] == 120
@@ -453,8 +560,8 @@ def test_proxmox_storage_role_needs_the_static_address(tmp_path):
     extra = {**pve_vars(tmp_path, settled=True, nas=False), "truenas_static_address": ""}
     rc, _, out = run("proxmox.yml", {**extra, "truenas_bootstrap_address": "127.0.0.10"}, check=True)
     expected = (
-        "No NFS server for homeserver-persistent, homeserver-ephemeral, claude-on-proxmox-ephemeral: "
-        "set proxmox_storage_nfs_server"
+        "No NFS server for homeserver-persistent, homeserver-ephemeral, claude-on-proxmox-ephemeral, "
+        "homeserver-backup: set proxmox_storage_nfs_server"
     )
     assert rc != 0 and expected in out, out[-3000:]
 
@@ -734,7 +841,7 @@ def test_proxmox_storage_role_refuses_an_export_another_id_mounts(tmp_path):
 
     pairs = (("truenas-persistent", "homeserver-persistent"), ("truenas-ephemeral", "homeserver-ephemeral"))
     s = read(state)
-    s["storage"] += [mounted("truenas-persistent", "/mnt/nvme_gen3/proxmox/vm")]
+    s["storage"] += [mounted("truenas-persistent", "/mnt/persistent/proxmox/vm")]
     s["storage"] += [mounted("truenas-ephemeral", "/mnt/ephemeral/proxmox/vm")]
     write(state, s)
     for check in (True, False):
@@ -746,7 +853,7 @@ def test_proxmox_storage_role_refuses_an_export_another_id_mounts(tmp_path):
         nfs = sorted(e["storage"] for e in s["storage"] if e["type"] == "nfs")
         assert s["mutations"] == 0 and nfs == ["truenas-ephemeral", "truenas-persistent"], "storage was added"
     # The wanted id exists beside the old one, as after a run that added it: the old one still has to go.
-    s["storage"] += [mounted("homeserver-persistent", "/mnt/nvme_gen3/proxmox/vm")]
+    s["storage"] += [mounted("homeserver-persistent", "/mnt/persistent/proxmox/vm")]
     write(state, s)
     rc, _, out = run("proxmox.yml", extra, check=True)
     assert rc != 0 and "is mounted as truenas-persistent, wanted as homeserver-persistent" in out, out[-3000:]
@@ -757,7 +864,7 @@ def test_proxmox_storage_role_refuses_an_export_another_id_mounts(tmp_path):
     expect(run("proxmox.yml", extra), "homeserver", changed=True, note="run once the old ids are gone")
     expect(run("proxmox.yml", extra), "homeserver", changed=0, note="second run once the old ids are gone")
     nfs = sorted(e["storage"] for e in read(state)["storage"] if e["type"] == "nfs")
-    assert nfs == ["claude-on-proxmox-ephemeral", "homeserver-ephemeral", "homeserver-persistent"]
+    assert nfs == ["claude-on-proxmox-ephemeral", "homeserver-backup", "homeserver-ephemeral", "homeserver-persistent"]
 
 
 def test_truenas_role_refuses_an_unpinned_certificate(nas):
@@ -769,3 +876,1085 @@ def test_truenas_role_refuses_an_unpinned_certificate(nas):
     rc, _, out = run("truenas_defaults.yml", extra)
     assert rc != 0 and "not the pinned one" in out and "the API key was not sent" in out, out[-3000:]
     assert Path(nas["calls"]).read_text().count("auth.login_with_api_key") == logins_before, "a login was attempted"
+
+
+# ----------------------------------------------------------------------------------- Backups ---
+
+
+def seed_storage(state, *entries):
+    """Add storages to the fake host, as proxmox_storage or the owner would have."""
+    s = read(state) if Path(state).exists() else fake_pve.fresh_state()
+    s["storage"] += list(entries)
+    write(state, s)
+
+
+BACKUP_NFS = {
+    "storage": "homeserver-backup",
+    "type": "nfs",
+    "server": "127.0.0.10",
+    "export": "/mnt/persistent/proxmox/backup",
+    "content": "backup",
+    "format": "qcow2",
+    "options": "vers=4.2",
+    "path": "/mnt/pve/homeserver-backup",
+}
+
+
+def backup_job(state, jid="vm-nightly"):
+    return read(state).get("backup_jobs", {}).get(jid)
+
+
+@pytest.mark.cluster
+def test_proxmox_backup_with_a_nas(tmp_path):
+    """With a NAS and a cluster: one nightly job of both nodes to the NAS's backup storage. A dry run on a fresh
+    host passes, the storage pending; a real run without the storage is refused; drift is corrected."""
+    state = tmp_path / "pve.json"
+    extra = {
+        "fake_pve_state": str(state),
+        "truenas_static_address": "127.0.0.10/24",
+        "kubernetes_node_addresses": NODE_ADDRESSES,
+    }
+
+    result = run("proxmox_backup.yml", extra, check=True)
+    expect(result, "homeserver", changed=1, note="dry run on a fresh host")
+    assert re.search(r'created by proxmox_storage on a real run"?:\s*\[\s*"homeserver-backup"', result[2]), result[2][
+        -3000:
+    ]
+    assert re.search(r'vm-nightly"?:\s*"?create', result[2]), result[2][-3000:]
+    assert not state.exists() or read(state)["mutations"] == 0, "the dry run changed the host"
+
+    rc, _, out = run("proxmox_backup.yml", extra)
+    assert rc != 0 and "homeserver-backup: does not exist" in out, out[-3000:]
+    assert backup_job(state) is None
+
+    seed_storage(state, BACKUP_NFS)
+    expect(run("proxmox_backup.yml", extra), "homeserver", changed=1, note="first run")
+    result = run("proxmox_backup.yml", extra)
+    expect(result, "homeserver", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")
+    expect(run("proxmox_backup.yml", extra, check=True), "homeserver", changed=0, note="dry run after applying")
+    job = backup_job(state)
+    assert {k: job[k] for k in ("storage", "vmid", "schedule", "mode", "compress", "prune-backups")} == {
+        "storage": "homeserver-backup",
+        "vmid": "300,301",
+        "schedule": "02:00",
+        "mode": "snapshot",
+        "compress": "zstd",
+        "prune-backups": "keep-daily=7,keep-weekly=4",
+    }
+    # Proxmox's own placeholder, untouched by Ansible's templating.
+    assert job["notes-template"] == "{{guestname}}"
+
+    # Drift: the schedule and the VMIDs changed by hand, the job disabled. VMIDs in another order are no change.
+    s = read(state)
+    s["backup_jobs"]["vm-nightly"].update(schedule="03:30", vmid="301,300,999", enabled="0")
+    write(state, s)
+    result = run("proxmox_backup.yml", extra, check=True)
+    expect(result, "homeserver", changed=1, note="dry run after drift")
+    assert "schedule" in result[2] and "enabled" in result[2], result[2][-3000:]
+    expect(run("proxmox_backup.yml", extra), "homeserver", changed=1, note="run after drift")
+    expect(run("proxmox_backup.yml", extra), "homeserver", changed=0, note="second run after drift")
+    job = backup_job(state)
+    assert (job["schedule"], job["vmid"], job["enabled"]) == ("02:00", "300,301", "1")
+    s = read(state)
+    s["backup_jobs"]["vm-nightly"]["vmid"] = "301,300"
+    write(state, s)
+    expect(run("proxmox_backup.yml", extra), "homeserver", changed=0, note="VMIDs in another order")
+
+    # Without a cluster, the VMs local.yml names alone: the same job, corrected to them.
+    alone = {k: v for k, v in extra.items() if k != "kubernetes_node_addresses"} | {"vm_backup_extra_vmids": [310]}
+    expect(run("proxmox_backup.yml", alone), "homeserver", changed=1, note="extra VMs without a cluster")
+    assert backup_job(state)["vmid"] == "310"
+    expect(run("proxmox_backup.yml", alone), "homeserver", changed=0, note="extra VMs, second run")
+
+
+@pytest.mark.cluster
+def test_proxmox_backup_without_a_nas(tmp_path):
+    """Without a NAS: no job and no read without vm_backup_storage; a directory storage that is not a checked
+    mount point is refused, naming the fix; then one job, for the cluster's node and the extra VMs."""
+    state = tmp_path / "pve.json"
+    extra = {
+        "fake_pve_state": str(state),
+        "truenas_static_address": "",
+        "kubernetes_node_addresses": {"homeserver-cp-1": "127.0.0.30"},
+        "kubernetes_node_sizes": {
+            "homeserver-cp-1": {
+                "cores": 2,
+                "memory_mib": 4096,
+                "system_disk_gib": 32,
+                "data_disk_gib": 20,
+                "media_disk_gib": 0,
+            }
+        },
+    }
+    for check in (True, False):
+        expect(run("proxmox_backup.yml", extra, check=check), "homeserver", changed=0, note="no backup storage")
+    assert not state.exists() or read(state)["mutations"] == 0
+
+    usb = {"storage": "usb-backup", "type": "dir", "path": "/mnt/usb", "content": "backup"}
+    seed_storage(state, usb)
+    with_usb = {**extra, "vm_backup_storage": "usb-backup", "vm_backup_extra_vmids": [310]}
+    for check in (True, False):
+        rc, _, out = run("proxmox_backup.yml", with_usb, check=check)
+        assert rc != 0 and "usb-backup: is a directory that is not a checked mount point" in out, out[-3000:]
+        assert "pvesm set usb-backup --is_mountpoint yes --create-base-path 0" in out, out[-3000:]
+    assert backup_job(state) is None
+
+    # "off" is unset to Proxmox too, and a btrfs storage is a directory as much.
+    s = read(state)
+    next(e for e in s["storage"] if e["storage"] == "usb-backup")["is_mountpoint"] = "off"
+    write(state, s)
+    rc, _, out = run("proxmox_backup.yml", with_usb, check=True)
+    assert rc != 0 and "usb-backup: is a directory that is not a checked mount point" in out, out[-3000:]
+    seed_storage(state, {"storage": "usb-btrfs", "type": "btrfs", "path": "/mnt/b", "content": "backup"})
+    rc, _, out = run("proxmox_backup.yml", {**with_usb, "vm_backup_storage": "usb-btrfs"}, check=True)
+    assert rc != 0 and "usb-btrfs: is a directory that is not a checked mount point" in out, out[-3000:]
+
+    s = read(state)
+    next(e for e in s["storage"] if e["storage"] == "usb-backup")["is_mountpoint"] = "yes"
+    write(state, s)
+    expect(run("proxmox_backup.yml", with_usb, check=True), "homeserver", changed=1, note="dry run, mount point")
+    expect(run("proxmox_backup.yml", with_usb), "homeserver", changed=1, note="first run")
+    expect(run("proxmox_backup.yml", with_usb), "homeserver", changed=0, note="second run")
+    job = backup_job(state)
+    assert (job["storage"], job["vmid"], job["notes-template"]) == ("usb-backup", "300,310", "{{guestname}}")
+
+    # A storage that holds no backups, and one that does not exist, are refused.
+    seed_storage(
+        state, {"storage": "usb-iso", "type": "dir", "path": "/mnt/iso", "content": "iso", "is_mountpoint": "1"}
+    )
+    for storage, message in (
+        ("usb-iso", "usb-iso: has no backup in its content"),
+        ("nowhere", "nowhere: does not exist"),
+    ):
+        rc, _, out = run("proxmox_backup.yml", {**with_usb, "vm_backup_storage": storage}, check=True)
+        assert rc != 0 and message in out, out[-3000:]
+
+
+# --------------------------------------------------------------------------------------- The cluster's VMs ---
+
+
+def mac(number):
+    """A locally administered MAC, built here because gitleaks flags a MAC written out in any tracked file."""
+    return ":".join(["02", "00", "00", "00", "00", f"{number:02x}"])
+
+
+NODE_MACS = {"homeserver-cp-1": mac(1), "homeserver-worker-1": mac(2)}
+PERSISTENT_NFS = {
+    "storage": "homeserver-persistent",
+    "type": "nfs",
+    "server": "127.0.0.10",
+    "export": "/mnt/persistent/proxmox/vm",
+    "content": "images",
+    "format": "qcow2",
+    "options": "vers=4.2",
+    "path": "/mnt/pve/homeserver-persistent",
+}
+ISO = "local:iso/talos-v1.14.2-ce4c9805-metal-amd64.iso"
+
+
+def vm_state(state, local_lvm_gib=500, **more):
+    """A fake Proxmox host as the Proxmox play leaves it, with local-lvm of the given size."""
+    s = fake_pve.fresh_state()
+    s["storage_total"] = {"local-lvm": local_lvm_gib * 2**30}
+    s.update(more)
+    write(state, s)
+
+
+def vms_of(state):
+    return read(state).get("vms", {})
+
+
+def restart_all(state):
+    """Every VM restarted by hand: what waited for a restart is applied, a None removing its setting."""
+    s = read(state)
+    for vm in s["vms"].values():
+        for key, value in vm["pending"].items():
+            if value is None:
+                vm["config"].pop(key, None)
+            else:
+                vm["config"][key] = value
+        vm["pending"] = {}
+    write(state, s)
+
+
+def fake_pve_command(state, *argv):
+    """A command run on the fake Proxmox host by hand, as the owner would: qm set 301 --delete scsi0, say."""
+    env = {**os.environ, "FAKE_PVE_STATE": str(state), "FAKE_PVE_PYTHON": sys.executable}
+    return subprocess.run([HERE / "fake_pve_bin" / argv[0], *argv[1:]], env=env, capture_output=True, text=True)
+
+
+def cluster_vars(tmp_path, nas=True, **more):
+    """The kubernetes test playbook's variables: with a NAS, two nodes; without, one, sized for a small host."""
+    extra = {"fake_pve_state": str(tmp_path / "pve.json"), "truenas_static_address": "127.0.0.10/24" if nas else ""}
+    if nas:
+        extra |= {"kubernetes_node_addresses": NODE_ADDRESSES, "kubernetes_node_macs": NODE_MACS}
+    else:
+        sizes = {"cores": 2, "memory_mib": 4096, "system_disk_gib": 16, "data_disk_gib": 4, "media_disk_gib": 8}
+        extra |= {
+            "kubernetes_node_addresses": {"homeserver-cp-1": NODE_ADDRESSES["homeserver-cp-1"]},
+            "kubernetes_node_macs": {"homeserver-cp-1": NODE_MACS["homeserver-cp-1"]},
+            "kubernetes_node_sizes": {"homeserver-cp-1": sizes},
+        }
+    return extra | more
+
+
+@pytest.mark.cluster
+def test_proxmox_vm_with_a_nas(tmp_path):
+    """With a NAS: a dry run on a fresh host passes, the persistent storage pending; a real run without that storage
+    is refused; then both VMs are created, started and left alone; drift is corrected; a shrink is refused."""
+    extra = cluster_vars(tmp_path)
+    state = Path(extra["fake_pve_state"])
+    vm_state(state)
+
+    result = run("kubernetes.yml", extra, check=True)
+    expect(result, "homeserver", changed=True, note="dry run on a fresh host")
+    out = result[2]
+    assert re.search(r'created by proxmox_storage on a real run"?:\s*\[\s*"homeserver-persistent"', out), out[-3000:]
+    assert re.search(r'homeserver-worker-1"?:\s*"?create', out) and "Would download: talos-v1.14.2" in out, out[-3000:]
+    assert read(state)["mutations"] == 0, "the dry run changed the host"
+
+    rc, _, out = run("kubernetes.yml", extra)
+    assert rc != 0 and "homeserver-persistent: does not exist" in out, out[-3000:]
+    assert vms_of(state) == {}
+
+    seed_storage(state, PERSISTENT_NFS)
+    expect(run("kubernetes.yml", extra), "homeserver", changed=True, note="first run")
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")
+    expect(run("kubernetes.yml", extra, check=True), "homeserver", changed=0, note="dry run after applying")
+    assert f'"homeserver-worker-1": "{mac(2).upper()}"' in result[2], "the MACs are not reported"
+
+    vms = vms_of(state)
+    assert sorted(vms) == ["300", "301"] and all(vm["status"] == "running" for vm in vms.values())
+    worker = vms["301"]["config"]
+    assert worker["scsi0"].startswith("local-lvm:vm-301-disk-1,") and "size=64G" in worker["scsi0"]
+    assert (
+        worker["scsi1"].startswith("homeserver-persistent:301/vm-301-disk-0.qcow2,") and "size=200G" in worker["scsi1"]
+    )
+    assert "serial=talos-data" in worker["scsi1"] and "backup=0" not in worker["scsi1"]
+    assert (worker["ide2"], worker["tags"], worker["boot"]) == (f"{ISO},media=cdrom", "k8s;talos", "order=scsi0;ide2")
+    assert worker["watchdog"] == "model=i6300esb,action=reset" and worker["startup"].startswith("order=2,")
+    assert worker["net0"].lower().startswith(f"virtio={mac(2)},")
+    assert vms["300"]["config"]["startup"].startswith("order=1,") and "scsi1" not in vms["300"]["config"]
+    isos = [v["volid"] for v in read(state)["content"]["local"]]
+    assert isos == [ISO], "the ISO was not downloaded once"
+
+    # Drift: cores changed by hand on the running control plane, tags in another order and case. The cores go back,
+    # pending until a restart, which every run reports and none makes; the tags are no change.
+    s = read(state)
+    s["vms"]["300"]["config"].update(cores="4", tags="talos;K8S")
+    write(state, s)
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=1, note="run after drift")
+    assert re.search(r'needs a restart[^"]*"?:\s*\{\s*"300":\s*\[\s*"cores"', result[2]), result[2][-3000:]
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=0, note=f"second run after drift (changed: {changed_tasks(result[2])})")
+    assert re.search(r'"300":\s*\[\s*"cores"', result[2]), "the pending restart is no longer reported"
+    assert vms_of(state)["300"]["status"] == "running", "the role restarted a VM"
+    s = read(state)
+    s["vms"]["300"]["config"] |= s["vms"]["300"]["pending"]
+    s["vms"]["300"]["pending"] = {}
+    write(state, s)
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=0, note="run after the restart")
+    assert "needs a restart" not in result[2]
+
+    # The worker's system disk replaced by hand (scripts/runbooks/dead-worker.md): Proxmox drops the deleted drive
+    # from the boot order and never adds the new one back, so the role adds the disk and puts the order back,
+    # pending until a restart.
+    assert fake_pve_command(state, "qm", "set", "301", "--delete", "scsi0").returncode == 0
+    assert vms_of(state)["301"]["config"]["boot"] == "order=ide2"
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=1, note="a system disk replaced by hand")
+    worker = vms_of(state)["301"]
+    assert worker["pending"]["boot"] == "order=scsi0;ide2" and worker["config"]["scsi0"].startswith("local-lvm:")
+    assert re.search(r'"301":\s*\[[^\]]*"boot"', result[2]), result[2][-3000:]
+    expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="a system disk replaced, again")
+
+    # The iGPU passed to the running worker: the PCI device waits for a restart, and is reported until then.
+    s = read(state)
+    s["pci_mappings"] = ["igpu"]
+    write(state, s)
+    gpu = extra | {"kubernetes_gpu_mapping": "igpu"}
+    result = run("kubernetes.yml", gpu)
+    expect(result, "homeserver", changed=1, note="the iGPU for the running worker")
+    assert vms_of(state)["301"]["pending"]["hostpci0"] == "mapping=igpu,pcie=1" and "hostpci0" not in str(
+        vms_of(state)["300"]
+    )
+    assert re.search(r'"301":\s*\[[^\]]*"hostpci0"', result[2]), result[2][-3000:]
+    expect(run("kubernetes.yml", gpu), "homeserver", changed=0, note="the iGPU, again")
+    restart_all(state)
+    # Taken away again: removed at the next restart too.
+    expect(run("kubernetes.yml", extra), "homeserver", changed=1, note="the iGPU taken away")
+    restart_all(state)
+    assert "hostpci0" not in vms_of(state)["301"]["config"]
+    expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="the iGPU taken away, again")
+
+    # A disk configured larger is grown; one configured smaller is refused, before anything changes.
+    grown = extra | {"kubernetes_node_sizes": {"homeserver-worker-1": {"system_disk_gib": 80}}}
+    expect(run("kubernetes.yml", grown), "homeserver", changed=1, note="a larger system disk")
+    assert "size=80G" in vms_of(state)["301"]["config"]["scsi0"]
+    expect(run("kubernetes.yml", grown), "homeserver", changed=0, note="a larger system disk, again")
+    shrunk = extra | {"kubernetes_node_sizes": {"homeserver-worker-1": {"system_disk_gib": 32}}}
+    mutations = read(state)["mutations"]
+    for check in (True, False):
+        rc, _, out = run("kubernetes.yml", shrunk, check=check)
+        assert rc != 0 and "scsi0 is 80 GiB, configured as 32 GiB: a disk is never shrunk" in out, out[-3000:]
+    assert read(state)["mutations"] == mutations
+
+    # A setup without a cluster creates nothing and downloads nothing, and reads nothing.
+    without = {k: v for k, v in extra.items() if not k.startswith("kubernetes_")}
+    result = run("kubernetes.yml", without)
+    expect(result, "homeserver", changed=0, note="no cluster")
+    assert re.search(r"Read the node's VMs\] \*+\nskipping:", result[2]), result[2][-3000:]
+
+
+@pytest.mark.cluster
+def test_proxmox_vm_without_a_nas(tmp_path):
+    """Without a NAS: one VM, its data disk on local-lvm, its media disk never backed up; the disk budget counts other
+    guests' disks, a container's (listed as rootdir) as much as a VM's, and refuses a plan that would overfill the
+    thin pool, until told otherwise."""
+    extra = cluster_vars(tmp_path, nas=False)
+    state = Path(extra["fake_pve_state"])
+    # A 54 GiB pool holding another VM's 40 GiB disk: the 28 GiB more this node needs do not fit.
+    vm_state(state, local_lvm_gib=54)
+    other = {"volid": "local-lvm:vm-200-disk-0", "content": "images", "vmid": 200, "size": 40 * 2**30, "format": "raw"}
+    s = read(state)
+    s["content"] = {"local-lvm": [other]}
+    write(state, s)
+    for check in (True, False):
+        rc, _, out = run("kubernetes.yml", extra, check=check)
+        assert (
+            rc != 0 and "local-lvm: its disks would be provisioned at 68 GiB (40 GiB there now, 28 GiB more" in out
+        ), out[-3000:]
+        assert "more than its 54 GiB" in out, out[-3000:]
+    assert vms_of(state) == {}
+    expect(
+        run("kubernetes.yml", extra | {"proxmox_vm_allow_overcommit": True}, check=True),
+        "homeserver",
+        changed=True,
+        note="overcommit allowed",
+    )
+    container = other | {"volid": "local-lvm:vm-201-disk-0", "content": "rootdir", "vmid": 201}
+    s = read(state)
+    s["content"] = {"local-lvm": [container]}
+    write(state, s)
+    rc, _, out = run("kubernetes.yml", extra, check=True)
+    assert rc != 0 and "provisioned at 68 GiB (40 GiB there now, 28 GiB more" in out, out[-3000:]
+
+    # Without the other VM's disk it fits, and still fits on the next run, its own disks counted once.
+    s = read(state)
+    s["content"] = {}
+    write(state, s)
+    expect(run("kubernetes.yml", extra), "homeserver", changed=True, note="first run")
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")
+    config = vms_of(state)["300"]["config"]
+    assert config["scsi1"].startswith("local-lvm:vm-300-disk-2,") and "serial=talos-data" in config["scsi1"]
+    assert config["scsi2"].startswith("local-lvm:vm-300-disk-3,") and "backup=0" in config["scsi2"]
+    assert "format=" not in config["scsi1"]
+
+    # Growing a disk counts against the pool as well: 28 GiB there, 30 GiB more does not fit in 54.
+    grown = extra | {
+        "kubernetes_node_sizes": {
+            "homeserver-cp-1": {**extra["kubernetes_node_sizes"]["homeserver-cp-1"], "data_disk_gib": 34}
+        }
+    }
+    mutations = read(state)["mutations"]
+    for check in (True, False):
+        rc, _, out = run("kubernetes.yml", grown, check=check)
+        assert rc != 0 and "provisioned at 58 GiB (28 GiB there now, 30 GiB more" in out, out[-3000:]
+    assert read(state)["mutations"] == mutations
+
+    # The VMs' disk storage disabled: refused, naming it.
+    s = read(state)
+    next(e for e in s["storage"] if e["storage"] == "local-lvm")["disable"] = 1
+    write(state, s)
+    rc, _, out = run("kubernetes.yml", extra, check=True)
+    assert rc != 0 and "local-lvm: is disabled (proxmox_vm_vms)" in out, out[-3000:]
+
+
+@pytest.mark.cluster
+def test_proxmox_vm_refuses_to_build_over_old_volumes(tmp_path):
+    """A missing VM whose VMID still has a disk or a backup is being rebuilt: refused, naming the way back, until told
+    to build it new, when its new disks take the next free names. A VMID another VM holds is refused."""
+    extra = cluster_vars(tmp_path)
+    state = Path(extra["fake_pve_state"])
+    vm_state(state)
+    seed_storage(state, PERSISTENT_NFS)
+    s = read(state)
+    s["content"] = {
+        "local-lvm": [{"volid": "local-lvm:vm-301-disk-0", "content": "images", "vmid": 301, "size": 2**30}],
+        "local": [
+            {"volid": "local:backup/vzdump-qemu-300-2026_10_01-02_00_00.vma.zst", "content": "backup", "vmid": 300},
+            # An upload for import belongs to no VMID, and Proxmox lists it whatever --vmid asks for.
+            {"volid": "local:import/appliance.ova", "content": "import"},
+        ],
+    }
+    write(state, s)
+    for check in (True, False):
+        rc, _, out = run("kubernetes.yml", extra, check=check)
+        assert rc != 0 and "VM 301 (homeserver-worker-1) does not exist, but its VMID still has volumes" in out, out[
+            -3000:
+        ]
+        assert "VM 300 (homeserver-cp-1) does not exist" in out and "qmrestore" in out, out[-3000:]
+        assert "scripts/runbooks/vm-restore.md" in out and "proxmox_vm_ignore_existing_volumes=true'" in out
+        assert "appliance.ova" not in out
+    assert vms_of(state) == {}
+
+    # Only an import file left: not a rebuild.
+    s = read(state)
+    s["content"] = {"local": [{"volid": "local:import/appliance.ova", "content": "import"}]}
+    write(state, s)
+    expect(run("kubernetes.yml", extra, check=True), "homeserver", changed=True, note="an import file only")
+
+    # A storage that is enabled but not active, as an unplugged USB backup disk is, cannot be ruled out.
+    seed_storage(state, {"storage": "usb-backup", "type": "dir", "path": "/mnt/usb", "content": "backup"})
+    s = read(state)
+    s["inactive"] = ["usb-backup"]
+    write(state, s)
+    rc, _, out = run("kubernetes.yml", extra, check=True)
+    assert rc != 0 and "usb-backup cannot be searched for its old disks and backups" in out, out[-3000:]
+    s = read(state)
+    s["inactive"] = []
+    s["content"] = {
+        "local-lvm": [{"volid": "local-lvm:vm-301-disk-0", "content": "images", "vmid": 301, "size": 2**30}],
+        "local": [
+            {"volid": "local:backup/vzdump-qemu-300-2026_10_01-02_00_00.vma.zst", "content": "backup", "vmid": 300}
+        ],
+    }
+    write(state, s)
+
+    rebuild = extra | {"proxmox_vm_ignore_existing_volumes": True}
+    expect(run("kubernetes.yml", rebuild), "homeserver", changed=True, note="a deliberate rebuild")
+    worker = vms_of(state)["301"]["config"]
+    assert worker["efidisk0"].startswith("local-lvm:vm-301-disk-1,") and worker["scsi0"].startswith(
+        "local-lvm:vm-301-disk-2,"
+    )
+
+    # VMID 300 now belongs to another VM, and 301 to a container.
+    s = read(state)
+    s["vms"]["300"]["config"]["name"] = "someone-else"
+    del s["vms"]["301"]
+    s["containers"] = [{"vmid": 301, "name": "pihole", "status": "running"}]
+    write(state, s)
+    rc, _, out = run("kubernetes.yml", extra, check=True)
+    assert rc != 0 and "VMID 300 belongs to 'someone-else', not 'homeserver-cp-1'" in out, out[-3000:]
+    assert "VMID 301 belongs to the container 'pihole', not to a VM named 'homeserver-worker-1'" in out, out[-3000:]
+
+
+@pytest.mark.cluster
+def test_proxmox_vm_starts_vms_restored_after_a_host_reinstall(tmp_path):
+    """After a reinstall the VMs come back from their backups, stopped, their CD-ROM naming a Talos ISO that went with
+    the boot disk, so starting them by hand fails (scripts/runbooks/vm-restore.md). make kubernetes downloads the ISO
+    again and then starts them, creating nothing."""
+    extra = cluster_vars(tmp_path)
+    state = Path(extra["fake_pve_state"])
+    vm_state(state)
+    seed_storage(state, PERSISTENT_NFS)
+    expect(run("kubernetes.yml", extra), "homeserver", changed=True, note="first run")
+    s = read(state)
+    s["content"]["local"] = []
+    for vm in s["vms"].values():
+        vm["status"] = "stopped"
+    write(state, s)
+    by_hand = fake_pve_command(state, "qm", "start", "300")
+    assert by_hand.returncode != 0 and f"volume '{ISO}' does not exist" in by_hand.stderr, by_hand.stderr
+
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=True, note="run after the restore")
+    assert [v["volid"] for v in read(state)["content"]["local"]] == [ISO]
+    assert sorted(vms_of(state)) == ["300", "301"] and all(vm["status"] == "running" for vm in vms_of(state).values())
+    expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="second run after the restore")
+
+
+@pytest.mark.cluster
+def test_proxmox_vm_recovers_from_a_failed_download_and_start(tmp_path):
+    """A download that fails is reported, though pvesh exits 0, and nothing is created; the next run downloads it. A
+    start that fails is reported; the next run starts the VM without creating it again. A node short of memory gets
+    a warning, and the run goes on."""
+    extra = cluster_vars(tmp_path)
+    state = Path(extra["fake_pve_state"])
+    vm_state(state, download_fails=True)
+    seed_storage(state, PERSISTENT_NFS)
+    rc, _, out = run("kubernetes.yml", extra)
+    assert rc != 0 and "Downloading talos-v1.14.2-ce4c9805-metal-amd64.iso" in out and "404 Not Found" in out, out[
+        -3000:
+    ]
+    assert vms_of(state) == {} and read(state).get("content", {}).get("local", []) == []
+
+    s = read(state)
+    s.update(download_fails=False, start_fails=True, node_memory={"total": 16 * 2**30, "used": 2**30})
+    write(state, s)
+    rc, _, out = run("kubernetes.yml", extra)
+    assert rc != 0 and "start failed" in out, out[-3000:]
+    assert "The VMs would need 28 GiB of memory, with 16 GiB on the node" in out, out[-3000:]
+    assert sorted(vms_of(state)) == ["300", "301"]
+    assert [vm["status"] for vm in vms_of(state).values()].count("stopped") == 1, "not just the failed start is left"
+    created = read(state)["mutations"]
+
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=True, note="run after the failed start")
+    assert all(vm["status"] == "running" for vm in vms_of(state).values())
+    assert read(state)["mutations"] - created == 1, "more than the start happened"
+    expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="second run after the failed start")
+
+
+# ------------------------------------------------------------------------------------------------ Talos ---
+
+# Sentinels that must never reach Ansible's output: the secrets bundle's cluster secret, which the fake carries into
+# every configuration it renders and echoes in its diffs.
+TALOS_SENTINEL = "sentinel-in-the-talos-bundle"
+TALOS_SECRETS = (
+    f"certs:\n  os: {{crt: {base64.b64encode(b'TEST-OS-CA').decode()}, key: y}}\n"
+    f"  k8s: {{crt: {base64.b64encode(b'TEST-K8S-CA').decode()}, key: z}}\n"
+    f"cluster:\n  id: test\n  secret: {TALOS_SENTINEL}\n"
+)
+
+
+@pytest.fixture(scope="module")
+def factory():
+    """The Image Factory: POST /schematics answers 201 Created with the body's sha256 as the id, as the real one
+    does (a schematic's id is the hash of its content)."""
+    posted = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            if self.path != "/schematics":
+                self.send_error(404)
+                return
+            posted.append(body.decode())
+            reply = json.dumps({"id": hashlib.sha256(body).hexdigest()}).encode()
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(reply)))
+            self.end_headers()
+            self.wfile.write(reply)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield {"url": f"http://127.0.0.1:{server.server_address[1]}", "posted": posted}
+    server.shutdown()
+
+
+def schematic_id(extensions):
+    """The id the factory fixture gives a schematic, computed as the role's request makes it."""
+    body = yaml.dump(
+        {"customization": {"systemExtensions": {"officialExtensions": extensions}}},
+        Dumper=yaml.SafeDumper,
+        default_flow_style=False,
+        indent=4,
+        allow_unicode=True,
+    )
+    return hashlib.sha256(body.encode()).hexdigest()
+
+
+def talos_vars(tmp_path, factory, nas=True, **more):
+    """The talos test playbook's variables, isolated in tmp_path: its HOME, talos_config_dir and secrets are the
+    test's own, never the owner's."""
+    extra = {
+        "fake_talos_state": str(tmp_path / "talos.json"),
+        "talos_config_dir": str(tmp_path / "home" / ".talos" / "homeserver"),
+        "vault_talos_secrets": TALOS_SECRETS,
+        "talos_image_factory_url": factory["url"],
+        "talos_probe_delay": 0,
+        "talos_probe_retries": 3,
+        "talos_install_retries": 5,
+        "truenas_static_address": "127.0.0.10/24" if nas else "",
+        "kubernetes_node_addresses": NODE_ADDRESSES if nas else {"homeserver-cp-1": NODE_ADDRESSES["homeserver-cp-1"]},
+    }
+    if not nas:
+        extra["kubernetes_node_sizes"] = {
+            "homeserver-cp-1": {
+                "cores": 2,
+                "memory_mib": 4096,
+                "system_disk_gib": 16,
+                "data_disk_gib": 4,
+                "media_disk_gib": 8,
+            }
+        }
+    return extra | more
+
+
+def talos_env(tmp_path, client="v1.14.9"):
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    return {"HOME": str(home), "FAKE_TALOSCTL_CLIENT_TAG": client}
+
+
+def talos_state(path, mode="maintenance", nas=True, **more):
+    """The fake nodes: booted from the v1.14.2 ISO into maintenance mode, unless told otherwise."""
+    addresses = NODE_ADDRESSES.values() if nas else [NODE_ADDRESSES["homeserver-cp-1"]]
+    nodes = {a: {"mode": mode, "version": "v1.14.2", "schematic": "iso"} for a in addresses}
+    write(path, {"nodes": nodes, "mutations": 0, **more})
+
+
+def talos_files(tmp_path):
+    """Everything the run left under the test's home."""
+    return sorted(str(p.relative_to(tmp_path)) for p in (tmp_path / "home").rglob("*") if p.is_file())
+
+
+def no_talos_secret(outputs):
+    for out in outputs:
+        assert TALOS_SENTINEL not in out, "the Talos secrets reached Ansible's output"
+
+
+@pytest.mark.cluster
+def test_talos_with_a_nas(tmp_path, factory):
+    """Two nodes in maintenance mode are installed, the cluster bootstrapped once, health-checked, and talosconfig and
+    kubeconfig written under the test's home; later runs change nothing; drift is applied without a reboot, as
+    Talos 1.14 applies anything, with a word about etcd when the control plane's changed, and an apply that fails
+    stops the run with its error; a pin bump upgrades nothing and is reported. The secrets never show."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state)
+    outputs = []
+
+    result = run("talos.yml", extra, check=True, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=True, note="dry run")
+    assert "Would install homeserver-worker-1 at 127.0.0.31" in result[2] and "Would bootstrap etcd" in result[2]
+    assert read(state)["mutations"] == 0 and talos_files(tmp_path) == [], "the dry run changed something"
+
+    result = run("talos.yml", extra, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=True, note="first run")
+    s = read(state)
+    assert s["bootstrapped"] and s.get("bootstrap_calls") == 1
+    assert all(n["mode"] == "configured" for n in s["nodes"].values())
+    base = schematic_id(["siderolabs/qemu-guest-agent"])
+    assert all(n["schematic"] == base and n["version"] == "v1.14.2" for n in s["nodes"].values())
+    cp, worker = s["nodes"]["127.0.0.30"]["config"], s["nodes"]["127.0.0.31"]["config"]
+    assert "# type: controlplane" in cp and "listen-metrics-urls" in cp and "$patch: delete" not in cp
+    assert "# type: worker" in worker and "name: local-path-provisioner" in worker and "_talos-data" in worker
+    assert "hostname: homeserver-worker-1" in worker and "kind: WatchdogTimerConfig" in worker
+    assert talos_files(tmp_path) == [
+        "home/.talos/homeserver/bootstrapped",
+        "home/.talos/homeserver/kubeconfig",
+        "home/.talos/homeserver/talosconfig",
+    ]
+    config_dir = Path(extra["talos_config_dir"])
+    assert oct(config_dir.stat().st_mode & 0o777) == "0o700"
+    assert all(oct(f.stat().st_mode & 0o777) == "0o600" for f in config_dir.iterdir())
+    talosconfig = yaml_load(config_dir / "talosconfig")
+    assert talosconfig["contexts"]["homeserver"]["endpoints"] == ["127.0.0.30"]
+
+    for check in (False, True):
+        result = run("talos.yml", extra, check=check, env=env)
+        outputs.append(result[2])
+        expect(result, "homeserver-k8s", changed=0, note=f"{'dry run' if check else 'second run'} after the build")
+    # The nodes' own version, never the client's (v1.14.9).
+    assert "Talos v1.14.2, schematic " + base[:8] in result[2] and "v1.14.9" not in result[2], result[2][-3000:]
+
+    # Drift: a node's configuration changed behind the role's back, on the worker, then on the control plane.
+    s = read(state)
+    s["nodes"]["127.0.0.31"].update(config="changed by hand\n", config_sha256="0")
+    write(state, s)
+    result = run("talos.yml", extra, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=1, note="run after drift")
+    assert read(state)["nodes"]["127.0.0.31"]["config"] == worker
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=0, note="second run after drift")
+    s = read(state)
+    s["nodes"]["127.0.0.30"].update(config=cp.replace("listen-metrics-urls", "listen-other-urls"), config_sha256="0")
+    s["apply_fails"] = "another apply configuration is already in progress"
+    write(state, s)
+    result = run("talos.yml", extra, env=env)
+    outputs.append(result[2])
+    assert result[0] != 0 and "homeserver-cp-1: talosctl apply-config failed:" in result[2], result[2][-3000:]
+    assert "another apply configuration is already in progress" in result[2]
+    s = read(state)
+    del s["apply_fails"]
+    write(state, s)
+    result = run("talos.yml", extra, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=1, note="run after drift on the control plane")
+    assert read(state)["nodes"]["127.0.0.30"]["config"] == cp, "applied without a reboot"
+    assert "talosctl -n 127.0.0.30 service etcd restart" in result[2], result[2][-3000:]
+    result = run("talos.yml", extra, env=env)
+    expect(result, "homeserver-k8s", changed=0, note="second run after drift on the control plane")
+    assert "service etcd restart" not in result[2]
+
+    # A pin bump: nothing is applied or upgraded, and the run says what waits for make talos-upgrade.
+    before = read(state)
+    bumped = extra | {"talos_version": "v1.14.3", "talos_kubernetes_version": "1.37.2"}
+    result = run("talos.yml", bumped, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=0, note="run with bumped pins")
+    after = read(state)
+    assert after["nodes"] == before["nodes"] and after.get("upgrades") is None and after["k8s_version"] == "1.37.1"
+    assert "make talos-upgrade" in result[2] and "homeserver-worker-1: Talos v1.14.3" in result[2], result[2][-3000:]
+    assert "kubernetes: 1.37.2" in result[2]
+    no_talos_secret(outputs)
+
+
+def yaml_load(path):
+    return yaml.safe_load(Path(path).read_text())
+
+
+@pytest.mark.cluster
+def test_talos_without_a_nas(tmp_path, factory):
+    """One node, which runs everything: its control plane configuration deletes the control-plane taint, and it carries
+    the data and media volumes."""
+    extra, env = talos_vars(tmp_path, factory, nas=False), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state, nas=False)
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="first run")
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=0, note="second run")
+    config = read(state)["nodes"]["127.0.0.30"]["config"]
+    assert "node-role.kubernetes.io/control-plane:\n    $patch: delete" in config, config
+    assert "name: local-path-provisioner" in config and "name: media" in config and "_talos-media" in config
+
+    # A user volume whose disk selector matches nothing is never mounted: the run says so, naming the volume.
+    s = read(state)
+    s["nodes"]["127.0.0.30"]["volumes_missing"] = ["media"]
+    write(state, s)
+    rc, _, out = run("talos.yml", extra, env=env)
+    assert rc != 0 and "homeserver-cp-1's user volumes are not ready: media (waiting)" in out, out[-3000:]
+
+
+@pytest.mark.cluster
+def test_talos_dry_run_on_a_fresh_host(tmp_path, factory):
+    """No VM yet: every node is reported as one to install once it is up, without waiting for it, and nothing fails."""
+    extra, env = talos_vars(tmp_path, factory, talos_probe_delay=60), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state, mode="absent")
+    started = time.monotonic()
+    result = run("talos.yml", extra, check=True, env=env)
+    expect(result, "homeserver-k8s", changed=True, note="dry run with no node up")
+    assert time.monotonic() - started < 50, "the dry run waited for the nodes"
+    assert "Would install homeserver-cp-1 at 127.0.0.30 once its VM is up" in result[2], result[2][-3000:]
+    assert read(state)["mutations"] == 0 and talos_files(tmp_path) == []
+
+
+@pytest.mark.cluster
+def test_talos_waits_for_a_slow_node_and_reports_a_failed_install(tmp_path, factory):
+    """A node that answers only after a few questions is installed on the same run. One that never answers fails a
+    real run after the retries, naming the MAC setting. One whose install fails reports why, not a timeout. A
+    talosctl of another minor release is refused before anything connects."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state)
+    s = read(state)
+    s["nodes"]["127.0.0.31"] = {"mode": "absent", "answers_after": 3, "version": "v1.14.2"}
+    write(state, s)
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="a slow node")
+    assert read(state)["nodes"]["127.0.0.31"]["mode"] == "configured"
+
+    talos_state(state)
+    s = read(state)
+    s["nodes"]["127.0.0.31"] = {"mode": "absent"}
+    write(state, s)
+    rc, _, out = run("talos.yml", extra, env=env)
+    assert rc != 0 and "homeserver-worker-1 at 127.0.0.31 does not answer" in out and "kubernetes_node_macs" in out, (
+        out[-3000:]
+    )
+
+    # A node configured in maintenance mode answers with the talosconfig at once, still running from the ISO, so only
+    # its install status tells. A selector that matches nothing keeps it pending, named before any bootstrap.
+    talos_state(state)
+    s = read(state)
+    s["nodes"]["127.0.0.31"]["install_error"] = "no disk matched the selector"
+    write(state, s)
+    rc, _, out = run("talos.yml", extra | {"talos_config_dir": str(tmp_path / "home" / "other")}, env=env)
+    assert rc != 0 and "homeserver-worker-1 did not install: still pending after 5 tries" in out, out[-3000:]
+    assert ": no disk matched the selector. Pending means no disk matched the install selector" in out, out[-3000:]
+    assert read(state)["nodes"]["127.0.0.31"]["mode"] == "configured" and "bootstrap_calls" not in read(state)
+
+    talos_state(state)
+    s = read(state)
+    s["nodes"]["127.0.0.30"]["install_fails"] = "installer exited with code 1"
+    write(state, s)
+    rc, _, out = run("talos.yml", extra | {"talos_config_dir": str(tmp_path / "home" / "failed")}, env=env)
+    assert rc != 0 and "homeserver-cp-1 did not install: the installer failed: installer exited with code 1" in out
+    assert "bootstrap_calls" not in read(state)
+
+    rc, _, out = run("talos.yml", extra, env=talos_env(tmp_path, client="v1.13.5"), check=True)
+    assert rc != 0 and "talosctl on this machine is v1.13" in out and "install talosctl v1.14.x" in out, out[-3000:]
+
+
+@pytest.mark.cluster
+def test_talos_bootstraps_once(tmp_path, factory):
+    """The record of a bootstrap stops a second one: with it and no running etcd the run fails, names the ways back,
+    and bootstraps nothing, unless allowed. Without the record, a cluster whose first build failed half way is
+    bootstrapped. A control plane not ready yet (FailedPrecondition) is asked again."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state, bootstrap_precondition_count=2)
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="first run, retried bootstrap")
+    assert read(state)["bootstrap_calls"] == 1
+
+    # The control plane lost its etcd.
+    s = read(state)
+    s["bootstrapped"] = False
+    write(state, s)
+    rc, _, out = run("talos.yml", extra, env=env)
+    assert rc != 0 and "talosctl bootstrap --recover-from=<snapshot>" in out and "vm-restore.md" in out, out[-3000:]
+    assert read(state)["bootstrap_calls"] == 1, "bootstrapped over a lost cluster"
+    expect(
+        run("talos.yml", extra | {"talos_allow_bootstrap": True}, env=env),
+        "homeserver-k8s",
+        changed=True,
+        note="a new cluster on purpose",
+    )
+    assert read(state)["bootstrap_calls"] == 2
+
+    # No record, the nodes configured but etcd never bootstrapped: a first build that stopped half way.
+    (Path(extra["talos_config_dir"]) / "bootstrapped").unlink()
+    s = read(state)
+    s["bootstrapped"] = False
+    write(state, s)
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="a build that stopped half way")
+    assert read(state)["bootstrap_calls"] == 3 and (Path(extra["talos_config_dir"]) / "bootstrapped").exists()
+
+
+@pytest.mark.cluster
+def test_talos_refuses_another_clusters_credentials(tmp_path, factory):
+    """talos_config_dir belongs to one cluster. A kubeconfig there naming another control plane (the home cluster's,
+    on a test host), or credentials from another CA than the secrets bundle's, stop a run, a dry run too, before
+    anything changes; local.yml's kubernetes_talos_config_dir gives a test host a directory of its own."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state)
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="first run")
+    home = Path(extra["talos_config_dir"])
+    kubeconfig = yaml_load(home / "kubeconfig")
+    assert kubeconfig["clusters"][0]["cluster"]["server"] == "https://127.0.0.30:6443"
+
+    kubeconfig["clusters"][0]["cluster"]["server"] = "https://127.0.0.99:6443"
+    (home / "kubeconfig").write_text(yaml.safe_dump(kubeconfig))
+    kept = {f.name: f.read_bytes() for f in home.iterdir()}
+    mutations = read(state)["mutations"]
+    for check in (True, False):
+        rc, _, out = run("talos.yml", extra, check=check, env=env)
+        assert rc != 0 and "holds another cluster's credentials: its kubeconfig names the server" in out, out[-3000:]
+        assert "https://127.0.0.99:6443, not https://127.0.0.30:6443" in out and "kubernetes_talos_config_dir" in out
+    assert {f.name: f.read_bytes() for f in home.iterdir()} == kept and read(state)["mutations"] == mutations
+
+    # The test host's own directory, from local.yml's setting through group_vars/kubernetes/talos.yml.
+    own = {k: v for k, v in extra.items() if k != "talos_config_dir"} | {"kubernetes_talos_config_dir": "~/.talos/test"}
+    expect(run("talos.yml", own, env=env), "homeserver-k8s", changed=True, note="a directory of its own")
+    assert (tmp_path / "home" / ".talos" / "test" / "kubeconfig").exists()
+    assert {f.name: f.read_bytes() for f in home.iterdir()} == kept
+
+    # Another secrets bundle: neither file was made from it.
+    other = TALOS_SECRETS.replace(base64.b64encode(b"TEST-OS-CA").decode(), base64.b64encode(b"OTHER-CA").decode())
+    other = other.replace(base64.b64encode(b"TEST-K8S-CA").decode(), base64.b64encode(b"OTHER-K8S").decode())
+    rc, _, out = run("talos.yml", own | {"vault_talos_secrets": other}, check=True, env=env)
+    assert rc != 0 and "its talosconfig trusts another CA" in out and "its kubeconfig trusts another CA" in out, out[
+        -3000:
+    ]
+    no_talos_secret([out])
+
+
+@pytest.mark.cluster
+def test_talos_renews_expiring_credentials(tmp_path, factory):
+    """Client certificates that expire within talos_renew_before_days are renewed: a dry run says so and writes
+    nothing, the run replaces talosconfig and kubeconfig, and the next run leaves them alone."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state, cert_days=10)
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="build, certificates of 10 days")
+    home = Path(extra["talos_config_dir"])
+    old = {name: (home / name).read_bytes() for name in ("talosconfig", "kubeconfig")}
+    s = read(state)
+    s["cert_days"] = 365
+    write(state, s)
+    result = run("talos.yml", extra, check=True, env=env)
+    expect(result, "homeserver-k8s", changed=True, note="dry run, certificates expiring")
+    assert "Would renew the kubeconfig" in result[2], result[2][-3000:]
+    assert {name: (home / name).read_bytes() for name in old} == old, "the dry run wrote something"
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="renewal")
+    new = {name: (home / name).read_bytes() for name in old}
+    assert all(new[name] != old[name] for name in old), "not both renewed"
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=0, note="after the renewal")
+    assert {name: (home / name).read_bytes() for name in old} == new
+
+
+@pytest.mark.cluster
+def test_talos_upgrade_and_etcd_snapshot(tmp_path, factory):
+    """make check-talos-upgrade changes nothing and shows the plan; make talos-upgrade snapshots etcd first, upgrades
+    the control plane before the worker, then Kubernetes, and has nothing left to do the second time. make
+    etcd-snapshot writes a snapshot and nothing else."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state)
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="build")
+
+    # A snapshot needs the control plane alone: here the worker is down and the Image Factory unreachable.
+    s = read(state)
+    worker = s["nodes"]["127.0.0.31"]
+    s["nodes"]["127.0.0.31"] = {"mode": "absent"}
+    write(state, s)
+    before = read(state)
+    started = time.monotonic()
+    snapshot = extra | {"talos_entry": "etcd-snapshot", "talos_image_factory_url": "http://127.0.0.1:9"}
+    result = run("talos_upgrade.yml", snapshot | {"talos_probe_delay": 60}, env=env)
+    expect(result, "homeserver-k8s", changed=True, note="etcd snapshot")
+    assert time.monotonic() - started < 50, "the snapshot waited for the worker"
+    after = read(state)
+    assert (
+        len(after["snapshots"]) == 1 and Path(after["snapshots"][0]).parent == Path(extra["talos_config_dir"]) / "etcd"
+    )
+    assert after["nodes"] == before["nodes"] and after["mutations"] == before["mutations"]
+    after["nodes"]["127.0.0.31"] = worker
+    write(state, after)
+
+    bumped = extra | {"talos_version": "v1.14.3", "talos_kubernetes_version": "1.37.2"}
+    result = run("talos_upgrade.yml", bumped, check=True, env=env)
+    expect(result, "homeserver-k8s", changed=True, note="check-talos-upgrade")
+    assert "Talos v1.14.2 -> v1.14.3" in result[2] and "1.37.1 -> 1.37.2" in result[2], result[2][-3000:]
+    assert "no deprecated APIs found" in result[2] and read(state)["mutations"] == after["mutations"]
+    assert not read(state).get("pre_pulls"), "the dry run pulled images onto the nodes"
+
+    result = run("talos_upgrade.yml", bumped, env=env)
+    expect(result, "homeserver-k8s", changed=True, note="talos-upgrade")
+    s = read(state)
+    assert s["upgrades"] == ["127.0.0.30", "127.0.0.31"], "the control plane was not upgraded first"
+    assert len(s["snapshots"]) == 2 and s["k8s_version"] == "1.37.2"
+    assert all(n["version"] == "v1.14.3" for n in s["nodes"].values())
+    result = run("talos_upgrade.yml", bumped, env=env)
+    expect(result, "homeserver-k8s", changed=0, note="talos-upgrade again")
+    assert len(read(state)["snapshots"]) == 2
+
+    # After the upgrade, a normal run renders with the versions now running: no drift.
+    expect(run("talos.yml", bumped, check=True, env=env), "homeserver-k8s", changed=0, note="dry run after upgrading")
+
+
+# ------------------------------------------------------------------------------------------------- Flux ---
+
+# A sentinel in the age key's format, built here so gitleaks does not take it for a key.
+AGE_KEY = "-".join(["AGE", "SECRET", "KEY", "1TESTSENTINELNOTAKEY"])
+
+
+def flux_vars(tmp_path, **more):
+    """The flux test playbook's variables, isolated in tmp_path: a sentinel age key, never the owner's."""
+    config_dir = tmp_path / "home" / ".talos" / "homeserver"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    key = tmp_path / "home" / "homeserver.agekey"
+    if not key.exists():
+        key.write_text(f"# created: test\n# public key: age1test\n{AGE_KEY}\n")
+        key.chmod(0o600)
+    extra = {
+        "fake_talos_state": str(tmp_path / "talos.json"),
+        "talos_config_dir": str(config_dir),
+        "sops_age_key_file": str(key),
+        "flux_bootstrap_wait_timeout": "0s",
+        "truenas_static_address": "127.0.0.10/24",
+        "kubernetes_node_addresses": NODE_ADDRESSES,
+        "kubernetes_lb_range": "127.0.0.40-127.0.0.49",
+        "kubernetes_lb_traefik_ip": "127.0.0.40",
+        "kubernetes_lb_frigate_ip": "127.0.0.41",
+        "flux_sync_url": "https://example.invalid/homeserver.git",
+    }
+    return extra | more
+
+
+def flux_objects(state):
+    return read(state).get("objects", {})
+
+
+def no_age_key(outputs):
+    encoded = base64.b64encode(f"# created: test\n# public key: age1test\n{AGE_KEY}\n".encode()).decode()
+    for out in outputs:
+        assert AGE_KEY not in out and encoded not in out, "the age key reached Ansible's output"
+
+
+@pytest.mark.cluster
+def test_flux_bootstrap(tmp_path):
+    """Before the cluster exists, a dry run says what it would install and a real run stops, naming where the
+    kubeconfig comes from. Then the operator, the age key, the settings and the FluxInstance are applied once, and
+    left alone; a changed or removed setting is applied; an operator bump re-installs it. The key never shows."""
+    extra, env = flux_vars(tmp_path), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    write(state, {"nodes": {}, "mutations": 0})
+    outputs = []
+
+    result = run("flux.yml", extra, check=True, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=True, note="dry run before the cluster")
+    assert "Would install the Flux Operator v0.61.0" in result[2], result[2][-3000:]
+    rc, _, out = run("flux.yml", extra, env=env)
+    assert rc != 0 and "roles/talos writes it into talos_config_dir" in out, out[-3000:]
+
+    # The cluster is up: its kubeconfig exists and it answers.
+    (Path(extra["talos_config_dir"]) / "kubeconfig").write_text("apiVersion: v1\n")
+    s = read(state)
+    s["bootstrapped"] = True
+    write(state, s)
+    result = run("flux.yml", extra, check=True, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=True, note="dry run before the operator")
+    assert flux_objects(state) == {} or read(state)["mutations"] == 0
+
+    result = run("flux.yml", extra, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=True, note="first run")
+    objects = flux_objects(state)
+    assert read(state)["operator_installs"] == ["v0.61.0"]
+    instance = objects["FluxInstance/flux-system/flux"]["spec"]
+    assert instance["sync"] == {
+        "kind": "GitRepository",
+        "url": "https://example.invalid/homeserver.git",
+        "ref": "refs/heads/main",
+        "path": "k8s/clusters/nas",
+        "interval": "1m",
+    }
+    assert "kustomize" not in instance, "no feature gate is set: strict substitution is Flux 2.9's default"
+    settings = objects["ConfigMap/flux-system/cluster-settings"]["data"]
+    assert settings["NAS_ADDRESS"] == "127.0.0.10" and settings["DATA_NODE"] == "homeserver-worker-1"
+    assert settings["DOMAIN"] == "homeserver.internal" and settings["MEDIA_DATASET"] == "/mnt/ephemeral/jellyfin"
+    assert all(isinstance(v, str) for v in settings.values())
+    secret = objects["Secret/flux-system/sops-age"]["data"]["age.agekey"]
+    assert AGE_KEY in base64.b64decode(secret).decode()
+
+    for check in (False, True):
+        result = run("flux.yml", extra, check=check, env=env)
+        outputs.append(result[2])
+        expect(result, "homeserver-k8s", changed=0, note=f"{'dry run' if check else 'second run'} after the bootstrap")
+
+    # A setting changed, then one removed: each is applied, and a removed key disappears.
+    result = run("flux.yml", extra | {"kubernetes_domain": "home.example.org"}, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=1, note="a changed setting")
+    assert flux_objects(state)["ConfigMap/flux-system/cluster-settings"]["data"]["DOMAIN"] == "home.example.org"
+    fewer = extra | {"flux_bootstrap_settings": {"DOMAIN": "home.example.org"}}
+    expect(run("flux.yml", fewer, env=env), "homeserver-k8s", changed=1, note="a removed setting")
+    assert flux_objects(state)["ConfigMap/flux-system/cluster-settings"]["data"] == {"DOMAIN": "home.example.org"}
+
+    # A new operator release is installed over the old one.
+    result = run("flux.yml", extra | {"flux_bootstrap_operator_version": "v0.62.0"}, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=True, note="an operator bump")
+    assert read(state)["operator_installs"] == ["v0.61.0", "v0.62.0"]
+    no_age_key(outputs)
+
+
+@pytest.mark.cluster
+def test_flux_bootstrap_refuses_a_shared_key_and_reports_a_stuck_operator(tmp_path):
+    """An age key file holding two keys, one others can read, or none, is refused before anything is applied. An
+    operator that never becomes available fails the run."""
+    extra, env = flux_vars(tmp_path), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    (Path(extra["talos_config_dir"]) / "kubeconfig").write_text("apiVersion: v1\n")
+    write(state, {"nodes": {}, "mutations": 0, "bootstrapped": True})
+    key = Path(extra["sops_age_key_file"])
+    for content, mode in ((f"{AGE_KEY}\n{AGE_KEY}2\n", 0o600), (f"{AGE_KEY}\n", 0o644), ("# no key\n", 0o600)):
+        key.write_text(content)
+        key.chmod(mode)
+        rc, _, out = run("flux.yml", extra, check=True, env=env)
+        assert rc != 0 and "must exist, be readable by you alone (mode 0600), and hold exactly one" in out, out[-3000:]
+        assert AGE_KEY not in out
+    assert read(state)["mutations"] == 0
+    key.write_text(f"{AGE_KEY}\n")
+    key.chmod(0o600)
+
+    s = read(state)
+    s["operator_never_available"] = True
+    write(state, s)
+    rc, _, out = run("flux.yml", extra, env=env)
+    assert rc != 0 and "timed out waiting for the condition on deployment/flux-operator" in out, out[-3000:]

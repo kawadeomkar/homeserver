@@ -52,7 +52,6 @@ k8s/**/*Secret*.yml
 # Exceptions — these carry no plaintext credential by construction, so they are
 # safe (and useful) to commit. Negations must come AFTER the block rules above.
 !k8s/**/*.sops.yaml
-!k8s/**/*sealed*.yaml
 !k8s/**/*.example.yaml
 !k8s/**/*.template.yaml
 !k8s/**/externalsecret*.yaml
@@ -69,6 +68,11 @@ keys.txt
 vault_password*
 kubeconfig
 k3s.yaml
+# Talos's generated files (talosctl gen secrets, gen config). roles/talos keeps them outside the repository, in a
+# scratch directory and ~/.talos; these are a safety net.
+secrets.yaml
+controlplane.yaml
+worker.yaml
 *.pem
 id_rsa
 id_rsa.pub

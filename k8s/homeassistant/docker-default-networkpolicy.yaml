@@ -1,3 +1,0 @@
-# Deprecated: this NetworkPolicy was a kompose artifact generated from Docker Compose.
-# It used io.kompose labels which have no meaning in k3s and could block pod traffic.
-# Removed in favour of k3s default networking (flannel CNI).

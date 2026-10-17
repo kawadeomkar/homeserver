@@ -1,0 +1,146 @@
+# Talos: building, using and upgrading the cluster
+
+The cluster is built by `make kubernetes` (`kubernetes.yml`): the VMs on the Proxmox host (`roles/proxmox_vm`),
+then Talos on them from this machine (`roles/talos`), then Flux (`roles/flux_bootstrap`). It never reboots a node
+and never moves one to another version; `make talos-upgrade` does that. Addresses and MACs live only in
+`group_vars/all/local.yml`.
+
+## Before the first build
+
+1. **Workstation tools**, from Homebrew: `talosctl` of the pinned minor release (`talos_version` in
+   `group_vars/all/kubernetes.yml`; `brew install siderolabs/tap/talosctl`), `kubectl`, `flux`, `sops`, `age`,
+   `helm` and `kustomize`. The role refuses a `talosctl` of another minor release, since its defaults follow its
+   own.
+2. **The secrets bundle**, in the vault: `make vault-edit`, then add
+
+   ```yaml
+   vault_talos_secrets: |
+     <the output of: talosctl gen secrets -o - (indent it under the key)>
+   ```
+
+   It is the cluster's CA and keys: lose it and the cluster can no longer be managed. Without a NAS, the vault is
+   the one `make vault-init` made, yours alone and in no repository: keep a copy of it and `.vault_pass` in your
+   password manager, and pull past a change to the tracked vault as `README.md` says, setting yours aside.
+3. **MACs and addresses.** Choose a locally administered MAC per node (lower case, the second hex digit 2, 6, a or
+   e) and put it in `local.yml` as `kubernetes_node_macs`, with each node's address in
+   `kubernetes_node_addresses`. In the router (OPNsense with a NAS), reserve each address for its MAC, outside the
+   DHCP range, and keep MetalLB's range (`kubernetes_lb_range`) free. All before the first run: a VM leases an
+   address the moment it starts.
+4. **The inventory** has `[kubernetes]` with `homeserver-k8s`, as in `inventory.example`.
+5. **The age key** that decrypts the cluster's SOPS secrets, a file holding this cluster's key alone, which Flux
+   receives whole (`README.md`, Kubernetes secrets). age-keygen makes no directories:
+
+   ```bash
+   mkdir -p ~/.config/sops/age && chmod 700 ~/.config/sops/age
+   age-keygen -o ~/.config/sops/age/homeserver.agekey && chmod 600 ~/.config/sops/age/homeserver.agekey
+   ```
+
+## The first build
+
+```bash
+make check-truenas && make truenas        # with a NAS
+make check-proxmox && make proxmox
+make check-kubernetes                      # on a fresh host: what it would create, install and bootstrap
+make kubernetes
+```
+
+One `make kubernetes` creates and starts the VMs, waits for each to boot the Talos ISO into maintenance mode,
+installs Talos on its system disk, bootstraps etcd, waits for `talosctl health`, and writes talosconfig and
+kubeconfig. The run reports each VM's MAC: check them against the DHCP reservations.
+
+## Using the cluster
+
+```bash
+export TALOSCONFIG=~/.talos/homeserver/talosconfig    # its endpoint and node: the control plane
+export KUBECONFIG=~/.talos/homeserver/kubeconfig
+talosctl health
+kubectl get nodes
+```
+
+**Back up `~/.talos/homeserver`** with the age key, in the password manager. Besides talosconfig and kubeconfig it
+holds `bootstrapped`, which is how the role tells a first build from a cluster that lost its etcd: with it and no
+running etcd, a run refuses to bootstrap again, which would make a new, empty cluster. On a new workstation,
+restore that directory before the first run. `etcd/` holds the etcd snapshots.
+
+Both client certificates are valid for a year; every run renews one that expires within 30 days.
+
+## Configuration changes
+
+A change to the patches (`group_vars/kubernetes/talos.yml`) is applied by `make kubernetes` without a reboot:
+Talos 1.14 applies any configuration at once in that mode (its default mode, `auto`, now means the same), and
+the role never reboots a node. A running service picks up its new settings as Talos reconciles it, except etcd,
+which reads its settings only when it starts: after a change to the control plane the run says so, and a change
+to `cluster.etcd` takes effect after `talosctl -n <address> service etcd restart` (a moment without the API on a
+single control plane). A setting read only at boot, such as a kernel argument, takes effect at the node's next
+reboot, by hand. A dry run says which nodes differ, never how, since the difference can hold secrets; to see it,
+run with `ANSIBLE_ARGS='-e talos_keep_rendered=true'`, which keeps each node's rendered configuration in
+`~/.talos/homeserver/rendered/` (mode 0600, delete it afterwards), then
+`talosctl apply-config -n <address> -f ~/.talos/homeserver/rendered/<node>.yaml --dry-run`.
+
+## Upgrades
+
+1. Bump the pins together in `group_vars/all/kubernetes.yml` (`talos_version`, `talos_contract`,
+   `talos_kubernetes_version`), the Makefile's `KUBERNETES_VERSION` and CI's `TALOSCTL_VERSION` and
+   `TALOSCTL_SHA256`, and upgrade the workstation's `talosctl`. Move to adjacent minor releases only, the latest
+   patch of each.
+2. `make kubernetes` between the bump and the upgrade changes nothing on the nodes: it renders each node with what
+   it runs, and reports the pending upgrade. It also downloads the new ISO, which nodes built later boot.
+3. `make check-talos-upgrade`: the plan per node, and Kubernetes's own upgrade dry run, deprecated APIs included.
+   Read it.
+4. `make talos-upgrade`: an etcd snapshot, each node's upgrade, control plane first (drained, then rebooted into
+   the new release), then `talosctl upgrade-k8s`, which also updates kube-proxy and CoreDNS.
+5. `make kubernetes`: a dry run after the upgrade shows no change.
+
+`make etcd-snapshot` takes a snapshot on its own.
+
+## The watchdog
+
+Every VM has Proxmox's `i6300esb` watchdog, which resets a VM whose Talos stops feeding it for two minutes
+(`WatchdogTimerConfig`). On the first build, check that `watchdog0` is that device and armed:
+
+```bash
+talosctl -n <address> read /sys/class/watchdog/watchdog0/identity     # i6300ESB timer
+talosctl -n <address> get watchdogtimerstatus                         # timeout 2m
+```
+
+If `watchdog0` is the q35 chipset's `iTCO_wdt` instead, point `WatchdogTimerConfig.device` at the i6300ESB's
+device in `group_vars/kubernetes/talos.yml`.
+
+## Restoring etcd
+
+From a VM backup, preferably: `scripts/runbooks/vm-restore.md`. From a snapshot in `~/.talos/homeserver/etcd/`:
+`talosctl bootstrap --recover-from=<file>` on a control plane whose etcd waits to be bootstrapped (`Preparing`),
+installed and configured, as after a reinstall; on a running node, wipe etcd's partition alone first, as
+`scripts/runbooks/dead-worker.md` says, which also warns that the snapshot's age is the point every Kubernetes
+object goes back to. Snapshots come only from `make etcd-snapshot` and the start of every `make talos-upgrade`.
+
+## The ISO
+
+`proxmox_vm` keeps every node's CD-ROM on the current Talos ISO and never ejects it: a node whose system disk is
+wiped reaches maintenance mode only from it. The boot order puts the system disk first, so an installed node
+never boots it. Old ISOs stay in `local` until removed by hand; the Proxmox play lists the ones no VM uses.
+
+## Validating on a test host without a NAS
+
+On a small host, use a fresh clone of the repository, without your `.vault_pass`, whose `local.yml` holds
+`proxmox_address`, a Kubernetes section with one node and small sizes (all five are required without a NAS), and a
+directory of its own for the cluster's credentials, so the home cluster's are never touched:
+
+```yaml
+kubernetes_node_sizes:
+  homeserver-cp-1: {cores: 4, memory_mib: 8192, system_disk_gib: 32, data_disk_gib: 20, media_disk_gib: 0}
+kubernetes_media_on_data_volume: true
+kubernetes_talos_config_dir: ~/.talos/homeserver-test
+```
+
+A run refuses a directory that holds another cluster's talosconfig or kubeconfig, so leaving the setting out stops
+at the first task that would use them. Give the test cluster a secrets bundle of its own too, never the home
+cluster's: in that clone, `make vault-init` (a vault of its own; see `README.md`), then `make vault-edit` and add
+`vault_talos_secrets` from a new `talosctl gen secrets -o -`, as in step 2 above. It is thrown away with the test
+cluster.
+
+Never set `proxmox_vm_allow_overcommit` on a host whose thin pool other VMs share: a full pool gives them all I/O
+errors. Once Flux is up, keep the homepage and media apps and suspend the rest
+(`flux suspend kustomization apps-nextcloud apps-photoprism apps-frigate -n flux-system`), or point
+`flux_sync_ref` at a branch that lists fewer apps (`refs/heads/<branch>`, a full reference). Afterwards: `qm stop 300 && qm destroy 300 --purge`, delete VM
+300's backups and the ISO, the clone, and its `kubernetes_talos_config_dir`.

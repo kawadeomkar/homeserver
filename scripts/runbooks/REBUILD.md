@@ -1,6 +1,6 @@
 # Rebuilding after a hardware failure
 
-How to bring the NAS or the Proxmox host back after a reinstall, using this repo. Ansible restores the
+How to bring the NAS, the Proxmox host or the Kubernetes cluster back after a reinstall, using this repo. Ansible restores the
 configuration, but a few things must exist before it can run. Those prerequisites are below. Values are named
 by their variable in `group_vars/all/local.yml`; the real values live only there.
 
@@ -9,12 +9,12 @@ by their variable in `group_vars/all/local.yml`; the real values live only there
 | Failure | What survives | What Ansible restores | What you do by hand |
 | --- | --- | --- | --- |
 | NAS boot drive | The data pools, with every dataset and its properties | Network, pool import, settings, NFS shares, services | Reinstall, API user and key, certificate pin |
-| One disk of the RAIDZ1 pool (`nvme_gen3`) | The pool, degraded | Nothing until the pool is healthy: the role only imports ONLINE pools | Replace the disk and resilver (see [Known limits](#known-limits)) |
+| One disk of the RAIDZ1 pool (`persistent`) | The pool, degraded | Nothing until the pool is healthy: the role only imports ONLINE pools | Replace the disk and resilver (see [Known limits](#known-limits)) |
 | The single disk of `ephemeral` | Nothing: that pool and the media on it are lost | A new, empty pool on a blank replacement disk, then its datasets and share | Allow pool creation and list the new disk |
 | NAS network card | Everything on disk | Everything, once the NAS is reachable | Update the router's DHCP reservation to the new MAC |
-| Proxmox boot drive | VM disks, on the NAS | The no-subscription repository, the upgrade, the NFS storages and the start-on-boot delay | Reinstall, root SSH key; recreate VM definitions |
-| Proxmox boot drive, in a setup without a NAS | Nothing: the VM disks were on it | The repository, the upgrade, and the check that `local-lvm` can hold VM disks | Reinstall, root SSH key; recreate the VMs from backups, if any |
-| The controller (this Mac) | The repo on GitHub, the vault (encrypted) | — | Restore `.vault_pass` and `local.yml` from your password manager |
+| Proxmox boot drive | VM disks on the NAS, and the VMs' nightly backups | The no-subscription repository, the upgrade, the NFS storages, the start-on-boot delay and the backup job | Reinstall, root SSH key, the iGPU's host setup if it had one ([gpu.md](gpu.md)); restore the VMs whose disks were on the boot drive from their backups ([vm-restore.md](vm-restore.md)) |
+| Proxmox boot drive, in a setup without a NAS | The backups, if `vm_backup_storage` is a USB disk or a backup server | The repository, the upgrade, the check that `local-lvm` can hold VM disks, and the backup job | Reinstall, root SSH key, re-add the backup storage before `make proxmox`; restore the VMs ([vm-restore.md](vm-restore.md)) |
+| The controller (this Mac) | The repo on GitHub, with a NAS the vault (encrypted) | — | Restore `.vault_pass`, `local.yml`, the age key and `~/.talos/homeserver` from your password manager, and without a NAS your own vault too |
 
 ## 1. The controller
 
@@ -27,11 +27,20 @@ Everything runs from a checkout of this repo.
 2. `make init`, which creates `inventory` and `group_vars/all/local.yml` from their examples.
 3. Restore the two files only you have:
    - **`.vault_pass`**: the vault password, from your password manager, readable by you alone
-     (`chmod 600 .vault_pass`). Without a NAS there is nothing to restore: `make vault-init` makes a new one, with
-     an empty vault (see `README.md`).
-   - **`group_vars/all/local.yml`**: addresses, disk serials and the certificate pin. Keep a copy of this file in
-     your password manager. If it's lost, refill it from `local.yml.example`; the comments there say where each
-     value comes from.
+     (`chmod 600 .vault_pass`).
+   - **`group_vars/all/vault.yml`**, without a NAS and with a cluster: your own vault, which holds the cluster's
+     secrets bundle (`vault_talos_secrets`) and is in no repository. Restore it from your password manager over
+     the tracked one, then `git update-index --skip-worktree group_vars/all/vault.yml` so it stays out of your
+     commits; `make vault-init` then says `nothing to do`. Never let `make vault-init` make a new one while a
+     cluster exists: a new vault has no secrets bundle, and a cluster without it can no longer be managed. Without
+     a NAS and without a cluster there is nothing to restore: `make vault-init` makes both files (see `README.md`).
+   - **`group_vars/all/local.yml`**: addresses, disk serials, the certificate pin, and the cluster's node
+     addresses and MACs. Keep a copy of this file in your password manager. If it's lost, refill it from
+     `local.yml.example`; the comments there say where each value comes from. The MACs must be the ones the
+     router's DHCP reservations name.
+   - **`~/.talos/homeserver`**, with a cluster: talosconfig, kubeconfig and `bootstrapped`, the record that the
+     cluster was bootstrapped, without which the role cannot tell a first build from a cluster that lost its etcd.
+   - **`~/.config/sops/age/homeserver.agekey`**, with a cluster: the key that decrypts the cluster's secrets.
 4. Check the toolchain works: `make lint && make test-idempotence`.
 
 Run `make` with the environment active (`pyenv activate homeserver`), or pass `VENV=<path to the env>`.
@@ -65,7 +74,7 @@ These can't be done by Ansible, because they are what it needs in order to conne
 ### Running it
 
 Run one stage at a time and read each result. Every run writes a log to `logs/`. TrueNAS allows 20 API logins a
-minute and a full dry run uses about 13, so leave a minute between a full dry run and a real run.
+minute and a full dry run uses about 16, so leave a minute between a full dry run and a real run.
 
 | Step | Command | Expect |
 | --- | --- | --- |
@@ -73,7 +82,7 @@ minute and a full dry run uses about 13, so leave a minute between a full dry ru
 | 2 | `make truenas TAGS=truenas_network` | DHCP off, static address applied. If the role can't reconnect, TrueNAS rolls back by itself after 90 s |
 | 3 | `make truenas TAGS=truenas_pools` | System dataset pinned to the boot pool, both pools imported. Don't accept TrueNAS's offer to upgrade pool features |
 | 4 | `make check-truenas TAGS=truenas_datasets` | No change: the datasets and their properties came back with the pools. Only a recreated pool shows new datasets |
-| 5 | `make truenas` | HTTPS redirect, NFS shares, NFS started. Shares and settings live in TrueNAS's own database, so they come back here |
+| 5 | `make truenas` | HTTPS redirect, snapshot tasks, NFS shares, alert mail, NFS started. Shares, tasks and settings live in TrueNAS's own database, so they come back here. The mail password comes from the vault |
 | 6 | `make truenas` | `changed=0` |
 
 The Proxmox host needs nothing: its NFS storages reconnect once the shares exist. `make check-proxmox` should
@@ -101,34 +110,62 @@ report no change, and `pvesm status` on the host should show every NFS storage a
    with a `Host` block in `~/.ssh/config` naming the key and `IdentitiesOnly yes`, so Ansible, which connects
    by address, offers the right one.
 3. **If the network card was replaced**, update the router's DHCP reservation. The bridge carries the card's MAC.
+4. **If the host passed its iGPU to the cluster** (`kubernetes_gpu_mapping` in `local.yml`), redo the host's part of
+   [gpu.md](gpu.md), the fallback address first, since the console goes dark once `vfio-pci` takes the iGPU: then
+   VT-d if the board was replaced, the `vfio-pci` binding and the PCI resource mapping, which lived on the old boot
+   drive. A restored VM that names the mapping does not start without it.
+5. **Without a NAS, with `vm_backup_storage`**: re-add that storage by hand, under the same id, before
+   `make check-proxmox`, which refuses a backup storage that does not exist. A USB disk goes back as a checked
+   mount point, as `scripts/runbooks/vm-restore.md` (step 1 of a real restore) shows; the backups on it are what
+   the cluster's VMs come back from.
 
 ### Running it
 
 | Step | Command | Expect |
 | --- | --- | --- |
-| 1 | `make check-proxmox` | A `proxmox.sources` file to write, `Enabled: false` for `pve-enterprise` and `ceph`, and no pending upgrade yet (the package lists are refreshed only for real). The plan shows `add` for the NFS storages (`homeserver-persistent`, `homeserver-ephemeral`, `claude-on-proxmox-ephemeral`). Without a NAS: `local-lvm: present` and nothing to add |
-| 2 | `make proxmox` | Repositories written, package lists refreshed, packages upgraded, and, since that brings a newer kernel, "Reboot the node when it is safe to": reboot the host by hand. The storages added and active, start-on-boot delay set. Without a NAS: no storage change |
+| 1 | `make check-proxmox` | A `proxmox.sources` file to write, `Enabled: false` for `pve-enterprise` and `ceph`, and no pending upgrade yet (the package lists are refreshed only for real). The plan shows `add` for the NFS storages (`homeserver-persistent`, `homeserver-ephemeral`, `claude-on-proxmox-ephemeral`, `homeserver-backup`) and `create` for the `vm-nightly` backup job, its storage pending. Without a NAS: `local-lvm: present` and nothing to add, and the backup job on `vm_backup_storage`, re-added in step 5 above |
+| 2 | `make proxmox` | Repositories written, package lists refreshed, packages upgraded, and, since that brings a newer kernel, "Reboot the node when it is safe to": reboot the host by hand. The storages added and active, start-on-boot delay set, backup job created. Without a NAS: no storage change |
 | 3 | `make proxmox` | `changed=0` |
 | 4 | `pveum aclmod /storage/claude-on-proxmox-ephemeral -user <user> -role <role>` | With a NAS: the grant for each project pool, with the user and role from that project's README, which also creates them on a fresh host |
 
 A fresh install carries none of the old `truenas-*` storage ids, so nothing needs removing; `README.md`'s
 section on storage for projects that create VMs says what each project is then told.
 
-With a NAS, the VM disks are still on it, but the VM definitions lived on the old boot drive (`/etc/pve`) and
-are gone: recreate the VMs with the VM-provisioning repo and attach the existing disks. Without one, the disks
-went with the boot drive (see the table at the top): restore the VMs from backups, if there are any, or
-recreate them empty. There are no Proxmox backups yet; whether to add them is an open item in `TODO.md`.
+The VM definitions lived on the old boot drive (`/etc/pve`) and are gone. Restore the VMs from their nightly
+backups, which `scripts/runbooks/vm-restore.md` describes, before anything creates them anew. With a NAS, the
+backups and the worker's data disk are on it; without one, the backups are wherever `vm_backup_storage` pointed.
+VMs that other projects create on the host (claude-on-proxmox's) are theirs to recreate.
+
+## 4. The Kubernetes cluster
+
+Only after the Proxmox host is back. The cluster's VMs lived on the Proxmox host, so their definitions went with
+its boot drive; the worker's data disk survives on the NAS. The order is fixed:
+
+1. `make truenas`, then `make proxmox` (sections 2 and 3).
+2. **Restore the VMs from their backups first**: `scripts/runbooks/vm-restore.md`. `make kubernetes` refuses to
+   create a VM whose VMID still has disks or backups, and refuses to bootstrap a cluster it bootstrapped before,
+   so a restore skipped here fails safe instead of building an empty cluster over the old data.
+3. Leave the restored VMs stopped and run `make check-kubernetes`, then `make kubernetes`. Their CD-ROM names a
+   Talos ISO that was on the lost boot drive, so Proxmox would refuse to start them by hand; `make kubernetes`
+   downloads it again and starts them. It finds configured nodes and a running etcd, and installs and bootstraps
+   nothing. `kubectl get nodes` shows them Ready.
+
+Prerequisites, before `make kubernetes`: `vault_talos_secrets` in the vault (it is, unless the vault was lost:
+then the cluster cannot be managed and is rebuilt), `~/.talos/homeserver` restored (section 1), the age key, the
+MACs' DHCP reservations, and the inventory's `[kubernetes]` group. `scripts/runbooks/talos.md` covers building,
+upgrading and the watchdog; a worker that stays down is `scripts/runbooks/dead-worker.md`.
 
 ## Known limits
 
 - **A degraded pool is not imported.** The role imports only pools that report ONLINE, so with one failed disk
-  in `nvme_gen3` it stops with "can be imported but is DEGRADED". Replacing the disk and resilvering the pool is
+  in `persistent` it stops with "can be imported but is DEGRADED". Replacing the disk and resilvering the pool is
   not automated yet (`TODO.md`). Doing it in the web UI breaks the rule that every change goes through Ansible, so
   decide deliberately.
 - **Recreating `ephemeral` erases nothing only on a blank disk.** To create the pool on a replacement disk, set
   `truenas_pool_allow_create: true` and list the new disk's serial under `truenas_pool_disks.ephemeral` in
   `local.yml`. The role refuses any disk that has partitions or belongs to a pool. Set the flag back to `false`
   afterwards.
-- **Email alerts are not configured** (`TODO.md`), so a failing disk is only visible in the web UI.
+- **Email alerts need a mail server** in `local.yml` and its password in the vault (`TODO.md`); without them a
+  failing disk is only visible in the web UI.
 - **TrueNAS's audit log keeps 7 days.** Before a planned rebuild, its Method Call entries show whether anything was
   changed outside Ansible since the last run.

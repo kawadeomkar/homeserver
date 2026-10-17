@@ -74,6 +74,11 @@ FIXTURES = [
     ("inventory.ini", "[nas]\n", {"sensitive-file"}),
     ("notes/MACHINES.md", "machines\n", {"sensitive-file"}),
     ("talosconfig", "context: x\n", {"sensitive-file"}),
+    ("kubeconfig", "apiVersion: v1\n", {"sensitive-file"}),
+    ("homeserver.agekey", "# created\n", {"sensitive-file"}),
+    ("talos/secrets.yaml", "cluster: {}\n", {"sensitive-file"}),
+    ("controlplane.yaml", "version: v1alpha1\n", {"sensitive-file"}),
+    ("out/worker.yaml", "version: v1alpha1\n", {"sensitive-file"}),
     ("logs/20261006-run.log", "run\n", {"sensitive-file"}),
     # Must not match: documentation addresses, loopback, version strings and image tags
     (
@@ -130,10 +135,12 @@ FIXTURES = [
     (
         "k8s/homepage/secret.yaml",
         "apiVersion: v1\n" + SECRET_KIND + "\ntype: kubernetes.io/service-account-token\n",
-        set(),
+        {"k8s-plaintext-secret"},
     ),
     ("k8s/demo/creds.sops.yaml", SECRET_KIND + "\n", set()),
-    ("k8s/demo/sealed-creds.yaml", SECRET_KIND + "\n", set()),
+    # Must match: no SealedSecrets here, so a name with "sealed" in it is allowed nothing, and JSON is read too.
+    ("k8s/demo/unsealed-creds.yaml", SECRET_KIND + "\n", {"k8s-plaintext-secret"}),
+    ("k8s/demo/creds.json", '{"apiVersion": "v1", "kind": "Secret"}\n', {"k8s-plaintext-secret"}),
     ("k8s/demo/creds.example.yaml", SECRET_KIND + "\n", set()),
     ("inventory.example", "[nas]\n", set()),
     # Must not match: an inventory below the root (only the root one is never committed), with loopback

@@ -1,0 +1,20 @@
+---
+# The media apps (Flux Kustomization apps-media). The Secret media/filebrowser is a SOPS file (k8s/README-secrets.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - filebrowser.sops.yaml
+  - library.yaml
+  - sonarr.yaml
+  - radarr.yaml
+  - prowlarr.yaml
+  - sabnzbd.yaml
+  - seerr.yaml
+  - jellyfin.yaml
+  - filebrowser.yaml
+configMapGenerator:
+  - name: filebrowser-config
+    namespace: media
+    files:
+      - config.yaml=filebrowser-config.yaml.tmpl

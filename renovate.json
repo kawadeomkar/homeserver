@@ -1,0 +1,46 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["flux", "kubernetes", "helm-values", "kustomize"],
+  "minimumReleaseAge": "7 days",
+  "minimumReleaseAgeBehaviour": "timestamp-optional",
+  "commitMessagePrefix": "[dependencies]",
+  "flux": {"managerFilePatterns": ["/^k8s/.+\\.ya?ml$/"]},
+  "kubernetes": {"managerFilePatterns": ["/^k8s/.+\\.ya?ml$/"]},
+  "packageRules": [
+    {
+      "description": "local-path-provisioner is vendored whole and bumped by hand (its README.md): an image bump alone would leave its RBAC and configuration old",
+      "matchFileNames": ["k8s/infrastructure/controllers/common/local-path/**"],
+      "enabled": false
+    },
+    {
+      "description": "Intel's GPU plugin is vendored whole and bumped by hand (k8s/infrastructure/gpu/README.md), its image with it",
+      "matchFileNames": ["k8s/infrastructure/gpu/**"],
+      "enabled": false
+    },
+    {
+      "description": "LinuxServer.io tags x.y.z.build-lsN",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["/linuxserver\\/(sonarr|radarr|prowlarr)$/"],
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)\\.(?<build>\\d+)-ls(?<revision>\\d+)$"
+    },
+    {
+      "description": "LinuxServer.io tags x.y.z-lsN",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["/linuxserver\\/(sabnzbd|nextcloud)$/"],
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-ls(?<build>\\d+)$"
+    },
+    {
+      "description": "LinuxServer.io Jellyfin: x.y.zubuNNNN-lsN, the Ubuntu release a compatibility, never a version",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["/linuxserver\\/jellyfin$/"],
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)(?<compatibility>ubu\\d+)-ls(?<build>\\d+)$"
+    },
+    {
+      "description": "LinuxServer.io MariaDB: x.y.z-rN-lsN",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["/linuxserver\\/mariadb$/"],
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-r(?<build>\\d+)-ls(?<revision>\\d+)$"
+    }
+  ]
+}

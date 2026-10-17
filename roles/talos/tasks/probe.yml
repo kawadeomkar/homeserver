@@ -1,0 +1,123 @@
+---
+# Each node is configured (it answers with the cluster's talosconfig), in maintenance mode (it answers only
+# without one, as a node booted from the ISO does), or not answering. A real run waits for a node that does not
+# answer yet: its VM may have started seconds before, in the previous play. A dry run asks once: on a fresh host
+# the VMs do not exist.
+- name: probe | Ask each node for its version, as a configured node
+  ansible.builtin.command:
+    argv: [talosctl, --talosconfig, "{{ talos_workspace }}/talosconfig", -e, "{{ item.address }}", -n, "{{ item.address }}", version]
+  register: talos_probe_configured
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  loop: "{{ talos_nodes }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: probe | Ask the others, as a node in maintenance mode
+  ansible.builtin.command:
+    argv: [talosctl, -e, "{{ item.address }}", -n, "{{ item.address }}", version, --insecure]
+  register: talos_probe_maintenance
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  until: talos_probe_maintenance.rc == 0
+  retries: "{{ 0 if ansible_check_mode else talos_probe_retries }}"
+  delay: "{{ talos_probe_delay }}"
+  loop: "{{ talos_probe_configured.results | rejectattr('rc', 'eq', 0) | map(attribute='item') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# A node that rebooted into its configuration while the wait above asked for maintenance mode.
+- name: probe | Ask the rest once more, as configured nodes
+  ansible.builtin.command:
+    argv: [talosctl, --talosconfig, "{{ talos_workspace }}/talosconfig", -e, "{{ item.address }}", -n, "{{ item.address }}", version]
+  register: talos_probe_again
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  loop: "{{ talos_probe_maintenance.results | default([]) | rejectattr('rc', 'eq', 0) | map(attribute='item') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: probe | Work out each node's state
+  ansible.builtin.set_fact:
+    talos_state: "{{ _state }}"
+  vars:
+    _answers: >-
+      {%- set out = {} -%}
+      {%- for r in talos_probe_configured.results + talos_probe_again.results | default([]) if r.rc == 0 -%}
+      {%-   set _ = out.update({r.item.name: {'state': 'configured', 'tag': r.stdout | talos_node_tag(r.item.address)}}) -%}
+      {%- endfor -%}
+      {%- for r in talos_probe_maintenance.results | default([]) if r.rc == 0 -%}
+      {%-   set _ = out.update({r.item.name: {'state': 'maintenance', 'tag': r.stdout | talos_node_tag(r.item.address)}}) -%}
+      {%- endfor -%}
+      {{ out }}
+    _state: >-
+      {%- set out = {} -%}
+      {%- for n in talos_nodes -%}
+      {%-   set _ = out.update({n.name: n | combine(_answers.get(n.name, {'state': 'absent', 'tag': none}))}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: probe | Refuse to go on without every node
+  ansible.builtin.assert:
+    that: _absent | length == 0
+    fail_msg: >-
+      {% for n in _absent %}{{ n.name }} at {{ n.address }} does not answer. {% endfor %}Is its VM running, and does the
+      router's DHCP reserve that address for the VM's MAC (kubernetes_node_macs)?
+    quiet: true
+  when: not ansible_check_mode
+  vars:
+    _absent: "{{ talos_state.values() | selectattr('state', 'eq', 'absent') | list }}"
+
+- name: probe | Read each configured node's schematic
+  ansible.builtin.command:
+    argv:
+      - talosctl
+      - --talosconfig
+      - "{{ talos_workspace }}/talosconfig"
+      - -e
+      - "{{ item.address }}"
+      - -n
+      - "{{ item.address }}"
+      - get
+      - extensions
+      - -o
+      - yaml
+  register: talos_extensions
+  changed_when: false
+  check_mode: false
+  loop: "{{ talos_state.values() | selectattr('state', 'eq', 'configured') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: probe | Look for a kubeconfig
+  ansible.builtin.stat:
+    path: "{{ talos_config_dir }}/kubeconfig"
+  register: talos_kubeconfig_file
+
+- name: probe | Read the cluster's Kubernetes version
+  ansible.builtin.command:
+    argv: [kubectl, --kubeconfig, "{{ talos_config_dir }}/kubeconfig", version, -o, json]
+  register: talos_kubectl_version
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  when:
+    - talos_kubeconfig_file.stat.exists
+    - talos_extensions.results | length > 0
+
+- name: probe | Keep each node's schematic and the cluster's Kubernetes version
+  ansible.builtin.set_fact:
+    talos_state: "{{ talos_state | combine(_schematics, recursive=true) }}"
+    talos_running_kubernetes: >-
+      {{ talos_kubectl_version.stdout | talos_server_version
+         if talos_kubectl_version is not skipped and talos_kubectl_version.rc == 0 else none }}
+  vars:
+    _schematics: >-
+      {%- set out = {} -%}
+      {%- for r in talos_extensions.results -%}
+      {%-   set _ = out.update({r.item.name: {'running_schematic': r.stdout | from_yaml_all | list | talos_schematic}}) -%}
+      {%- endfor -%}
+      {{ out }}

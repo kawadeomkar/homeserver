@@ -1,18 +1,14 @@
 ### TODO list
 
-Ordered by whether the Proxmox + Talos migration makes the item moot. `docs/ISSUES.md` (gitignored) holds
-the full audit with file/line references; the finding ids below refer to it.
+The running backlog: TLS, CI follow-ups, the NAS and the Proxmox host, remote access, and the steps that bring the
+cluster's apps up once it is built. Finding ids such as K8S-14 refer to `docs/ISSUES.md` (gitignored), the audit of
+the tree before the cluster was built.
 
-## Do before migrating — these survive it
+## TLS
 
-- [ ] Delete the placeholder alerting rule that always fires at a nonexistent Alertmanager (K8S-26)
-- [ ] Add Renovate for the 21 container image tags, which are pinned and bumped by hand. Wait until the
-      cluster exists, and split the ruleset first so an app with write access cannot merge on its own
-      (REPO-3). Dependabot covers the SHA-pinned actions and the Python lock, not image tags
-- [ ] Implement the SOPS + age decision for Kubernetes Secrets, and write down where the age key lives and
-      how it is backed up. Until then nextcloud and photoprism cannot deploy (see `k8s/README-secrets.md`)
-- [ ] Real domain instead of `*.homeserver.internal`, which public ACME cannot validate. Prerequisite for
-      any TLS at all (K8S-14)
+- [ ] Choose a real domain instead of `*.homeserver.internal`, which public ACME cannot validate, and a DNS
+      provider with an API for cert-manager's DNS-01 challenge. Every Ingress is plain HTTP until then: TLS
+      (cert-manager, a wildcard certificate for Traefik, HTTPS for Nextcloud) waits for both (K8S-14)
 
 ## CI
 
@@ -34,24 +30,45 @@ the full audit with file/line references; the finding ids below refer to it.
 The NAS was reinstalled on TrueNAS Community Edition and is configured only through Ansible:
 `roles/truenas` (`truenas.yml`) and, on the Proxmox side, `roles/proxmox_storage` (`proxmox.yml`).
 
+- [ ] Recreate the home NAS's redundant pool under its class name, `persistent`. It is still called by its
+      old hardware name, so until then `local.yml` must set `truenas_pool_persistent` to that name, or every
+      run looks for a pool called `persistent` and stops. Do it together with the storage-id move under
+      Proxmox, since both re-create the Proxmox storages:
+      1. Check that the pool holds nothing worth keeping: list its datasets (read-only), and run `pvesm list`
+         on the Proxmox storages that mount it.
+      2. Destroy the pool in the TrueNAS UI. The role never destroys a pool.
+      3. In `local.yml`, remove `truenas_pool_persistent`, key the five disk serials under `persistent`, and
+         set `truenas_pool_allow_create: true`.
+      4. Run `make check-truenas`, then `make truenas`.
+      5. Remove `truenas_pool_allow_create`.
+
+      This is the first real run of the role's pool creation, which no test exercises. Leave the `ephemeral`
+      pool alone: it already has its class name and holds the media dataset.
+
+      **Do it before the first live run that creates the cluster's datasets on the pool** (Nextcloud's and
+      PhotoPrism's), while it still holds nothing worth keeping: step 2 destroys it. Once it holds their files
+      and the VM backups, never destroy it to rename it; keep `truenas_pool_persistent` in `local.yml` for good
+      instead.
+- [ ] Size `vm_storage_ephemeral_reservation` (`group_vars/all/storage.yml`) to what the VMs on the ephemeral
+      pool need, such as the sum of the project pools' quotas, before the media apps start writing to the media
+      dataset on the same pool. Until then nothing stops the media from filling the pool under the VMs.
 - [ ] Automate recovery of a degraded pool. `roles/truenas` imports only ONLINE pools, so after a disk
       failure in the RAIDZ1 pool it stops, and replacing the disk and resilvering has no Ansible path yet
       (see `scripts/runbooks/REBUILD.md`)
 - [ ] Move the router's DHCP dynamic range off the addresses the servers use. The NAS and the Proxmox host
       are now reserved in DHCP (OPNsense Dnsmasq host entries), but the range still overlaps server
       addresses, which is how the NAS's first-choice static address turned out to be taken
-- [ ] Decide whether persistent VMs are backed up (a `backup` dataset with 1M records and a Proxmox
-      backup storage) or simply recreated after a Proxmox wipe
+- [ ] Run the VM-restore drill (`scripts/runbooks/vm-restore.md`) once the cluster's VMs exist and the first
+      nightly backup has run, and again after any change to the backup job
 - [ ] Measure synchronous write speed on the persistent storage (`fio` with `fsync=1`). The pool's
       drives have no power-loss protection and there is no log device; a slow result calls for a log
       device, not `sync=disabled`
 - [ ] Decide whether to delete the TrueNAS CORE leftovers on the `ephemeral` pool: an orphaned snapshot of
       the media dataset and the old `.system` dataset. The role leaves both alone
 - [ ] Decide whether the NAS keeps IPv6 autoconfiguration (`truenas_ipv6_auto`)
-- [ ] Set up email alerts. Nothing is configured, so a degraded pool is silent. Needs SMTP credentials in
-      the vault
-- [ ] Decide which host, if any, mounts the `ephemeral/jellyfin` media dataset, then export it to that
-      host only. Until then it stays unexported
+- [ ] Give the NAS a mail server for its alerts: the `truenas_mail_*` settings and `truenas_alert_email` in
+      `local.yml` (`local.yml.example` lists them), and `vault_truenas_mail_password` in the vault. Until
+      then nothing is mailed, so a degraded pool shows only in the web UI
 - [ ] Before upgrading the NAS to TrueNAS 26, replace the role's hand-written WebSocket client
       (`roles/truenas/module_utils/truenas_api.py`) with iXsystems' official library,
       [`truenas/api_client`](https://github.com/truenas/api_client). Its README says TrueNAS 26 changes
@@ -92,22 +109,36 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 - [ ] Pick a quota for `claude-on-proxmox-ephemeral` (`quota` on its `vm_storage_consumers` entry, in bytes or
       with a binary suffix such as `200G`); the parent's 1 TiB applies meanwhile
 
-## Manifest defects found in review
+## Remote access
 
-From a review of the change stack in October 2026. Read from the manifests and the upstream images; none
-was reproduced on a cluster, because there is none.
+- [ ] Make OPNsense the LAN's Tailscale subnet router (`README.md`, Remote access). The old Ubuntu host's subnet
+      router went with it, so until then nothing at home is reachable from outside
 
-- [ ] `grafana` runs as uid 472 and relies on `fsGroup` to make its hostPath PV writable, which Kubernetes
-      does not apply to hostPath volumes, so it cannot write `/var/lib/grafana`. `prometheus` depends the
-      same way on `/opt/prometheus` being owned by uid 1000. Both go away with the hostPath→PVC conversion
-- [ ] `filebrowser`: `FileOrCreate` makes `filebrowser.db` a root-owned 0644 file, but the pinned image
-      runs as uid 1000 and needs to write it
-- [ ] `dashy` is pinned to 4.4.12, which listens on 8080 and reads `/app/user-data/conf.yml`; the manifest
-      still uses containerPort and targetPort 80 and mounts `/app/public/conf.yml`
-- [ ] `homepage` is pinned to v1.13.2, which rejects requests unless `HOMEPAGE_ALLOWED_HOSTS` names the
-      host it is reached by; the Deployment sets no env at all
-- [ ] `prometheus` Deployment has no `strategy: Recreate` although it now holds a hostPath PV, so a rollout
-      starts a second pod against the same TSDB and hangs
+## Bringing the apps up
+
+Once the cluster is built and Flux syncs it (`scripts/runbooks/talos.md`). Merge app by app, or suspend the app
+Kustomizations and resume one at a time, in this order: homepage; prowlarr, sonarr, radarr, sabnzbd, seerr and
+filebrowser; jellyfin; nextcloud and photoprism; frigate. Each must start, survive `kubectl delete pod` and a node
+reboot (`talosctl reboot -n <worker>`), keep its data, and come back from a VM backup once, by the isolated drill
+(`scripts/runbooks/vm-restore.md`).
+
+- [ ] With a NAS, before the media apps import anything: move the media dataset's content into the apps' layout and
+      fix its ownership once (`README.md`, Manifests). Check first that its NFSv4 ACLs let uid 1000 write over NFS
+      with root mapped to root, and that `chown-mount` can chown its mount point
+- [ ] The TrueNAS CORE snapshot of 2024 on the media dataset pins every block the move replaces: decide with the
+      "TrueNAS CORE leftovers" item whether to delete it, through the role
+- [ ] After each app's first start, its own steps (`README.md`, Manifests): Nextcloud's wizard and `occ` settings,
+      Jellyfin's transcode path, SABnzbd's incomplete folder and host whitelist, Frigate's cameras
+- [ ] Enforce network policies (CLAUDE.md, Landmines): turn on `kubeNetworkPoliciesEnabled` in a
+      `KubeFlannelCNIConfig` control-plane patch, add a NetworkPolicy in `frigate` that opens only 8971, 8554 and
+      8555 (TCP and UDP), and check that Frigate's probes on 5000, from the kubelet, still pass and that Flux's own
+      policies leave it working
+- [ ] With an Intel iGPU in the host, pass it to the workload node for Jellyfin and Frigate
+      (`scripts/runbooks/gpu.md`), and run that runbook's checks: the render node's group inside the pods, and
+      that without a GPU both apps still schedule
+- [ ] Check that LinuxServer.io's images start with `allowPrivilegeEscalation: false`, which their s6 init has not
+      been seen to need. (Frigate 0.17's form under `go2rtc` is settled: it fills in `{FRIGATE_...}` only in streams
+      and the RTSP user and password, and go2rtc expands `${...}` everywhere else, from its environment.)
 
 ## Removed with the Ubuntu host layer
 
@@ -116,25 +147,14 @@ setup and the helper scripts) was deleted, and its backlog went with it: fail2ba
 `usernames` list, `package` instead of `apt`, the defaults/vars split, and pinning `k3s_version`. The code
 is in the git history.
 
-## Migration decisions still open
+## Renovate
 
-Blocked on the per-server hardware inventory.
+- [ ] Install the Mend Renovate app on the repository once the ruleset is split (REPO-3, `docs/CI-PLAN.md` §7.3):
+      `renovate.json` is ready. Until then the images and charts under `k8s/` are bumped by hand
 
-- [ ] NAS address and export layout for the cluster — two different addresses and two export roots appear
-      across the manifests, and one root is on a pool that no longer exists. The NAS now has one address
-      (`truenas_static_address`) but exports only the two Proxmox VM datasets (K8S-9)
-- [ ] LoadBalancer implementation and VIP range. k3s's ServiceLB does not exist on Talos, so jellyfin's
-      DLNA/discovery Services need MetalLB or Cilium LB IPAM there (K8S-5)
-- [ ] Ingress controller. Talos bundles none, so every class-less Ingress in this repo routes nowhere
-      until one is installed (K8S-6)
-- [ ] CSI driver / StorageClass. Talos ships neither, and the `/opt` hostPath model does not survive an
-      immutable root — this is also what the outstanding PSA violations really need (K8S-4)
-- [ ] GPU passthrough: jellyfin and frigate both want `/dev/dri`, and one Intel iGPU cannot easily be
-      shared between two VMs
-- [ ] Home Assistant's placement — it needs device access and host networking, and is the workload least
-      suited to Talos
-- [ ] Control-plane count, and where etcd snapshots go
-- [ ] Replace `k8s/prometheus`, `k8s/grafana`, `k8s/node-exporter` and `k8s/kube-state-metrics` with
-      `kube-prometheus-stack` once the cluster is built. Decided in October 2026; until then the
-      hand-written tree is left as it is, including its two open defects listed above
-- [ ] dashdot's placement — inside a VM it reports the VM's virtual disk, not real hardware (K8S-10)
+## The cluster's secrets
+
+- [ ] Make the cluster's age key (`k8s/README-secrets.md`), put its public half in `.sops.yaml` as the recipient, and
+      keep the key file in the password manager
+- [ ] Make the apps' Secrets with sops, each in its app's directory and listed in its `kustomization.yaml`: the five
+      `k8s/README-secrets.md` lists. Until one exists, its app waits

@@ -4,7 +4,10 @@ It implements only the methods roles/truenas calls, returns the shapes the real 
 (checked against TrueNAS 25.10.7 and its middleware source), and refuses what the real API refuses
 where a non-idempotent role would trip over it: creating a dataset, share, NTP server or scrub
 task that exists, importing a pool that is imported, POSIX ACLs without aclmode DISCARD,
-non-consecutive name servers. Any other method is an error, so an unexpected call fails the test.
+non-consecutive name servers, a snapshot task for a dataset that does not exist. The periodic snapshot
+tasks, mail and alert services follow the TrueNAS API v25.10 reference (api.truenas.com) rather than a
+capture, and mail.config returns the password as set, as the reference documents. Any other method is an
+error, so an unexpected call fails the test.
 
 State lives in a JSON file that is re-read before and written after every call, so a test can
 inspect it, or change it to simulate drift, between runs.
@@ -70,7 +73,7 @@ def initial_state(address):
             "activity": {"type": "DENY", "activities": []},
         },
         "exported_pools": [
-            {"name": "nvme_gen3", "guid": "1001", "status": "ONLINE", "hostname": "", "children": []},
+            {"name": "persistent", "guid": "1001", "status": "ONLINE", "hostname": "", "children": []},
             {
                 "name": "ephemeral",
                 "guid": "1002",
@@ -132,6 +135,21 @@ def initial_state(address):
             "rdma": False,
         },
         "shares": [],
+        "snapshot_tasks": [],
+        # mail.config as a fresh install has it: no server, no authentication.
+        "mail": {
+            "id": 1,
+            "fromemail": "",
+            "fromname": "",
+            "outgoingserver": "",
+            "port": 25,
+            "security": "PLAIN",
+            "smtp": False,
+            "user": None,
+            "pass": None,
+            "oauth": None,
+        },
+        "alert_services": [],
         "mutations": 0,
     }
 
@@ -464,6 +482,124 @@ class FakeTrueNAS:
         server.update(data)
         self.mutated()
         return copy.deepcopy(server)
+
+    # --------------------------------------------------------------- snapshots
+    # As pool.snapshottask.create takes and returns them (TrueNAS API v25.10). The dataset must exist.
+    SNAPSHOT_TASK_FIELDS = frozenset(
+        {
+            "dataset",
+            "recursive",
+            "lifetime_value",
+            "lifetime_unit",
+            "enabled",
+            "exclude",
+            "naming_schema",
+            "allow_empty",
+            "schedule",
+        }
+    )
+    SCHEDULE_FIELDS = frozenset({"minute", "hour", "dom", "month", "dow", "begin", "end"})
+    SCHEDULE_DEFAULTS = types.MappingProxyType(
+        {"minute": "00", "hour": "*", "dom": "*", "month": "*", "dow": "*", "begin": "00:00", "end": "23:59"}
+    )
+
+    def check_snapshot_task(self, data, where):
+        unknown = set(data) - self.SNAPSHOT_TASK_FIELDS
+        if unknown:
+            raise CallError(f"{where}: unexpected fields {sorted(unknown)}")
+        if set(data.get("schedule") or {}) - self.SCHEDULE_FIELDS:
+            raise CallError(
+                f"{where}.schedule: unexpected fields {sorted(set(data['schedule']) - self.SCHEDULE_FIELDS)}"
+            )
+        if "lifetime_unit" in data and data["lifetime_unit"] not in ("HOUR", "DAY", "WEEK", "MONTH", "YEAR"):
+            raise CallError(f"{where}.lifetime_unit: Input should be 'HOUR', 'DAY', 'WEEK', 'MONTH' or 'YEAR'")
+        if "dataset" in data and data["dataset"] not in self.s["datasets"]:
+            raise CallError(f"{where}.dataset: Dataset not found", errname="ENOENT")
+
+    def m_pool_snapshottask_query(self, filters=None, options=None):
+        return [copy.deepcopy(t) for t in self.s.setdefault("snapshot_tasks", []) if matches(t, filters)]
+
+    def m_pool_snapshottask_create(self, data):
+        self.check_snapshot_task(data, "pool_snapshottask_create")
+        task = {
+            "id": self.new_id(),
+            "recursive": False,
+            "lifetime_value": 2,
+            "lifetime_unit": "WEEK",
+            "enabled": True,
+            "exclude": [],
+            "naming_schema": "auto-%Y-%m-%d_%H-%M",
+            "allow_empty": True,
+            "vmware_sync": False,
+            "state": {"state": "PENDING"},
+            **data,
+            "schedule": {**self.SCHEDULE_DEFAULTS, **(data.get("schedule") or {})},
+        }
+        self.s.setdefault("snapshot_tasks", []).append(task)
+        self.mutated()
+        return copy.deepcopy(task)
+
+    def m_pool_snapshottask_update(self, task_id, data):
+        task = next((t for t in self.s.setdefault("snapshot_tasks", []) if t["id"] == task_id), None)
+        if task is None:
+            raise CallError(f"periodic snapshot task {task_id} does not exist", errname="ENOENT")
+        self.check_snapshot_task(data, "pool_snapshottask_update")
+        task.update({**data, "schedule": {**task["schedule"], **(data.get("schedule") or {})}})
+        self.mutated()
+        return copy.deepcopy(task)
+
+    # -------------------------------------------------------------------- mail
+    # mail.config returns the password as it was set (TrueNAS API v25.10: pass is a string or null).
+    def m_mail_config(self):
+        return copy.deepcopy(self.s["mail"])
+
+    def m_mail_update(self, data):
+        unknown = set(data) - (set(self.s["mail"]) - {"id"})
+        if unknown:
+            raise CallError(f"mail_update: unexpected fields {sorted(unknown)}")
+        if data.get("security", self.s["mail"]["security"]) not in ("PLAIN", "SSL", "TLS"):
+            raise CallError("mail_update.security: Input should be 'PLAIN', 'SSL' or 'TLS'")
+        self.s["mail"].update(data)
+        self.mutated()
+        return self.m_mail_config()
+
+    # ------------------------------------------------------------ alertservice
+    ALERT_LEVELS = ("INFO", "NOTICE", "WARNING", "ERROR", "CRITICAL", "ALERT", "EMERGENCY")
+
+    def check_alert_service(self, data, where):
+        unknown = set(data) - {"name", "attributes", "level", "enabled"}
+        if unknown:
+            raise CallError(f"{where}: unexpected fields {sorted(unknown)}")
+        attributes = data.get("attributes")
+        if attributes is not None and (attributes.get("type") != "Mail" or set(attributes) - {"type", "email"}):
+            raise CallError(f"{where}.attributes: the fake knows only the Mail service ({{type: Mail, email}})")
+        if "level" in data and data["level"] not in self.ALERT_LEVELS:
+            raise CallError(f"{where}.level: Input should be one of {self.ALERT_LEVELS}")
+
+    def m_alertservice_query(self, filters=None, options=None):
+        return [copy.deepcopy(a) for a in self.s.setdefault("alert_services", []) if matches(a, filters)]
+
+    def m_alertservice_create(self, data):
+        self.check_alert_service(data, "alert_service_create")
+        if not {"name", "attributes", "level"} <= set(data):
+            raise CallError("alert_service_create: name, attributes and level are required")
+        service = {"id": self.new_id(), "enabled": True, "type__title": "Email", **data}
+        self.s.setdefault("alert_services", []).append(service)
+        self.mutated()
+        return copy.deepcopy(service)
+
+    def m_alertservice_update(self, service_id, data):
+        service = next((a for a in self.s.setdefault("alert_services", []) if a["id"] == service_id), None)
+        if service is None:
+            raise CallError(f"alert service {service_id} does not exist", errname="ENOENT")
+        self.check_alert_service(data, "alert_service_update")
+        # TrueNAS 25.10's alertservice.update takes the full AlertServiceCreate model, unlike most updates.
+        missing = sorted({"name", "attributes", "level"} - set(data))
+        if missing:
+            raise CallError(f"alert_service_update.{missing[0]}: Field required")
+        service.update(data)
+        self.mutated()
+        return copy.deepcopy(service)
 
     # ---------------------------------------------------------------- services
     def m_service_query(self, filters=None, options=None):

@@ -1,0 +1,7 @@
+---
+# With a NAS: both setups' controllers, and csi-driver-nfs, which mounts the NAS's datasets as static volumes.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../common
+  - csi-driver-nfs

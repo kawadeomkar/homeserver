@@ -1,0 +1,55 @@
+---
+# The Kubernetes cluster's VMs on this Proxmox host, applied by roles/proxmox_vm from kubernetes.yml's first play.
+# The nodes, their sizes and their storages come from group_vars/all/kubernetes.yml, the MACs from local.yml.
+# Without a cluster, nothing: no VM and no ISO.
+
+# Every node first boots the Talos ISO, built by the Image Factory from the pinned version and schematic. The
+# version and schematic are in the file name, so a new pin is a new file; the old one stays until removed by
+# hand, which the role's report suggests once no VM uses it.
+kubernetes_iso_storage: local
+kubernetes_iso_filename: "talos-{{ talos_version }}-{{ kubernetes_iso_schematic[:8] }}-metal-amd64.iso"
+proxmox_vm_isos: >-
+  {{ [{'storage': kubernetes_iso_storage, 'filename': kubernetes_iso_filename,
+       'url': 'https://factory.talos.dev/image/' ~ kubernetes_iso_schematic ~ '/' ~ talos_version ~ '/metal-amd64.iso'}]
+     if kubernetes_present else [] }}
+
+# The bridge the installer creates.
+kubernetes_bridge: vmbr0
+
+# One VM per node. The system disk on the installer's storage; the data disk, which holds the apps' local
+# volumes, on the persistent NAS storage with a NAS (qcow2) and on the installer's storage without one; the media
+# disk without a NAS, never backed up. Each disk's serial names its /dev/disk/by-id/ link, which is how Talos's
+# disk selectors find it. The CD-ROM always holds the current ISO, so a node whose system disk is wiped reaches
+# maintenance mode from it; it boots from its system disk first. The control plane starts first, and the
+# workload node gets the host's iGPU when local.yml names its PCI mapping (kubernetes_gpu_mapping).
+proxmox_vm_vms: >-
+  {%- set out = [] -%}
+  {%- for n in kubernetes_nodes if kubernetes_present -%}
+  {%-   set disks = [{'slot': 'scsi0', 'storage': kubernetes_system_storage, 'size_gib': n.system_disk_gib,
+                      'serial': 'talos-system'}] -%}
+  {%-   if n.data_disk_gib | default(0) | int > 0 -%}
+  {%-     set _ = disks.append({'slot': 'scsi1', 'storage': kubernetes_data_storage, 'size_gib': n.data_disk_gib,
+                                'serial': 'talos-data'} | combine({'format': 'qcow2'} if nas_present else {})) -%}
+  {%-   endif -%}
+  {%-   if n.media_disk_gib | default(0) | int > 0 -%}
+  {%-     set _ = disks.append({'slot': 'scsi2', 'storage': kubernetes_system_storage, 'size_gib': n.media_disk_gib,
+                                'serial': 'talos-media', 'backup': false}) -%}
+  {%-   endif -%}
+  {%-   set gpu = kubernetes_gpu_mapping | default('', true) and n.name == kubernetes_data_node -%}
+  {%-   set _ = out.append({
+          'vmid': n.vmid, 'name': n.name, 'cores': n.cores, 'memory_mib': n.memory_mib,
+          'machine': 'q35', 'bios': 'ovmf', 'efidisk_storage': kubernetes_system_storage, 'cpu': 'host',
+          'scsihw': 'virtio-scsi-pci', 'disks': disks,
+          'net': {'bridge': kubernetes_bridge, 'mac': kubernetes_node_macs[n.name]},
+          'iso': kubernetes_iso_storage ~ ':iso/' ~ kubernetes_iso_filename, 'boot': 'order=scsi0;ide2',
+          'watchdog': {'model': 'i6300esb', 'action': 'reset'}, 'onboot': true,
+          'startup': 'order=' ~ ('1' if n.role == 'controlplane' else '2') ~ ',up=60,down=120',
+          'tags': ['talos', 'k8s'],
+          'hostpci': [{'mapping': kubernetes_gpu_mapping, 'pcie': true}] if gpu else [],
+          'start': true}) -%}
+  {%- endfor -%}
+  {{ out }}
+
+# The persistent NAS storage is added by proxmox_storage in the Proxmox play, so a dry run on a fresh host reports
+# it as pending.
+proxmox_vm_pending_storages: "{{ proxmox_storage_nfs | map(attribute='id') | list }}"

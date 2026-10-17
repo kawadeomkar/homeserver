@@ -5,6 +5,8 @@
 source =
     roles/truenas/library
     roles/truenas/module_utils
+    roles/proxmox_vm/filter_plugins
+    roles/talos/filter_plugins
 branch = true
 
 [report]

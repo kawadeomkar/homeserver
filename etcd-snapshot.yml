@@ -1,0 +1,33 @@
+---
+# An etcd snapshot of the control plane, into ~/.talos/homeserver/etcd/ (talos_config_dir): make etcd-snapshot.
+# talos-upgrade.yml takes one before every upgrade. Restore with talosctl bootstrap --recover-from=<snapshot>.
+- name: Snapshot etcd
+  hosts: kubernetes
+  gather_facts: false
+  pre_tasks:
+    - name: Refuse NAS settings that come without a NAS address
+      ansible.builtin.assert:
+        that: nas_section_error | length == 0
+        fail_msg: "{{ nas_section_error }}"
+        quiet: true
+      tags: [always]
+    - name: Refuse an incomplete Kubernetes section
+      ansible.builtin.assert:
+        that: kubernetes_settings_error | length == 0
+        fail_msg: "{{ kubernetes_settings_error | join(' ') }}"
+        quiet: true
+      tags: [always]
+    - name: Say why the cluster is skipped
+      ansible.builtin.debug:
+        msg: No kubernetes_node_addresses in group_vars/all/local.yml, so this setup has no cluster.
+      when: not kubernetes_present
+      tags: [always]
+    - name: Skip the cluster when local.yml names no nodes
+      ansible.builtin.meta: end_host
+      when: not kubernetes_present
+      tags: [always]
+  tasks:
+    - name: Take the snapshot
+      ansible.builtin.include_role:
+        name: talos
+        tasks_from: etcd-snapshot
