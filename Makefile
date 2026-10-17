@@ -223,6 +223,12 @@ vault-init: ## Without a NAS: an empty vault of your own, with a new .vault_pass
 	@test -x $(BIN)/ansible-vault || { echo "ansible-vault is not in $(VENV): activate the project's virtualenv, or pass VENV=<path>"; exit 1; }
 	@if [ -f .vault_pass ] && $(BIN)/ansible-vault view group_vars/all/vault.yml >/dev/null 2>&1; then \
 	  echo "group_vars/all/vault.yml already opens with .vault_pass: nothing to do."; \
+	elif [ -f group_vars/all/vault.yml ] && ! { tracked=$$(git rev-parse -q --verify :group_vars/all/vault.yml 2>/dev/null) \
+	    && [ -n "$$tracked" ] && [ "$$(git hash-object group_vars/all/vault.yml)" = "$$tracked" ]; }; then \
+	  echo "group_vars/all/vault.yml does not open with .vault_pass and is not the tracked vault, so it may be yours," \
+	    "with your secrets in it: restore the .vault_pass that opens it rather than replace it. To start" \
+	    "afresh all the same, move the file out of the repository first."; \
+	  exit 1; \
 	else \
 	  umask 077 && { [ -f .vault_pass ] || openssl rand -hex 32 > .vault_pass; } \
 	  && printf -- '---\n{}\n' | $(BIN)/ansible-vault encrypt --output group_vars/all/vault.yml \

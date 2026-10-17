@@ -111,6 +111,13 @@ class TrueNASClient:
             raise TrueNASError("no TrueNAS address given")
         if not api_key:
             raise TrueNASError("no TrueNAS API key given")
+        # With neither, the API key would go to whatever answers on the address.
+        if not validate_certs and not cert_sha256:
+            raise TrueNASCertificateError(
+                f"certificate validation is off and no certificate is pinned, so nothing proves {host} is the NAS: "
+                "pin its certificate's SHA-256 (truenas_api_cert_sha256), or validate certificates; the API key was "
+                "not sent"
+            )
         self.host = host
         self.url = f"wss://{host}:{port}/api/current"
         self.timeout = timeout

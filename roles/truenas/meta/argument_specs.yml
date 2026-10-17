@@ -34,7 +34,9 @@ argument_specs:
       truenas_api_cert_sha256:
         type: str
         default: ""
-        description: SHA-256 fingerprint of the NAS's certificate; when set, the API key goes only to that server.
+        description: >-
+          SHA-256 fingerprint of the NAS's certificate; the API key goes only to that server. Required while
+          truenas_validate_certs is off.
       truenas_api_timeout:
         type: int
         default: 120
