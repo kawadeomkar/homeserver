@@ -87,9 +87,32 @@ jobs:
         run: make venv PYTHON=python
       - name: Unit tests
         run: make test
-      # Runs both roles against fake_truenas.py and fake_pve_bin; needs openssl, which the image has.
+      # Runs the roles against fake_truenas.py and fake_pve_bin; needs openssl, which the image has. The cluster
+      # job runs the rest.
       - name: Idempotence against the TrueNAS and Proxmox fakes
-        run: make test-idempotence
+        run: make test-idempotence PYTEST_ARGS='-m "not cluster"'
+
+  # The VM backup role against its fake, apart from the test job's matrix: it has no Python modules of its own,
+  # so one Python, the newest, is enough, and the matrix stays within its time limit.
+  cluster:
+    name: cluster
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Install Poetry
+        run: pipx install "poetry==${POETRY_VERSION}"
+      - name: Install the locked tooling
+        run: make venv PYTHON=python
+      - name: Idempotence of the cluster's roles against their fakes
+        run: make test-idempotence PYTEST_ARGS='-m cluster'
 
   kubernetes:
     name: kubernetes
@@ -206,7 +229,7 @@ jobs:
   ci-success:
     name: ci-success
     if: always()
-    needs: [lint, test, kubernetes, leaks, workflows, dependency-review]
+    needs: [lint, test, cluster, kubernetes, leaks, workflows, dependency-review]
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions: {}

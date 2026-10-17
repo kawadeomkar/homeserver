@@ -68,8 +68,8 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 - [ ] Move the router's DHCP dynamic range off the addresses the servers use. The NAS and the Proxmox host
       are now reserved in DHCP (OPNsense Dnsmasq host entries), but the range still overlaps server
       addresses, which is how the NAS's first-choice static address turned out to be taken
-- [ ] Decide whether persistent VMs are backed up (a `backup` dataset with 1M records and a Proxmox
-      backup storage) or simply recreated after a Proxmox wipe
+- [ ] Run the VM-restore drill (`scripts/runbooks/vm-restore.md`) once the first nightly backup has run, and
+      again after any change to the backup job
 - [ ] Measure synchronous write speed on the persistent storage (`fio` with `fsync=1`). The pool's
       drives have no power-loss protection and there is no log device; a slow result calls for a log
       device, not `sync=disabled`

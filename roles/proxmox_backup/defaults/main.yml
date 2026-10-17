@@ -1,0 +1,11 @@
+---
+# Neutral defaults: with nothing else set, the role changes nothing. The jobs are configuration, set in
+# inventory group_vars; see README.md.
+
+# vzdump backup jobs. Each: id, schedule, storage and vmid (a list of VMIDs); optional mode, compress,
+# prune_backups, notes_template and enabled. A job is created or corrected, never deleted.
+proxmox_backup_jobs: []
+
+# Storage ids that an earlier role creates on a real run, such as the NFS storages proxmox_storage adds. A dry
+# run on a fresh host reports a job's missing storage from this list as pending instead of refusing it.
+proxmox_backup_pending_storages: []

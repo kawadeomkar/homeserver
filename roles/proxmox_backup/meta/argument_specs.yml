@@ -1,0 +1,24 @@
+---
+argument_specs:
+  main:
+    short_description: Keep Proxmox VE's scheduled vzdump backup jobs as configured
+    description:
+      - Creates each job of proxmox_backup_jobs with pvesh under /cluster/backup, and corrects the
+        settings it manages of one that exists. Never deletes a job, and never touches one that is not listed.
+      - Refuses a job whose storage does not exist, is disabled or does not hold backups, and a directory
+        storage that is not a checked mount point, which would fill the node's root filesystem when its disk is
+        missing. In check mode, a storage named in proxmox_backup_pending_storages is reported as pending.
+      - The defaults change nothing.
+    options:
+      proxmox_backup_jobs:
+        type: list
+        elements: dict
+        default: []
+        description: >-
+          Jobs, each with id, schedule, storage and vmid (a list of VMIDs); optional mode (snapshot), compress
+          (zstd), prune_backups, notes_template and enabled (true).
+      proxmox_backup_pending_storages:
+        type: list
+        elements: str
+        default: []
+        description: Storage ids an earlier role creates on a real run; reported as pending in check mode.

@@ -52,3 +52,15 @@ def test_gate_allows_skipping_only_jobs_that_run_on_every_pull_request():
     skippable = {name.strip() for name in gate["with"].get("allowed-skips", "").split(",") if name.strip()}
     conditional = {name: job["if"] for name, job in jobs.items() if "if" in job and name != "ci-success"}
     assert conditional == dict.fromkeys(skippable, "github.event_name == 'pull_request'")
+
+
+def test_every_idempotence_test_runs_once():
+    """The test job's matrix skips the tests marked cluster and the cluster job runs only those, so each runs, on the
+    matrix's Pythons or on one, and none twice."""
+    jobs = workflow()["jobs"]
+
+    def commands(job):
+        return [step["run"] for step in jobs[job]["steps"] if "make test-idempotence" in step.get("run", "")]
+
+    assert commands("test") == ["make test-idempotence PYTEST_ARGS='-m \"not cluster\"'"]
+    assert commands("cluster") == ["make test-idempotence PYTEST_ARGS='-m cluster'"]

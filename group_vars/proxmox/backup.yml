@@ -1,0 +1,20 @@
+---
+# This Proxmox host's backups, applied by roles/proxmox_backup: one nightly vzdump job for every VM worth
+# keeping, owned by no single project. Restoring one is by hand: scripts/runbooks/vm-restore.md.
+
+# The VMs it covers: those local.yml names in vm_backup_extra_vmids.
+vm_backup_vmids: "{{ vm_backup_extra_vmids | default([], true) | map('int') | unique | list }}"
+# Where they go: the NAS's backup storage with a NAS; without one, the storage local.yml names in
+# vm_backup_storage (a USB disk or a Proxmox Backup Server), or nowhere, which the play warns about.
+vm_backup_target: "{{ vm_storage_backup.proxmox_id if nas_present else vm_backup_storage | default('', true) }}"
+
+# Kept seven days and four weeks. The notes carry each VM's name, through Proxmox's own {{guestname}}, which is a
+# string literal inside this expression and so never templated by Ansible.
+proxmox_backup_jobs: >-
+  {{ [] if not vm_backup_vmids or not vm_backup_target else
+     [{'id': 'vm-nightly', 'schedule': '02:00', 'storage': vm_backup_target, 'vmid': vm_backup_vmids,
+       'mode': 'snapshot', 'compress': 'zstd', 'prune_backups': 'keep-daily=7,keep-weekly=4', 'enabled': true,
+       'notes_template': '{{guestname}}'}] }}
+# The NAS's backup storage is added by proxmox_storage earlier in the play, so a dry run on a fresh host reports
+# it as pending.
+proxmox_backup_pending_storages: "{{ proxmox_storage_nfs | map(attribute='id') | list }}"

@@ -196,6 +196,8 @@ def blank_nas_local_yml():
 EXAMPLE_LOCAL_YML = (ROOT / "group_vars" / "all" / "local.yml.example").read_text()
 TAILSCALE_LOCAL_YML = "tailscale_advertise_routes: [192.0.2.0/24]\n"
 TAILSCALE_CHECK = "TASK [proxmox_tailscale : Check the role's inputs]"
+# What the Proxmox play says when a VM has no backup: without a NAS, VMs to back up and no vm_backup_storage.
+NO_BACKUP = "are not backed up, because this setup has no NAS"
 
 
 def example_tree(tmp_path, local_yml=None):
@@ -240,37 +242,37 @@ def argspec_pass(tree, playbook="site.yml", *extra):
     [
         pytest.param(
             None,
-            4,
+            5,
             ["validate | Check the connection settings", "skipping: [truenas]", TAILSCALE_CHECK],
-            [],
+            [NO_BACKUP],
             id="nas",
         ),
         pytest.param(
             EXAMPLE_LOCAL_YML + TAILSCALE_LOCAL_YML,
-            4,
+            5,
             ["validate | Check the connection settings", TAILSCALE_CHECK],
-            [],
+            [NO_BACKUP],
             id="nas-tailscale",
         ),
         pytest.param(
             PROXMOX_ONLY_LOCAL_YML,
-            3,
+            4,
             ["Skip the NAS when local.yml gives it no address", "ok: [truenas]", TAILSCALE_CHECK],
-            ["TASK [truenas :", "validate | Check the connection settings"],
+            ["TASK [truenas :", "validate | Check the connection settings", NO_BACKUP],
             id="proxmox-only",
         ),
         pytest.param(
             PROXMOX_ONLY_LOCAL_YML + TAILSCALE_LOCAL_YML,
-            3,
+            4,
             ["Skip the NAS when local.yml gives it no address", TAILSCALE_CHECK],
-            ["TASK [truenas :"],
+            ["TASK [truenas :", NO_BACKUP],
             id="proxmox-only-tailscale",
         ),
         pytest.param(
             blank_nas_local_yml(),
-            3,
+            4,
             ["Skip the NAS when local.yml gives it no address", "ok: [truenas]"],
-            ["TASK [truenas :", "validate | Check the connection settings"],
+            ["TASK [truenas :", "validate | Check the connection settings", NO_BACKUP],
             id="proxmox-only-blank-values",
         ),
     ],
@@ -312,7 +314,7 @@ def test_inventory_without_the_nas_host(tmp_path):
     rc, out = argspec_pass(tree)
     assert rc == 0, out[-3000:]
     assert "skipping: no hosts matched" in out, out[-3000:]
-    assert out.count("Validating arguments against arg spec 'main'") == 3, out[-3000:]
+    assert out.count("Validating arguments against arg spec 'main'") == 4, out[-3000:]
 
 
 @pytest.mark.parametrize("playbook", ["site.yml", "proxmox.yml"])
@@ -370,6 +372,7 @@ def resolve_on(tree, host, expression, *extra):
                 {"id": "homeserver-persistent", "export": "/mnt/persistent/proxmox/vm"},
                 {"id": "homeserver-ephemeral", "export": "/mnt/ephemeral/proxmox/vm"},
                 {"id": "claude-on-proxmox-ephemeral", "export": "/mnt/ephemeral/proxmox/claude-on-proxmox"},
+                {"id": "homeserver-backup", "content": ["backup"], "export": "/mnt/persistent/proxmox/backup"},
             ],
             [],
             id="nas",
@@ -404,6 +407,7 @@ def test_nas_gets_a_dataset_and_share_per_vm_storage(tmp_path):
     assert nas["datasets"] == [
         "persistent/proxmox",
         "persistent/proxmox/vm",
+        "persistent/proxmox/backup",
         "ephemeral/proxmox",
         "ephemeral/proxmox/vm",
         "ephemeral/proxmox/claude-on-proxmox",
@@ -412,6 +416,7 @@ def test_nas_gets_a_dataset_and_share_per_vm_storage(tmp_path):
     assert nas["shares"] == [
         "/mnt/persistent/proxmox/vm",
         "/mnt/ephemeral/proxmox/vm",
+        "/mnt/persistent/proxmox/backup",
         "/mnt/ephemeral/proxmox/claude-on-proxmox",
     ]
 
@@ -443,6 +448,7 @@ def test_pool_names_follow_local_yml(tmp_path):
         "datasets": [
             "tank/proxmox",
             "tank/proxmox/vm",
+            "tank/proxmox/backup",
             "scratch/proxmox",
             "scratch/proxmox/vm",
             "scratch/proxmox/claude-on-proxmox",
@@ -453,6 +459,7 @@ def test_pool_names_follow_local_yml(tmp_path):
         "/mnt/tank/proxmox/vm",
         "/mnt/scratch/proxmox/vm",
         "/mnt/scratch/proxmox/claude-on-proxmox",
+        "/mnt/tank/proxmox/backup",
     ]
 
 

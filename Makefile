@@ -162,9 +162,12 @@ secrets-push: ## Secrets and identifiers in the commits being pushed (the pre-pu
 
 .PHONY: test-idempotence
 # One pytest worker per CPU: each test runs its own fakes and playbooks, so they run side by side, and in sequence
-# the suite outgrew the CI job's timeout.
-test-idempotence: ## Run each role repeatedly against local fakes of TrueNAS and Proxmox
-	$(BIN)/pytest -q -n auto tests/integration
+# the suite outgrew the CI job's timeout. CI runs the tests marked cluster (the VM backup playbook) in a job of their
+# own, on one Python, and the rest on each: PYTEST_ARGS='-m cluster' or PYTEST_ARGS='-m "not cluster"'. Empty runs
+# them all.
+PYTEST_ARGS ?=
+test-idempotence: ## Run each role repeatedly against local fakes (PYTEST_ARGS narrows it, e.g. -m cluster)
+	$(BIN)/pytest -q -n auto $(PYTEST_ARGS) tests/integration
 
 .PHONY: lint-kubeconform
 # kubeconform retries each schema download itself (twice, with backoff), so an invalid manifest fails

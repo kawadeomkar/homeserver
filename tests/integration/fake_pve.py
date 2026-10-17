@@ -1,5 +1,5 @@
-"""Stand-ins for the Proxmox VE commands roles/proxmox_storage and roles/proxmox_apt run, for the idempotence
-tests.
+"""Stand-ins for the Proxmox VE commands roles/proxmox_storage, roles/proxmox_apt and roles/proxmox_backup run,
+for the idempotence tests.
 
 `pvesh get /storage`, `pvesh get /nodes/<node>/config`, `pvesh get /nodes/<node>/storage/<id>/status`,
 `pvesm add nfs`, `pvesm set`, `pvenode config set`, `hostname -s`, `apt-get update` and `apt-get dist-upgrade`,
@@ -15,6 +15,11 @@ in the state's `inactive` list answers `active: 0` while still enabled, as one w
 come up does, and one whose `nodes` leaves this node out answers `enabled: 0`, as Proxmox does for a storage
 restricted to other cluster nodes. Nothing the role runs changes either. Anything else exits non-zero, so an
 unexpected command fails the test.
+
+Backup jobs: `pvesh get|create /cluster/backup` and `pvesh get|set /cluster/backup/<id>`, from Proxmox VE 9's
+API schema, not yet captured from a host. A job's prune settings come back as an object and its enabled flag
+as a number; the role reads text as well, in case a real host gives that. Ids follow Proxmox's pve-configid
+rule, and an option the schema lacks fails as it does there. A job's VMIDs start at 100.
 
 apt-get reads the deb822 .sources files in $FAKE_PVE_SOURCES_DIR, the directory the role is given. `update`
 fails with 401 Unauthorized, as the real one does, when an enterprise.proxmox.com repository is still
@@ -123,45 +128,158 @@ def listing(state):
 
 
 def pvesh(state, args):
-    if args[:1] != ["get"] or args[-2:] != ["--output-format", "json"]:
+    """pvesh <get|create|set> <path> [--option value ...] [--output-format json]: get prints JSON and needs the
+    format; create and set print nothing, as for these paths on a real host."""
+    if len(args) < 2 or args[0] not in ("get", "create", "set"):
         fail(f"fake pvesh: unsupported {args}")
-    path = args[1]
-    parts = path.split("/")
-    if path == "/storage":
-        print(json.dumps(listing(state)))
-    elif len(parts) == 4 and parts[1] == "nodes" and parts[3] == "config":
-        # As on a real host, /nodes/localhost/config (or any name but the node's own) answers {},
-        # and values come back as strings.
-        print(json.dumps({k: str(v) for k, v in state["node"].items()} if parts[2] == NODE else {}))
-    elif len(parts) == 6 and parts[1] == "nodes" and parts[3] == "storage" and parts[5] == "status":
-        if parts[2] not in (NODE, "localhost"):
-            fail(f"500 hostname lookup '{parts[2]}' failed")
-        sid = parts[4]
-        entry = next((s for s in state["storage"] if s["storage"] == sid), None)
-        if entry is None:
-            fail(f"500 storage '{sid}' does not exist")
-        restricted = "nodes" in entry and NODE not in entry["nodes"].split(",")
-        enabled = not entry.get("disable") and not restricted
-        active = enabled and sid not in state.get("inactive", [])
-        total = 64 * 2**30 if active else 0
-        # content in the latest listing's order: counting status reads too would change the order the next
-        # listing shows, which the content-order test depends on.
-        print(
-            json.dumps(
-                {
-                    "active": 1 if active else 0,
-                    "avail": total - total // 8,
-                    "content": rotated(entry["content"], state.get("reads", 0)),
-                    "enabled": 1 if enabled else 0,
-                    "shared": 1 if entry["type"] == "nfs" else 0,
-                    "total": total,
-                    "type": entry["type"],
-                    "used": total // 8,
-                }
-            )
+    verb, path, rest = args[0], args[1], args[2:]
+    formatted = rest[-2:] == ["--output-format", "json"]
+    if formatted:
+        rest = rest[:-2]
+    if verb == "get" and not formatted:
+        fail(f"fake pvesh: get needs --output-format json: {args}")
+    for route, handler in ROUTES:
+        found = route.fullmatch(path)
+        if found and verb in handler:
+            result = handler[verb](state, *found.groups(), options(rest))
+            if verb == "get":
+                print(json.dumps(result))
+            return
+    fail(f"fake pvesh: unsupported {verb} {path}")
+
+
+def no_options(opts):
+    if opts:
+        fail(f"400 Parameter verification failed.\n{sorted(opts)[0]}: property is not defined in schema")
+
+
+def get_storage(state, opts):
+    no_options(opts)
+    return listing(state)
+
+
+def get_node_config(state, node, opts):
+    # As on a real host, /nodes/localhost/config (or any name but the node's own) answers {},
+    # and values come back as strings.
+    return {k: str(v) for k, v in state["node"].items()} if node == NODE else {}
+
+
+def check_node(node):
+    if node not in (NODE, "localhost"):
+        fail(f"500 hostname lookup '{node}' failed")
+
+
+def get_storage_status(state, node, sid, opts):
+    check_node(node)
+    no_options(opts)
+    entry = next((s for s in state["storage"] if s["storage"] == sid), None)
+    if entry is None:
+        fail(f"500 storage '{sid}' does not exist")
+    restricted = "nodes" in entry and NODE not in entry["nodes"].split(",")
+    enabled = not entry.get("disable") and not restricted
+    active = enabled and sid not in state.get("inactive", [])
+    total = 64 * 2**30 if active else 0
+    # content in the latest listing's order: counting status reads too would change the order the next
+    # listing shows, which the content-order test depends on.
+    return {
+        "active": 1 if active else 0,
+        "avail": total - total // 8,
+        "content": rotated(entry["content"], state.get("reads", 0)),
+        "enabled": 1 if enabled else 0,
+        "shared": 1 if entry["type"] == "nfs" else 0,
+        "total": total,
+        "type": entry["type"],
+        "used": total // 8,
+    }
+
+
+# A scheduled backup job's settings, as `pvesh create /cluster/backup` takes them (Proxmox VE 9's vzdump job
+# schema, the ones this repo uses and a few more), and Proxmox's rule for its id (pve-configid).
+BACKUP_OPTIONS = {
+    "schedule",
+    "storage",
+    "vmid",
+    "all",
+    "exclude",
+    "node",
+    "mode",
+    "compress",
+    "prune-backups",
+    "notes-template",
+    "enabled",
+    "comment",
+    "mailto",
+    "mailnotification",
+}
+
+
+def backup_job(state, opts):
+    unknown = set(opts) - BACKUP_OPTIONS - {"delete"}
+    if unknown:
+        fail(f"400 Parameter verification failed.\n{sorted(unknown)[0]}: property is not defined in schema")
+    if "mode" in opts and opts["mode"] not in ("snapshot", "suspend", "stop"):
+        fail(
+            f"400 Parameter verification failed.\nmode: value '{opts['mode']}' does not have a value in the enumeration"
         )
-    else:
-        fail(f"fake pvesh: unsupported path {path}")
+    if "prune-backups" in opts:
+        for item in opts["prune-backups"].split(","):
+            key, _, value = item.partition("=")
+            if not key.startswith("keep-") or not value.isdigit():
+                fail(f"400 Parameter verification failed.\nprune-backups: invalid format - {item}")
+    if "vmid" in opts and (
+        not re.fullmatch(r"\d+(,\d+)*", opts["vmid"]) or any(int(v) < 100 for v in opts["vmid"].split(","))
+    ):
+        fail("400 Parameter verification failed.\nvmid: value does not look like a valid VM ID list")
+
+
+def shown_job(job):
+    """A job as `pvesh get /cluster/backup` shows it: prune settings as an object, enabled as a number."""
+    shown = {**job, "type": "vzdump", "enabled": int(job.get("enabled", "1"))}
+    if "prune-backups" in job:
+        shown["prune-backups"] = dict(item.split("=", 1) for item in job["prune-backups"].split(","))
+    return shown
+
+
+def get_backup_jobs(state, opts):
+    return [shown_job(job) for job in state.get("backup_jobs", {}).values()]
+
+
+def create_backup_job(state, opts):
+    jid = opts.pop("id", None)
+    if jid is None or not re.fullmatch(r"[a-z][a-z0-9_-]+", jid, re.IGNORECASE):
+        fail(f"400 Parameter verification failed.\nid: invalid configuration ID '{jid}'")
+    backup_job(state, opts)
+    jobs = state.setdefault("backup_jobs", {})
+    if jid in jobs:
+        fail(f"500 Job '{jid}' already exists")
+    jobs[jid] = {"id": jid, **opts}
+    state["mutations"] += 1
+
+
+def get_backup_job(state, jid, opts):
+    job = state.get("backup_jobs", {}).get(jid)
+    if job is None:
+        fail(f"500 Job '{jid}' does not exist")
+    return shown_job(job)
+
+
+def set_backup_job(state, jid, opts):
+    get_backup_job(state, jid, opts)
+    backup_job(state, opts)
+    job = state["backup_jobs"][jid]
+    for name in opts.pop("delete", "").split(","):
+        job.pop(name, None)
+    job.update(opts)
+    state["mutations"] += 1
+
+
+ROUTES = [
+    (re.compile(r"/storage"), {"get": get_storage}),
+    (re.compile(r"/nodes/([^/]+)/config"), {"get": get_node_config}),
+    (re.compile(r"/nodes/([^/]+)/storage/([^/]+)/status"), {"get": get_storage_status}),
+    (re.compile(r"/cluster/backup"), {"get": get_backup_jobs, "create": create_backup_job}),
+    (re.compile(r"/cluster/backup/([^/]+)"), {"get": get_backup_job, "set": set_backup_job}),
+]
 
 
 def pvesm(state, args):

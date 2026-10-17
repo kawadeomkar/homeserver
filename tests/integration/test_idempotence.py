@@ -242,6 +242,7 @@ def test_truenas_role_is_idempotent(nas):
     assert ds["ephemeral/proxmox/vm"]["sync"]["rawvalue"] == "disabled"
     assert ds["ephemeral/proxmox"]["quota"]["rawvalue"] == "1099511627776"
     assert ds["ephemeral/proxmox"]["reservation"]["rawvalue"] == str(100 * 2**30)
+    assert ds["persistent/proxmox/backup"]["recordsize"]["rawvalue"] == "1048576"
     assert ds["persistent/proxmox/vm"]["recordsize"]["rawvalue"] == "65536"
     # The project pool: a dataset of its own with the ephemeral class's properties.
     pool = ds["ephemeral/proxmox/claude-on-proxmox"]
@@ -251,6 +252,7 @@ def test_truenas_role_is_idempotent(nas):
     assert sorted(sh["path"] for sh in s["shares"]) == [
         "/mnt/ephemeral/proxmox/claude-on-proxmox",
         "/mnt/ephemeral/proxmox/vm",
+        "/mnt/persistent/proxmox/backup",
         "/mnt/persistent/proxmox/vm",
     ]
     assert all(sh["hosts"] == [PROXMOX_ADDRESS] and sh["maproot_user"] == "root" for sh in s["shares"])
@@ -412,7 +414,7 @@ def test_proxmox_storage_role_is_idempotent(tmp_path):
 
     result = run("proxmox.yml", extra, check=True)
     expect(result, "homeserver", note="dry run")
-    for sid in ("homeserver-persistent", "homeserver-ephemeral", "claude-on-proxmox-ephemeral"):
+    for sid in ("homeserver-persistent", "homeserver-ephemeral", "claude-on-proxmox-ephemeral", "homeserver-backup"):
         assert re.search(rf'{sid}"?:\s*"?add', result[2]), (
             f"the dry run does not plan to add {sid}\n{result[2][-3000:]}"
         )
@@ -425,15 +427,21 @@ def test_proxmox_storage_role_is_idempotent(tmp_path):
 
     s = read(state)
     nfs = {e["storage"]: e for e in s["storage"] if e["type"] == "nfs"}
-    assert sorted(nfs) == ["claude-on-proxmox-ephemeral", "homeserver-ephemeral", "homeserver-persistent"]
-    for entry in nfs.values():
+    assert sorted(nfs) == [
+        "claude-on-proxmox-ephemeral",
+        "homeserver-backup",
+        "homeserver-ephemeral",
+        "homeserver-persistent",
+    ]
+    for sid, entry in nfs.items():
         assert (entry["server"], entry["content"], entry["format"], entry["options"]) == (
             "127.0.0.10",
-            "images",
+            "backup" if sid == "homeserver-backup" else "images",
             "qcow2",
             "vers=4.2",
         )
         assert "disable" not in entry
+    assert nfs["homeserver-backup"]["export"] == "/mnt/persistent/proxmox/backup"
     assert nfs["homeserver-ephemeral"]["export"] == "/mnt/ephemeral/proxmox/vm"
     assert nfs["claude-on-proxmox-ephemeral"]["export"] == "/mnt/ephemeral/proxmox/claude-on-proxmox"
     assert s["node"]["startall-onboot-delay"] == 120
@@ -508,8 +516,8 @@ def test_proxmox_storage_role_needs_the_static_address(tmp_path):
     extra = {**pve_vars(tmp_path, settled=True, nas=False), "truenas_static_address": ""}
     rc, _, out = run("proxmox.yml", {**extra, "truenas_bootstrap_address": "127.0.0.10"}, check=True)
     expected = (
-        "No NFS server for homeserver-persistent, homeserver-ephemeral, claude-on-proxmox-ephemeral: "
-        "set proxmox_storage_nfs_server"
+        "No NFS server for homeserver-persistent, homeserver-ephemeral, claude-on-proxmox-ephemeral, "
+        "homeserver-backup: set proxmox_storage_nfs_server"
     )
     assert rc != 0 and expected in out, out[-3000:]
 
@@ -812,7 +820,7 @@ def test_proxmox_storage_role_refuses_an_export_another_id_mounts(tmp_path):
     expect(run("proxmox.yml", extra), "homeserver", changed=True, note="run once the old ids are gone")
     expect(run("proxmox.yml", extra), "homeserver", changed=0, note="second run once the old ids are gone")
     nfs = sorted(e["storage"] for e in read(state)["storage"] if e["type"] == "nfs")
-    assert nfs == ["claude-on-proxmox-ephemeral", "homeserver-ephemeral", "homeserver-persistent"]
+    assert nfs == ["claude-on-proxmox-ephemeral", "homeserver-backup", "homeserver-ephemeral", "homeserver-persistent"]
 
 
 def test_truenas_role_refuses_an_unpinned_certificate(nas):
@@ -837,3 +845,146 @@ def test_truenas_role_refuses_an_unpinned_certificate(nas):
         rc, _, out = run("truenas_defaults.yml", extra, check=check)
         assert rc != 0 and "truenas_api_cert_sha256 is empty, so nothing would prove" in out, out[-3000:]
     assert logged() == before, "the NAS was asked something"
+
+
+# ----------------------------------------------------------------------------------- Backups ---
+
+
+def seed_storage(state, *entries):
+    """Add storages to the fake host, as proxmox_storage or the owner would have."""
+    s = read(state) if Path(state).exists() else fake_pve.fresh_state()
+    s["storage"] += list(entries)
+    write(state, s)
+
+
+BACKUP_NFS = {
+    "storage": "homeserver-backup",
+    "type": "nfs",
+    "server": "127.0.0.10",
+    "export": "/mnt/persistent/proxmox/backup",
+    "content": "backup",
+    "format": "qcow2",
+    "options": "vers=4.2",
+    "path": "/mnt/pve/homeserver-backup",
+}
+
+
+def backup_job(state, jid="vm-nightly"):
+    return read(state).get("backup_jobs", {}).get(jid)
+
+
+@pytest.mark.cluster
+def test_proxmox_backup_with_a_nas(tmp_path):
+    """With a NAS: one nightly job of the VMs local.yml names to the NAS's backup storage. A dry run on a fresh
+    host passes, the storage pending; a real run without the storage is refused; drift is corrected."""
+    state = tmp_path / "pve.json"
+    extra = {
+        "fake_pve_state": str(state),
+        "truenas_static_address": "127.0.0.10/24",
+        "vm_backup_extra_vmids": [300, 301],
+    }
+
+    result = run("proxmox_backup.yml", extra, check=True)
+    expect(result, "homeserver", changed=1, note="dry run on a fresh host")
+    assert re.search(r'created by proxmox_storage on a real run"?:\s*\[\s*"homeserver-backup"', result[2]), result[2][
+        -3000:
+    ]
+    assert re.search(r'vm-nightly"?:\s*"?create', result[2]), result[2][-3000:]
+    assert not state.exists() or read(state)["mutations"] == 0, "the dry run changed the host"
+
+    rc, _, out = run("proxmox_backup.yml", extra)
+    assert rc != 0 and "homeserver-backup: does not exist" in out, out[-3000:]
+    assert backup_job(state) is None
+
+    seed_storage(state, BACKUP_NFS)
+    expect(run("proxmox_backup.yml", extra), "homeserver", changed=1, note="first run")
+    result = run("proxmox_backup.yml", extra)
+    expect(result, "homeserver", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")
+    expect(run("proxmox_backup.yml", extra, check=True), "homeserver", changed=0, note="dry run after applying")
+    job = backup_job(state)
+    assert {k: job[k] for k in ("storage", "vmid", "schedule", "mode", "compress", "prune-backups")} == {
+        "storage": "homeserver-backup",
+        "vmid": "300,301",
+        "schedule": "02:00",
+        "mode": "snapshot",
+        "compress": "zstd",
+        "prune-backups": "keep-daily=7,keep-weekly=4",
+    }
+    # Proxmox's own placeholder, untouched by Ansible's templating.
+    assert job["notes-template"] == "{{guestname}}"
+
+    # Drift: the schedule and the VMIDs changed by hand, the job disabled. VMIDs in another order are no change.
+    s = read(state)
+    s["backup_jobs"]["vm-nightly"].update(schedule="03:30", vmid="301,300,999", enabled="0")
+    write(state, s)
+    result = run("proxmox_backup.yml", extra, check=True)
+    expect(result, "homeserver", changed=1, note="dry run after drift")
+    assert "schedule" in result[2] and "enabled" in result[2], result[2][-3000:]
+    expect(run("proxmox_backup.yml", extra), "homeserver", changed=1, note="run after drift")
+    expect(run("proxmox_backup.yml", extra), "homeserver", changed=0, note="second run after drift")
+    job = backup_job(state)
+    assert (job["schedule"], job["vmid"], job["enabled"]) == ("02:00", "300,301", "1")
+    s = read(state)
+    s["backup_jobs"]["vm-nightly"]["vmid"] = "301,300"
+    write(state, s)
+    expect(run("proxmox_backup.yml", extra), "homeserver", changed=0, note="VMIDs in another order")
+
+    # Other VMs in local.yml: the same job, corrected to them.
+    other = extra | {"vm_backup_extra_vmids": [310]}
+    expect(run("proxmox_backup.yml", other), "homeserver", changed=1, note="other VMs")
+    assert backup_job(state)["vmid"] == "310"
+    expect(run("proxmox_backup.yml", other), "homeserver", changed=0, note="other VMs, second run")
+
+
+@pytest.mark.cluster
+def test_proxmox_backup_without_a_nas(tmp_path):
+    """Without a NAS: no job and no read without vm_backup_storage; a directory storage that is not a checked
+    mount point is refused, naming the fix; then one job, for the VMs local.yml names."""
+    state = tmp_path / "pve.json"
+    extra = {
+        "fake_pve_state": str(state),
+        "truenas_static_address": "",
+        "vm_backup_extra_vmids": [300],
+    }
+    for check in (True, False):
+        expect(run("proxmox_backup.yml", extra, check=check), "homeserver", changed=0, note="no backup storage")
+    assert not state.exists() or read(state)["mutations"] == 0
+
+    usb = {"storage": "usb-backup", "type": "dir", "path": "/mnt/usb", "content": "backup"}
+    seed_storage(state, usb)
+    with_usb = {**extra, "vm_backup_storage": "usb-backup", "vm_backup_extra_vmids": [300, 310]}
+    for check in (True, False):
+        rc, _, out = run("proxmox_backup.yml", with_usb, check=check)
+        assert rc != 0 and "usb-backup: is a directory that is not a checked mount point" in out, out[-3000:]
+        assert "pvesm set usb-backup --is_mountpoint yes --create-base-path 0" in out, out[-3000:]
+    assert backup_job(state) is None
+
+    # "off" is unset to Proxmox too, and a btrfs storage is a directory as much.
+    s = read(state)
+    next(e for e in s["storage"] if e["storage"] == "usb-backup")["is_mountpoint"] = "off"
+    write(state, s)
+    rc, _, out = run("proxmox_backup.yml", with_usb, check=True)
+    assert rc != 0 and "usb-backup: is a directory that is not a checked mount point" in out, out[-3000:]
+    seed_storage(state, {"storage": "usb-btrfs", "type": "btrfs", "path": "/mnt/b", "content": "backup"})
+    rc, _, out = run("proxmox_backup.yml", {**with_usb, "vm_backup_storage": "usb-btrfs"}, check=True)
+    assert rc != 0 and "usb-btrfs: is a directory that is not a checked mount point" in out, out[-3000:]
+
+    s = read(state)
+    next(e for e in s["storage"] if e["storage"] == "usb-backup")["is_mountpoint"] = "yes"
+    write(state, s)
+    expect(run("proxmox_backup.yml", with_usb, check=True), "homeserver", changed=1, note="dry run, mount point")
+    expect(run("proxmox_backup.yml", with_usb), "homeserver", changed=1, note="first run")
+    expect(run("proxmox_backup.yml", with_usb), "homeserver", changed=0, note="second run")
+    job = backup_job(state)
+    assert (job["storage"], job["vmid"], job["notes-template"]) == ("usb-backup", "300,310", "{{guestname}}")
+
+    # A storage that holds no backups, and one that does not exist, are refused.
+    seed_storage(
+        state, {"storage": "usb-iso", "type": "dir", "path": "/mnt/iso", "content": "iso", "is_mountpoint": "1"}
+    )
+    for storage, message in (
+        ("usb-iso", "usb-iso: has no backup in its content"),
+        ("nowhere", "nowhere: does not exist"),
+    ):
+        rc, _, out = run("proxmox_backup.yml", {**with_usb, "vm_backup_storage": storage}, check=True)
+        assert rc != 0 and message in out, out[-3000:]
