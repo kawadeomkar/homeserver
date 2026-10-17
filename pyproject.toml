@@ -31,6 +31,8 @@ dev = [
     "check-jsonschema==0.38.2",
     # Runs the git hooks in .pre-commit-config.yaml, which `make init` installs.
     "pre-commit==4.6.2",
+    # Generates each role's REFERENCE.md from the role itself (`make docs`; `make lint-docs` checks it is current).
+    "docsible==0.8.0",
 ]
 
 [tool.poetry]
