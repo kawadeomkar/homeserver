@@ -73,10 +73,31 @@ truenas_datasets_vm_consumers: >-
   {%- endfor -%}
   {{ out }}
 
+# ----------------------------------------------------------------- snapshots ---
+# The persistent VMs' disks keep hourly snapshots for a day and daily for a week, no longer: they hold whole VM
+# disks, whose scratch data older snapshots would pin, and a longer history belongs in a backup of the VMs.
+# Nothing on the ephemeral pool is ever snapshotted. The daily task keeps a snapshot even when nothing was written
+# since the last one: it fires at midnight with an hourly one, and TrueNAS destroys a batch of snapshots that are
+# all empty unless a task in it allows empty ones, so on a dataset left alone after 23:00 no daily snapshot would
+# ever survive. An empty snapshot costs nothing; the hourly ones still skip them.
+truenas_snapshot_tasks: >-
+  {%- set hourly = {'naming_schema': 'hourly-%Y-%m-%d_%H-%M', 'lifetime_unit': 'DAY', 'allow_empty': false,
+                    'schedule': {'minute': '00', 'hour': '*', 'dom': '*', 'month': '*', 'dow': '*'}} -%}
+  {%- set daily = {'naming_schema': 'daily-%Y-%m-%d_%H-%M', 'lifetime_unit': 'DAY', 'allow_empty': true,
+                   'schedule': {'minute': '00', 'hour': '00', 'dom': '*', 'month': '*', 'dow': '*'}} -%}
+  {%- set common = {'recursive': false, 'enabled': true} -%}
+  {%- set out = [common | combine(hourly, {'dataset': vm_storage.persistent.dataset, 'lifetime_value': 1}),
+                 common | combine(daily, {'dataset': vm_storage.persistent.dataset, 'lifetime_value': 7})] -%}
+  {{ out }}
+
 # ----------------------------------------------------------------------- NFS ---
 truenas_nfs_settings:
   # Proxmox checks an NFSv4 storage with rpcinfo, which needs the port mapper NFSv3 brings.
   protocols: [NFSV3, NFSV4]
+  # Only requests from privileged ports (NFS's "secure"), which only root on a client can open. NFS with sec=sys
+  # trusts a client's address, and the shares map root to root: on a device of their own an attacker is root anyway,
+  # but no unprivileged process on a client can speak NFS. TrueNAS's default, kept as it is.
+  allow_nonroot: false
 truenas_nfs_shares: "{{ truenas_nfs_shares_vm_classes + truenas_nfs_shares_vm_consumers }}"
 truenas_nfs_shares_vm_classes:
   - path: "{{ vm_storage_mount_root }}/{{ vm_storage.persistent.dataset }}"
@@ -97,6 +118,20 @@ truenas_nfs_share_defaults:
   maproot_user: root
   maproot_group: root
   enabled: true
+
+# -------------------------------------------------------------------- alerts ---
+# Alert e-mail, when local.yml names a mail server: the NAS mails warnings and worse (a degraded pool, a pool
+# filling up, a failed snapshot task) to truenas_alert_email. The password is vault_truenas_mail_password.
+truenas_mail: >-
+  {{ {} if not truenas_mail_server | default('', true) else
+     {'outgoingserver': truenas_mail_server, 'port': truenas_mail_port | default(587, true) | int,
+      'security': truenas_mail_security | default('TLS', true), 'smtp': truenas_mail_user | default('', true) | length > 0,
+      'user': truenas_mail_user | default(none, true),
+      'fromemail': truenas_mail_from | default(truenas_mail_user, true) | default('', true)} }}
+truenas_mail_password: "{{ vault_truenas_mail_password | default('') }}"
+truenas_alert_services: >-
+  {{ [] if not truenas_alert_email | default('', true) else
+     [{'name': 'Email', 'attributes': {'type': 'Mail', 'email': truenas_alert_email}, 'level': 'WARNING', 'enabled': true}] }}
 
 # ------------------------------------------------------------------ services ---
 truenas_services:

@@ -20,7 +20,7 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 
 **Description**: 
 - Runs on the controller and talks to the NAS's JSON-RPC WebSocket API with an API key; nothing goes over SSH.
-- Stages, each under its own tag - truenas_network (network settings, static address), truenas_pools (import or create, auto-trim, scrub), truenas_system (general settings, NTP), truenas_datasets, truenas_nfs (service settings, shares), truenas_services.
+- Stages, each under its own tag - truenas_network (network settings, static address), truenas_pools (import or create, auto-trim, scrub), truenas_system (general settings, NTP), truenas_datasets, truenas_snapshots (periodic snapshot tasks), truenas_nfs (service settings, shares), truenas_alerts (outgoing mail, alert services), truenas_services.
 - The defaults change nothing. Every stage acts only on what its variables declare, and an empty list or dict (or a null value) leaves that part of the NAS alone.
 - Never destroys, wipes, exports or upgrades a pool, never deletes a dataset, and refuses an NFS share without a host or network restriction.
 
@@ -370,6 +370,18 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
     
   
 
+  - **truenas_snapshot_tasks**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: Periodic snapshot tasks, each with dataset and naming_schema, which identify it, and the fields of pool.snapshottask.create. Never deleted.
+  
+  
+  
+    
+  
+
   - **truenas_nfs_settings**
     - **Required**: false
     - **Type**: dict
@@ -400,6 +412,38 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
     - **Description**: Fields laid under every share.
   
   
+  
+
+  - **truenas_mail**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: Fields for mail.update (outgoingserver, port, security, smtp, user, fromemail). Empty leaves mail alone.
+  
+  
+  
+
+  - **truenas_mail_password**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The mail server's password, compared on every run and never printed.
+  
+  
+  
+
+  - **truenas_alert_services**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: Alert services, each with name, which identifies it, and the fields of alertservice.create. Never deleted.
+  
+  
+  
+    
   
 
   - **truenas_services**
@@ -459,10 +503,14 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 | [truenas_ntp_servers](defaults/main.yml#L70)   | list | `[]` |    
 | [truenas_ntp_server_defaults](defaults/main.yml#L71)   | dict | `{}` |    
 | [truenas_datasets](defaults/main.yml#L76)   | list | `[]` |    
-| [truenas_nfs_settings](defaults/main.yml#L80)   | dict | `{}` |    
-| [truenas_nfs_shares](defaults/main.yml#L83)   | list | `[]` |    
-| [truenas_nfs_share_defaults](defaults/main.yml#L85)   | dict | `{}` |    
-| [truenas_services](defaults/main.yml#L89)   | dict | `{}` |    
+| [truenas_snapshot_tasks](defaults/main.yml#L82)   | list | `[]` |    
+| [truenas_nfs_settings](defaults/main.yml#L86)   | dict | `{}` |    
+| [truenas_nfs_shares](defaults/main.yml#L89)   | list | `[]` |    
+| [truenas_nfs_share_defaults](defaults/main.yml#L91)   | dict | `{}` |    
+| [truenas_mail](defaults/main.yml#L96)   | dict | `{}` |    
+| [truenas_mail_password](defaults/main.yml#L98)   | str |  |    
+| [truenas_alert_services](defaults/main.yml#L101)   | list | `[]` |    
+| [truenas_services](defaults/main.yml#L105)   | dict | `{}` |    
 
 
 
@@ -470,6 +518,13 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 
 ### Tasks
 
+
+#### File: tasks/alerts.yml
+
+| Name | Module | Has Conditions |
+| ---- | ------ | -------------- |
+| alerts ¦ Set the outgoing mail server | truenas_config | True |
+| alerts ¦ Create or update the alert services | truenas_resource | True |
 
 #### File: tasks/connect.yml
 
@@ -498,7 +553,9 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 | Data pools | ansible.builtin.import_tasks | False |  |
 | System settings | ansible.builtin.import_tasks | False |  |
 | Datasets | ansible.builtin.import_tasks | False |  |
+| Periodic snapshots | ansible.builtin.import_tasks | False |  |
 | NFS settings and shares | ansible.builtin.import_tasks | False |  |
+| Mail and alerts | ansible.builtin.import_tasks | False |  |
 | Services | ansible.builtin.import_tasks | False |  |
 
 #### File: tasks/network.yml
@@ -530,6 +587,12 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 | ---- | ------ | -------------- |
 | services ¦ Enable, disable, start or stop services | truenas_service | True |
 
+#### File: tasks/snapshots.yml
+
+| Name | Module | Has Conditions |
+| ---- | ------ | -------------- |
+| snapshots ¦ Create or update the periodic snapshot tasks | truenas_resource | True |
+
 #### File: tasks/system.yml
 
 | Name | Module | Has Conditions |
@@ -549,6 +612,26 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 
 ## Task Flow Graphs
 
+
+
+### Graph for alerts.yml
+
+```mermaid
+flowchart TD
+Start
+classDef block stroke:#3498db,stroke-width:2px;
+classDef task stroke:#4b76bb,stroke-width:2px;
+classDef includeTasks stroke:#16a085,stroke-width:2px;
+classDef importTasks stroke:#34495e,stroke-width:2px;
+classDef includeRole stroke:#2980b9,stroke-width:2px;
+classDef importRole stroke:#699ba7,stroke-width:2px;
+classDef includeVars stroke:#8e44ad,stroke-width:2px;
+classDef rescue stroke:#665352,stroke-width:2px;
+
+  Start-->|Task| alerts___Set_the_outgoing_mail_server0[alerts   set the outgoing mail server<br>When: **truenas mail   length   0**]:::task
+  alerts___Set_the_outgoing_mail_server0-->|Task| alerts___Create_or_update_the_alert_services1[alerts   create or update the alert services<br>When: **truenas alert services   length   0**]:::task
+  alerts___Create_or_update_the_alert_services1-->End
+```
 
 
 ### Graph for connect.yml
@@ -614,10 +697,12 @@ classDef rescue stroke:#665352,stroke-width:2px;
   Network_settings_and_static_address_network_yml_1-->|Import task| Data_pools_pools_yml_2[/data pools<br>import_task: pools yml/]:::importTasks
   Data_pools_pools_yml_2-->|Import task| System_settings_system_yml_3[/system settings<br>import_task: system yml/]:::importTasks
   System_settings_system_yml_3-->|Import task| Datasets_datasets_yml_4[/datasets<br>import_task: datasets yml/]:::importTasks
-  Datasets_datasets_yml_4-->|Import task| NFS_settings_and_shares_nfs_yml_5[/nfs settings and shares<br>import_task: nfs yml/]:::importTasks
-  NFS_settings_and_shares_nfs_yml_5-->|Import task| Services_services_yml_6[/services<br>import_task: services yml/]:::importTasks
-  Services_services_yml_6-.->|End of Block| Configure_the_NAS_through_its_API1_block_start_0
-  Services_services_yml_6-->End
+  Datasets_datasets_yml_4-->|Import task| Periodic_snapshots_snapshots_yml_5[/periodic snapshots<br>import_task: snapshots yml/]:::importTasks
+  Periodic_snapshots_snapshots_yml_5-->|Import task| NFS_settings_and_shares_nfs_yml_6[/nfs settings and shares<br>import_task: nfs yml/]:::importTasks
+  NFS_settings_and_shares_nfs_yml_6-->|Import task| Mail_and_alerts_alerts_yml_7[/mail and alerts<br>import_task: alerts yml/]:::importTasks
+  Mail_and_alerts_alerts_yml_7-->|Import task| Services_services_yml_8[/services<br>import_task: services yml/]:::importTasks
+  Services_services_yml_8-.->|End of Block| Configure_the_NAS_through_its_API1_block_start_0
+  Services_services_yml_8-->End
 ```
 
 
@@ -699,6 +784,25 @@ classDef rescue stroke:#665352,stroke-width:2px;
 
   Start-->|Task| services___Enable__disable__start_or_stop_services0[services   enable  disable  start or stop services<br>When: **truenas services   length   0**]:::task
   services___Enable__disable__start_or_stop_services0-->End
+```
+
+
+### Graph for snapshots.yml
+
+```mermaid
+flowchart TD
+Start
+classDef block stroke:#3498db,stroke-width:2px;
+classDef task stroke:#4b76bb,stroke-width:2px;
+classDef includeTasks stroke:#16a085,stroke-width:2px;
+classDef importTasks stroke:#34495e,stroke-width:2px;
+classDef includeRole stroke:#2980b9,stroke-width:2px;
+classDef importRole stroke:#699ba7,stroke-width:2px;
+classDef includeVars stroke:#8e44ad,stroke-width:2px;
+classDef rescue stroke:#665352,stroke-width:2px;
+
+  Start-->|Task| snapshots___Create_or_update_the_periodic_snapshot_tasks0[snapshots   create or update the periodic snapshot<br>tasks<br>When: **truenas snapshot tasks   length   0**]:::task
+  snapshots___Create_or_update_the_periodic_snapshot_tasks0-->End
 ```
 
 

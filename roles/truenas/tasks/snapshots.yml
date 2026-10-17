@@ -1,0 +1,10 @@
+---
+# Keyed by dataset and naming schema, so one dataset can have an hourly, a daily and a weekly task. Never deletes
+# a task, and never touches one that is not listed. A task's dataset must exist, so this stage follows the
+# datasets.
+- name: snapshots | Create or update the periodic snapshot tasks
+  truenas_resource:
+    namespace: pool.snapshottask
+    key: [dataset, naming_schema]
+    entries: "{{ truenas_snapshot_tasks }}"
+  when: truenas_snapshot_tasks | length > 0

@@ -8,7 +8,8 @@ description:
   - For each entry of O(entries), finds the one item whose O(key) fields are equal with
     C(<namespace>.query), then creates it, updates the other fields that differ, or deletes it.
     Fails if more than one item matches.
-  - Used for C(sharing.nfs) (key C(path)) and C(system.ntpserver) (key C(address)).
+  - Used for C(sharing.nfs) (key C(path)), C(system.ntpserver) (key C(address)) and C(alertservice) (key
+    C(name), with O(update_whole)).
   - Lists of plain values (an NFS share's C(hosts), say) are compared ignoring order.
   - Takes a list so a play logs in once for all of them; TrueNAS rate-limits logins.
 options:
@@ -34,6 +35,13 @@ options:
     type: str
     choices: [present, absent]
     default: present
+  update_whole:
+    description:
+      - Send the whole entry, its key fields and every managed field, to C(<namespace>.update), rather than the
+        fields that differ alone. For namespaces whose update takes the full model, such as C(alertservice) in
+        TrueNAS 25.10, which refuses an update without its name and attributes.
+    type: bool
+    default: false
 attributes:
   check_mode:
     support: full
@@ -57,7 +65,7 @@ from ansible.module_utils.truenas_api import (
 )
 
 
-def ensure(api, module, namespace, match, data, state):
+def ensure(api, module, namespace, match, data, state, update_whole=False):
     """Bring one item to the wanted state. Returns (action or None, before, after)."""
     found = api.call(f"{namespace}.query", [[k, "=", v] for k, v in match.items()])
     if len(found) > 1:
@@ -82,7 +90,7 @@ def ensure(api, module, namespace, match, data, state):
     if not changes:
         return None, before, before
     if not module.check_mode:
-        api.call(f"{namespace}.update", item["id"], changes)
+        api.call(f"{namespace}.update", item["id"], {**match, **data} if update_whole else changes)
     return "update", before, {**before, **data}
 
 
@@ -94,6 +102,7 @@ def main():
         entries=dict(type="list", elements="dict", required=True),
         defaults=dict(type="dict", default={}),
         state=dict(type="str", choices=["present", "absent"], default="present"),
+        update_whole=dict(type="bool", default=False),
     )
     module = AnsibleModule(argument_spec=spec, supports_check_mode=True)
     p = module.params
@@ -113,7 +122,9 @@ def main():
                 match = {k: entry[k] for k in p["key"]}
                 data = {k: v for k, v in entry.items() if k not in match}
                 label = " ".join(str(v) for v in match.values())
-                action, before[label], after[label] = ensure(api, module, p["namespace"], match, data, p["state"])
+                action, before[label], after[label] = ensure(
+                    api, module, p["namespace"], match, data, p["state"], p["update_whole"]
+                )
                 if action:
                     actions[label] = action
         except TrueNASError as exc:

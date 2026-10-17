@@ -1,6 +1,7 @@
 ---
 # Each stage has its own tag, so one stage can be checked or applied at a time:
-#   truenas_network, truenas_pools, truenas_system, truenas_datasets, truenas_nfs, truenas_services
+#   truenas_network, truenas_pools, truenas_system, truenas_datasets, truenas_snapshots, truenas_nfs,
+#   truenas_alerts, truenas_services
 # Validation and the read-only connection (also tagged truenas_info) run under every tag.
 # A stage whose configuration is empty does nothing.
 
@@ -48,9 +49,17 @@
       ansible.builtin.import_tasks: datasets.yml
       tags: [truenas_datasets]
 
+    - name: Periodic snapshots
+      ansible.builtin.import_tasks: snapshots.yml
+      tags: [truenas_snapshots]
+
     - name: NFS settings and shares
       ansible.builtin.import_tasks: nfs.yml
       tags: [truenas_nfs]
+
+    - name: Mail and alerts
+      ansible.builtin.import_tasks: alerts.yml
+      tags: [truenas_alerts]
 
     - name: Services
       ansible.builtin.import_tasks: services.yml

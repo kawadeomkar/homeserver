@@ -456,14 +456,78 @@ def test_pool_names_follow_local_yml(tmp_path):
     ]
 
 
-@pytest.mark.parametrize("setting", ["truenas_pool_persistent: tank", "truenas_pool_ephemeral: scratch"])
+@pytest.mark.parametrize(
+    "setting", ["truenas_pool_persistent: tank", "truenas_mail_server: smtp.example.org", "truenas_alert_email: a@b.c"]
+)
 def test_nas_settings_given_without_an_address_are_refused(tmp_path, setting):
-    """Pool names are TrueNAS settings: given without a NAS address they read as a misspelt address."""
+    """Pool names and the alert mail are TrueNAS settings: given without a NAS address they read as a misspelt
+    address."""
     tree = example_tree(tmp_path, PROXMOX_ONLY_LOCAL_YML + setting + "\n")
     rc, out = argspec_pass(tree, "proxmox.yml")
     assert rc != 0, out[-3000:]
     assert "but neither truenas_static_address nor truenas_bootstrap_address" in out, out[-3000:]
     assert setting.split(":")[0] in out, out[-3000:]
+
+
+def test_snapshot_tasks(tmp_path):
+    """The persistent VMs' disks are snapshotted hourly and daily; nothing on the ephemeral pool, ever. The daily
+    task allows empty snapshots: it fires with an hourly one, and TrueNAS destroys a batch whose snapshots are all
+    empty unless one of its tasks allows them, so an idle dataset would keep none."""
+    tasks = resolve_on(example_tree(tmp_path), "truenas", "truenas_snapshot_tasks")
+    found = sorted(
+        {
+            (t["dataset"], t["naming_schema"].split("-")[0], t["lifetime_value"], t["lifetime_unit"], t["allow_empty"])
+            for t in tasks
+        }
+    )
+    assert found == [
+        ("persistent/proxmox/vm", "daily", 7, "DAY", True),
+        ("persistent/proxmox/vm", "hourly", 1, "DAY", False),
+    ]
+    assert not [t for t in tasks if t["dataset"].startswith("ephemeral/")]
+
+
+@pytest.mark.parametrize(
+    ("given", "message"),
+    [
+        (
+            {"truenas_mail_server": "smtp.example.org", "truenas_mail_user": "nas"},
+            "sets truenas_mail_server but no sender address",
+        ),
+        ({"truenas_alert_email": "a@b.c"}, "sets truenas_alert_email but no truenas_mail_server"),
+    ],
+)
+def test_alert_mail_needs_a_sender_and_a_server(tmp_path, given, message):
+    """TrueNAS refuses mail settings without a sender address, and an alert address has nothing to go through
+    without a server: both are refused before the NAS play runs, and pass once completed."""
+    tree = example_tree(tmp_path)
+    assert message in resolve_on(tree, "truenas", "nas_section_error", "-e", json.dumps(given))
+    completed = given | {"truenas_mail_server": "smtp.example.org", "truenas_mail_from": "nas@example.org"}
+    assert resolve_on(tree, "truenas", "nas_section_error", "-e", json.dumps(completed)) == ""
+
+
+def test_alert_mail_follows_local_yml(tmp_path):
+    """No mail server in local.yml, no mail settings and no alert service; with one, both, with authentication
+    only when a user is given. The password comes from the vault."""
+    tree = example_tree(tmp_path)
+    assert resolve_on(tree, "truenas", "[truenas_mail, truenas_alert_services]") == [{}, []]
+    given = {
+        "truenas_mail_server": "smtp.example.org",
+        "truenas_mail_user": "nas@example.org",
+        "truenas_alert_email": "a@b.c",
+    }
+    mail, alerts = resolve_on(tree, "truenas", "[truenas_mail, truenas_alert_services]", "-e", json.dumps(given))
+    assert mail == {
+        "outgoingserver": "smtp.example.org",
+        "port": 587,
+        "security": "TLS",
+        "smtp": True,
+        "user": "nas@example.org",
+        "fromemail": "nas@example.org",
+    }
+    assert alerts == [
+        {"name": "Email", "attributes": {"type": "Mail", "email": "a@b.c"}, "level": "WARNING", "enabled": True}
+    ]
 
 
 def test_task_arguments_match_module_specs():

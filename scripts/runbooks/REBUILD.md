@@ -65,7 +65,7 @@ These can't be done by Ansible, because they are what it needs in order to conne
 ### Running it
 
 Run one stage at a time and read each result. Every run writes a log to `logs/`. TrueNAS allows 20 API logins a
-minute and a full dry run uses about 13, so leave a minute between a full dry run and a real run.
+minute and a full dry run uses about 16, so leave a minute between a full dry run and a real run.
 
 | Step | Command | Expect |
 | --- | --- | --- |
@@ -73,7 +73,7 @@ minute and a full dry run uses about 13, so leave a minute between a full dry ru
 | 2 | `make truenas TAGS=truenas_network` | DHCP off, static address applied. If the role can't reconnect, TrueNAS rolls back by itself after 90 s |
 | 3 | `make truenas TAGS=truenas_pools` | System dataset pinned to the boot pool, both pools imported. Don't accept TrueNAS's offer to upgrade pool features |
 | 4 | `make check-truenas TAGS=truenas_datasets` | No change: the datasets and their properties came back with the pools. Only a recreated pool shows new datasets |
-| 5 | `make truenas` | HTTPS redirect, NFS shares, NFS started. Shares and settings live in TrueNAS's own database, so they come back here |
+| 5 | `make truenas` | HTTPS redirect, snapshot tasks, NFS shares, alert mail, NFS started. Shares, tasks and settings live in TrueNAS's own database, so they come back here. The mail password comes from the vault |
 | 6 | `make truenas` | `changed=0` |
 
 The Proxmox host needs nothing: its NFS storages reconnect once the shares exist. `make check-proxmox` should
@@ -135,6 +135,7 @@ recreate them empty. There are no Proxmox backups yet; whether to add them is an
   `truenas_pool_allow_create: true` and list the new disk's serial under `truenas_pool_disks.ephemeral` in
   `local.yml`. The role refuses any disk that has partitions or belongs to a pool. Set the flag back to `false`
   afterwards.
-- **Email alerts are not configured** (`TODO.md`), so a failing disk is only visible in the web UI.
+- **Email alerts need a mail server** in `local.yml` and its password in the vault (`TODO.md`); without them a
+  failing disk is only visible in the web UI.
 - **TrueNAS's audit log keeps 7 days.** Before a planned rebuild, its Method Call entries show whether anything was
   changed outside Ansible since the last run.
