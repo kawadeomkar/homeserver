@@ -414,14 +414,30 @@ def test_talos_nodes_resolve_on_the_kubernetes_host(tmp_path, local_yml, nodes):
         tree,
         "homeserver-k8s",
         "{'nodes': talos_nodes, 'endpoint': talos_endpoint, 'version': talos_version, "
-        "'cp': talos_patches_controlplane | join('\\n')}",
+        "'cp': talos_patches_controlplane | join('\\n'), 'patches': talos_patches_common + talos_patches_controlplane}",
         *CLUSTER_ARGS,
+        # What roles/talos learns from talosctl as it renders; a documentation range here.
+        "-e",
+        json.dumps({"talos_pod_subnets": ["198.51.100.0/24"]}),
     )
     assert {n["name"]: (n["role"], len(n["patches"])) for n in found["nodes"]} == nodes
     assert found["endpoint"] == "https://192.0.2.30:6443" and found["version"] == "v1.14.2"
     assert ("$patch: delete" in found["cp"]) == (local_yml is not None)
     # Without its policy agent, Flannel would let every NetworkPolicy through unenforced.
     assert "kind: KubeFlannelCNIConfig\nkubeNetworkPoliciesEnabled: true" in found["cp"]
+    # The firewall: the two APIs open, the rest to the nodes (and the pod network), etcd to the control plane alone.
+    docs = [yaml.safe_load(patch) for patch in found["patches"]]
+    rules = {doc["name"]: doc for doc in docs if doc.get("kind") == "NetworkRuleConfig"}
+    assert {"apiVersion": "v1alpha1", "kind": "NetworkDefaultActionConfig", "ingress": "block"} in docs
+    nodes_32 = [{"subnet": f"192.0.2.{30 + i}/32"} for i in range(len(nodes))]
+    pods = {"subnet": "198.51.100.0/24"}
+    assert rules["talos-api"]["ingress"] == rules["kubernetes-api"]["ingress"] == [
+        {"subnet": "0.0.0.0/0"},
+        {"subnet": "::/0"},
+    ]
+    assert rules["kubelet"]["ingress"] == rules["node-metrics"]["ingress"] == nodes_32 + [pods]
+    assert rules["flannel-vxlan"]["ingress"] == rules["trustd"]["ingress"] == nodes_32
+    assert rules["etcd"]["ingress"] == [{"subnet": "192.0.2.30/32"}]
 
 
 @pytest.mark.parametrize(

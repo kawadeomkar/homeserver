@@ -862,6 +862,9 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
 
 | Name | Module | Has Conditions |
 | ---- | ------ | -------------- |
+| render ¦ Render a configuration with talosctl's defaults | ansible.builtin.command | False |
+| render ¦ Keep the pod network it gives | ansible.builtin.set_fact | False |
+| render ¦ Refuse a configuration without a pod network | ansible.builtin.assert | False |
 | render ¦ Write the shared patches | ansible.builtin.copy | False |
 | render ¦ Write each node's own patches | ansible.builtin.copy | False |
 | render ¦ Render each node's configuration | ansible.builtin.command | False |
@@ -1078,10 +1081,13 @@ classDef importRole stroke:#699ba7,stroke-width:2px;
 classDef includeVars stroke:#8e44ad,stroke-width:2px;
 classDef rescue stroke:#665352,stroke-width:2px;
 
-  Start-->|Task| render___Write_the_shared_patches0[render   write the shared patches]:::task
-  render___Write_the_shared_patches0-->|Task| render___Write_each_node_s_own_patches1[render   write each node s own patches]:::task
-  render___Write_each_node_s_own_patches1-->|Task| render___Render_each_node_s_configuration2[render   render each node s configuration]:::task
-  render___Render_each_node_s_configuration2-->End
+  Start-->|Task| render___Render_a_configuration_with_talosctl_s_defaults0[render   render a configuration with talosctl s<br>defaults]:::task
+  render___Render_a_configuration_with_talosctl_s_defaults0-->|Task| render___Keep_the_pod_network_it_gives1[render   keep the pod network it gives]:::task
+  render___Keep_the_pod_network_it_gives1-->|Task| render___Refuse_a_configuration_without_a_pod_network2[render   refuse a configuration without a pod<br>network]:::task
+  render___Refuse_a_configuration_without_a_pod_network2-->|Task| render___Write_the_shared_patches3[render   write the shared patches]:::task
+  render___Write_the_shared_patches3-->|Task| render___Write_each_node_s_own_patches4[render   write each node s own patches]:::task
+  render___Write_each_node_s_own_patches4-->|Task| render___Render_each_node_s_configuration5[render   render each node s configuration]:::task
+  render___Render_each_node_s_configuration5-->End
 ```
 
 

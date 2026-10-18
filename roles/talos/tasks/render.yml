@@ -3,6 +3,47 @@
 # secrets.yaml) by talosctl gen config: the patches for every node, then for its role, then its own. Takes
 # talos_render: [{name, role, version, contract, kubernetes_version, install_image, patches}]. A local render, so it
 # runs in check mode too. tests/talos_validate.yml renders through this file as well, for make lint-talos.
+
+# The pod network talosctl gives a cluster, asked for rather than written out: the patches can use it as
+# talos_pod_subnets (this repository's firewall lets it reach the kubelet and the metrics on a node).
+- name: render | Render a configuration with talosctl's defaults
+  ansible.builtin.command:
+    argv:
+      - talosctl
+      - gen
+      - config
+      - "{{ talos_cluster_name }}"
+      - "{{ talos_endpoint }}"
+      - --with-secrets
+      - "{{ talos_workspace }}/secrets.yaml"
+      - --talos-version
+      - "{{ talos_contract }}"
+      - --output-types
+      - controlplane
+      - -o
+      - "{{ talos_workspace }}/defaults.yaml"
+      - --force
+      - --with-docs=false
+      - --with-examples=false
+  changed_when: false
+  check_mode: false
+
+- name: render | Keep the pod network it gives
+  ansible.builtin.set_fact:
+    talos_pod_subnets: "{{ ((_network + [{}]) | first).podSubnets | default([]) }}"
+  vars:
+    _network: >-
+      {{ lookup('ansible.builtin.file', talos_workspace ~ '/defaults.yaml') | from_yaml_all | select('mapping')
+         | selectattr('kind', 'defined') | selectattr('kind', 'eq', 'KubeNetworkConfig') | list }}
+
+- name: render | Refuse a configuration without a pod network
+  ansible.builtin.assert:
+    that: talos_pod_subnets | length > 0
+    fail_msg: >-
+      talosctl gen config wrote no KubeNetworkConfig with podSubnets: this talosctl renders configurations of a form
+      the role does not know.
+    quiet: true
+
 - name: render | Write the shared patches
   ansible.builtin.copy:
     content: "{{ item.1 }}"

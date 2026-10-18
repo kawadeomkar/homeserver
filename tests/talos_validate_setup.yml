@@ -58,6 +58,29 @@
       loop: "{{ talos_nodes }}"
       loop_control:
         label: "{{ setup.name }}: {{ item.name }}"
+
+    # The firewall lets the pod network reach the kubelet and the metrics on a node (group_vars/kubernetes/talos.yml),
+    # so its rule must name the network each node gives its pods.
+    - name: tests | talos_validate_setup | Check that the firewall lets in the cluster's pod network
+      ansible.builtin.assert:
+        that:
+          - _pods | length > 0
+          - _pods | difference(_kubelet) | length == 0
+        fail_msg: >-
+          {{ setup.name }}: {{ item.name }} gives pods {{ _pods }}, but its firewall lets {{ _kubelet }} reach the
+          kubelet.
+        quiet: true
+      vars:
+        _docs: >-
+          {{ lookup('ansible.builtin.file', talos_validate_dir.path ~ '/' ~ item.name ~ '.yaml') | from_yaml_all
+             | select('mapping') | selectattr('kind', 'defined') | list }}
+        _pods: "{{ ((_docs | selectattr('kind', 'eq', 'KubeNetworkConfig') | list + [{}]) | first).podSubnets | default([]) }}"
+        _kubelet: >-
+          {{ ((_docs | selectattr('kind', 'eq', 'NetworkRuleConfig') | selectattr('name', 'eq', 'kubelet') | list + [{}])
+              | first).ingress | default([]) | map(attribute='subnet') | list }}
+      loop: "{{ talos_nodes }}"
+      loop_control:
+        label: "{{ setup.name }}: {{ item.name }}"
   always:
     - name: tests | talos_validate_setup | Remove the scratch directory
       ansible.builtin.file:

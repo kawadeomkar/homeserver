@@ -419,6 +419,9 @@ def cmd_config(state, globals_, args):
     Path(path).write_text(yaml.safe_dump(config))
 
 
+# The pod network the fake's gen config gives a cluster: an RFC 5737 range, never a real network.
+FAKE_POD_SUBNET = "198.51.100.0/24"
+
 GEN_VALUE = {
     "--with-secrets",
     "--talos-version",
@@ -474,6 +477,11 @@ def cmd_gen(state, globals_, args):
         f"# sans: {','.join(flags.get('--additional-sans', []))}",
         f"# k8s-ca: {secrets['certs']['k8s']['crt']}",
         f"# cluster-secret: {((secrets or {}).get('cluster') or {}).get('secret', '')}",
+        # The pod network talosctl writes by default, as its own document; a documentation range here.
+        "---",
+        "apiVersion: v1alpha1",
+        "kind: KubeNetworkConfig",
+        "podSubnets: [" + FAKE_POD_SUBNET + "]",
     ]
     for patch in patches:
         if not patch.startswith("@"):

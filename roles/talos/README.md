@@ -22,7 +22,9 @@ What `main` does, in order:
   only `--insecure`), or not answering, which a real run waits for (`talos_probe_retries`, `talos_probe_delay`).
 - **Renders** each node's configuration with `talosctl gen config`, the secrets bundle and the patches. A node in
   maintenance mode gets the pins; a configured node gets what it runs (its Talos version and schematic, the
-  cluster's Kubernetes version), so a pin bump changes nothing until `upgrade` moves it.
+  cluster's Kubernetes version), so a pin bump changes nothing until `upgrade` moves it. It first asks talosctl
+  for the pod network it gives a cluster by default, which the patches can use as `talos_pod_subnets` (a firewall
+  rule for the pod network, say) without writing the range out.
 - **Installs** a node in maintenance mode with `apply-config --insecure`, then waits on its install status until
   it reports `installed` (`talos_install_retries`): Talos installs in the background from the ISO and reboots into
   its system disk. A disk selector that matches nothing shows up as a lasting `pending`, with Talos's error.

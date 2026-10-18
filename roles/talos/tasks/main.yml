@@ -199,7 +199,7 @@
           {%- else %} no answer for {{ _waited }} since its configuration was applied.
           {%- endif %}
           {%- if 'no disk matched' in _status.error | default('', true) or _status.phase == 'pending' %} No disk matched
-          the install selector (talos_patches_common); talosctl -n {{ item.item.address }} get disks lists the disks and
+          the install selector (the UnattendedInstallConfig in talos_patches_common); talosctl -n {{ item.item.address }} get disks lists the disks and
           their by-id links.
           {%- endif %}
       when: _status.phase != 'installed'

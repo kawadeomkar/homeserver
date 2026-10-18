@@ -1541,6 +1541,9 @@ def test_talos_with_a_nas(tmp_path, factory):
     assert "# type: controlplane" in cp and "listen-metrics-urls" in cp and "$patch: delete" not in cp
     assert "# type: worker" in worker and "name: local-path-provisioner" in worker and "_drive-scsi1" in worker
     assert "hostname: homeserver-worker-1" in worker and "kind: WatchdogTimerConfig" in worker
+    # The firewall's rules for the pod network name the one talosctl gave, which the role asked it for.
+    assert "kind: NetworkDefaultActionConfig\ningress: block" in worker
+    assert '{"subnet": "198.51.100.0/24"}' in worker and '{"subnet": "198.51.100.0/24"}' in cp
     assert talos_files(tmp_path) == [
         "home/.talos/homeserver/bootstrapped",
         "home/.talos/homeserver/kubeconfig",
