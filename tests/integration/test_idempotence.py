@@ -1584,6 +1584,7 @@ def test_talos_with_a_nas(tmp_path, factory):
     expect(result, "homeserver-k8s", changed=1, note="run after drift on the control plane")
     assert read(state)["nodes"]["127.0.0.30"]["config"] == cp, "applied without a reboot"
     assert "talosctl -n 127.0.0.30 service etcd restart" in result[2], result[2][-3000:]
+    assert "talosctl -n 127.0.0.30 upgrade-k8s --to " in result[2], result[2][-3000:]
     result = run("talos.yml", extra, env=env)
     expect(result, "homeserver-k8s", changed=0, note="second run after drift on the control plane")
     assert "service etcd restart" not in result[2]

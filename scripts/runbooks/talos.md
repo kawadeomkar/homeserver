@@ -74,8 +74,11 @@ Talos 1.14 applies any configuration at once in that mode (its default mode, `au
 the role never reboots a node. A running service picks up its new settings as Talos reconciles it, except etcd,
 which reads its settings only when it starts: after a change to the control plane the run says so, and a change
 to `cluster.etcd` takes effect after `talosctl -n <address> service etcd restart` (a moment without the API on a
-single control plane). A setting read only at boot, such as a kernel argument, takes effect at the node's next
-reboot, by hand. A dry run says which nodes differ, never how, since the difference can hold secrets; to see it,
+single control plane). Flannel, kube-proxy and CoreDNS run from manifests Talos applies only at bootstrap, so a
+change to their settings (`KubeFlannelCNIConfig`, say) reaches the cluster through
+`talosctl -n <control plane> upgrade-k8s --to <running Kubernetes version>`, which re-applies them (`--dry-run` shows
+the diff first; the run's note gives the command). A setting read only at boot, such as a kernel argument, takes
+effect at the node's next reboot, by hand. A dry run says which nodes differ, never how, since the difference can hold secrets; to see it,
 run with `ANSIBLE_ARGS='-e talos_keep_rendered=true'`, which keeps each node's rendered configuration in
 `~/.talos/homeserver/rendered/` (mode 0600, delete it afterwards), then
 `talosctl apply-config -n <address> -f ~/.talos/homeserver/rendered/<node>.yaml --dry-run`.
