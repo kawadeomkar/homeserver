@@ -82,8 +82,11 @@ spec:
             allowEncodedNullCharacter: false
         transport:
           respondingTimeouts:
-            # Large uploads take longer than the 60-second default (Jellyfin's, over plain HTTP).
-            readTimeout: 0
+            # How long a client may take to send its whole request, body included. Longer than the 60-second
+            # default, for what Jellyfin's apps send over plain HTTP, and finite: Traefik reads a request before
+            # any Middleware judges it, so without a limit any device on the LAN could hold connections open for
+            # ever by sending slowly.
+            readTimeout: 10m
       # TLS with the cluster's wildcard certificate (the default TLSStore, k8s/infrastructure/configs/tls.yaml), and
       # HSTS on every response.
       websecure:
@@ -96,8 +99,9 @@ spec:
             allowEncodedNullCharacter: false
         transport:
           respondingTimeouts:
-            # Large uploads (Nextcloud, PhotoPrism, FileBrowser) take longer than the 60-second default.
-            readTimeout: 0
+            # Large uploads (Nextcloud, PhotoPrism, FileBrowser) take longer than the 60-second default; an hour
+            # carries a file of tens of gigabytes over the LAN, and still ends a request sent slowly on purpose.
+            readTimeout: 1h
     resources:
       requests:
         cpu: 50m
