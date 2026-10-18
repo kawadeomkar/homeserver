@@ -2456,3 +2456,44 @@ def test_app_scale_refusals_and_timeouts(tmp_path):
     rc, _, out = run("apps.yml", up, env=env)
     assert rc != 0 and "timed out waiting for the condition" in out, out[-3000:]
     assert deployments_of(state)["nextcloud/nextcloud"] == held(1), "nextcloud waits for its database"
+
+
+@pytest.mark.cluster
+def test_haos_power(tmp_path):
+    """make down shuts Home Assistant's VM down through its own shutdown, never a forced stop, and make up starts
+    it again; each leaves a VM already as asked alone, a dry run changes nothing, a VMID that does not exist is
+    refused, and a shutdown that never finishes fails the run with the VM still running."""
+    extra = {"fake_pve_state": str(tmp_path / "pve.json"), "haos_mac": mac(9)}
+    state = Path(extra["fake_pve_state"])
+    vm_state(state, vms={"310": {"config": {"name": "homeassistant"}, "pending": {}, "status": "running"}})
+    down, up = extra | {"haos_power": "stopped"}, extra | {"haos_power": "running"}
+
+    def status():
+        return read(state)["vms"]["310"]["status"]
+
+    result = run("haos_power.yml", down, check=True)
+    expect(result, "homeserver", changed=1, note="dry run of down")
+    assert "Would shut down VM 310." in result[2] and status() == "running", result[2][-3000:]
+    expect(run("haos_power.yml", down), "homeserver", changed=True, note="down")
+    assert status() == "stopped"
+    for check in (False, True):
+        result = run("haos_power.yml", down, check=check)
+        expect(result, "homeserver", changed=0, note=f"{'dry run of' if check else 'second'} down")
+        assert "VM 310 already stopped." in result[2], result[2][-3000:]
+
+    result = run("haos_power.yml", up, check=True)
+    expect(result, "homeserver", changed=1, note="dry run of up")
+    assert "Would start VM 310." in result[2] and status() == "stopped", result[2][-3000:]
+    expect(run("haos_power.yml", up), "homeserver", changed=True, note="up")
+    assert status() == "running"
+    expect(run("haos_power.yml", up), "homeserver", changed=0, note="second up")
+
+    rc, _, out = run("haos_power.yml", down | {"haos_vm_vmid": 311}, check=True)
+    assert rc != 0 and "VM 311 does not exist on this host" in out, out[-3000:]
+
+    s = read(state)
+    s["shutdown_hangs"] = True
+    write(state, s)
+    rc, _, out = run("haos_power.yml", down)
+    assert rc != 0 and "VM quit/powerdown failed - got timeout" in out, out[-3000:]
+    assert status() == "running"

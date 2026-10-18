@@ -23,7 +23,7 @@ POETRY_FOUND = @command -v $(POETRY) >/dev/null || { echo "Poetry is not on PATH
 # Narrow a run to stages, e.g. make check-truenas TAGS=truenas_pools
 TAGS    ?=
 TAG_ARGS := $(if $(TAGS),--tags $(TAGS),)
-# Narrow make down and make up to some apps or groups, e.g. make down ONLY=jellyfin,nextcloud
+# Narrow make down and make up to some apps, groups or homeassistant, e.g. make down ONLY=jellyfin,nextcloud
 ONLY    ?=
 ONLY_ARGS := $(if $(ONLY),-e '{"only": "$(strip $(ONLY))"}',)
 # Anything else for ansible-playbook, such as a variable for one run:
@@ -256,19 +256,19 @@ etcd-snapshot: ## Snapshot etcd into ~/.talos/homeserver/etcd/
 	$(RUN) etcd-snapshot.yml $(ANSIBLE_ARGS)
 
 .PHONY: check-down
-check-down: ## Show what make down would stop, in order (ONLY=<apps or groups> narrows it)
+check-down: ## Show what make down would stop, in order (ONLY=<apps, groups or homeassistant> narrows it)
 	$(RUN) down.yml --check --diff $(ONLY_ARGS) $(ANSIBLE_ARGS)
 
 .PHONY: down
-down: ## Spin the apps down: scaled to zero, Flux told to leave them, data kept (ONLY=jellyfin,media for some)
+down: ## Spin the apps down (scaled to zero, Flux told to leave them) and Home Assistant's VM (ONLY=jellyfin,media,homeassistant for some)
 	$(RUN) down.yml --diff $(ONLY_ARGS) $(ANSIBLE_ARGS)
 
 .PHONY: check-up
-check-up: ## Show what make up would start, in order (ONLY=<apps or groups> narrows it)
+check-up: ## Show what make up would start, in order (ONLY=<apps, groups or homeassistant> narrows it)
 	$(RUN) up.yml --check --diff $(ONLY_ARGS) $(ANSIBLE_ARGS)
 
 .PHONY: up
-up: ## Bring back what make down stopped, and hand it back to Flux (ONLY=<apps or groups> for some)
+up: ## Bring back what make down stopped, apps handed back to Flux (ONLY=<apps, groups or homeassistant> for some)
 	$(RUN) up.yml --diff $(ONLY_ARGS) $(ANSIBLE_ARGS)
 
 .PHONY: check

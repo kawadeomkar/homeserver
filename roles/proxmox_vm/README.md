@@ -57,6 +57,9 @@ A download's own task status is checked: `pvesh` can exit 0 for a download that 
 | `proxmox_vm_allow_overcommit` | `false` | Let the disks on thin LVM or ZFS add up to more than it holds |
 | `proxmox_vm_ignore_existing_volumes` | `false` | Create a missing VM over its VMID's old disks or backups |
 | `proxmox_vm_node` | `""` | Node name; empty means the host's short hostname |
+| `proxmox_vm_power` | `""` | The power entry point: `stopped` or `running`; empty does nothing |
+| `proxmox_vm_power_vmids` | `[]` | The power entry point's VMs |
+| `proxmox_vm_power_timeout` | `180` | Seconds a VM's own shutdown may take before the run fails |
 
 A VM:
 
@@ -103,6 +106,24 @@ refuses, naming the `pvesm set` that enables them, before creating anything.
 Every disk is created with `discard=on,ssd=1`. A `serial` is passed to the guest, but on virtio-scsi Proxmox also
 sets `device_id=drive-<slot>`, which names the disk's `/dev/disk/by-id/` link (`scsi-0QEMU_QEMU_HARDDISK_drive-scsiN`):
 a guest finds a disk by its slot, so keep each disk in its slot.
+
+## Shutting VMs down and starting them
+
+The `power` entry point (`tasks_from: power`) does only this: with `proxmox_vm_power: stopped` it shuts each VM of
+`proxmox_vm_power_vmids` down with `qm shutdown`, the guest's own shutdown through ACPI or its agent, never a forced
+stop, and fails the run, the VM still running, when that takes more than `proxmox_vm_power_timeout` seconds; with
+`running` it starts each with `qm start`. A VM already as asked is left alone, a VMID that does not exist is refused,
+and a dry run says what it would do. The main entry point starts again a VM marked `start`, and the host one marked
+`onboot` when it boots. This repository's `down.yml` and `up.yml` use it for Home Assistant's VM.
+
+```yaml
+- ansible.builtin.import_role:
+    name: proxmox_vm
+    tasks_from: power
+  vars:
+    proxmox_vm_power: stopped
+    proxmox_vm_power_vmids: [310]
+```
 
 ## Examples
 

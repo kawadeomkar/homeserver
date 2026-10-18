@@ -977,35 +977,63 @@ def test_home_assistant_url_is_a_setting_only_when_given(tmp_path):
     assert settings["HAOS_URL"] == "http://homeassistant.home.arpa:8123"
 
 
+HAOS_ONLY_ARGS = ("-e", json.dumps({"haos_mac": mac(9)}))
+
+
 @pytest.mark.parametrize("playbook", ["down.yml", "up.yml"])
 @pytest.mark.parametrize(
-    ("local_yml", "extra", "validations"),
+    ("local_yml", "extra", "only", "validations", "says"),
     [
-        pytest.param(None, CLUSTER_ARGS, 1, id="cluster"),
-        pytest.param(example_without_kubernetes(), (), 0, id="no-cluster"),
+        pytest.param(None, CLUSTER_ARGS, "", 2, None, id="cluster-and-haos"),
+        # Apps' names leave Home Assistant alone, and its name alone leaves the cluster unasked.
+        pytest.param(None, CLUSTER_ARGS, "jellyfin, media", 1, "Leave Home Assistant alone", id="apps-only"),
+        pytest.param(None, CLUSTER_ARGS, "homeassistant", 1, None, id="haos-only"),
+        pytest.param(example_without_kubernetes(), HAOS_ONLY_ARGS, "", 1, "so this setup has no cluster", id="haos"),
+        pytest.param(example_without_kubernetes(), (), "", 0, "so this setup has no Home Assistant VM", id="neither"),
     ],
 )
-def test_down_and_up_pass_the_argument_specs(tmp_path, playbook, local_yml, extra, validations):
-    """make down and make up pass roles/app_scale's checks with the tracked configuration and make's ONLY, and
-    without a cluster end before the role."""
+def test_down_and_up_pass_the_argument_specs(tmp_path, playbook, local_yml, extra, only, validations, says):
+    """make down and make up pass roles/app_scale's and the proxmox_vm role's power entry point's checks with the
+    tracked configuration and make's ONLY, and each play ends by itself in a setup without its part."""
     tree = example_tree(tmp_path, local_yml)
-    rc, out = argspec_pass(tree, playbook, *extra, "-e", json.dumps({"only": "jellyfin, media"}))
+    rc, out = argspec_pass(tree, playbook, *extra, "-e", json.dumps({"only": only}))
     assert rc == 0, out[-3000:]
-    assert out.count("Validating arguments against arg spec 'main'") == validations, out[-3000:]
-    if not validations:
-        assert "so this setup has no cluster" in out, out[-3000:]
+    assert out.count("Validating arguments against arg spec") == validations, out[-3000:]
+    assert says is None or says in out, out[-3000:]
 
 
-def test_down_and_up_take_only_as_a_list(tmp_path):
-    """ONLY reaches the role as names, blanks and spaces dropped; without it, as no names (every app)."""
+@pytest.mark.parametrize(
+    ("extra", "only", "refused"),
+    [
+        pytest.param(HAOS_ONLY_ARGS, "jellyfin", "make down knows no jellyfin: only homeassistant", id="haos"),
+        pytest.param((), "homeassistant", "knows no homeassistant, nor any other name", id="neither"),
+    ],
+)
+def test_down_without_a_cluster_refuses_an_app(tmp_path, extra, only, refused):
+    """Without a cluster no play checks app names, so Home Assistant's refuses every name but its own."""
+    tree = example_tree(tmp_path, example_without_kubernetes())
+    rc, out = argspec_pass(tree, "down.yml", *extra, "-e", json.dumps({"only": only}))
+    assert rc != 0 and refused in out, out[-3000:]
+
+
+def test_down_and_up_read_only_alike(tmp_path):
+    """Every play of both playbooks, and the test playbooks, read ONLY the same way: names, blanks and spaces
+    dropped, and without it no names (everything)."""
     tree = example_tree(tmp_path)
+    expressions = set()
     for playbook in ("down.yml", "up.yml"):
-        play = yaml.safe_load((tree / playbook).read_text())[0]
-        assert play["roles"][0]["vars"]["app_scale_state"] == playbook.removesuffix(".yml")
-    expression = yaml.safe_load((tree / "down.yml").read_text())[0]["roles"][0]["vars"]["app_scale_only"]
-    assert expression == yaml.safe_load((tree / "up.yml").read_text())[0]["roles"][0]["vars"]["app_scale_only"]
+        apps, haos = yaml.safe_load((tree / playbook).read_text())
+        role = apps["roles"][0]
+        assert role["vars"]["app_scale_state"] == playbook.removesuffix(".yml")
+        assert role["vars"]["app_scale_only"] == "{{ only_names }}"
+        expressions |= {apps["vars"]["only_names"], haos["vars"]["only_names"]}
+        power = haos["tasks"][0]["vars"]
+        assert power["proxmox_vm_power"] == {"down.yml": "stopped", "up.yml": "running"}[playbook]
+        tests = yaml.safe_load((ROOT / "tests" / "integration" / "haos_power.yml").read_text())[0]["tasks"][0]
+        assert tests["vars"]["proxmox_vm_power_vmids"] == power["proxmox_vm_power_vmids"]
+    (expression,) = expressions
     tests = yaml.safe_load((ROOT / "tests" / "integration" / "apps.yml").read_text())[0]["roles"][0]["vars"]
-    assert tests["app_scale_only"] == expression, "tests/integration/apps.yml runs what the playbooks run"
+    assert tests["app_scale_only"] == expression, "tests/integration/apps.yml reads ONLY as the playbooks do"
     inner = expression.strip().removeprefix("{{").removesuffix("}}")
     assert resolve_on(tree, "homeserver-k8s", inner, "-e", json.dumps({"only": " jellyfin,, media "})) == [
         "jellyfin",

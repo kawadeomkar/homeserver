@@ -57,6 +57,13 @@ a backup (Settings, System, Backups). Home Assistant updates itself; the pinned 
 run corrects the VM's size, USB devices and other settings, reports what waits for a restart, and leaves Home
 Assistant itself alone: a Home Assistant that has its owner, set up by hand or restored, is never onboarded again.
 
+## Stopping it for a while
+
+`make down ONLY=homeassistant` shuts the VM down through Home Assistant OS's own shutdown, never a forced stop (one
+that takes more than three minutes fails the run and leaves it running), and `make up ONLY=homeassistant` starts it;
+a bare `make down` stops it with the cluster's apps. It stays down until then, or until the host boots or
+`make homeassistant` runs, both of which start it.
+
 ## Backups
 
 The nightly VM backup (`vm-nightly`, `make proxmox`) covers VM 310 whenever `haos_mac` is set, in both setups and

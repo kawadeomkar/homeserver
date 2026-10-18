@@ -38,8 +38,8 @@ says what it would stop or start, in order.
 | `app_scale_annotation` | `""` | The annotation that records a stopped app's replicas |
 | `app_scale_timeout` | `10m` | How long a real run waits for an app to stop, or to be available |
 
-This repository's `down.yml` and `up.yml` pass the state and `ONLY`; the rest is in
-`group_vars/kubernetes/apps.yml`.
+This repository's `down.yml` and `up.yml` pass the state and `ONLY`, with `homeassistant` as the name their second
+play takes (Home Assistant's VM); the rest is in `group_vars/kubernetes/apps.yml`.
 
 ## Example
 
