@@ -64,3 +64,8 @@ proxmox_storage_local: [local-lvm]
 In check mode the role reads the node's configuration and prints its plan (`add`, `correct` or `ok` per NFS
 storage, `present` per checked storage), and every refusal above applies. The `pvesm` commands themselves
 run only for real.
+
+## Reference
+
+[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make docs` from the role itself:
+its argument specs, defaults and vars, and each tasks file as a table and a flow graph. Never edit it by hand.

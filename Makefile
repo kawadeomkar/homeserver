@@ -45,6 +45,21 @@ KUBE_SCHEMAS := https://raw.githubusercontent.com/yannh/kubernetes-json-schema/$
 KUBE_CACHE   ?= .cache/kubeconform
 # Every role's custom modules, as paths.
 MODULES := $(wildcard roles/*/library/*.py)
+# Each role's REFERENCE.md is docsible's page for it, generated whole from the role as it is: meta/main.yml,
+# meta/argument_specs.yml, the defaults and vars, and every tasks file as a table and a Mermaid graph. It is never
+# edited by hand; its README.md is, and stays the role's own. --no-docsible leaves out docsible's .docsible file,
+# metadata meant to be filled in by hand, which would add only the date it was first made; --no-backup the copy of
+# the previous page, which git keeps; the empty --playbook the example playbook docsible looks for in the role's
+# tests/test.yml, which no role here has: without it docsible prints "playbook not found", which fails the run below.
+ROLES         := $(patsubst %/,%,$(wildcard roles/*/))
+DOCSIBLE_PAGE := REFERENCE.md
+DOCSIBLE      := $(BIN)/docsible --no-backup --no-docsible --graph --playbook "" --output $(DOCSIBLE_PAGE)
+# Runs docsible on every role, under the directory $(1). docsible reports a file it cannot read, then leaves it out
+# and exits 0, so any line besides its "Documentation generated at" fails the run.
+DOCSIBLE_RUN   = rc=0; for role in $(ROLES); do \
+	  out=$$($(DOCSIBLE) --role $(1)/$$role 2>&1) || rc=1; \
+	  if printf '%s\n' "$$out" | grep -v '^Documentation generated at: '; then rc=1; fi; \
+	done
 
 .DEFAULT_GOAL := help
 
@@ -78,10 +93,10 @@ init: venv ## One-time setup: venv, the git hooks, plus inventory and local.yml 
 	@test -f group_vars/all/local.yml || cp group_vars/all/local.yml.example group_vars/all/local.yml
 	@echo "Now fill in group_vars/all/local.yml (git-ignored) and make sure .vault_pass exists."
 
-.PHONY: lint linters lint-lock lint-yaml lint-ansible lint-python lint-module-docs lint-github test
+.PHONY: lint linters lint-lock lint-yaml lint-ansible lint-python lint-module-docs lint-github lint-docs test
 lint: linters test ## Every linter, then the unit and policy tests
 
-linters: lint-lock lint-yaml lint-ansible lint-python lint-module-docs lint-github ## The lock, yamllint, ansible-lint, ruff, module docs, GitHub config schemas (no tests)
+linters: lint-lock lint-yaml lint-ansible lint-python lint-module-docs lint-github lint-docs ## The lock, yamllint, ansible-lint, ruff, module docs, GitHub config schemas, role references (no tests)
 
 # Poetry checks that pyproject.toml is valid and that the lock was made from it (its content-hash), and
 # --strict fails on warnings too. tests/policy checks what Poetry does not: the pins and the hashes.
@@ -113,6 +128,18 @@ lint-module-docs: ## Every custom module's DOCUMENTATION parses (each failure is
 lint-github: ## dependabot.yml and the workflows against their published schemas (bundled, so offline)
 	$(BIN)/check-jsonschema --builtin-schema vendor.dependabot .github/dependabot.yml
 	$(BIN)/check-jsonschema --builtin-schema vendor.github-workflows .github/workflows/*.yml
+
+# Generates the pages again from a copy of roles/, so the tree is left as it is, and compares them.
+lint-docs: ## Every role's REFERENCE.md is what docsible generates from the role as it is (make docs fixes it)
+	@rm -rf .cache/docsible && mkdir -p .cache/docsible && cp -R roles .cache/docsible/
+	@$(call DOCSIBLE_RUN,.cache/docsible); \
+	for role in $(ROLES); do diff -u $$role/$(DOCSIBLE_PAGE) .cache/docsible/$$role/$(DOCSIBLE_PAGE) || rc=1; done; \
+	[ $$rc = 0 ] || echo "A role's $(DOCSIBLE_PAGE) is missing or stale: run make docs and commit it" >&2; exit $$rc
+
+.PHONY: docs
+docs: ## Write every role's REFERENCE.md with docsible, from the role as it is (never edit one by hand)
+	@$(call DOCSIBLE_RUN,.); \
+	[ $$rc = 0 ] && printf 'Wrote %s\n' $(addsuffix /$(DOCSIBLE_PAGE),$(ROLES)); exit $$rc
 
 test: ## The unit tests, and the policy tests that check the repo's own rules, with a coverage report
 	$(BIN)/pytest -q -m "not gitleaks" --cov --cov-report=term tests/unit tests/policy
