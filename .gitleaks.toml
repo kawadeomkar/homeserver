@@ -45,6 +45,14 @@ regex = '''(?i)\b([a-z0-9-]+\.[a-z0-9-]+\.ts\.net)\b'''
 secretGroup = 1
 keywords = [".ts.net"]
 
+# gitleaks' own rules do not know Tailscale's keys. The auth key belongs in the vault (vault_tailscale_auth_key).
+[[rules]]
+id = "tailscale-key"
+description = "Tailscale auth key, OAuth client secret, API access token or webhook secret"
+regex = '''\b(tskey-(?:auth|client|api|webhook|scim)-[A-Za-z0-9]+-[A-Za-z0-9]+)\b'''
+secretGroup = 1
+keywords = ["tskey-"]
+
 [[rules]]
 id = "k8s-plaintext-secret"
 description = "Plaintext Kubernetes Secret manifest"

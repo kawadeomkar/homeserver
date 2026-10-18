@@ -1,0 +1,109 @@
+---
+# The guard: an nftables table of the role's own, inet tailnet_guard, loaded by its own unit, tailnet-guard.service,
+# which tailscaled requires. It is fail-closed: if the table cannot load, Tailscale does not start and nothing is
+# forwarded. A drop in any nftables base chain is final, so the table holds whatever Tailscale's own rules (iptables
+# or nftables) and Proxmox's firewalls accept. Every change is a reload, which replaces the table atomically, keeps
+# the old one if the new one fails, and unlike a restart does not reach tailscaled through its Requires=.
+
+# Debian's own nftables.service loads /etc/nftables.conf, which begins with `flush ruleset`: enabled, it would
+# remove the guard at every boot and reload. It ships disabled, and stays so.
+- name: guard | Read whether Debian's nftables service is enabled
+  ansible.builtin.command:
+    argv: [systemctl, is-enabled, nftables.service]
+  register: proxmox_tailscale_nftables_service
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: guard | Refuse Debian's nftables service
+  ansible.builtin.assert:
+    that: proxmox_tailscale_nftables_service.stdout | trim not in ['enabled', 'enabled-runtime']
+    fail_msg: >-
+      nftables.service is enabled. At every boot and reload it loads /etc/nftables.conf, which on Debian begins with
+      `flush ruleset` and would remove the tailnet guard. Disable it (systemctl disable nftables), and keep any rules
+      it held in a table of their own.
+    quiet: true
+
+- name: guard | Create the guard's directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ proxmox_tailscale_guard_file | dirname }}"
+    - "{{ proxmox_tailscale_systemd_dir }}/tailscaled.service.d"
+
+# nft checks the file before it replaces the old one, so a file nft would reject is never installed.
+- name: guard | Write the guard's table
+  ansible.builtin.template:
+    src: tailnet-guard.nft.j2
+    dest: "{{ proxmox_tailscale_guard_file }}"
+    mode: "0644"
+    validate: nft -c -f %s
+  register: proxmox_tailscale_guard_table
+
+- name: guard | Write the guard's unit, and make tailscaled require it
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ proxmox_tailscale_systemd_dir }}/{{ item.dest }}"
+    mode: "0644"
+  loop:
+    - {src: tailnet-guard.service.j2, dest: tailnet-guard.service}
+    - {src: tailnet-guard.conf.j2, dest: tailscaled.service.d/10-tailnet-guard.conf}
+  loop_control:
+    label: "{{ item.dest }}"
+  register: proxmox_tailscale_guard_units
+
+- name: guard | Reload systemd's unit files
+  ansible.builtin.command:
+    argv: [systemctl, daemon-reload]
+  changed_when: true
+  when: proxmox_tailscale_guard_units.results | selectattr('changed') | list | length > 0
+
+- name: guard | Read whether the guard is enabled, running and loaded
+  ansible.builtin.command:
+    argv: "{{ item }}"
+  loop:
+    - [systemctl, is-enabled, tailnet-guard.service]
+    - [systemctl, is-active, tailnet-guard.service]
+    - [nft, list, table, inet, tailnet_guard]
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  register: proxmox_tailscale_guard_state
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# Loaded again when its file changed, or when it is not running or its table is gone, removed by hand say.
+- name: guard | Work out what the guard needs
+  ansible.builtin.set_fact:
+    proxmox_tailscale_guard_enable: "{{ proxmox_tailscale_guard_state.results[0].stdout | trim != 'enabled' }}"
+    proxmox_tailscale_guard_load: >-
+      {{ (['its table changed'] if proxmox_tailscale_guard_table is changed else [])
+         + (['it is not running'] if proxmox_tailscale_guard_state.results[1].stdout | trim != 'active' else [])
+         + (['its table is not loaded'] if proxmox_tailscale_guard_state.results[2].rc != 0 else []) }}
+
+- name: guard | Enable the guard at boot
+  ansible.builtin.command:
+    argv: [systemctl, enable, tailnet-guard.service]
+  changed_when: true
+  when: proxmox_tailscale_guard_enable
+
+# reload-or-restart: a reload when the unit is active, a start when it is not; never a restart.
+- name: guard | Load the guard
+  ansible.builtin.command:
+    argv: [systemctl, reload-or-restart, tailnet-guard.service]
+  changed_when: true
+  when: proxmox_tailscale_guard_load | length > 0
+
+- name: guard | Say what loading the guard would do
+  ansible.builtin.debug:
+    msg: "Would {{ _actions | join(' and ') }}."
+  vars:
+    _actions: >-
+      {{ (['enable the guard at boot'] if proxmox_tailscale_guard_enable else [])
+         + (['load the guard (' ~ proxmox_tailscale_guard_load | join(', ') ~ ')'] if proxmox_tailscale_guard_load else []) }}
+  changed_when: true
+  when:
+    - ansible_check_mode
+    - proxmox_tailscale_guard_enable or proxmox_tailscale_guard_load | length > 0

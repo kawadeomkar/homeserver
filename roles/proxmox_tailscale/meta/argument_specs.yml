@@ -1,0 +1,77 @@
+---
+argument_specs:
+  main:
+    short_description: Make a Proxmox VE node its LAN's Tailscale subnet router, behind a forwarding guard
+    description:
+      - Installs Tailscale from its own Debian repository, and with proxmox_tailscale_upgrade upgrades it on every run.
+        Tailscale's own updater is meant to be turned off in proxmox_tailscale_settings.
+      - Loads a fail-closed nftables guard, its own table in its own unit, which tailscaled requires. Tailnet clients
+        reach the guarded hosts only on the allowed ports, nothing outside the advertised prefixes, and the LAN starts
+        no connection into the tailnet, whatever the tailnet's policy says.
+      - Turns on IPv4 forwarding, logs the node in once with a tagged one-off auth key, advertises the LAN's prefixes,
+        and keeps the given preferences with tailscale set.
+      - Reports what only the tailnet's admin console can fix, such as a route not yet approved. It never logs the node
+        out, changes its tags or restarts tailscaled itself.
+      - The defaults change nothing.
+    options:
+      proxmox_tailscale_advertise_routes:
+        type: list
+        elements: str
+        default: []
+        description: The LAN prefixes to advertise, IPv4, in CIDR form. Empty, the role does nothing.
+      proxmox_tailscale_tags:
+        type: list
+        elements: str
+        default: []
+        description: The tags the node joins with, each tag:<name>. At least one is required with routes.
+      proxmox_tailscale_auth_key:
+        type: str
+        default: ""
+        no_log: true
+        description: A one-off auth key, read only while the node is logged out.
+      proxmox_tailscale_settings:
+        type: dict
+        default: {}
+        description: Preferences kept with tailscale set, by its flag names, each a boolean or a string.
+      proxmox_tailscale_upgrade:
+        type: bool
+        default: false
+        description: Upgrade Tailscale on every run. False only ever installs it.
+      proxmox_tailscale_guard_hosts:
+        type: list
+        elements: str
+        default: []
+        description: IPv4 addresses of LAN hosts that tailnet clients may reach only on proxmox_tailscale_guard_allow.
+      proxmox_tailscale_guard_allow:
+        type: list
+        elements: str
+        default: []
+        description: The ports still reachable on the guarded hosts, each tcp/<port> or udp/<port>.
+      proxmox_tailscale_suite:
+        type: str
+        default: ""
+        description: The Debian release for Tailscale's repository. Empty reads it from the node's /etc/os-release.
+      proxmox_tailscale_repository:
+        type: str
+        default: https://pkgs.tailscale.com/stable/debian
+        description: Tailscale's Debian repository, which also serves its signing key.
+      proxmox_tailscale_keyring:
+        type: str
+        default: /usr/share/keyrings/tailscale-archive-keyring.gpg
+        description: Where the repository's signing key goes.
+      proxmox_tailscale_sources_dir:
+        type: str
+        default: /etc/apt/sources.list.d
+        description: Where apt keeps its deb822 repository files.
+      proxmox_tailscale_sysctl_file:
+        type: str
+        default: /etc/sysctl.d/99-tailscale.conf
+        description: The file that turns on IPv4 forwarding at boot.
+      proxmox_tailscale_guard_file:
+        type: str
+        default: /etc/nftables.d/tailnet-guard.nft
+        description: The guard's nftables table.
+      proxmox_tailscale_systemd_dir:
+        type: str
+        default: /etc/systemd/system
+        description: Where the guard's unit and tailscaled's drop-in go.

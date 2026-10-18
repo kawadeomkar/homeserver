@@ -1,0 +1,102 @@
+---
+# Tailscale's own Debian repository and its packages. The signing key is downloaded once, as Tailscale's
+# instructions do; the tailscale-archive-keyring package then owns the same file and brings a new key through apt.
+# Upgrades are this role's own (proxmox_tailscale_upgrade), not Tailscale's updater, which on Debian runs apt on its
+# own schedule and works only with a tailscale.list file.
+
+# The release is read from the node rather than configured, so a reinstall on a newer Proxmox gets that release's
+# repository.
+- name: install | Read the node's Debian release
+  ansible.builtin.shell: . /etc/os-release && printf '%s' "$VERSION_CODENAME"
+  register: proxmox_tailscale_os_release
+  changed_when: false
+  check_mode: false
+  when: proxmox_tailscale_suite | length == 0
+
+- name: install | Use the Debian release
+  ansible.builtin.set_fact:
+    proxmox_tailscale_release: >-
+      {{ proxmox_tailscale_suite if proxmox_tailscale_suite | length > 0 else proxmox_tailscale_os_release.stdout | trim }}
+
+- name: install | Refuse to write a repository for an unknown release
+  ansible.builtin.assert:
+    that: proxmox_tailscale_release | length > 0
+    fail_msg: /etc/os-release on the node gives no VERSION_CODENAME; set proxmox_tailscale_suite to the Debian release.
+    quiet: true
+
+# Only when the file is missing: from the first install on, the keyring package keeps it.
+- name: install | Download Tailscale's signing key, once
+  ansible.builtin.get_url:
+    url: "{{ proxmox_tailscale_repository }}/{{ proxmox_tailscale_release }}.noarmor.gpg"
+    dest: "{{ proxmox_tailscale_keyring }}"
+    mode: "0644"
+    force: false
+
+- name: install | Write Tailscale's repository file
+  ansible.builtin.copy:
+    dest: "{{ proxmox_tailscale_sources_dir }}/tailscale.sources"
+    content: |
+      Types: deb
+      URIs: {{ proxmox_tailscale_repository }}
+      Suites: {{ proxmox_tailscale_release }}
+      Components: main
+      Signed-By: {{ proxmox_tailscale_keyring }}
+    mode: "0644"
+
+# Both apt-get steps are skipped in check mode, as commands are. A dry run simulates the install instead, on the
+# package lists as they were last refreshed, which on a fresh node do not know Tailscale's repository yet.
+- name: install | Refresh the package lists
+  ansible.builtin.command:
+    argv: [apt-get, -q, update]
+  changed_when: false
+
+# nftables, which the guard needs, is already on a Proxmox node; naming it declares the dependency. Without an
+# upgrade, --no-upgrade leaves an installed package as it is. Configuration files changed on the node are kept.
+- name: install | Simulate installing or upgrading Tailscale
+  ansible.builtin.command:
+    argv: "{{ ['apt-get', '-q', '-s', 'install'] + _no_upgrade + _packages }}"
+  register: proxmox_tailscale_simulated
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: ansible_check_mode
+  vars:
+    _no_upgrade: "{{ [] if proxmox_tailscale_upgrade else ['--no-upgrade'] }}"
+    _packages: [tailscale, tailscale-archive-keyring, nftables]
+
+- name: install | Install or upgrade Tailscale
+  ansible.builtin.command:
+    argv: >-
+      {{ ['apt-get', '-q', '-y', '-o', 'Dpkg::Options::=--force-confdef', '-o', 'Dpkg::Options::=--force-confold', 'install']
+         + _no_upgrade + _packages }}
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: proxmox_tailscale_installed
+  changed_when: proxmox_tailscale_installed.stdout is not search('^0 upgraded, 0 newly installed', multiline=True)
+  vars:
+    _no_upgrade: "{{ [] if proxmox_tailscale_upgrade else ['--no-upgrade'] }}"
+    _packages: [tailscale, tailscale-archive-keyring, nftables]
+
+# The packages and versions, from apt-get's output: the simulation's Inst lines in check mode, dpkg's Unpacking lines
+# for real. In check mode this is where a pending install or upgrade is reported as a change.
+- name: install | Show what installing or upgrading changes
+  ansible.builtin.debug:
+    msg: >-
+      {{ ('Tailscale is not in the package lists yet: a real run refreshes them and installs tailscale, '
+          ~ 'tailscale-archive-keyring and nftables.') if _unknown else
+         (('Would install or upgrade: ' if ansible_check_mode else 'Installed or upgraded: ') ~ _changes | join(', ')
+          if _changes else 'Tailscale is up to date.') }}
+  changed_when: ansible_check_mode and (_unknown or _changes | length > 0)
+  vars:
+    _result: "{{ proxmox_tailscale_simulated if ansible_check_mode else proxmox_tailscale_installed }}"
+    _out: "{{ _result.stdout | default('') }}"
+    _unknown: "{{ ansible_check_mode and _result.rc | default(0) != 0 }}"
+    _changes: >-
+      {%- set out = [] -%}
+      {%- for name, old, new in _out | regex_findall('^Inst ([^ ]+) (?:.([^] ]+). )?[(]([^ )]+)', multiline=True) -%}
+      {%-   set _ = out.append(name ~ ' ' ~ ((old ~ ' → ') if old else '') ~ new) -%}
+      {%- endfor -%}
+      {%- for name, new, old in _out | regex_findall('^Unpacking ([^ ]+) [(]([^)]+)[)](?: over [(]([^)]+)[)])?', multiline=True) -%}
+      {%-   set _ = out.append(name ~ ' ' ~ ((old ~ ' → ') if old else '') ~ new) -%}
+      {%- endfor -%}
+      {{ out }}

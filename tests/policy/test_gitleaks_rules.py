@@ -57,6 +57,17 @@ FIXTURES = [
     ("notes/mac.md", "nic " + colons("52", "54", "00", "12", "34", "56") + "\n", {"mac-address"}),
     ("notes/mac-dash.md", "nic " + "-".join(["52", "54", "00", "ab", "cd", "ef"]) + "\n", {"mac-address"}),
     ("notes/tailnet.md", "ssh nas." + "tail1234" + ".ts" + ".net\n", {"tailnet-name"}),
+    # tailscale-key: anywhere, auth keys and OAuth client secrets alike
+    (
+        "notes/tailscale-key.md",
+        "key " + "-".join(["tskey", "auth", "kQ7xWm2" + "CNTRL", "Zp8vR3nT6yLq4sJd"]) + "\n",
+        {"tailscale-key"},
+    ),
+    (
+        "notes/tailscale-client.md",
+        "-".join(["tskey", "client", "kA1b2C3" + "CNTRL", "Mn4Bv5Cx6Zl7Kj8H"]) + "\n",
+        {"tailscale-key"},
+    ),
     # k8s-plaintext-secret: a Secret manifest under k8s/, in any of its spellings
     (
         "k8s/demo/creds.yaml",
@@ -118,6 +129,12 @@ FIXTURES = [
     (
         "pyproject.toml",
         'dependencies = ["ansible-core==2.21.4", "trove-classifiers==2026.9.21.13"]\n# kubernetes 1.37.1\n',
+        set(),
+    ),
+    # Must not match: a key's prefix named in documentation, and the vault's variable
+    (
+        "notes/tailscale-docs.md",
+        "a one-off auth key starts with tskey-" + "auth-, kept as vault_tailscale_auth_key\n",
         set(),
     ),
     # Must not match: a certificate fingerprint is a longer colon-hex run than a MAC address

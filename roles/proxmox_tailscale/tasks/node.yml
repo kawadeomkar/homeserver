@@ -1,0 +1,214 @@
+---
+# The node itself: logged in once with the auth key, brought back up if someone ran `tailscale down`, then its routes
+# and preferences kept with `tailscale set`, compared key by key with `tailscale get --json`, which uses the same flag
+# names. `tailscale status --json` lists every device in the tailnet and the tailnet's name, so it is read without
+# being printed, and only the fields used here are kept.
+
+# `tailscale up` takes most preferences, but not these, which only `tailscale set` does. Logging in with the
+# preferences it takes means the node never runs, even for a moment, with Tailscale's defaults, such as accept-dns.
+- name: node | Work out the flags for tailscale up and tailscale set
+  ansible.builtin.set_fact:
+    proxmox_tailscale_set_flags: "{{ _flags }}"
+    proxmox_tailscale_up_flags: >-
+      {{ ['--advertise-tags=' ~ proxmox_tailscale_tags | join(',')]
+         + (_flags | reject('match', '^--(' ~ _set_only | join('|') ~ ')=') | list) }}
+  vars:
+    _set_only: [auto-update, nickname, relay-server-port, relay-server-static-endpoints, update-check, webclient]
+    _flags: >-
+      {%- set out = ['--advertise-routes=' ~ proxmox_tailscale_advertise_routes | join(',')] -%}
+      {%- for key, value in proxmox_tailscale_settings.items() -%}
+      {%-   set _ = out.append('--' ~ key ~ '=' ~ ((value | string | lower) if value is boolean else value)) -%}
+      {%- endfor -%}
+      {{ out }}
+
+# tailscaled restarts when its package is upgraded, so it may still be starting. In check mode on a fresh node
+# Tailscale is not installed yet, and the command fails.
+- name: node | Read the node's state
+  ansible.builtin.command:
+    argv: [tailscale, status, --json]
+  register: proxmox_tailscale_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+  retries: 10
+  delay: 3
+  until: >-
+    (ansible_check_mode and proxmox_tailscale_status.rc != 0)
+    or (proxmox_tailscale_status.rc == 0
+        and (proxmox_tailscale_status.stdout | from_json).BackendState not in ['NoState', 'Starting'])
+
+- name: node | Keep the node's backend state
+  ansible.builtin.set_fact:
+    proxmox_tailscale_backend: >-
+      {{ (proxmox_tailscale_status.stdout | from_json).BackendState if proxmox_tailscale_status.rc == 0
+         else ('NeedsLogin' if ansible_check_mode else 'NotRunning') }}
+
+- name: node | Refuse a node Tailscale cannot log in or bring up
+  ansible.builtin.assert:
+    that: proxmox_tailscale_backend in ['Running', 'Stopped', 'NeedsLogin']
+    fail_msg: "{{ _approval if proxmox_tailscale_backend == 'NeedsMachineAuth' else _silent }}"
+    quiet: true
+  vars:
+    _approval: >-
+      Tailscale is waiting for the device to be approved in the admin console (Machines): device approval is on, and
+      the auth key was not pre-approved.
+    _silent: >-
+      tailscaled does not answer on the node (tailscale status: {{ proxmox_tailscale_backend }}); see journalctl -u
+      tailscaled.
+
+- name: node | Refuse to log in without an auth key
+  ansible.builtin.assert:
+    that: proxmox_tailscale_backend != 'NeedsLogin' or proxmox_tailscale_auth_key | length > 0
+    fail_msg: >-
+      The node is not logged in to a tailnet, and proxmox_tailscale_auth_key is empty. Make a one-off, pre-approved
+      auth key tagged {{ proxmox_tailscale_tags | join(', ') }} in Tailscale's admin console, set it (in this repo:
+      vault_tailscale_auth_key in the vault, with make vault-edit; scripts/runbooks/tailscale.md), and run again.
+    quiet: true
+
+# The key goes to the node in a file only root can read, and to tailscale as --auth-key=file:<path>, so it never
+# appears in an argument list, a log or Ansible's output.
+- name: node | Log in, or bring the node back up
+  when:
+    - proxmox_tailscale_backend in ['NeedsLogin', 'Stopped']
+    - not ansible_check_mode
+  block:
+    - name: node | Make a private file for the auth key
+      ansible.builtin.tempfile:
+        state: file
+        suffix: .tailscale
+      register: proxmox_tailscale_key_file
+      when: proxmox_tailscale_backend == 'NeedsLogin'
+
+    - name: node | Write the auth key into it
+      ansible.builtin.copy:
+        content: "{{ proxmox_tailscale_auth_key }}"
+        dest: "{{ proxmox_tailscale_key_file.path }}"
+        mode: "0600"
+      no_log: true
+      when: proxmox_tailscale_backend == 'NeedsLogin'
+
+    # Every managed flag is named, so tailscale up never refuses as changing settings it was not told about.
+    - name: node | Run tailscale up
+      ansible.builtin.command:
+        argv: "{{ ['tailscale', 'up', '--timeout=120s'] + _key + proxmox_tailscale_up_flags }}"
+      changed_when: true
+      vars:
+        _key: "{{ ['--auth-key=file:' ~ proxmox_tailscale_key_file.path] if proxmox_tailscale_backend == 'NeedsLogin' else [] }}"
+  always:
+    - name: node | Remove the auth key's file
+      ansible.builtin.file:
+        path: "{{ proxmox_tailscale_key_file.path }}"
+        state: absent
+      when: proxmox_tailscale_key_file.path is defined
+
+- name: node | Say what logging in would do
+  ansible.builtin.debug:
+    msg: >-
+      Would {{ 'log the node in with the auth key' if proxmox_tailscale_backend == 'NeedsLogin' else 'bring the node back
+      up' }}: tailscale up {{ proxmox_tailscale_up_flags | join(' ') }}, then tailscale set for the rest.
+  changed_when: true
+  when:
+    - ansible_check_mode
+    - proxmox_tailscale_backend in ['NeedsLogin', 'Stopped']
+
+# A dry run on a node that is not running yet has nothing to compare: the line above says what it would do.
+- name: node | Read the node's preferences
+  ansible.builtin.command:
+    argv: [tailscale, get, --json]
+  register: proxmox_tailscale_prefs
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode or proxmox_tailscale_backend == 'Running'
+
+# advertise-routes as a set, whether tailscale writes it as a list or a comma-separated string; every setting by its
+# flag name, as tailscale get --json keys it. A setting tailscale does not know reads as different, and tailscale set
+# then names it.
+- name: node | Work out which preferences differ
+  ansible.builtin.set_fact:
+    proxmox_tailscale_differ: >-
+      {%- set prefs = proxmox_tailscale_prefs.stdout | from_json -%}
+      {%- set out = [] -%}
+      {%- set routes = prefs['advertise-routes'] | default('', true) -%}
+      {%- set routes = routes.split(',') if routes is string else routes -%}
+      {%- if routes | map('trim') | select | sort != proxmox_tailscale_advertise_routes | map('string') | sort -%}
+      {%-   set _ = out.append('advertise-routes') -%}
+      {%- endif -%}
+      {%- for key, value in proxmox_tailscale_settings.items() if key not in prefs or prefs[key] != value -%}
+      {%-   set _ = out.append(key) -%}
+      {%- endfor -%}
+      {{ out }}
+  when: proxmox_tailscale_prefs is not skipped
+
+- name: node | Set the node's routes and preferences
+  ansible.builtin.command:
+    argv: "{{ ['tailscale', 'set'] + proxmox_tailscale_set_flags }}"
+  changed_when: true
+  when: proxmox_tailscale_differ | default([]) | length > 0
+
+- name: node | Say which preferences differ
+  ansible.builtin.debug:
+    msg: "{{ 'Would set' if ansible_check_mode else 'Set' }} {{ proxmox_tailscale_differ | join(', ') }} with tailscale set."
+  changed_when: ansible_check_mode
+  when: proxmox_tailscale_differ | default([]) | length > 0
+
+- name: node | Read the node's state after the changes
+  ansible.builtin.command:
+    argv: [tailscale, status, --json]
+  register: proxmox_tailscale_status_after
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+  when: proxmox_tailscale_status.rc == 0
+
+# Serve proxies connections from the node itself, with the address the guarded hosts trust, which the guard cannot
+# see. Its configuration can name the tailnet, so it is read without being printed.
+- name: node | Read Tailscale Serve's configuration
+  ansible.builtin.command:
+    argv: [tailscale, serve, status, --json]
+  register: proxmox_tailscale_serve
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+  when: proxmox_tailscale_status.rc == 0
+
+# What only the admin console, or the owner on the node, can fix. Reported on every run, never a failure.
+- name: node | Report what the admin console must fix
+  ansible.builtin.debug:
+    msg: "{{ _report if _report else 'Nothing for the admin console to fix.' }}"
+  when: proxmox_tailscale_status_after is not skipped
+  vars:
+    _after: "{{ proxmox_tailscale_status_after.stdout | from_json if proxmox_tailscale_status_after.rc == 0 else {} }}"
+    _running: "{{ _after.BackendState | default('') == 'Running' }}"
+    _self: "{{ _after.Self | default({}, true) }}"
+    _primary: "{{ _self.PrimaryRoutes | default([], true) }}"
+    _tags: "{{ _self.Tags | default([], true) }}"
+    _serve: "{{ proxmox_tailscale_serve.stdout | default('{}', true) | from_json if proxmox_tailscale_serve.rc == 0 else {} }}"
+    _report: >-
+      {%- set out = [] -%}
+      {%- set unapproved = proxmox_tailscale_advertise_routes | map('string') | reject('in', _primary) | list -%}
+      {%- if _running and unapproved -%}
+      {%-   set _ = out.append('Advertised but not approved, or served by another subnet router: ' ~ unapproved | join(', ')
+                               ~ '. Approve them in the admin console, or add the auto-approver from '
+                               ~ 'scripts/runbooks/tailscale.md.') -%}
+      {%- endif -%}
+      {%- if _running and _tags | sort != proxmox_tailscale_tags | sort -%}
+      {%-   set _ = out.append('The node is tagged ' ~ (_tags | join(', ') if _tags else 'with nothing') ~ ', not '
+                               ~ proxmox_tailscale_tags | join(', ') ~ '. Tags change only by re-authenticating: edit '
+                               ~ 'them in the admin console (Machines, Edit ACL tags).') -%}
+      {%- endif -%}
+      {%- if _running and _self.KeyExpiry | default('', true) -%}
+      {%-   set _ = out.append('The node key expires at ' ~ _self.KeyExpiry ~ ', and remote access with it: '
+                               ~ 'disable key expiry for the machine in the admin console.') -%}
+      {%- endif -%}
+      {%- if _serve -%}
+      {%-   set _ = out.append('Tailscale Serve or Funnel is configured on the node. It connects from the node itself, '
+                               ~ 'with the address the guarded hosts trust, which the guard cannot see: check that no '
+                               ~ 'target is one of ' ~ (proxmox_tailscale_guard_hosts | join(', ') or 'them') ~ '.') -%}
+      {%- endif -%}
+      {%- for warning in _after.Health | default([], true) -%}
+      {%-   set _ = out.append('Tailscale reports: ' ~ warning) -%}
+      {%- endfor -%}
+      {{ out }}
