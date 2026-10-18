@@ -4,10 +4,22 @@
   "enabledManagers": ["flux", "kubernetes", "helm-values", "kustomize"],
   "minimumReleaseAge": "7 days",
   "minimumReleaseAgeBehaviour": "timestamp-optional",
+  "pinDigests": true,
   "commitMessagePrefix": "[dependencies]",
   "flux": {"managerFilePatterns": ["/^k8s/.+\\.ya?ml$/"]},
   "kubernetes": {"managerFilePatterns": ["/^k8s/.+\\.ya?ml$/"]},
   "packageRules": [
+    {
+      "description": "Only Docker Hub gives a release time, so the 7-day age gate holds nothing else back: an image or OCI chart from another registry waits for approval on the Dependency Dashboard",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["/^ghcr\\.io\\//", "/^quay\\.io\\//", "/^registry\\.k8s\\.io\\//"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "A chart and the images its release pins by digest move in one pull request",
+      "matchFileNames": ["k8s/infrastructure/controllers/*/*/**", "k8s/infrastructure/monitoring/**"],
+      "groupName": "{{parentDir}}"
+    },
     {
       "description": "local-path-provisioner is vendored whole and bumped by hand (its README.md): an image bump alone would leave its RBAC and configuration old",
       "matchFileNames": ["k8s/infrastructure/controllers/common/local-path/**"],

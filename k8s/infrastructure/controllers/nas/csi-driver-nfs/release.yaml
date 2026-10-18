@@ -21,6 +21,18 @@ spec:
         kind: HelmRepository
         name: csi-driver-nfs
   values:
+    # Each image by its version and digest (CLAUDE.md): a chart bump changes both here too.
+    image:
+      nfs:
+        tag: v4.13.5@sha256:19162ec4fb3f56a7e53f578721b0d5b8e9c691c27d2789aecb17e9de60a94595
+      csiProvisioner:
+        tag: v6.3.0@sha256:a4b0b1a37605b7b04a293e136edf7006ec1786a8eb3f4e5a945f81d667dcc371
+      csiResizer:
+        tag: v2.2.1@sha256:ea1d25e23479000c7e8eeb92d827df66258df4e482ca054c5e7ce3fc0f5c41a5
+      livenessProbe:
+        tag: v2.19.0@sha256:06da0d5b8908072f2e4522692aee8dc119fba7247a9658497e1153992cd777e9
+      nodeDriverRegistrar:
+        tag: v2.17.0@sha256:f9de845b170155199f2a2a3f9531cf13d78e31235e9db6b6582a8b0db0a50dad
     driver:
       name: nfs.csi.k8s.io
     kubeletDir: /var/lib/kubelet

@@ -17,6 +17,10 @@ spec:
   upgrade:
     crds: CreateReplace
   values:
+    # The image by its version and digest (CLAUDE.md): a chart bump changes both here too. The chart takes the pair
+    # in tag, pulls by the digest and reads the version for its own checks.
+    image:
+      tag: v3.7.14@sha256:575fa15b135078fe5e50aa847987d96dbddd7b093c172429618404df73f3fa7c
     ingressClass:
       enabled: true
       isDefaultClass: true

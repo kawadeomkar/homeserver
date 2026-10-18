@@ -45,7 +45,7 @@ spec:
         # LinuxServer.io: starts as root, and s6 drops to PUID and PGID; it needs the default capabilities, but not
         # NET_RAW, whose raw sockets nothing here opens and which would let it forge its neighbours' packets.
         - name: mariadb
-          image: lscr.io/linuxserver/mariadb:11.4.12-r0-ls224
+          image: docker.io/linuxserver/mariadb:11.4.12-r0-ls224@sha256:b68d35ff2da41e568f51e0370a7e1c3ce693fecdacbed061b4b0be5b924f14bb
           env:
             - name: PUID
               value: "1000"

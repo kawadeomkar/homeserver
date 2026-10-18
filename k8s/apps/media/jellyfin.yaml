@@ -64,7 +64,7 @@ spec:
         # LinuxServer.io: starts as root, and s6 drops to PUID and PGID; it needs the default capabilities, but not
         # NET_RAW, whose raw sockets nothing here opens and which would let it forge its neighbours' packets.
         - name: jellyfin
-          image: lscr.io/linuxserver/jellyfin:10.11.11ubu2404-ls42
+          image: docker.io/linuxserver/jellyfin:10.11.11ubu2404-ls42@sha256:bb8d372e35d5c4a6cb61d830a06f5b5846528315b97cf5d38b80eea1e430efa7
           env:
             - name: PUID
               value: "1000"

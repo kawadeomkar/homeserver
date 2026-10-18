@@ -579,6 +579,54 @@ def rendered():
     return tuple(found)
 
 
+DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
+# An image named in a flag, such as cert-manager's ACME solver or the Prometheus operator's config reloader.
+IMAGE_FLAG = re.compile(r"^--[a-z0-9-]+=((?:[a-z0-9-]+\.)+[a-z]{2,}/[^\s=]+)$")
+
+
+def image_refs(objects):
+    """(owner, image) for every image the objects run: their containers', those named in a container's flags, and a
+    Prometheus's or an Alertmanager's own."""
+    for path, obj in objects:
+        spec = pod_spec(obj)
+        for container in containers(spec) if spec else []:
+            yield path, label(obj), container["image"]
+            for arg in (container.get("args") or []) + (container.get("command") or []):
+                if match := IMAGE_FLAG.match(str(arg)):
+                    yield path, label(obj), match.group(1)
+        if obj["kind"] in ("Prometheus", "Alertmanager") and obj["spec"].get("image"):
+            yield path, label(obj), obj["spec"]["image"]
+
+
+def kustomize_digests(path):
+    """The images a file's kustomization.yaml pins by digest, by the name they replace."""
+    kustomization = ROOT / path.parent / "kustomization.yaml"
+    if not kustomization.is_file():
+        return {}
+    return {
+        entry["name"]: entry["digest"]
+        for entry in yaml.safe_load(kustomization.read_text()).get("images") or []
+        if entry.get("digest")
+    }
+
+
+def test_images_are_pinned_by_digest():
+    """A tag can be moved to other contents and a digest cannot, so every image is pinned by both: the tag says what
+    it is, the digest what is pulled. A vendored file keeps upstream's tag, and its kustomization.yaml the digest."""
+    wrong = []
+    for path, owner, image in image_refs(manifests()):
+        if not DIGEST.search(image) and image.rpartition(":")[0] not in kustomize_digests(path):
+            wrong.append(f"{owner}: {image}")
+    assert wrong == []
+
+
+@pytest.mark.skipif(not RENDERED.is_dir(), reason="make lint-helm renders the charts first")
+def test_chart_images_are_pinned_by_digest():
+    """Every image a chart runs is pinned in the release's values: the chart's defaults are tags."""
+    wrong = sorted({f"{owner}: {image}" for _, owner, image in image_refs(rendered()) if not DIGEST.search(image)})
+    assert wrong == []
+
+
 @pytest.mark.skipif(not RENDERED.is_dir(), reason="make lint-helm renders the charts first")
 def test_chart_host_paths_are_pinned():
     found = set().union(*(host_paths(obj) for _, obj in rendered()))

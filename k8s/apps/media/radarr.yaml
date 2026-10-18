@@ -59,7 +59,7 @@ spec:
         # LinuxServer.io: starts as root, and s6 drops to PUID and PGID; it needs the default capabilities, but not
         # NET_RAW, whose raw sockets nothing here opens and which would let it forge its neighbours' packets.
         - name: radarr
-          image: lscr.io/linuxserver/radarr:6.3.0.10514-ls312
+          image: docker.io/linuxserver/radarr:6.3.0.10514-ls312@sha256:e35056574cdc695a9ee745aa1ecda9eab3842450bf4b7b8471b023790fa3861d
           env:
             - name: PUID
               value: "1000"

@@ -5,6 +5,11 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - local-path-storage.yaml
+# The provisioner's image, pinned by digest at the vendored release's tag.
+images:
+  - name: docker.io/rancher/local-path-provisioner
+    newTag: v0.0.37
+    digest: sha256:e757967a5ec338f6a9b371c5a9688bedaa8c3578ea3dd4db329ea0084be0a86f
 patches:
   # The default StorageClass, named local. Its volumes are `local` PersistentVolumes, not hostPath ones (the
   # annotation), and are kept when their claim goes: an app's data is never deleted with its claim.

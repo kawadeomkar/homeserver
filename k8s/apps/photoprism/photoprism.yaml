@@ -82,7 +82,7 @@ spec:
               mountPath: /mnt/v
       containers:
         - name: photoprism
-          image: photoprism/photoprism:260601
+          image: docker.io/photoprism/photoprism:260601@sha256:650c6ad5a6517ea95671eedb0f2a9c49f05729a1d95809fcf01533b96149582e
           env:
             - name: PHOTOPRISM_UID
               value: "1000"

@@ -87,7 +87,7 @@ Every app reads its Secret with `envFrom`, so every key becomes an environment v
 container. Until an app's Secret exists, its pods wait for it, and its Flux Kustomization does not become ready;
 the other apps are not held up.
 
-- **nextcloud-db**: `lscr.io/linuxserver/mariadb` treats `MYSQL_DATABASE`, `MYSQL_USER` and `MYSQL_PASSWORD` as all or
+- **nextcloud-db**: `linuxserver/mariadb` treats `MYSQL_DATABASE`, `MYSQL_USER` and `MYSQL_PASSWORD` as all or
   none. The Nextcloud admin account is made in the web setup wizard: MySQL/MariaDB, database host `nextcloud-db`,
   database name and user as `MYSQL_DATABASE` and `MYSQL_USER` (`nextcloud`), and `MYSQL_PASSWORD` (`sops -d` reads
   it); the LinuxServer.io image reads no admin variables.

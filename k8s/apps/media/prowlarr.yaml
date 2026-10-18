@@ -40,7 +40,7 @@ spec:
         # LinuxServer.io: starts as root, and s6 drops to PUID and PGID; it needs the default capabilities, but not
         # NET_RAW, whose raw sockets nothing here opens and which would let it forge its neighbours' packets.
         - name: prowlarr
-          image: lscr.io/linuxserver/prowlarr:2.5.2.5491-ls155
+          image: docker.io/linuxserver/prowlarr:2.5.2.5491-ls155@sha256:2f3d31307beba3ba2dd226d191f5f5c14ee3b4d8b49277c64683f5ed97083179
           env:
             - name: PUID
               value: "1000"

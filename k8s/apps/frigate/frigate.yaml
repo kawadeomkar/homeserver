@@ -81,7 +81,7 @@ spec:
               mountPath: /seed
       containers:
         - name: frigate
-          image: ghcr.io/blakeblackshear/frigate:0.17.2
+          image: ghcr.io/blakeblackshear/frigate:0.17.2@sha256:d4351369984d4a9e2a49ac59736f6490856a7ea11f7790040746d21496967010
           env:
             - name: TZ
               value: "${TZ}"
