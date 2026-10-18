@@ -20,7 +20,7 @@ kubectl -n media port-forward svc/sonarr 8989      # then http://localhost:8989;
 |---|---|---|---|
 | Sonarr | `media` | `svc/sonarr 8989` | Authentication: method **Forms**, a username and a long password from your password manager |
 | Radarr | `media` | `svc/radarr 7878` | The same |
-| Prowlarr | `media` | `svc/prowlarr 9696` | The same |
+| Prowlarr | `media` | `svc/prowlarr 9696` | The same. Then Settings → Apps: Sonarr and Radarr, each with Prowlarr Server `http://prowlarr.media.svc.cluster.local:9696`, its own Service (`http://sonarr.media.svc.cluster.local:8989`, `http://radarr.media.svc.cluster.local:7878`) and its API key; then Indexers: your indexers, which Prowlarr hands to both. Until then Sonarr and Radarr log `No available indexers` at every RSS sync |
 | SABnzbd | `media` | `svc/sabnzbd 8080` | Its wizard (the news server). Then Config → General → Security: a username and password; Config → Folders: incomplete `/data/usenet/incomplete`, complete `/data/usenet/complete`; Config → Special → `host_whitelist`: add `sabnzbd.<domain>` |
 | Jellyfin | `media` | `svc/jellyfin 8096` | Its wizard: the admin account. Then Dashboard → Playback → Transcoding: transcode path `/transcode` |
 | Seerr | `media` | `svc/seerr 5055` | Sign in with Jellyfin, at `http://jellyfin.media.svc.cluster.local:8096`, as Jellyfin's admin; then Sonarr and Radarr by their Service names and API keys |
