@@ -33,7 +33,7 @@ def flux_paths(setup):
     out = {}
     for path in files_of(K8S / "clusters" / setup):
         for obj in objects_in(path):
-            # A Kustomization applying another repository's files (Intel's GPU plugin) has nothing here to build.
+            # Only a Kustomization of this repository (source flux-system) has anything here to build.
             if obj["kind"] == "Kustomization" and obj["spec"]["sourceRef"]["name"] == "flux-system":
                 name = obj["metadata"]["name"]
                 if obj["spec"].get("patches") or obj["spec"].get("images"):

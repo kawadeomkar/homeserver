@@ -3,9 +3,10 @@
 Infrastructure repo for a small homelab: the Kubernetes manifests of a dozen self-hosted services, which Flux
 applies, and the Ansible that builds the machines and the cluster they run on.
 
-> **Status: built, not yet run.** The Ansible configures the NAS and the Proxmox host, builds the cluster's VMs,
-> installs Talos Linux on them and hands the cluster to Flux, which applies `k8s/`. Every role is tested against
-> local fakes; the cluster has not been built on the real machines yet. See `CLAUDE.md` for the detailed
+> **Status: built, and run on the real machines.** The Ansible configures the NAS and the Proxmox host, builds the
+> cluster's VMs, installs Talos Linux on them and hands the cluster to Flux, which applies `k8s/`. Every role is
+> tested against local fakes, and the whole chain has run on the home machines, with a NAS. The LAN reaches no app
+> until its first-run setup is done (`scripts/runbooks/first-run.md`). See `CLAUDE.md` for the detailed
 > architecture and the known landmines.
 
 ## Target stack

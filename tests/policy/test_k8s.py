@@ -263,7 +263,7 @@ def flux_kustomizations():
         out[cluster.name] = {}
         for path in files_of(str(cluster.relative_to(ROOT))):
             for obj in objects_in(ROOT / path):
-                # One applying another repository's files (Intel's GPU plugin) has nothing here to follow.
+                # Only one of this repository (source flux-system) has anything here to follow.
                 if obj["kind"] == "Kustomization" and obj["spec"]["sourceRef"]["name"] == "flux-system":
                     spec = obj["spec"]
                     depends = tuple(d["name"] for d in spec.get("dependsOn") or [])

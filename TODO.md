@@ -165,7 +165,6 @@ is in the git history.
 
 ## The cluster's secrets
 
-- [ ] Make the cluster's age key (`k8s/README-secrets.md`), put its public half in `.sops.yaml` as the recipient, and
-      keep the key file in the password manager
-- [ ] Make the apps' Secrets with sops, each in its app's directory and listed in its `kustomization.yaml`: the five
-      `k8s/README-secrets.md` lists. Until one exists, its app waits
+- [ ] Keep copies of the cluster's age key (`~/.config/sops/age/homeserver.agekey`) and its Talos secrets bundle
+      (`~/.talos/homeserver/secrets.yaml`) in the password manager. The repo holds neither, so a lost workstation
+      without them means new Secrets and a new cluster (`k8s/README-secrets.md`, `README.md`)

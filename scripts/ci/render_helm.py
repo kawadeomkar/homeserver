@@ -62,7 +62,7 @@ def synced_files(setup):
     out = files_of(ROOT / "k8s" / "clusters" / setup)
     for path in list(out):
         for obj in objects_in(path):
-            # A Kustomization applying another repository's files (Intel's GPU plugin) has none here.
+            # Only a Kustomization of this repository (source flux-system) has files here.
             if obj["kind"] == "Kustomization" and obj["spec"]["sourceRef"]["name"] == "flux-system":
                 out += [file for file in files_of(ROOT / obj["spec"]["path"]) if file not in out]
     return out
