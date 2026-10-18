@@ -85,3 +85,8 @@ talos_schematics: {base: [siderolabs/qemu-guest-agent]}
 talos_nodes:
   - {name: cp-1, role: controlplane, address: 192.0.2.30, schematic: base, patches: []}
 ```
+
+## Reference
+
+[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make docs` from the role itself:
+its argument specs, defaults and vars, and each tasks file as a table and a flow graph. Never edit it by hand.

@@ -45,3 +45,8 @@ flux_bootstrap_age_key_file: "{{ lookup('env', 'HOME') }}/.config/sops/age/homel
 ```
 
 Flux's controllers hold cluster-admin: whoever can merge to the synced branch controls the cluster.
+
+## Reference
+
+[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make docs` from the role itself:
+its argument specs, defaults and vars, and each tasks file as a table and a flow graph. Never edit it by hand.

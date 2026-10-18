@@ -86,3 +86,8 @@ a guest finds a disk by its slot, so keep each disk in its slot.
 ## Examples
 
 This repository's configuration, `group_vars/proxmox/vms.yml`, maps the Kubernetes nodes onto VMs.
+
+## Reference
+
+[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make docs` from the role itself:
+its argument specs, defaults and vars, and each tasks file as a table and a flow graph. Never edit it by hand.

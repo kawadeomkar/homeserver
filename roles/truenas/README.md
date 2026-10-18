@@ -107,3 +107,8 @@ truenas_services:
   explicitly. The role pins it to `truenas_system_dataset_pool` (`boot-pool`) before importing.
 - An existing dataset's `acltype` or `aclmode` is changed only when its entry sets `allow_acl_change`.
 - Pool creation (`truenas_pool_allow_create`) needs every listed disk blank, and is untested.
+
+## Reference
+
+[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make docs` from the role itself:
+its argument specs, defaults and vars, and each tasks file as a table and a flow graph. Never edit it by hand.

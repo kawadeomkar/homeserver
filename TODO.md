@@ -33,6 +33,12 @@ the tree before the cluster was built.
 - [ ] Check the first Scorecard run on `main`: that the OpenSSF API accepted the result, and which low
       scores are worth acting on. Code-Review (every change is the maintainer's own), Fuzzing,
       CII-Best-Practices and Packaging are expected to score low. Add its badge to `README.md` if wanted
+- [ ] docsible 0.8.0 leaves a block's `always` tasks out of each role's `REFERENCE.md`, so proxmox_apt's
+      page never shows it recording a reboot, and shows no tags for a task inside a block, so truenas's
+      page leaves its eight stage tags blank. Both are reported upstream (docsible#137, docsible#138) and still
+      on its main branch, which fixes multi-line comments in tables (docsible#135) and `!unsafe` tags
+      (docsible#134), unreleased. With a release that has them, bump the pin, think again about `--comments`,
+      check whether #137 and #138 are fixed too, and run `make docs`
 
 ## TrueNAS
 

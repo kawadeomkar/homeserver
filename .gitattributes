@@ -1,0 +1,3 @@
+# Each role's REFERENCE.md is written by docsible (make docs), never by hand: GitHub folds it in diffs and leaves it
+# out of the language statistics.
+roles/*/REFERENCE.md linguist-generated=true
