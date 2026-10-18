@@ -29,8 +29,9 @@ options:
     default: false
   api_cert_sha256:
     description:
-      - SHA-256 fingerprint of the NAS's certificate, in either case, with or without colons. When set,
-        the API key is sent only to a server presenting that certificate.
+      - SHA-256 fingerprint of the NAS's certificate, in either case, with or without colons. The API key is
+        sent only to a server presenting that certificate.
+      - Required unless O(validate_certs) is on: with neither, the module fails before connecting.
     type: str
     default: ""
   api_timeout:

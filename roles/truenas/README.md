@@ -14,9 +14,10 @@ share that names no hosts or networks, since NFS with `sec=sys` has no authentic
   Ansible runs from a virtualenv that has it).
 - An API key for a user with full admin rights, kept in a vault. Use HTTPS only: TrueNAS revokes a key
   sent over plain HTTP.
-- Optionally, the SHA-256 fingerprint of the NAS's web certificate in `truenas_api_cert_sha256`. With
-  certificate validation off (the default certificate is self-signed), it is what stops the API key
-  being sent to another device that answers on one of the addresses.
+- The SHA-256 fingerprint of the NAS's web certificate in `truenas_api_cert_sha256`, unless
+  `truenas_validate_certs` is on with a certificate the controller trusts. With certificate validation off (the
+  default certificate is self-signed), it is what stops the API key being sent to another device that answers on
+  one of the addresses, so the role refuses to run with neither, and so does its client.
 
 ## On a fresh install
 
@@ -24,8 +25,8 @@ The role cannot create its own way in. After installing TrueNAS, and before the 
 
 1. Create a local user in the `builtin_administrators` group (the Full Admin role) and an API key for it with no
    expiry, over HTTPS. Put the key where `truenas_api_key` reads it, ideally a vault.
-2. If you pin the certificate, read the new install's fingerprint and update `truenas_api_cert_sha256`; a
-   reinstall generates a new self-signed certificate.
+2. Read the new install's certificate fingerprint and update `truenas_api_cert_sha256`; a reinstall generates a
+   new self-signed certificate.
 3. Make sure one of `truenas_api_hosts` reaches the NAS: a DHCP reservation for its MAC makes the install come up
    on the expected address.
 

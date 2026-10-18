@@ -868,14 +868,27 @@ def test_proxmox_storage_role_refuses_an_export_another_id_mounts(tmp_path):
 
 
 def test_truenas_role_refuses_an_unpinned_certificate(nas):
-    """With the wrong certificate fingerprint, the API key is never sent."""
+    """With the wrong certificate fingerprint, the API key is never sent; with none, and no certificate validation
+    either, nothing is even tried, in a dry run too."""
     extra = {k: v for k, v in nas_vars(nas).items() if k.startswith("truenas_api")}
     extra["truenas_api_cert_sha256"] = "00" * 32
     extra["truenas_api_connect_wait"] = 0
-    logins_before = Path(nas["calls"]).read_text().count("auth.login_with_api_key")
+    calls = Path(nas["calls"])
+
+    def logged():
+        return calls.read_text() if calls.exists() else ""
+
+    logins_before = logged().count("auth.login_with_api_key")
     rc, _, out = run("truenas_defaults.yml", extra)
     assert rc != 0 and "not the pinned one" in out and "the API key was not sent" in out, out[-3000:]
-    assert Path(nas["calls"]).read_text().count("auth.login_with_api_key") == logins_before, "a login was attempted"
+    assert logged().count("auth.login_with_api_key") == logins_before, "a login was attempted"
+
+    before = logged()
+    extra["truenas_api_cert_sha256"] = ""
+    for check in (True, False):
+        rc, _, out = run("truenas_defaults.yml", extra, check=check)
+        assert rc != 0 and "truenas_api_cert_sha256 is empty, so nothing would prove" in out, out[-3000:]
+    assert logged() == before, "the NAS was asked something"
 
 
 # ----------------------------------------------------------------------------------- Backups ---

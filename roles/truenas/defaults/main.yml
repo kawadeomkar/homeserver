@@ -11,9 +11,9 @@ truenas_api_hosts: []
 truenas_api_port: 443
 truenas_api_key: ""
 truenas_validate_certs: false
-# SHA-256 fingerprint of the NAS's web certificate (colons optional). When set, the API key is sent
-# only to a server presenting that certificate, which matters while truenas_validate_certs is off.
-# Update it if the certificate is replaced.
+# SHA-256 fingerprint of the NAS's web certificate (colons optional): the API key is sent only to a server
+# presenting that certificate. Required while truenas_validate_certs is off, since nothing else would prove what
+# answers is the NAS. Update it if the certificate is replaced.
 truenas_api_cert_sha256: ""
 # Seconds to wait for one API answer, to keep retrying a refused connection, for a job to finish,
 # and for TrueNAS's login rate limit (20 logins per 60 s per client) to reset.
