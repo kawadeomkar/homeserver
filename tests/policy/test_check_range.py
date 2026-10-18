@@ -137,7 +137,8 @@ def test_an_inline_gitleaks_allow_is_ignored(repo):
 def test_a_committed_gitleaksignore_is_ignored_in_ci(repo):
     main = branch_with(repo, {"nas.md": f"nas {ADDRESS}\n"})
     commit = repo.sha("HEAD")
-    repo.write(".gitleaksignore", f"{commit}:nas.md:private-ipv4:1\n")
+    # Both rules that catch an address in Markdown.
+    repo.write(".gitleaksignore", f"{commit}:nas.md:private-ipv4:1\n{commit}:nas.md:ipv4-literal:1\n")
     repo.commit("ignore it")
     assert repo.check(main, ci=False).returncode == 0  # the ignore file works where it is honoured...
     assert caught(repo.check(main))  # ...and CI deletes it before scanning

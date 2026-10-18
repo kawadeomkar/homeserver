@@ -18,6 +18,7 @@ group_vars/**/local.yaml*
 # Hardware notes (addresses, MACs, serials) and Talos's client config, wherever they are written.
 /MACHINES*
 talosconfig
+talosconfig.*
 
 # local notes / audits
 docs/*
@@ -67,6 +68,8 @@ key.txt
 keys.txt
 vault_password*
 kubeconfig
+kubeconfig.*
+*.kubeconfig
 k3s.yaml
 # Talos's generated files (talosctl gen secrets, gen config). roles/talos keeps them outside the repository, in a
 # scratch directory and ~/.talos; these are a safety net.

@@ -15,10 +15,11 @@ keywords = ["10.", "172.", "192.168.", "100.", "169.254."]
 
 [[rules]]
 id = "ipv4-literal"
-description = "IPv4 literal in code, tests or manifests: use a variable, and RFC 5737 in examples"
+description = "IPv4 literal in code, tests, manifests, scripts or documentation: use a variable, and RFC 5737 in examples"
 # molecule/ and .config/molecule/ are where Molecule role tests will go. CI scans a change with its
-# target's rules, so they must be covered before the first one is added.
-path = '''^(roles/|group_vars/|tests/|molecule/|\.config/molecule/|k8s/|inventory\.example$|[^/]+\.ya?ml$|ansible\.cfg$|Makefile$)'''
+# target's rules, so they must be covered before the first one is added. Markdown anywhere: a public address
+# written in a runbook identifies this network as much as one in a task.
+path = '''^(roles/|group_vars/|host_vars/|tests/|molecule/|\.config/molecule/|k8s/|scripts/|\.github/|inventory\.example$|[^/]+\.ya?ml$|ansible\.cfg$|Makefile$)|(^|/)[^/]+\.md$'''
 regex = '''\b((?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3})\b'''
 secretGroup = 1
   [[rules.allowlists]]
@@ -39,6 +40,29 @@ regex = '''(?i)(?:^|[^0-9a-f:])((?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2})(?:[^0-9a-f:]|
 secretGroup = 1
 
 [[rules]]
+id = "private-ipv4-partial"
+description = "A private network written in part: its first three numbers, then .x, .* or a /prefix"
+regex = '''\b((?:10\.(?:25[0-5]|2[0-4]\d|1?\d?\d)|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.(?:25[0-5]|2[0-4]\d|1?\d?\d))(?:\.[xX*]|/\d{1,2}\b)'''
+secretGroup = 1
+keywords = ["10.", "172.", "192.168."]
+
+[[rules]]
+id = "mac-address-dotted"
+description = "MAC address in dotted form (aabb.ccdd.eeff)"
+regex = '''(?i)(?:^|[^0-9a-f.])([0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4})(?:[^0-9a-f.]|$)'''
+secretGroup = 1
+
+[[rules]]
+id = "disk-id"
+description = "A disk's /dev/disk/by-id name, which carries its model and serial, or a WWN; QEMU's virtual disks excepted"
+regex = '''(?i)(/dev/disk/by-id/[a-z0-9]+-[a-z0-9._:-]+|\bwwn-0x[0-9a-f]{16,32}\b|\bnaa\.[0-9a-f]{16,32}\b)'''
+secretGroup = 1
+keywords = ["/dev/disk/by-id/", "wwn-", "naa."]
+  [[rules.allowlists]]
+  regexTarget = "match"
+  regexes = ['''(?i)QEMU''']
+
+[[rules]]
 id = "tailnet-name"
 description = "Tailscale MagicDNS name"
 regex = '''(?i)\b([a-z0-9-]+\.[a-z0-9-]+\.ts\.net)\b'''
@@ -57,4 +81,4 @@ keywords = ["kind"]
 [[rules]]
 id = "sensitive-file"
 description = "A file that is never committed: vault password, local vars, inventory, machine notes, run logs, the cluster's credentials and Talos's generated files"
-path = '''(?i)(^|/)(\.?vault[-_.]?pass[^/]*|local\.ya?ml(\.(bak|orig|old|save|swp|tmp))?|MACHINES[^/]*|talosconfig|kubeconfig|[^/]*\.agekey|secrets\.ya?ml|controlplane\.ya?ml|worker\.ya?ml|logs/[^/]+\.log)$|^inventory(\.(bak|orig|old|ini))?$'''
+path = '''(?i)(^|/)(\.?vault[-_.]?pass[^/]*|local\.ya?ml(\.(bak|orig|old|save|swp|tmp))?|MACHINES[^/]*|talosconfig(\.[^/]*)?|kubeconfig(\.[^/]*)?|[^/]*\.kubeconfig|[^/]*\.agekey|secrets\.ya?ml|controlplane\.ya?ml|worker\.ya?ml|logs/[^/]+\.log)$|^inventory(\.(bak|orig|old|ini))?$'''

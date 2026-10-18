@@ -35,14 +35,14 @@ SECRET_KIND = "kind: " + "Secret"
 # (path, content, the custom rules that must fire on it). An empty set means nothing may fire.
 FIXTURES = [
     # private-ipv4: anywhere
-    ("notes/rfc1918.md", "nas " + dotted("10", "20", "30", "40") + "\n", {"private-ipv4"}),
+    ("notes/rfc1918.txt", "nas " + dotted("10", "20", "30", "40") + "\n", {"private-ipv4"}),
     (
-        "notes/rfc1918-b.md",
+        "notes/rfc1918-b.txt",
         "router " + dotted("172", "16", "5", "4") + " and " + dotted("192", "168", "1", "1") + "\n",
         {"private-ipv4"},
     ),
-    ("notes/cgnat.md", "tailnet peer " + dotted("100", "100", "1", "2") + "\n", {"private-ipv4"}),
-    ("notes/link-local.md", "fallback " + dotted("169", "254", "1", "1") + "\n", {"private-ipv4"}),
+    ("notes/cgnat.txt", "tailnet peer " + dotted("100", "100", "1", "2") + "\n", {"private-ipv4"}),
+    ("notes/link-local.txt", "fallback " + dotted("169", "254", "1", "1") + "\n", {"private-ipv4"}),
     # ipv4-literal: any address in code, tests and manifests, private or not
     ("roles/demo/defaults/main.yml", "demo_dns: " + dotted("8", "8", "8", "8") + "\n", {"ipv4-literal"}),
     ("group_vars/all/net.yml", "demo_nas: " + dotted("192", "168", "1", "10") + "\n", {"private-ipv4", "ipv4-literal"}),
@@ -51,6 +51,24 @@ FIXTURES = [
     ("molecule/demo/converge.yml", "demo_dns: " + dotted("8", "8", "4", "4") + "\n", {"ipv4-literal"}),
     (".config/molecule/config.yml", "server: " + dotted("1", "1", "1", "1") + "\n", {"ipv4-literal"}),
     ("extra.yml", "dns: " + dotted("9", "9", "9", "9") + "\n", {"ipv4-literal"}),
+    # ipv4-literal: also in scripts, workflows, host variables and Markdown anywhere
+    ("scripts/demo.sh", "ping " + dotted("1", "2", "3", "4") + "\n", {"ipv4-literal"}),
+    (".github/workflows/demo.yml", "dns: " + dotted("9", "9", "9", "9") + "\n", {"ipv4-literal"}),
+    ("host_vars/nas.txt", "nas " + dotted("8", "8", "4", "4") + "\n", {"ipv4-literal"}),
+    ("docs-tracked/notes.md", "gateway " + dotted("8", "8", "8", "8") + "\n", {"ipv4-literal"}),
+    # private-ipv4-partial: a private network written in part, anywhere
+    ("notes/partial.md", "the LAN, " + dotted("10", "20", "30") + ".x\n", {"private-ipv4-partial"}),
+    ("notes/partial-star.md", "the LAN, " + dotted("192", "168", "40") + ".*\n", {"private-ipv4-partial"}),
+    ("notes/partial-cidr.md", "the LAN, " + dotted("172", "16", "4") + "/24\n", {"private-ipv4-partial"}),
+    # mac-address-dotted, disk-id: anywhere
+    ("notes/cisco.md", "port " + ".".join(["5254", "0012", "3456"]) + "\n", {"mac-address-dotted"}),
+    (
+        "notes/disks.md",
+        "disk /dev/disk/" + "by-id/" + "nvme-Samsung_SSD_970_EVO_Plus_2TB_" + "S4J4NX0R" + "123456\n",
+        {"disk-id"},
+    ),
+    ("notes/wwn.md", "disk wwn-" + "0x" + "5000c500a1b2c3d4\n", {"disk-id"}),
+    ("notes/naa.md", "disk naa" + "." + "5000c500a1b2c3d4\n", {"disk-id"}),
     # ipv6-private, mac-address, tailnet-name: anywhere
     ("notes/ula.md", "peer fd7a:" + "115c:a1e0::1\n", {"ipv6-private"}),
     ("notes/v6-link-local.md", "gateway fe80:" + ":1:2\n", {"ipv6-private"}),
@@ -80,6 +98,9 @@ FIXTURES = [
     ("controlplane.yaml", "version: v1alpha1\n", {"sensitive-file"}),
     ("out/worker.yaml", "version: v1alpha1\n", {"sensitive-file"}),
     ("logs/20261006-run.log", "run\n", {"sensitive-file"}),
+    ("lab.kubeconfig", "apiVersion: v1\n", {"sensitive-file"}),
+    ("kubeconfig.bak", "apiVersion: v1\n", {"sensitive-file"}),
+    ("talos/talosconfig.old", "context: x\n", {"sensitive-file"}),
     # Must not match: documentation addresses, loopback, version strings and image tags
     (
         "roles/demo/vars/main.yml",
@@ -103,7 +124,13 @@ FIXTURES = [
         + '"\n',
         set(),
     ),
-    ("README-public.md", "a public resolver, " + dotted("8", "8", "8", "8") + ", outside code and manifests\n", set()),
+    # Must not match: version strings in prose, and QEMU's virtual disks
+    (
+        "notes/versions.md",
+        "Jellyfin 10.11.11ubu2404, Sonarr 4.0.19.2979, Kubernetes 1.37.1, a 10.0.0 release, CIDR /16 alone\n",
+        set(),
+    ),
+    ("notes/qemu.md", "the link /dev/disk/" + "by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0\n", set()),
     (
         "k8s/demo/deployment.yaml",
         "\n".join(
