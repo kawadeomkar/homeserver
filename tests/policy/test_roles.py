@@ -431,11 +431,9 @@ def test_talos_nodes_resolve_on_the_kubernetes_host(tmp_path, local_yml, nodes):
     assert {"apiVersion": "v1alpha1", "kind": "NetworkDefaultActionConfig", "ingress": "block"} in docs
     nodes_32 = [{"subnet": f"192.0.2.{30 + i}/32"} for i in range(len(nodes))]
     pods = {"subnet": "198.51.100.0/24"}
-    assert rules["talos-api"]["ingress"] == rules["kubernetes-api"]["ingress"] == [
-        {"subnet": "0.0.0.0/0"},
-        {"subnet": "::/0"},
-    ]
-    assert rules["kubelet"]["ingress"] == rules["node-metrics"]["ingress"] == nodes_32 + [pods]
+    anywhere = [{"subnet": "0.0.0.0/0"}, {"subnet": "::/0"}]
+    assert rules["talos-api"]["ingress"] == rules["kubernetes-api"]["ingress"] == anywhere
+    assert rules["kubelet"]["ingress"] == rules["node-metrics"]["ingress"] == [*nodes_32, pods]
     assert rules["flannel-vxlan"]["ingress"] == rules["trustd"]["ingress"] == nodes_32
     assert rules["etcd"]["ingress"] == [{"subnet": "192.0.2.30/32"}]
 

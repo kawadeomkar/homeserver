@@ -1737,7 +1737,11 @@ def test_talos_reinstalls_only_a_named_node(tmp_path, factory):
 
     # The worker's system disk was wiped: it boots the ISO into maintenance mode again.
     s = read(state)
-    s["nodes"][NODE_ADDRESSES["homeserver-worker-1"]] = {"mode": "maintenance", "version": "v1.14.2", "schematic": "iso"}
+    s["nodes"][NODE_ADDRESSES["homeserver-worker-1"]] = {
+        "mode": "maintenance",
+        "version": "v1.14.2",
+        "schematic": "iso",
+    }
     write(state, s)
     mutations = read(state)["mutations"]
     for check in (True, False):
