@@ -2,7 +2,10 @@
 # Mounts the NAS's datasets as static PersistentVolumes (infrastructure/storage/nas); no StorageClass, so nothing is
 # ever provisioned on the NAS dynamically. In kube-system, which Talos exempts from Pod Security, like any CSI node
 # plugin. fsGroup policy off: with it on, kubelet would chown and chmod a whole NFS volume, the media library or the
-# photo originals, on every start of a pod that sets fsGroup; ownership comes from each app's init container.
+# photo originals, on every start of a pod that sets fsGroup; ownership comes from each app's init container. No
+# volume snapshots (the NAS snapshots the datasets worth it, roles/truenas): neither the snapshot controller and its
+# CRDs nor the controller pod's snapshot sidecar, which the chart runs regardless and which, with no CRDs to watch,
+# logs a failure every few seconds for good.
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -23,6 +26,7 @@ spec:
     kubeletDir: /var/lib/kubelet
     controller:
       replicas: 1
+      enableSnapshotter: false
     externalSnapshotter:
       enabled: false
     storageClass:
