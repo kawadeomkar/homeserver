@@ -1,8 +1,8 @@
 # proxmox_vm
 
 Creates VMs on a Proxmox VE node with `qm` over SSH, every option given, and on later runs keeps the settings it
-manages as configured. Downloads the ISOs they boot from with `pvesh`. With only its defaults it changes
-nothing.
+manages as configured. Downloads the ISOs they boot from, and the images a disk is imported from, with `pvesh`.
+With only its defaults it changes nothing.
 
 The tasks read the node; the `proxmox_vm_plan` filter (`filter_plugins/proxmox_vm.py`, unit-tested in
 `tests/unit/test_proxmox_vm_plan.py`) works out what to do from what they read, and the tasks run the commands it
@@ -11,16 +11,21 @@ its size, property strings in any order, numbers as text), so every setting is c
 
 ## What it does, and never does
 
-- **Creates** a missing VM with `qm create`, then starts it when `start` is true.
+- **Creates** a missing VM with `qm create`, then starts it when `start` is true. A disk with `import_from` is
+  imported from that volume (an image in a storage's import content, or a disk inside an OVA there:
+  `local:import/<name>.ova/<disk>.vmdk`) at the image's own size, then grown to `size_gib`; an image is downloaded
+  only with its `sha256`, which Proxmox checks before it stores the file.
 - **Corrects** cores, memory, CPU type, ballooning, start-on-boot, the startup order, the watchdog, the guest
-  agent, tags, PCI devices (`hostpci`), the CD-ROM (`ide2`) and the boot order (`boot`, which Proxmox edits when
-  a drive is deleted), in one `qm set`; adds a configured disk the VM
-  lacks; grows a disk configured larger (`qm disk resize`); starts a stopped VM marked `start`.
+  agent, tags, PCI devices (`hostpci`), USB devices (`usb`), the CD-ROM (`ide2`) and the boot order (`boot`, which
+  Proxmox edits when a drive is deleted), in one `qm set`; adds a configured disk the VM lacks, unless it is
+  imported (that is the VM's own system, imported once, when the VM is created: restore the VM instead); grows a disk configured larger (`qm disk resize`); starts a stopped VM marked `start`.
 - **Reports**, never changes: every VM's MAC, for checking against the router's DHCP reservations; a MAC that
   differs from the configured one; every setting that waits for a restart (on a running VM, Proxmox applies
   cores, CPU, memory, ballooning, the watchdog, the agent, the boot order and PCI devices only at the next start);
-  ISOs named like the role's own that no VM on the node uses.
-- **Never** moves, shrinks or detaches a disk, deletes a VM or an ISO, ejects the CD-ROM, or restarts a VM.
+  ISOs and images named like the role's own that no VM on the node uses (an image is used only to create its VM,
+  so the pinned one stays, for a rebuild).
+- **Never** moves, shrinks or detaches a disk, deletes a VM, an ISO or an image, ejects the CD-ROM, or restarts a
+  VM.
 - **Refuses**, before changing anything:
   - a VMID that belongs to a VM of another name, or to a container;
   - a missing VM whose VMID still has disks or backups on any of the node's storages (files that belong to no
@@ -47,6 +52,7 @@ A download's own task status is checked: `pvesh` can exit 0 for a download that 
 |---|---|---|
 | `proxmox_vm_vms` | `[]` | VMs (below) |
 | `proxmox_vm_isos` | `[]` | ISOs to download: `storage`, `filename`, `url` |
+| `proxmox_vm_imports` | `[]` | Images to download as import content: `storage`, `filename`, `url`, `sha256` (required) |
 | `proxmox_vm_pending_storages` | `[]` | Storage ids an earlier role adds on a real run; pending in check mode |
 | `proxmox_vm_allow_overcommit` | `false` | Let the disks on thin LVM or ZFS add up to more than it holds |
 | `proxmox_vm_ignore_existing_volumes` | `false` | Create a missing VM over its VMID's old disks or backups |
@@ -76,8 +82,23 @@ A VM:
   startup: "order=1,up=60,down=120"
   tags: [talos, k8s]
   hostpci: []                         # [{mapping: igpu, pcie: true}]: a PCI resource mapping
+  usb: []                             # [{host: "10c4:ea60"}] (lsusb's vendor:product, or bus-port) or [{mapping: zigbee}]; usb3: true
   start: true                         # default
 ```
+
+A disk imported from an image, here Home Assistant OS's OVA, downloaded through `proxmox_vm_imports`:
+
+```yaml
+  disks:
+    - {slot: scsi0, storage: nas-vm, size_gib: 32, format: qcow2,
+       import_from: "local:import/haos_ova-18.3.ova/home-assistant.vmdk"}
+  import_working_storage: nas-vm      # qm create --import-working-storage
+```
+
+Proxmox extracts a disk out of an OVA before converting it, onto the VM's `import_working_storage` (a parameter of
+`qm create`, shared by every import of the command) or else the OVA's own storage, which must hold images and have a
+path (a directory or NFS storage). The installer's `local` holds no images unless they are enabled, so the role
+refuses, naming the `pvesm set` that enables them, before creating anything.
 
 Every disk is created with `discard=on,ssd=1`. A `serial` is passed to the guest, but on virtio-scsi Proxmox also
 sets `device_id=drive-<slot>`, which names the disk's `/dev/disk/by-id/` link (`scsi-0QEMU_QEMU_HARDDISK_drive-scsiN`):
@@ -85,4 +106,5 @@ a guest finds a disk by its slot, so keep each disk in its slot.
 
 ## Examples
 
-This repository's configuration, `group_vars/proxmox/vms.yml`, maps the Kubernetes nodes onto VMs.
+This repository's configuration, `group_vars/proxmox/vms.yml`, maps the Kubernetes nodes onto VMs, and
+`group_vars/proxmox/haos.yml` the Home Assistant OS VM, which `homeassistant.yml` passes to the role as play vars.

@@ -8,6 +8,7 @@
   vars_files:
     - ../../group_vars/all/storage.yml
     - ../../group_vars/all/kubernetes.yml
+    - ../../group_vars/all/haos.yml
     - ../../group_vars/proxmox/storage.yml
     - ../../group_vars/proxmox/backup.yml
   environment:

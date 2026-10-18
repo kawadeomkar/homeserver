@@ -12,7 +12,7 @@ applies, and the Ansible that builds the machines and the cluster they run on.
 
 | Machine | Role |
 |---|---|
-| homeserver | Proxmox hypervisor; Kubernetes runs in Talos Linux VMs on it |
+| homeserver | Proxmox hypervisor; Kubernetes runs in Talos Linux VMs on it, Home Assistant OS in a VM of its own |
 | truenas | TrueNAS Community Edition; all Proxmox VM storage lives here. **Optional**: without one, VM disks stay on the Proxmox host (see [Without a NAS](#without-a-nas)) |
 | opnsense | Router and firewall for the LAN |
 
@@ -29,15 +29,17 @@ roles/truenas/           configures the NAS through its API: address, pools, dat
 roles/proxmox_apt/       sets Proxmox's package repositories (no subscription), upgrades it on every run, and says when it needs a reboot
 roles/proxmox_storage/   adds the NAS's shares to Proxmox as qcow2 VM-disk storage, or checks its own storage
 roles/proxmox_backup/    keeps the nightly vzdump job of the VMs
-roles/proxmox_vm/        creates the cluster's VMs and keeps the settings it manages
+roles/proxmox_vm/        creates the cluster's VMs and Home Assistant's, and keeps the settings it manages
+roles/haos_onboard/      gives a new Home Assistant its owner account before anyone else on the network can
 roles/talos/             installs Talos on the VMs, keeps their configuration, bootstraps etcd once, upgrades on request
 roles/flux_bootstrap/    installs the Flux Operator and hands the cluster to Flux, which syncs k8s/clusters/<setup>
-truenas.yml proxmox.yml  one playbook per machine; kubernetes.yml builds the cluster; site.yml runs all three, NAS first
+truenas.yml proxmox.yml  one playbook per machine; homeassistant.yml makes Home Assistant's VM; kubernetes.yml builds the cluster; site.yml runs all four, NAS first
 talos-upgrade.yml etcd-snapshot.yml  move the cluster to new pins; snapshot etcd
-group_vars/all/vault.yml Ansible Vault file: the TrueNAS API key
+group_vars/all/vault.yml Ansible Vault file: the TrueNAS API key, Home Assistant's owner password
 group_vars/all/local.yml.example  template for local.yml, which holds every address and serial
 group_vars/all/storage.yml        VM storage layout shared by both plays, and the switch for a setup without a NAS
 group_vars/all/kubernetes.yml     the Kubernetes cluster's shape, its NAS datasets, and the checks on local.yml's Kubernetes section
+group_vars/all/haos.yml           Home Assistant's switch, size and owner, and the checks on local.yml's Home Assistant section
 group_vars/nas/, group_vars/proxmox/  connection and per-machine configuration
 inventory.example        template for inventory (no addresses in it)
 .gitleaks.toml           gitleaks rules for the identifiers this public repo must never hold
@@ -69,6 +71,7 @@ make test-idempotence             # each role run repeatedly against local fakes
 make ci                           # what the CI gate runs, on one Python, apart from the workflow linters
 make check-truenas && make truenas
 make check-proxmox && make proxmox
+make check-homeassistant && make homeassistant
 ```
 
 Each TrueNAS stage can be run on its own with `TAGS=truenas_network`, `truenas_pools`, `truenas_system`,
@@ -216,8 +219,8 @@ alone. Whenever `local.yml` changes, update its copy in your password manager.
 
 ### Backups
 
-Every night at 02:00 the `vm-nightly` job backs up the cluster's VMs, and any other VM listed in `local.yml`'s
-`vm_backup_extra_vmids` (Home Assistant's, say), keeping seven daily and four weekly backups. With a NAS they go
+Every night at 02:00 the `vm-nightly` job backs up the cluster's VMs, Home Assistant's, and any other VM listed in
+`local.yml`'s `vm_backup_extra_vmids`, keeping seven daily and four weekly backups. With a NAS they go
 to the NAS (`homeserver-backup`, on the redundant pool). Without one, name a Proxmox storage that holds backups
 in `vm_backup_storage`: a USB disk added as a directory storage, set up as a checked mount point
 (`pvesm set <id> --is_mountpoint yes --create-base-path 0`, which the role insists on), or a Proxmox Backup
@@ -226,9 +229,13 @@ proves a backup restores without disturbing the running cluster: `scripts/runboo
 
 ### Home Assistant
 
-Home Assistant runs as a VM of its own, Home Assistant OS, made by hand once (`scripts/runbooks/haos.md`): it must
-keep working while the cluster is down. Its nightly backup comes from listing its VMID in `vm_backup_extra_vmids`,
-and Homepage links to it when `local.yml` sets `haos_url`.
+Home Assistant runs as a VM of its own, Home Assistant OS, which `make homeassistant` creates from the pinned
+release's OVA (checked against its sha256) whenever `local.yml` gives its MAC (`haos_mac`), in both setups and with
+or without a cluster: it must keep working while the cluster is down. Before anyone else on the network can, the run
+gives a new Home Assistant its owner account, with the vault's `vault_haos_owner_password`: until it has one, whoever
+reaches it first could claim it. The nightly backup covers it, and Homepage links to it when `local.yml` sets
+`haos_url`. `scripts/runbooks/haos.md` has the steps before the first run (the DHCP reservation, the password, a
+Zigbee stick) and what comes after.
 
 ### The iGPU
 

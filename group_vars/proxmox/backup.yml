@@ -2,11 +2,12 @@
 # This Proxmox host's backups, applied by roles/proxmox_backup: one nightly vzdump job for every VM worth
 # keeping, owned by no single project. Restoring one is by hand: scripts/runbooks/vm-restore.md.
 
-# The VMs it covers: the cluster's nodes, when there is a cluster, and any other VM local.yml names in
-# vm_backup_extra_vmids, such as Home Assistant's, whether or not a cluster exists.
+# The VMs it covers: the cluster's nodes, when there is a cluster, Home Assistant's, when there is one, and any other
+# VM local.yml names in vm_backup_extra_vmids.
 vm_backup_vmids: >-
-  {{ ((kubernetes_nodes | map(attribute='vmid') | list) if kubernetes_present else [])
-     + (vm_backup_extra_vmids | default([], true) | map('int') | list) }}
+  {{ (((kubernetes_nodes | map(attribute='vmid') | list) if kubernetes_present else [])
+      + ([haos_vm_vmid | int] if haos_present else [])
+      + (vm_backup_extra_vmids | default([], true) | map('int') | list)) | unique | list }}
 # Where they go: the NAS's backup storage with a NAS; without one, the storage local.yml names in
 # vm_backup_storage (a USB disk or a Proxmox Backup Server), or nowhere, which the play warns about.
 vm_backup_target: "{{ vm_storage_backup.proxmox_id if nas_present else vm_backup_storage | default('', true) }}"

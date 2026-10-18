@@ -136,7 +136,22 @@ backups, which `scripts/runbooks/vm-restore.md` describes, before anything creat
 backups and the worker's data disk are on it; without one, the backups are wherever `vm_backup_storage` pointed.
 VMs that other projects create on the host (claude-on-proxmox's) are theirs to recreate.
 
-## 4. The Kubernetes cluster
+## 4. Home Assistant
+
+Only after the Proxmox host is back, independent of the cluster. Its VM's definition went with the boot drive; its
+disk survives on the NAS with one, and its backups in either setup.
+
+1. **Restore VM 310 from its backup first** (`scripts/runbooks/vm-restore.md`). `make homeassistant` refuses to
+   create a VM whose VMID still has disks or backups, so a restore skipped here fails safe instead of a new, empty
+   Home Assistant over the old one's history.
+2. `make check-homeassistant`, then `make homeassistant`: it finds the restored VM, corrects nothing that matches,
+   starts it, and leaves its Home Assistant alone, since it has its owner. The OVA it would make a new VM from is
+   downloaded again; nothing uses it until a VM is made anew.
+
+Prerequisites: `haos_mac` in `local.yml` (section 1) with its DHCP reservation, and `vault_haos_owner_password` in
+the vault. A Home Assistant that is built new instead gets its owner account from the run (`scripts/runbooks/haos.md`).
+
+## 5. The Kubernetes cluster
 
 Only after the Proxmox host is back. The cluster's VMs lived on the Proxmox host, so their definitions went with
 its boot drive; the worker's data disk survives on the NAS. The order is fixed:

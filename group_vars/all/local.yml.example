@@ -137,4 +137,28 @@ flux_sync_url: https://github.com/<you>/homeserver.git
 # kubernetes_gpu_mapping: igpu
 # Home Assistant OS's address, for Homepage's tile: its own local name and
 # port, never under the cluster's domain (scripts/runbooks/haos.md).
-# haos_url: http://homeassistant.home.arpa:8123
+# haos_url: http://homeassistant.home.arpa/
+
+# ----------------------------------------------------------- Home Assistant ---
+# No Home Assistant? Delete this section. With it, make homeassistant creates
+# Home Assistant OS as a VM of its own on the Proxmox host (VMID 310), with or
+# without a cluster or a NAS, gives it its owner account, and the nightly backup
+# covers it (scripts/runbooks/haos.md). The owner's password is the vault's
+# vault_haos_owner_password (make vault-edit).
+#
+# Its MAC, chosen by you and reserved in the router's DHCP before the first run,
+# with the hostname homeassistant: locally administered, in lower case, its
+# second hex digit 2, 6, a or e, and not a cluster node's. Replace <mac>; a
+# placeholder left here is refused.
+haos_mac: "<mac>"
+# USB devices passed through, such as a Zigbee or Z-Wave stick: by the
+# vendor:product id lsusb on the Proxmox host shows, which follows the stick to
+# any port, or by a Proxmox USB resource mapping.
+# haos_usb: [{host: "10c4:ea60"}]
+# Its size, when not 2 cores, 4 GiB of memory and a 32 GiB disk (the least).
+# haos_size: {cores: 2, memory_mib: 4096, disk_gib: 64}
+# The owner account's name and username, when not Owner and owner.
+# haos_owner_name: Owner
+# haos_owner_username: owner
+# Another VMID, when 310 is taken.
+# haos_vmid: 310

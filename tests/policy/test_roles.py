@@ -194,7 +194,7 @@ def argspec_pass(tree, playbook="site.yml", *extra):
         "ansible-playbook",
         *["-i", "inventory.example", playbook, "--tags", "__argspec_only__", "--skip-tags", "truenas_info"],
         *["-e", "ansible_connection=local", "-e", "vault_truenas_api_key=stub"],
-        *["-e", "vault_truenas_mail_password=stub", *extra],
+        *["-e", "vault_truenas_mail_password=stub", "-e", "vault_haos_owner_password=stub-password", *extra],
     )
 
 
@@ -210,17 +210,25 @@ NO_BACKUP = "are not backed up, because this setup has no NAS"
 @pytest.mark.parametrize(
     ("local_yml", "extra", "validations", "present", "absent"),
     [
-        pytest.param(None, CLUSTER_ARGS, 7, NAS_PLAY_RUNS, [NO_BACKUP], id="nas-cluster"),
+        pytest.param(None, CLUSTER_ARGS, 9, NAS_PLAY_RUNS, [NO_BACKUP], id="nas-cluster-haos"),
         pytest.param(example_without_kubernetes(), (), 5, NAS_PLAY_RUNS, [NO_BACKUP], id="nas"),
         pytest.param(
             PROXMOX_ONLY_CLUSTER_LOCAL_YML,
             CLUSTER_ARGS,
+            8,
+            [*NAS_PLAY_ENDS, NO_BACKUP],
+            NAS_ROLE,
+            id="proxmox-only-cluster-haos",
+        ),
+        pytest.param(PROXMOX_ONLY_LOCAL_YML, (), 4, NAS_PLAY_ENDS, [*NAS_ROLE, NO_BACKUP], id="proxmox-only"),
+        pytest.param(
+            PROXMOX_ONLY_LOCAL_YML + f'haos_mac: "{mac(9)}"\n',
+            (),
             6,
             [*NAS_PLAY_ENDS, NO_BACKUP],
             NAS_ROLE,
-            id="proxmox-only-cluster",
+            id="proxmox-only-haos",
         ),
-        pytest.param(PROXMOX_ONLY_LOCAL_YML, (), 4, NAS_PLAY_ENDS, [*NAS_ROLE, NO_BACKUP], id="proxmox-only"),
         pytest.param(
             blank_nas_local_yml(), (), 4, NAS_PLAY_ENDS, [*NAS_ROLE, NO_BACKUP], id="proxmox-only-blank-values"
         ),
@@ -271,12 +279,18 @@ def test_inventory_without_the_nas_host(tmp_path):
     ("local_yml", "extra", "refused"),
     [
         pytest.param(PROXMOX_ONLY_LOCAL_YML, (), False, id="no-cluster"),
-        pytest.param(PROXMOX_ONLY_CLUSTER_LOCAL_YML, CLUSTER_ARGS, True, id="cluster"),
+        pytest.param(
+            PROXMOX_ONLY_CLUSTER_LOCAL_YML,
+            ("-e", json.dumps({k: v for k, v in CLUSTER_VARS.items() if k != "haos_mac"})),
+            True,
+            id="cluster",
+        ),
     ],
 )
 def test_inventory_without_the_kubernetes_group(tmp_path, local_yml, extra, refused):
     """An inventory made before the cluster has no kubernetes group. Without a cluster it still works; with one the
-    run is refused before any VM is made, rather than creating the VMs and matching no host to build Talos on."""
+    run is refused before any VM is made, rather than creating the VMs and matching no host to build Talos on.
+    (Home Assistant's VM, left out here, needs no such group.)"""
     tree = example_tree(tmp_path, local_yml)
     inventory = tree / "inventory.example"
     inventory.write_text(re.sub(r"(?ms)^# The Kubernetes cluster.*\Z", "", inventory.read_text()))
@@ -1022,3 +1036,102 @@ def test_gpu_follows_local_yml(tmp_path, local_yml, mapping):
     assert labelled == ([workload] if mapping else [])
     settings = resolve_on(tree, "homeserver-k8s", "flux_bootstrap_settings", "-e", given)
     assert (settings["GPU_I915"], settings["FRIGATE_DETECTOR_DEVICE"]) == (("1", "GPU") if mapping else ("0", "CPU"))
+
+
+# ------------------------------------------------------------------------------------------ Home Assistant ---
+
+
+# Each problem with local.yml's Home Assistant section, and what the message says.
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        pytest.param({}, [], id="example-filled-in"),
+        pytest.param({"haos_mac": "<mac>"}, ["haos_mac must be a locally administered MAC"], id="placeholder"),
+        pytest.param(
+            {"haos_mac": "00:" + mac(9)[3:]}, ["haos_mac must be a locally administered MAC"], id="universal-mac"
+        ),
+        pytest.param({"haos_mac": mac(1)}, ["haos_mac is a cluster node's MAC too"], id="a-node-mac"),
+        pytest.param({"haos_vmid": 301}, ["haos_vmid 301 is a cluster node's VMID"], id="a-node-vmid"),
+        pytest.param({"haos_vmid": 50}, ["haos_vmid must be a number from 100"], id="vmid-too-low"),
+        pytest.param({"haos_size": {"disk_gib": 16}}, ["disk_gib must be at least 32"], id="disk-below-the-image"),
+        pytest.param({"haos_size": {"gpus": 1}}, ["haos_size: gpus is not a size"], id="unknown-size"),
+        pytest.param({"haos_size": {"cores": "two"}}, ["cores must be a whole number"], id="size-not-a-number"),
+        pytest.param({"haos_size": [2]}, ["haos_size must map cores"], id="size-a-list"),
+        pytest.param({"haos_usb": "10c4:ea60"}, ["haos_usb must be a list of devices"], id="usb-a-string"),
+        pytest.param({"haos_usb": [{"port": 1}]}, ["haos_usb must be a list of devices"], id="usb-unknown-key"),
+        pytest.param({"haos_usb": [{"host": "10c4:ea60"}, {"mapping": "zwave"}]}, [], id="usb-by-id-and-mapping"),
+        pytest.param({"haos_owner_username": "Owner"}, ["haos_owner_username must be lower case"], id="username"),
+    ],
+)
+def test_haos_settings_are_checked(tmp_path, extra, expected):
+    errors = resolve_on(
+        example_tree(tmp_path), "homeserver", "haos_settings_error", "-e", json.dumps(CLUSTER_VARS | extra)
+    )
+    if not expected:
+        assert errors == []
+    for text in expected:
+        assert any(text in error for error in errors), f"{text!r} not in {errors}"
+
+
+def test_haos_settings_without_a_mac_are_refused(tmp_path):
+    """A section that sets the VM's size but no MAC: what a misspelt haos_mac looks like."""
+    local_yml = as_local_yml(without(example(), "haos_mac") | {"haos_size": {"cores": 4}})
+    errors = resolve_on(
+        example_tree(tmp_path, local_yml),
+        "homeserver",
+        "haos_settings_error",
+        "-e",
+        json.dumps(without(CLUSTER_VARS, "haos_mac")),
+    )
+    assert any("sets haos_size but no haos_mac" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("playbook", ["homeassistant.yml", "proxmox.yml", "site.yml"])
+def test_haos_present_cannot_be_set(tmp_path, playbook):
+    rc, out = argspec_pass(example_tree(tmp_path), playbook, *CLUSTER_ARGS, "-e", "haos_present=false")
+    assert rc != 0 and "haos_present is worked out from haos_mac" in out, out[-3000:]
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "storage", "fmt"),
+    [
+        pytest.param(None, "homeserver-persistent", "qcow2", id="nas"),
+        pytest.param(PROXMOX_ONLY_LOCAL_YML + f'haos_mac: "{mac(9)}"\n', "local-lvm", None, id="proxmox-only"),
+    ],
+)
+def test_haos_vm_resolves_on_the_proxmox_host(tmp_path, local_yml, storage, fmt):
+    """The VM, the OVA it is imported from and the backup that covers it, through the real inventory layout: its disk
+    on the NAS's persistent storage with a NAS (qcow2), on local-lvm without one; the OVA always checked."""
+    vms, imports, backed_up = resolve_on(
+        example_tree(tmp_path, local_yml), "homeserver", "[haos_vms, haos_imports, vm_backup_vmids]", *CLUSTER_ARGS
+    )
+    (vm,) = vms
+    (disk,) = vm["disks"]
+    assert (vm["vmid"], vm["name"], vm["bios"], vm["boot"]) == (310, "homeassistant", "ovmf", "order=scsi0")
+    assert (vm["net"]["mac"], vm["usb"], vm["watchdog"]["model"]) == (mac(9), [], "i6300esb")
+    assert (disk["storage"], disk.get("format"), disk["size_gib"]) == (storage, fmt, 32)
+    assert disk["import_from"] == "local:import/haos_ova-18.3.ova/home-assistant.vmdk"
+    (image,) = imports
+    assert image["filename"] == "haos_ova-18.3.ova" and re.fullmatch(r"[0-9a-f]{64}", image["sha256"])
+    assert image["url"] == "https://github.com/home-assistant/operating-system/releases/download/18.3/haos_ova-18.3.ova"
+    assert 310 in backed_up
+
+
+def test_haos_placeholder_stops_the_plays_that_read_it(tmp_path):
+    """local.yml.example's <mac> for Home Assistant stops proxmox.yml and homeassistant.yml before any role runs."""
+    for playbook in ("proxmox.yml", "homeassistant.yml"):
+        rc, out = argspec_pass(
+            example_tree(tmp_path / playbook), playbook, "-e", json.dumps(without(CLUSTER_VARS, "haos_mac"))
+        )
+        assert rc != 0 and "haos_mac must be a locally administered MAC" in out, out[-3000:]
+        assert "TASK [proxmox_" not in out and "TASK [haos_onboard" not in out, out[-3000:]
+
+
+def test_haos_test_playbook_runs_the_real_plays_roles():
+    """tests/integration/homeassistant.yml runs homeassistant.yml's roles with homeassistant.yml's own vars, and its
+    pre-tasks are homeassistant.yml's, so the idempotence tests run what make homeassistant does."""
+    (real,) = yaml.safe_load((ROOT / "homeassistant.yml").read_text())
+    (test,) = yaml.safe_load((ROOT / "tests" / "integration" / "homeassistant.yml").read_text())
+    assert test["vars"] == real["vars"] and test["roles"] == real["roles"]
+    by_name = {task["name"]: task for task in real["pre_tasks"]}
+    assert all(by_name.get(task["name"]) == task for task in test["pre_tasks"]), "a pre-task differs"

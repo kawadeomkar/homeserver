@@ -3,10 +3,11 @@ argument_specs:
   main:
     short_description: Create Proxmox VE VMs and keep the settings it manages as configured
     description:
-      - Downloads the ISOs of proxmox_vm_isos, creates each VM of proxmox_vm_vms with qm, every option given, and
-        on later runs corrects its cores, memory, CPU type, ballooning, start-on-boot, startup order, watchdog,
-        agent, tags, PCI devices and CD-ROM, adds a configured disk it lacks and grows a disk configured larger.
-        Starts a stopped VM marked start.
+      - Downloads the ISOs of proxmox_vm_isos and the images of proxmox_vm_imports (checking each image's sha256),
+        creates each VM of proxmox_vm_vms with qm, every option given, a disk with import_from imported from its
+        image and grown to its size, and on later runs corrects its cores, memory, CPU type, ballooning,
+        start-on-boot, startup order, watchdog, agent, tags, PCI and USB devices and CD-ROM, adds a configured disk
+        it lacks and grows a disk configured larger. Starts a stopped VM marked start.
       - Never moves, shrinks or detaches a disk, never deletes a VM or an ISO, and never restarts a VM; a setting
         that waits for a restart is reported.
       - Refuses a VMID that belongs to another VM, a missing VM whose VMID still has disks or backups, a disk
@@ -19,14 +20,21 @@ argument_specs:
         elements: dict
         default: []
         description: >-
-          VMs, each with vmid, name, cores, memory_mib, disks ({slot, storage, size_gib, serial, format, backup})
-          and net ({bridge, mac}); optional machine, bios, efidisk_storage, cpu, scsihw, iso, boot, watchdog,
-          onboot, startup, tags, hostpci and start.
+          VMs, each with vmid, name, cores, memory_mib, disks ({slot, storage, size_gib, serial, format, backup,
+          import_from}) and net ({bridge, mac}); optional machine, bios, efidisk_storage, cpu, scsihw, iso, boot,
+          watchdog, onboot, startup, tags, hostpci, usb, import_working_storage and start.
       proxmox_vm_isos:
         type: list
         elements: dict
         default: []
         description: ISOs to download, each with storage, filename and url. Never deleted.
+      proxmox_vm_imports:
+        type: list
+        elements: dict
+        default: []
+        description: >-
+          Images a disk is imported from, downloaded as import content, each with storage, filename, url and
+          sha256. Never deleted.
       proxmox_vm_pending_storages:
         type: list
         elements: str
