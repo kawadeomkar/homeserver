@@ -2,9 +2,17 @@
 # How this cluster is handed to Flux, applied by roles/flux_bootstrap after roles/talos. Flux then syncs this
 # repository's k8s/clusters/<setup> and applies everything below it.
 flux_bootstrap_kubeconfig: "{{ talos_config_dir }}/kubeconfig"
+# The Flux Operator, and through it Flux, which runs with cluster-admin rights: each pinned so that nothing moves
+# unreviewed. A bump changes each pair together (CLAUDE.md): the release with its install.yaml's SHA-256 (sha256sum
+# of the downloaded file) and its image's digest (crane digest ghcr.io/controlplaneio-fluxcd/flux-operator:<version>),
+# and the Flux release with the manifests artifact holding it (crane digest
+# ghcr.io/controlplaneio-fluxcd/flux-operator-manifests:latest, read on the day of the bump).
 flux_bootstrap_operator_version: v0.61.0
+flux_bootstrap_operator_sha256: 550ebc8eec5fae00e55336cf5403a60846c51174095df3d8ca541b48481662af
+flux_bootstrap_operator_digest: sha256:71041d9fff7f7b05f1a8123ebe73c73b7b156f4aacfe1e8e19b5aa953a98892c
 flux_bootstrap_instance:
-  version: "2.9.x"
+  version: "2.9.6"
+  artifact: oci://ghcr.io/controlplaneio-fluxcd/flux-operator-manifests@sha256:41223e96853ea6817d12aa8cf5dc43de49b7abab6892bb12ab39190cc12bba0c
   # The repository this cluster syncs, from local.yml: it has no default, since Flux applies whatever it holds with
   # cluster-admin rights, and a fork must sync its own (kubernetes_settings_error refuses it missing).
   url: "{{ flux_sync_url }}"

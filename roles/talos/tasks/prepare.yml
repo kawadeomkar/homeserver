@@ -50,6 +50,43 @@
     talos_installer: "{{ talos_image_factory_url | urlsplit('hostname') }}/metal-installer"
   when: not talos_prepare_minimal | default(false)
 
+# The id names what the nodes boot, so it is not taken on the factory's word: a schematic's id is the hash of its
+# content, so a pinned one only changes when the schematic does, and then its new id is pinned by hand.
+- name: prepare | Refuse a schematic id other than the pinned one
+  ansible.builtin.assert:
+    that: _wrong | length == 0
+    fail_msg: >-
+      {% for name in _wrong %}The Image Factory gave the schematic {{ name }} the id {{ talos_schematic_ids[name] }}, but
+      talos_schematic_pins holds {{ talos_schematic_pins[name] | default('none') }}. {% endfor %}A changed schematic
+      needs its new id pinned; otherwise, the factory answered something else.
+    quiet: true
+  when:
+    - not talos_prepare_minimal | default(false)
+    - talos_schematic_pins | length > 0
+  vars:
+    _wrong: >-
+      {%- set out = [] -%}
+      {%- for name, id in talos_schematic_ids.items() if talos_schematic_pins.get(name) != id -%}
+      {%-   set _ = out.append(name) -%}
+      {%- endfor -%}
+      {{ out }}
+
+# A tag on the factory's registry can be moved; the nodes install and upgrade from the digest pinned beside it.
+- name: prepare | Refuse an installer image without its pinned digest
+  ansible.builtin.assert:
+    that: _missing | length == 0
+    fail_msg: >-
+      talos_installer_digests has no digest for the installer image {{ _missing | join(', ') }} (keys
+      "<schematic id>:<version>"): pin each with its digest (crane digest {{ talos_installer }}/<id>:<version>).
+    quiet: true
+  when:
+    - not talos_prepare_minimal | default(false)
+    - talos_installer_digests | length > 0
+  vars:
+    _missing: >-
+      {{ talos_nodes | map(attribute='schematic') | unique | map('extract', talos_schematic_ids)
+         | map('regex_replace', '$', ':' ~ talos_version) | reject('in', talos_installer_digests) | list }}
+
 # The secrets bundle, from its own file outside any repository: every key of the cluster (its CAs, the service
 # account key, etcd's encryption key), so it must be the owner's alone, as talosctl gen secrets writes it, and it is
 # never printed. Checked by its text alone: a YAML parser's error could quote a line of it.
@@ -158,6 +195,26 @@
   ansible.builtin.set_fact:
     talos_workspace: "{{ talos_scratch.path }}"
 
+# A run is removed by its own block's always, which an interrupted run (Ctrl-C, a lost terminal) never reaches,
+# leaving a copy of the secrets bundle behind. Any such directory a day old is an earlier run's: removed here.
+- name: prepare | Look for scratch directories interrupted runs left
+  ansible.builtin.find:
+    paths: "{{ talos_workspace | dirname }}"
+    patterns: ["ansible.*.talos"]
+    file_type: directory
+    age: 1d
+  register: talos_stale_scratch
+  check_mode: false
+
+- name: prepare | Remove them
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  check_mode: false
+  loop: "{{ talos_stale_scratch.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+
 - name: prepare | Write the secrets bundle there
   ansible.builtin.copy:
     content: "{{ talos_secrets }}"
@@ -195,25 +252,5 @@
   loop: [endpoint, node]
 
 - name: prepare | Find out what each node runs
-# A run is removed by its own block's always, which an interrupted run (Ctrl-C, a lost terminal) never reaches,
-# leaving a copy of the secrets bundle behind. Any such directory a day old is an earlier run's: removed here.
-- name: prepare | Look for scratch directories interrupted runs left
-  ansible.builtin.find:
-    paths: "{{ talos_workspace | dirname }}"
-    patterns: ["ansible.*.talos"]
-    file_type: directory
-    age: 1d
-  register: talos_stale_scratch
-  check_mode: false
-
-- name: prepare | Remove them
-  ansible.builtin.file:
-    path: "{{ item.path }}"
-    state: absent
-  check_mode: false
-  loop: "{{ talos_stale_scratch.files }}"
-  loop_control:
-    label: "{{ item.path }}"
-
   ansible.builtin.import_tasks: probe.yml
   when: not talos_prepare_minimal | default(false)

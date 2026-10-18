@@ -98,3 +98,13 @@ def test_user_volumes():
     ]
     assert tf.user_volumes(patches) == ["local-path-provisioner", "media"]
     assert tf.user_volumes([]) == []
+
+
+def test_the_installer_image_carries_its_pinned_digest():
+    digests = {"abc:v1.14.2": "sha256:" + "1" * 64}
+    assert tf.installer_image("factory.talos.dev/metal-installer", "abc", "v1.14.2", digests) == (
+        "factory.talos.dev/metal-installer/abc:v1.14.2@sha256:" + "1" * 64
+    )
+    # A pair without a pin, or no pins at all: the tag alone.
+    assert tf.installer_image("f/metal-installer", "abc", "v1.14.3", digests) == "f/metal-installer/abc:v1.14.3"
+    assert tf.installer_image("f/metal-installer", "abc", "v1.14.2", {}) == "f/metal-installer/abc:v1.14.2"

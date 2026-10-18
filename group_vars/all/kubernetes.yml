@@ -30,6 +30,21 @@ talos_kubernetes_version: 1.37.1
 # The Image Factory schematic of the ISO the VMs first boot: Talos with the QEMU guest agent. Its id is the
 # sha256 of the schematic, so it never changes with the version.
 kubernetes_iso_schematic: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
+# What the Image Factory must serve for these pins, since it publishes no checksum to anyone without a subscription:
+# each pinned once, from a download checked against the copy already in use, and bumped with talos_version
+# (CLAUDE.md). The ISO's SHA-256, which Proxmox checks as it downloads (sha256sum of the ISO); each schematic's id,
+# which roles/talos refuses the factory to answer otherwise (the factory's POST /schematics); and the digest of the
+# installer image of each schematic at talos_version, which the nodes install and upgrade from (crane digest
+# factory.talos.dev/metal-installer/<id>:<version>).
+kubernetes_iso_sha256: d541f989abd3fe5ba9a9d4ec66be7c2a29da6b90f540881c966e0fb5192151b9
+talos_schematic_pins:
+  base: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
+  gpu: 1ced7e2625c2a315e204530da2daf7a99cc0612fe4392c8ac110eb12f5a54053
+talos_installer_digests:
+  ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.14.2: >-
+    sha256:88d11931b80041b53e54724728f6a59ea6580949d73ee3298da8f07329c94835
+  1ced7e2625c2a315e204530da2daf7a99cc0612fe4392c8ac110eb12f5a54053:v1.14.2: >-
+    sha256:5d4ce2585153d6847090c1349b5ba4e5dcc9bd2b326b4485461f11ca7e32e95e
 
 # The cluster's shape. With a NAS: a control plane and a worker that runs every app. Without one: a single
 # control plane that runs everything, sized to the host by local.yml (kubernetes_node_sizes is required then).

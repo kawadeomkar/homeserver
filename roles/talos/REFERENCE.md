@@ -243,12 +243,32 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
   
   
 
+  - **talos_schematic_pins**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: Each schematic's id, by its name in talos_schematics: the Image Factory's answer is refused otherwise. Empty checks nothing.
+  
+  
+  
+
+  - **talos_installer_digests**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: The digest of each installer image, by "<schematic id>:<version>", which the nodes are given beside the tag. Once set, every schematic in use at talos_version must have one.
+  
+  
+  
+
   - **talos_keep_rendered**
     - **Required**: false
     - **Type**: bool
     - **Default**: False
   
-    - **Description**: Keep each node's rendered configuration in talos_config_dir/rendered/ (mode 0600; it holds the secrets), to compare by hand with talosctl apply-config --dry-run.
+    - **Description**: Keep each node's rendered configuration in talos_config_dir/rendered/ (mode 0600; it holds the secrets), to compare by hand with talosctl apply-config --dry-run, until the next run without it, which removes them.
   
   
   
@@ -476,12 +496,32 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
   
   
 
+  - **talos_schematic_pins**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: Each schematic's id, by its name in talos_schematics: the Image Factory's answer is refused otherwise. Empty checks nothing.
+  
+  
+  
+
+  - **talos_installer_digests**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: The digest of each installer image, by "<schematic id>:<version>", which the nodes are given beside the tag. Once set, every schematic in use at talos_version must have one.
+  
+  
+  
+
   - **talos_keep_rendered**
     - **Required**: false
     - **Type**: bool
     - **Default**: False
   
-    - **Description**: Keep each node's rendered configuration in talos_config_dir/rendered/ (mode 0600; it holds the secrets), to compare by hand with talosctl apply-config --dry-run.
+    - **Description**: Keep each node's rendered configuration in talos_config_dir/rendered/ (mode 0600; it holds the secrets), to compare by hand with talosctl apply-config --dry-run, until the next run without it, which removes them.
   
   
   
@@ -708,12 +748,32 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
   
   
 
+  - **talos_schematic_pins**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: Each schematic's id, by its name in talos_schematics: the Image Factory's answer is refused otherwise. Empty checks nothing.
+  
+  
+  
+
+  - **talos_installer_digests**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: The digest of each installer image, by "<schematic id>:<version>", which the nodes are given beside the tag. Once set, every schematic in use at talos_version must have one.
+  
+  
+  
+
   - **talos_keep_rendered**
     - **Required**: false
     - **Type**: bool
     - **Default**: False
   
-    - **Description**: Keep each node's rendered configuration in talos_config_dir/rendered/ (mode 0600; it holds the secrets), to compare by hand with talosctl apply-config --dry-run.
+    - **Description**: Keep each node's rendered configuration in talos_config_dir/rendered/ (mode 0600; it holds the secrets), to compare by hand with talosctl apply-config --dry-run, until the next run without it, which removes them.
   
   
   
@@ -754,7 +814,9 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
 | [talos_install_retries](defaults/main.yml#L38)   | int | `60` |    
 | [talos_allow_bootstrap](defaults/main.yml#L40)   | bool | `False` |    
 | [talos_reinstall](defaults/main.yml#L44)   | list | `[]` |    
-| [talos_keep_rendered](defaults/main.yml#L47)   | bool | `False` |    
+| [talos_schematic_pins](defaults/main.yml#L48)   | dict | `{}` |    
+| [talos_installer_digests](defaults/main.yml#L49)   | dict | `{}` |    
+| [talos_keep_rendered](defaults/main.yml#L53)   | bool | `False` |    
 
 
 
@@ -797,6 +859,7 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
 | Work out what to render for each node | ansible.builtin.set_fact | False |
 | Render the configurations | ansible.builtin.include_tasks | False |
 | Keep the rendered configurations, when asked | ansible.builtin.copy | True |
+| Remove the rendered configurations an earlier run kept | ansible.builtin.file | True |
 | Say which configured nodes were left as they are | ansible.builtin.debug | True |
 | Look for the record of the bootstrap | ansible.builtin.stat | False |
 | Refuse to send a bootstrapped cluster's keys to a node the run does not name | ansible.builtin.assert | True |
@@ -828,6 +891,8 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
 | prepare ¦ Refuse a talosctl of another minor release | ansible.builtin.assert | False |
 | prepare ¦ Ask the Image Factory for each schematic's id | ansible.builtin.uri | True |
 | prepare ¦ Keep the schematics' ids | ansible.builtin.set_fact | True |
+| prepare ¦ Refuse a schematic id other than the pinned one | ansible.builtin.assert | True |
+| prepare ¦ Refuse an installer image without its pinned digest | ansible.builtin.assert | True |
 | prepare ¦ Look for the secrets bundle | ansible.builtin.stat | False |
 | prepare ¦ Refuse a missing secrets bundle | ansible.builtin.assert | False |
 | prepare ¦ Refuse a secrets bundle others can read | ansible.builtin.assert | False |
@@ -839,6 +904,8 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
 | prepare ¦ Refuse another cluster's credentials | ansible.builtin.assert | False |
 | prepare ¦ Make a scratch directory | ansible.builtin.tempfile | False |
 | prepare ¦ Use it | ansible.builtin.set_fact | False |
+| prepare ¦ Look for scratch directories interrupted runs left | ansible.builtin.find | False |
+| prepare ¦ Remove them | ansible.builtin.file | False |
 | prepare ¦ Write the secrets bundle there | ansible.builtin.copy | False |
 | prepare ¦ Make a talosconfig for this run | ansible.builtin.command | False |
 | prepare ¦ Give it the control plane as endpoint and node | ansible.builtin.command | False |
@@ -976,29 +1043,30 @@ classDef rescue stroke:#665352,stroke-width:2px;
   Write_a_talosconfig__or_renew_one_that_expires_soon4-->|Task| Work_out_what_to_render_for_each_node5[work out what to render for each node]:::task
   Work_out_what_to_render_for_each_node5-->|Include task| Render_the_configurations_render_yml_6[render the configurations<br>include_task: render yml]:::includeTasks
   Render_the_configurations_render_yml_6-->|Task| Keep_the_rendered_configurations__when_asked7[keep the rendered configurations  when asked<br>When: **talos keep rendered   bool**]:::task
-  Keep_the_rendered_configurations__when_asked7-->|Task| Say_which_configured_nodes_were_left_as_they_are8[say which configured nodes were left as they are<br>When: **talos unrendered   length   0**]:::task
-  Say_which_configured_nodes_were_left_as_they_are8-->|Task| Look_for_the_record_of_the_bootstrap9[look for the record of the bootstrap]:::task
-  Look_for_the_record_of_the_bootstrap9-->|Task| Refuse_to_send_a_bootstrapped_cluster_s_keys_to_a_node_the_run_does_not_name10[refuse to send a bootstrapped cluster s keys to a<br>node the run does not name<br>When: **talos bootstrap record stat exists and not talos<br>allow bootstrap   bool**]:::task
-  Refuse_to_send_a_bootstrapped_cluster_s_keys_to_a_node_the_run_does_not_name10-->|Task| Say_which_nodes_would_be_installed11[say which nodes would be installed<br>When: **ansible check mode**]:::task
-  Say_which_nodes_would_be_installed11-->|Task| Install_Talos_on_the_nodes_in_maintenance_mode12[install talos on the nodes in maintenance mode]:::task
-  Install_Talos_on_the_nodes_in_maintenance_mode12-->|Task| Wait_for_each_node_to_install_and_boot_from_its_system_disk13[wait for each node to install and boot from its<br>system disk<br>When: **not ansible check mode**]:::task
-  Wait_for_each_node_to_install_and_boot_from_its_system_disk13-->|Task| Refuse_to_go_on_with_a_node_that_did_not_install14[refuse to go on with a node that did not install<br>When: **status phase     installed**]:::task
-  Refuse_to_go_on_with_a_node_that_did_not_install14-->|Task| Compare_each_configured_node_s_configuration15[compare each configured node s configuration]:::task
-  Compare_each_configured_node_s_configuration15-->|Task| Work_out_which_nodes_differ16[work out which nodes differ]:::task
-  Work_out_which_nodes_differ16-->|Task| Show_the_nodes_whose_configuration_differs17[show the nodes whose configuration differs<br>When: **talos drifted   length   0**]:::task
-  Show_the_nodes_whose_configuration_differs17-->|Task| Apply_the_configuration_without_a_reboot18[apply the configuration without a reboot]:::task
-  Apply_the_configuration_without_a_reboot18-->|Task| Refuse_to_go_on_when_a_configuration_was_not_applied19[refuse to go on when a configuration was not<br>applied<br>When: **item rc    0**]:::task
-  Refuse_to_go_on_when_a_configuration_was_not_applied19-->|Import task| Bootstrap_etcd__once_bootstrap_yml_20[/bootstrap etcd  once<br>import_task: bootstrap yml/]:::importTasks
-  Bootstrap_etcd__once_bootstrap_yml_20-->|Task| Wait_for_the_cluster_to_be_healthy21[wait for the cluster to be healthy<br>When: **not ansible check mode**]:::task
-  Wait_for_the_cluster_to_be_healthy21-->|Task| Read_each_node_s_volumes22[read each node s volumes<br>When: **not ansible check mode and item patches   default <br>     talos user volumes   length   0**]:::task
-  Read_each_node_s_volumes22-->|Task| Refuse_a_user_volume_that_is_not_ready23[refuse a user volume that is not ready<br>When: **unready   length   0**]:::task
-  Refuse_a_user_volume_that_is_not_ready23-->|Task| Check_the_kubeconfig_s_client_certificate24[check the kubeconfig s client certificate<br>When: **talos kubeconfig file stat exists**]:::task
-  Check_the_kubeconfig_s_client_certificate24-->|Task| Fetch_a_kubeconfig__or_renew_one_that_expires_soon25[fetch a kubeconfig  or renew one that expires soon<br>When: **not talos kubeconfig file stat exists or talos<br>kubeconfig cert rc    0**]:::task
-  Fetch_a_kubeconfig__or_renew_one_that_expires_soon25-->|Task| Say_the_kubeconfig_would_be_fetched_or_renewed26[say the kubeconfig would be fetched or renewed<br>When: **ansible check mode and  not talos kubeconfig file<br>stat exists or talos kubeconfig cert rc    0**]:::task
-  Say_the_kubeconfig_would_be_fetched_or_renewed26-->|Task| Keep_the_kubeconfig_readable_by_its_owner_alone27[keep the kubeconfig readable by its owner alone<br>When: **not ansible check mode**]:::task
-  Keep_the_kubeconfig_readable_by_its_owner_alone27-->|Task| Report_the_versions_running__and_any_upgrade_the_pins_wait_for28[report the versions running  and any upgrade the<br>pins wait for]:::task
-  Report_the_versions_running__and_any_upgrade_the_pins_wait_for28-.->|End of Block| Build_the_cluster1_block_start_0
-  Report_the_versions_running__and_any_upgrade_the_pins_wait_for28-->End
+  Keep_the_rendered_configurations__when_asked7-->|Task| Remove_the_rendered_configurations_an_earlier_run_kept8[remove the rendered configurations an earlier run<br>kept<br>When: **not talos keep rendered   bool**]:::task
+  Remove_the_rendered_configurations_an_earlier_run_kept8-->|Task| Say_which_configured_nodes_were_left_as_they_are9[say which configured nodes were left as they are<br>When: **talos unrendered   length   0**]:::task
+  Say_which_configured_nodes_were_left_as_they_are9-->|Task| Look_for_the_record_of_the_bootstrap10[look for the record of the bootstrap]:::task
+  Look_for_the_record_of_the_bootstrap10-->|Task| Refuse_to_send_a_bootstrapped_cluster_s_keys_to_a_node_the_run_does_not_name11[refuse to send a bootstrapped cluster s keys to a<br>node the run does not name<br>When: **talos bootstrap record stat exists and not talos<br>allow bootstrap   bool**]:::task
+  Refuse_to_send_a_bootstrapped_cluster_s_keys_to_a_node_the_run_does_not_name11-->|Task| Say_which_nodes_would_be_installed12[say which nodes would be installed<br>When: **ansible check mode**]:::task
+  Say_which_nodes_would_be_installed12-->|Task| Install_Talos_on_the_nodes_in_maintenance_mode13[install talos on the nodes in maintenance mode]:::task
+  Install_Talos_on_the_nodes_in_maintenance_mode13-->|Task| Wait_for_each_node_to_install_and_boot_from_its_system_disk14[wait for each node to install and boot from its<br>system disk<br>When: **not ansible check mode**]:::task
+  Wait_for_each_node_to_install_and_boot_from_its_system_disk14-->|Task| Refuse_to_go_on_with_a_node_that_did_not_install15[refuse to go on with a node that did not install<br>When: **status phase     installed**]:::task
+  Refuse_to_go_on_with_a_node_that_did_not_install15-->|Task| Compare_each_configured_node_s_configuration16[compare each configured node s configuration]:::task
+  Compare_each_configured_node_s_configuration16-->|Task| Work_out_which_nodes_differ17[work out which nodes differ]:::task
+  Work_out_which_nodes_differ17-->|Task| Show_the_nodes_whose_configuration_differs18[show the nodes whose configuration differs<br>When: **talos drifted   length   0**]:::task
+  Show_the_nodes_whose_configuration_differs18-->|Task| Apply_the_configuration_without_a_reboot19[apply the configuration without a reboot]:::task
+  Apply_the_configuration_without_a_reboot19-->|Task| Refuse_to_go_on_when_a_configuration_was_not_applied20[refuse to go on when a configuration was not<br>applied<br>When: **item rc    0**]:::task
+  Refuse_to_go_on_when_a_configuration_was_not_applied20-->|Import task| Bootstrap_etcd__once_bootstrap_yml_21[/bootstrap etcd  once<br>import_task: bootstrap yml/]:::importTasks
+  Bootstrap_etcd__once_bootstrap_yml_21-->|Task| Wait_for_the_cluster_to_be_healthy22[wait for the cluster to be healthy<br>When: **not ansible check mode**]:::task
+  Wait_for_the_cluster_to_be_healthy22-->|Task| Read_each_node_s_volumes23[read each node s volumes<br>When: **not ansible check mode and item patches   default <br>     talos user volumes   length   0**]:::task
+  Read_each_node_s_volumes23-->|Task| Refuse_a_user_volume_that_is_not_ready24[refuse a user volume that is not ready<br>When: **unready   length   0**]:::task
+  Refuse_a_user_volume_that_is_not_ready24-->|Task| Check_the_kubeconfig_s_client_certificate25[check the kubeconfig s client certificate<br>When: **talos kubeconfig file stat exists**]:::task
+  Check_the_kubeconfig_s_client_certificate25-->|Task| Fetch_a_kubeconfig__or_renew_one_that_expires_soon26[fetch a kubeconfig  or renew one that expires soon<br>When: **not talos kubeconfig file stat exists or talos<br>kubeconfig cert rc    0**]:::task
+  Fetch_a_kubeconfig__or_renew_one_that_expires_soon26-->|Task| Say_the_kubeconfig_would_be_fetched_or_renewed27[say the kubeconfig would be fetched or renewed<br>When: **ansible check mode and  not talos kubeconfig file<br>stat exists or talos kubeconfig cert rc    0**]:::task
+  Say_the_kubeconfig_would_be_fetched_or_renewed27-->|Task| Keep_the_kubeconfig_readable_by_its_owner_alone28[keep the kubeconfig readable by its owner alone<br>When: **not ansible check mode**]:::task
+  Keep_the_kubeconfig_readable_by_its_owner_alone28-->|Task| Report_the_versions_running__and_any_upgrade_the_pins_wait_for29[report the versions running  and any upgrade the<br>pins wait for]:::task
+  Report_the_versions_running__and_any_upgrade_the_pins_wait_for29-.->|End of Block| Build_the_cluster1_block_start_0
+  Report_the_versions_running__and_any_upgrade_the_pins_wait_for29-->End
 ```
 
 
@@ -1021,22 +1089,26 @@ classDef rescue stroke:#665352,stroke-width:2px;
   prepare___Read_the_workstation_s_talosctl_version1-->|Task| prepare___Refuse_a_talosctl_of_another_minor_release2[prepare   refuse a talosctl of another minor<br>release]:::task
   prepare___Refuse_a_talosctl_of_another_minor_release2-->|Task| prepare___Ask_the_Image_Factory_for_each_schematic_s_id3[prepare   ask the image factory for each schematic<br>s id<br>When: **not talos prepare minimal   default false**]:::task
   prepare___Ask_the_Image_Factory_for_each_schematic_s_id3-->|Task| prepare___Keep_the_schematics__ids4[prepare   keep the schematics  ids<br>When: **not talos prepare minimal   default false**]:::task
-  prepare___Keep_the_schematics__ids4-->|Task| prepare___Look_for_the_secrets_bundle5[prepare   look for the secrets bundle]:::task
-  prepare___Look_for_the_secrets_bundle5-->|Task| prepare___Refuse_a_missing_secrets_bundle6[prepare   refuse a missing secrets bundle]:::task
-  prepare___Refuse_a_missing_secrets_bundle6-->|Task| prepare___Refuse_a_secrets_bundle_others_can_read7[prepare   refuse a secrets bundle others can read]:::task
-  prepare___Refuse_a_secrets_bundle_others_can_read7-->|Task| prepare___Read_the_secrets_bundle8[prepare   read the secrets bundle]:::task
-  prepare___Read_the_secrets_bundle8-->|Task| prepare___Keep_it_for_this_run9[prepare   keep it for this run]:::task
-  prepare___Keep_it_for_this_run9-->|Task| prepare___Refuse_a_file_that_is_not_a_secrets_bundle10[prepare   refuse a file that is not a secrets<br>bundle]:::task
-  prepare___Refuse_a_file_that_is_not_a_secrets_bundle10-->|Task| prepare___Look_for_the_credentials_an_earlier_run_kept11[prepare   look for the credentials an earlier run<br>kept]:::task
-  prepare___Look_for_the_credentials_an_earlier_run_kept11-->|Task| prepare___Compare_them_with_this_cluster12[prepare   compare them with this cluster]:::task
-  prepare___Compare_them_with_this_cluster12-->|Task| prepare___Refuse_another_cluster_s_credentials13[prepare   refuse another cluster s credentials]:::task
-  prepare___Refuse_another_cluster_s_credentials13-->|Task| prepare___Make_a_scratch_directory14[prepare   make a scratch directory]:::task
-  prepare___Make_a_scratch_directory14-->|Task| prepare___Use_it15[prepare   use it]:::task
-  prepare___Use_it15-->|Task| prepare___Write_the_secrets_bundle_there16[prepare   write the secrets bundle there]:::task
-  prepare___Write_the_secrets_bundle_there16-->|Task| prepare___Make_a_talosconfig_for_this_run17[prepare   make a talosconfig for this run]:::task
-  prepare___Make_a_talosconfig_for_this_run17-->|Task| prepare___Give_it_the_control_plane_as_endpoint_and_node18[prepare   give it the control plane as endpoint<br>and node]:::task
-  prepare___Give_it_the_control_plane_as_endpoint_and_node18-->|Import task| prepare___Find_out_what_each_node_runs_probe_yml_19[/prepare   find out what each node runs<br>When: **not talos prepare minimal   default false**<br>import_task: probe yml/]:::importTasks
-  prepare___Find_out_what_each_node_runs_probe_yml_19-->End
+  prepare___Keep_the_schematics__ids4-->|Task| prepare___Refuse_a_schematic_id_other_than_the_pinned_one5[prepare   refuse a schematic id other than the<br>pinned one<br>When: **not talos prepare minimal   default false  and<br>talos schematic pins   length   0**]:::task
+  prepare___Refuse_a_schematic_id_other_than_the_pinned_one5-->|Task| prepare___Refuse_an_installer_image_without_its_pinned_digest6[prepare   refuse an installer image without its<br>pinned digest<br>When: **not talos prepare minimal   default false  and<br>talos installer digests   length   0**]:::task
+  prepare___Refuse_an_installer_image_without_its_pinned_digest6-->|Task| prepare___Look_for_the_secrets_bundle7[prepare   look for the secrets bundle]:::task
+  prepare___Look_for_the_secrets_bundle7-->|Task| prepare___Refuse_a_missing_secrets_bundle8[prepare   refuse a missing secrets bundle]:::task
+  prepare___Refuse_a_missing_secrets_bundle8-->|Task| prepare___Refuse_a_secrets_bundle_others_can_read9[prepare   refuse a secrets bundle others can read]:::task
+  prepare___Refuse_a_secrets_bundle_others_can_read9-->|Task| prepare___Read_the_secrets_bundle10[prepare   read the secrets bundle]:::task
+  prepare___Read_the_secrets_bundle10-->|Task| prepare___Keep_it_for_this_run11[prepare   keep it for this run]:::task
+  prepare___Keep_it_for_this_run11-->|Task| prepare___Refuse_a_file_that_is_not_a_secrets_bundle12[prepare   refuse a file that is not a secrets<br>bundle]:::task
+  prepare___Refuse_a_file_that_is_not_a_secrets_bundle12-->|Task| prepare___Look_for_the_credentials_an_earlier_run_kept13[prepare   look for the credentials an earlier run<br>kept]:::task
+  prepare___Look_for_the_credentials_an_earlier_run_kept13-->|Task| prepare___Compare_them_with_this_cluster14[prepare   compare them with this cluster]:::task
+  prepare___Compare_them_with_this_cluster14-->|Task| prepare___Refuse_another_cluster_s_credentials15[prepare   refuse another cluster s credentials]:::task
+  prepare___Refuse_another_cluster_s_credentials15-->|Task| prepare___Make_a_scratch_directory16[prepare   make a scratch directory]:::task
+  prepare___Make_a_scratch_directory16-->|Task| prepare___Use_it17[prepare   use it]:::task
+  prepare___Use_it17-->|Task| prepare___Look_for_scratch_directories_interrupted_runs_left18[prepare   look for scratch directories interrupted<br>runs left]:::task
+  prepare___Look_for_scratch_directories_interrupted_runs_left18-->|Task| prepare___Remove_them19[prepare   remove them]:::task
+  prepare___Remove_them19-->|Task| prepare___Write_the_secrets_bundle_there20[prepare   write the secrets bundle there]:::task
+  prepare___Write_the_secrets_bundle_there20-->|Task| prepare___Make_a_talosconfig_for_this_run21[prepare   make a talosconfig for this run]:::task
+  prepare___Make_a_talosconfig_for_this_run21-->|Task| prepare___Give_it_the_control_plane_as_endpoint_and_node22[prepare   give it the control plane as endpoint<br>and node]:::task
+  prepare___Give_it_the_control_plane_as_endpoint_and_node22-->|Import task| prepare___Find_out_what_each_node_runs_probe_yml_23[/prepare   find out what each node runs<br>When: **not talos prepare minimal   default false**<br>import_task: probe yml/]:::importTasks
+  prepare___Find_out_what_each_node_runs_probe_yml_23-->End
 ```
 
 

@@ -64,11 +64,13 @@
           {%-   if n.state == 'configured' and n.tag and n.running_schematic and talos_running_kubernetes -%}
           {%-     set _ = out.append(n | combine({'version': n.tag, 'contract': n.tag | talos_minor,
                     'kubernetes_version': talos_running_kubernetes,
-                    'install_image': talos_installer ~ '/' ~ n.running_schematic ~ ':' ~ n.tag})) -%}
+                    'install_image': talos_installer | talos_installer_image(n.running_schematic, n.tag,
+                                                                             talos_installer_digests)})) -%}
           {%-   elif n.state != 'configured' -%}
           {%-     set _ = out.append(n | combine({'version': talos_version, 'contract': talos_contract,
                     'kubernetes_version': talos_kubernetes_version,
-                    'install_image': talos_installer ~ '/' ~ talos_schematic_ids[n.schematic] ~ ':' ~ talos_version})) -%}
+                    'install_image': talos_installer | talos_installer_image(talos_schematic_ids[n.schematic],
+                                                                             talos_version, talos_installer_digests)})) -%}
           {%-   endif -%}
           {%- endfor -%}
           {{ out }}
@@ -93,8 +95,6 @@
       loop_control:
         label: "{{ item.name }}"
 
-    - name: Say which configured nodes were left as they are
-      ansible.builtin.debug:
     # Kept until the next run that does not ask: they hold every key of the cluster.
     - name: Remove the rendered configurations an earlier run kept
       ansible.builtin.file:
@@ -102,6 +102,8 @@
         state: absent
       when: not talos_keep_rendered | bool
 
+    - name: Say which configured nodes were left as they are
+      ansible.builtin.debug:
         msg: >-
           Not checked for drift this run, since the cluster's Kubernetes version could not be read (no kubeconfig on
           this machine yet): {{ talos_unrendered | join(', ') }}. The run fetches one; the next run checks them.

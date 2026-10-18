@@ -113,7 +113,11 @@ them), then
 1. Bump the pins together in `group_vars/all/kubernetes.yml` (`talos_version`, `talos_contract`,
    `talos_kubernetes_version`), the Makefile's `KUBERNETES_VERSION` and CI's `TALOSCTL_VERSION` and
    `TALOSCTL_SHA256`, and upgrade the workstation's `talosctl`. Move to adjacent minor releases only, the latest
-   patch of each.
+   patch of each. With them, what the Image Factory must serve for the new version, since it publishes no checksum:
+   `kubernetes_iso_sha256` (`sha256sum` of the new ISO, downloaded from the URL `proxmox_vm_isos` names) and a
+   `talos_installer_digests` entry for each schematic at the new version (`crane digest
+   factory.talos.dev/metal-installer/<schematic id>:<version>`), keeping the old version's entries until every
+   node has moved, since a node is rendered with what it runs. The schematic ids stay, unless a schematic changed.
 2. `make kubernetes` between the bump and the upgrade changes nothing on the nodes: it renders each node with what
    it runs, and reports the pending upgrade. It also downloads the new ISO, which nodes built later boot.
 3. `make check-talos-upgrade`: the plan per node, and Kubernetes's own upgrade dry run, deprecated APIs included.

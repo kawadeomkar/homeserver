@@ -22,6 +22,7 @@ Description: Hand a Kubernetes cluster to Flux, through the Flux Operator
 - Runs on the controller with kubectl. Installs or upgrades the Flux Operator, and keeps the Secret flux-system/sops-age (the age key), the ConfigMap flux-system/cluster-settings and the FluxInstance flux as configured, each compared with a server-side diff and applied server-side under one field manager, so a key removed from the settings disappears.
 - Flux 2.9 and later fail a manifest naming a setting that does not exist (strict substitution, on by default), instead of giving it an empty string.
 - Refuses an age key file that holds anything but one key, or that others can read.
+- Installs only an install.yaml of the pinned SHA-256, with the operator's image pinned by digest, and gives the FluxInstance an exact Flux release and a manifests artifact pinned by digest, so nothing it installs can change unreviewed.
 - The defaults do nothing.
 
 
@@ -58,12 +59,32 @@ Description: Hand a Kubernetes cluster to Flux, through the Flux Operator
   
   
 
+  - **flux_bootstrap_operator_sha256**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The SHA-256 (hex) install.yaml must have, checked before anything in it is applied. Required with a version.
+  
+  
+  
+
+  - **flux_bootstrap_operator_digest**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The operator image's digest (sha256:...), which its Deployment is given beside the tag. Required with a version.
+  
+  
+  
+
   - **flux_bootstrap_instance**
     - **Required**: false
     - **Type**: dict
     - **Default**: {}
   
-    - **Description**: The FluxInstance's Flux version (2.9.x), Git url, ref and path.
+    - **Description**: The FluxInstance's exact Flux release (such as 2.9.6), the operator's manifests artifact pinned by digest (oci://...@sha256:...), and the Git url, ref and path.
   
   
   
@@ -116,10 +137,12 @@ Description: Hand a Kubernetes cluster to Flux, through the Flux Operator
 | [flux_bootstrap_kubeconfig](defaults/main.yml#L6)   | str |  |    
 | [flux_bootstrap_operator_version](defaults/main.yml#L8)   | str |  |    
 | [flux_bootstrap_operator_url](defaults/main.yml#L9)   | str | `https://github.com/controlplaneio-fluxcd/flux-operator/releases/download` |    
-| [flux_bootstrap_instance](defaults/main.yml#L11)   | dict | `{}` |    
-| [flux_bootstrap_settings](defaults/main.yml#L14)   | dict | `{}` |    
-| [flux_bootstrap_age_key_file](defaults/main.yml#L17)   | str |  |    
-| [flux_bootstrap_wait_timeout](defaults/main.yml#L19)   | str | `10m` |    
+| [flux_bootstrap_operator_sha256](defaults/main.yml#L12)   | str |  |    
+| [flux_bootstrap_operator_digest](defaults/main.yml#L13)   | str |  |    
+| [flux_bootstrap_instance](defaults/main.yml#L16)   | dict | `{}` |    
+| [flux_bootstrap_settings](defaults/main.yml#L19)   | dict | `{}` |    
+| [flux_bootstrap_age_key_file](defaults/main.yml#L22)   | str |  |    
+| [flux_bootstrap_wait_timeout](defaults/main.yml#L24)   | str | `10m` |    
 
 
 
@@ -148,7 +171,12 @@ Description: Hand a Kubernetes cluster to Flux, through the Flux Operator
 | Name | Module | Has Conditions |
 | ---- | ------ | -------------- |
 | objects ¦ Work out whether the operator is the pinned release | ansible.builtin.set_fact | False |
-| objects ¦ Install or upgrade the Flux Operator | ansible.builtin.command | True |
+| objects ¦ Install or upgrade the Flux Operator | block | True |
+| objects ¦ Make a scratch directory for the release | ansible.builtin.tempfile | False |
+| objects ¦ Download the release's install.yaml, checking its SHA-256 | ansible.builtin.get_url | False |
+| objects ¦ Pin the operator's image by digest | ansible.builtin.replace | False |
+| objects ¦ Refuse a release whose operator image was not pinned | ansible.builtin.assert | False |
+| objects ¦ Apply the release | ansible.builtin.command | False |
 | objects ¦ Say the operator would be upgraded | ansible.builtin.debug | True |
 | objects ¦ Wait for the operator | ansible.builtin.command | True |
 | objects ¦ Render the age key as the Secret flux-system/sops-age | ansible.builtin.command | False |
@@ -211,8 +239,14 @@ classDef includeVars stroke:#8e44ad,stroke-width:2px;
 classDef rescue stroke:#665352,stroke-width:2px;
 
   Start-->|Task| objects___Work_out_whether_the_operator_is_the_pinned_release0[objects   work out whether the operator is the<br>pinned release]:::task
-  objects___Work_out_whether_the_operator_is_the_pinned_release0-->|Task| objects___Install_or_upgrade_the_Flux_Operator1[objects   install or upgrade the flux operator<br>When: **flux bootstrap operator current    flux bootstrap<br>operator version**]:::task
-  objects___Install_or_upgrade_the_Flux_Operator1-->|Task| objects___Say_the_operator_would_be_upgraded2[objects   say the operator would be upgraded<br>When: **ansible check mode and flux bootstrap operator<br>current    flux bootstrap operator version**]:::task
+  objects___Work_out_whether_the_operator_is_the_pinned_release0-->|Block Start| objects___Install_or_upgrade_the_Flux_Operator1_block_start_0[[objects   install or upgrade the flux operator<br>When: **flux bootstrap operator current    flux bootstrap<br>operator pinned and not ansible check mode**]]:::block
+  objects___Install_or_upgrade_the_Flux_Operator1_block_start_0-->|Task| objects___Make_a_scratch_directory_for_the_release0[objects   make a scratch directory for the release]:::task
+  objects___Make_a_scratch_directory_for_the_release0-->|Task| objects___Download_the_release_s_install_yaml__checking_its_SHA_2561[objects   download the release s install yaml <br>checking its sha 256]:::task
+  objects___Download_the_release_s_install_yaml__checking_its_SHA_2561-->|Task| objects___Pin_the_operator_s_image_by_digest2[objects   pin the operator s image by digest]:::task
+  objects___Pin_the_operator_s_image_by_digest2-->|Task| objects___Refuse_a_release_whose_operator_image_was_not_pinned3[objects   refuse a release whose operator image<br>was not pinned]:::task
+  objects___Refuse_a_release_whose_operator_image_was_not_pinned3-->|Task| objects___Apply_the_release4[objects   apply the release]:::task
+  objects___Apply_the_release4-.->|End of Block| objects___Install_or_upgrade_the_Flux_Operator1_block_start_0
+  objects___Apply_the_release4-->|Task| objects___Say_the_operator_would_be_upgraded2[objects   say the operator would be upgraded<br>When: **ansible check mode and flux bootstrap operator<br>current    flux bootstrap operator pinned**]:::task
   objects___Say_the_operator_would_be_upgraded2-->|Task| objects___Wait_for_the_operator3[objects   wait for the operator<br>When: **not ansible check mode**]:::task
   objects___Wait_for_the_operator3-->|Task| objects___Render_the_age_key_as_the_Secret_flux_system_sops_age4[objects   render the age key as the secret flux<br>system sops age]:::task
   objects___Render_the_age_key_as_the_Secret_flux_system_sops_age4-->|Task| objects___Render_the_settings_and_the_FluxInstance5[objects   render the settings and the fluxinstance]:::task

@@ -34,6 +34,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import fake_kubectl  # noqa: E402
 import fake_pve  # noqa: E402
 import fake_truenas  # noqa: E402
 
@@ -1151,6 +1152,9 @@ def test_proxmox_vm_with_a_nas(tmp_path):
     assert vms["300"]["config"]["startup"].startswith("order=1,") and "scsi1" not in vms["300"]["config"]
     isos = [v["volid"] for v in read(state)["content"]["local"]]
     assert isos == [ISO], "the ISO was not downloaded once"
+    # Proxmox checks the download against the pinned SHA-256.
+    download = read(state)["downloads"][0]
+    assert download["checksum-algorithm"] == "sha256" and re.fullmatch(r"[0-9a-f]{64}", download["checksum"])
 
     # Drift: cores changed by hand on the running control plane, tags in another order and case. The cores go back,
     # pending until a restart, which every run reports and none makes; the tags are no change.
@@ -1454,6 +1458,11 @@ def factory():
     server.shutdown()
 
 
+# The schematics of group_vars/kubernetes/talos.yml, and the digest the tests pin every installer image to.
+SCHEMATICS = {"base": ["siderolabs/qemu-guest-agent"], "gpu": ["siderolabs/qemu-guest-agent", "siderolabs/i915"]}
+INSTALLER_DIGEST = "sha256:" + "0" * 63 + "2"
+
+
 def schematic_id(extensions):
     """The id the factory fixture gives a schematic, computed as the role's request makes it."""
     body = yaml.dump(
@@ -1486,6 +1495,13 @@ def talos_vars(tmp_path, factory, nas=True, **more):
         "talos_probe_delay": 0,
         "talos_probe_retries": 3,
         "talos_install_retries": 5,
+        # The fake factory's ids, pinned, and a digest of no real image for each installer.
+        "talos_schematic_pins": {name: schematic_id(extensions) for name, extensions in SCHEMATICS.items()},
+        "talos_installer_digests": {
+            f"{schematic_id(extensions)}:{version}": INSTALLER_DIGEST
+            for extensions in SCHEMATICS.values()
+            for version in ("v1.14.2", "v1.14.3")
+        },
         "truenas_static_address": "127.0.0.10/24" if nas else "",
         "kubernetes_node_addresses": NODE_ADDRESSES if nas else {"homeserver-cp-1": NODE_ADDRESSES["homeserver-cp-1"]},
     }
@@ -1554,6 +1570,8 @@ def test_talos_with_a_nas(tmp_path, factory):
     assert "# type: controlplane" in cp and "listen-metrics-urls" in cp and "$patch: delete" not in cp
     assert "# type: worker" in worker and "name: local-path-provisioner" in worker and "_drive-scsi1" in worker
     assert "hostname: homeserver-worker-1" in worker and "kind: WatchdogTimerConfig" in worker
+    # Each node installs its schematic's installer at the pinned digest.
+    assert f"/metal-installer/{base}:v1.14.2@{INSTALLER_DIGEST}" in worker
     # The firewall's rules for the pod network name the one talosctl gave, which the role asked it for.
     assert "kind: NetworkDefaultActionConfig\ningress: block" in worker
     assert '{"subnet": "198.51.100.0/24"}' in worker and '{"subnet": "198.51.100.0/24"}' in cp
@@ -1683,6 +1701,22 @@ def test_talos_leaves_no_keys_behind(tmp_path, factory):
     expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=1, note="the renders removed")
     assert not rendered.exists()
     expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=0, note="nothing left to remove")
+
+
+@pytest.mark.cluster
+def test_talos_refuses_what_the_factory_answers_unpinned(tmp_path, factory):
+    """A schematic id the factory gives other than the pinned one, and an installer image of the pinned version
+    without a digest, are refused before any node is asked anything, in a dry run too."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state)
+    other = extra | {"talos_schematic_pins": extra["talos_schematic_pins"] | {"base": "ab" * 32}}
+    rc, _, out = run("talos.yml", other, check=True, env=env)
+    assert rc != 0 and f"gave the schematic base the id {schematic_id(SCHEMATICS['base'])}" in out, out[-3000:]
+    assert f"talos_schematic_pins holds {'ab' * 32}" in out, out[-3000:]
+    rc, _, out = run("talos.yml", extra | {"talos_version": "v1.14.9"}, check=True, env=env)
+    assert rc != 0 and f"no digest for the installer image {schematic_id(SCHEMATICS['base'])}:v1.14.9" in out
+    assert read(state)["mutations"] == 0
 
 
 @pytest.mark.cluster
@@ -1958,8 +1992,43 @@ def test_talos_upgrade_and_etcd_snapshot(tmp_path, factory):
 AGE_KEY = "-".join(["AGE", "SECRET", "KEY", "1TESTSENTINELNOTAKEY"])
 
 
-def flux_vars(tmp_path, **more):
-    """The flux test playbook's variables, isolated in tmp_path: a sentinel age key, never the owner's."""
+@pytest.fixture(scope="module")
+def operator_releases():
+    """The Flux Operator's release downloads: GET /<version>/install.yaml serves the fake's release of that version,
+    whose SHA-256 the test then pins, as the real file's is."""
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            found = re.fullmatch(r"/(v\d+\.\d+\.\d+)/install\.yaml", self.path)
+            if not found:
+                self.send_error(404)
+                return
+            body = operator_release(found.group(1))
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+
+
+def operator_release(version):
+    return yaml.safe_dump_all(fake_kubectl.operator_objects(version)).encode()
+
+
+# What the operator's image is pinned to in the tests: a digest of no real image.
+OPERATOR_DIGEST = "sha256:" + "0" * 63 + "1"
+
+
+def flux_vars(tmp_path, operator_releases, **more):
+    """The flux test playbook's variables, isolated in tmp_path: a sentinel age key, never the owner's, and the
+    operator's releases from the test's own server, pinned by the SHA-256 of what it serves."""
     config_dir = tmp_path / "home" / ".talos" / "homeserver"
     config_dir.mkdir(parents=True, exist_ok=True)
     key = tmp_path / "home" / "homeserver.agekey"
@@ -1977,6 +2046,9 @@ def flux_vars(tmp_path, **more):
         "kubernetes_lb_traefik_ip": "127.0.0.40",
         "kubernetes_lb_frigate_ip": "127.0.0.41",
         "flux_sync_url": "https://example.invalid/homeserver.git",
+        "flux_bootstrap_operator_url": operator_releases,
+        "flux_bootstrap_operator_sha256": hashlib.sha256(operator_release("v0.61.0")).hexdigest(),
+        "flux_bootstrap_operator_digest": OPERATOR_DIGEST,
     }
     return extra | more
 
@@ -1992,11 +2064,13 @@ def no_age_key(outputs):
 
 
 @pytest.mark.cluster
-def test_flux_bootstrap(tmp_path):
+def test_flux_bootstrap(tmp_path, operator_releases):
     """Before the cluster exists, a dry run says what it would install and a real run stops, naming where the
-    kubeconfig comes from. Then the operator, the age key, the settings and the FluxInstance are applied once, and
-    left alone; a changed or removed setting is applied; an operator bump re-installs it. The key never shows."""
-    extra, env = flux_vars(tmp_path), talos_env(tmp_path)
+    kubeconfig comes from. Then the operator, its image pinned by digest, the age key, the settings and the
+    FluxInstance, an exact Flux release from a pinned artifact, are applied once, and left alone; a changed or removed
+    setting is applied; an operator bump re-installs it, and a release whose install.yaml is not the pinned one is
+    refused before anything is applied. The key never shows."""
+    extra, env = flux_vars(tmp_path, operator_releases), talos_env(tmp_path)
     state = Path(extra["fake_talos_state"])
     write(state, {"nodes": {}, "mutations": 0})
     outputs = []
@@ -2022,8 +2096,10 @@ def test_flux_bootstrap(tmp_path):
     outputs.append(result[2])
     expect(result, "homeserver-k8s", changed=True, note="first run")
     objects = flux_objects(state)
-    assert read(state)["operator_installs"] == ["v0.61.0"]
+    assert read(state)["operator_installs"] == [f"flux-operator:v0.61.0@{OPERATOR_DIGEST}"]
     instance = objects["FluxInstance/flux-system/flux"]["spec"]
+    assert instance["distribution"]["version"] == "2.9.6"
+    assert re.fullmatch(r"oci://\S+/flux-operator-manifests@sha256:[0-9a-f]{64}", instance["distribution"]["artifact"])
     assert instance["sync"] == {
         "kind": "GitRepository",
         "url": "https://example.invalid/homeserver.git",
@@ -2053,19 +2129,27 @@ def test_flux_bootstrap(tmp_path):
     expect(run("flux.yml", fewer, env=env), "homeserver-k8s", changed=1, note="a removed setting")
     assert flux_objects(state)["ConfigMap/flux-system/cluster-settings"]["data"] == {"DOMAIN": "home.example.org"}
 
-    # A new operator release is installed over the old one.
-    result = run("flux.yml", extra | {"flux_bootstrap_operator_version": "v0.62.0"}, env=env)
+    # A new operator release whose install.yaml is not the pinned one is refused, and nothing is applied.
+    bump = extra | {"flux_bootstrap_operator_version": "v0.62.0"}
+    mutations = read(state)["mutations"]
+    rc, _, out = run("flux.yml", bump, env=env)
+    assert rc != 0 and "did not match" in out, out[-3000:]
+    assert read(state)["mutations"] == mutations and len(read(state)["operator_installs"]) == 1
+
+    # Pinned, it is installed over the old one.
+    bump |= {"flux_bootstrap_operator_sha256": hashlib.sha256(operator_release("v0.62.0")).hexdigest()}
+    result = run("flux.yml", bump, env=env)
     outputs.append(result[2])
     expect(result, "homeserver-k8s", changed=True, note="an operator bump")
-    assert read(state)["operator_installs"] == ["v0.61.0", "v0.62.0"]
+    assert read(state)["operator_installs"][1] == f"flux-operator:v0.62.0@{OPERATOR_DIGEST}"
     no_age_key(outputs)
 
 
 @pytest.mark.cluster
-def test_flux_bootstrap_refuses_a_shared_key_and_reports_a_stuck_operator(tmp_path):
+def test_flux_bootstrap_refuses_a_shared_key_and_reports_a_stuck_operator(tmp_path, operator_releases):
     """An age key file holding two keys, one others can read, or none, is refused before anything is applied. An
     operator that never becomes available fails the run."""
-    extra, env = flux_vars(tmp_path), talos_env(tmp_path)
+    extra, env = flux_vars(tmp_path, operator_releases), talos_env(tmp_path)
     state = Path(extra["fake_talos_state"])
     (Path(extra["talos_config_dir"]) / "kubeconfig").write_text("apiVersion: v1\n")
     write(state, {"nodes": {}, "mutations": 0, "bootstrapped": True})

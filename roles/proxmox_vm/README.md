@@ -46,7 +46,7 @@ A download's own task status is checked: `pvesh` can exit 0 for a download that 
 | Variable | Default | Meaning |
 |---|---|---|
 | `proxmox_vm_vms` | `[]` | VMs (below) |
-| `proxmox_vm_isos` | `[]` | ISOs to download: `storage`, `filename`, `url` |
+| `proxmox_vm_isos` | `[]` | ISOs to download: `storage`, `filename`, `url`, and `sha256`, the file's SHA-256, which Proxmox checks before keeping the download |
 | `proxmox_vm_pending_storages` | `[]` | Storage ids an earlier role adds on a real run; pending in check mode |
 | `proxmox_vm_allow_overcommit` | `false` | Let the disks on thin LVM or ZFS add up to more than it holds |
 | `proxmox_vm_ignore_existing_volumes` | `false` | Create a missing VM over its VMID's old disks or backups |

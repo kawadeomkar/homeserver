@@ -27,7 +27,8 @@
           {%- for n in [talos_controlplane] + talos_workers -%}
           {%-   set s = talos_state[n.name] -%}
           {%-   if s.tag != talos_version or s.running_schematic != talos_schematic_ids[n.schematic] -%}
-          {%-     set _ = out.append(s | combine({'image': talos_installer ~ '/' ~ talos_schematic_ids[n.schematic] ~ ':' ~ talos_version})) -%}
+          {%-     set _ = out.append(s | combine({'image': talos_installer | talos_installer_image(
+                    talos_schematic_ids[n.schematic], talos_version, talos_installer_digests)})) -%}
           {%-   endif -%}
           {%- endfor -%}
           {{ out }}
@@ -44,8 +45,10 @@
           {%- set out = {} -%}
           {%- for n in talos_state.values() -%}
           {%-   set u = talos_upgrades | selectattr('name', 'eq', n.name) | list -%}
-          {%-   set _ = out.update({n.name: ('Talos ' ~ n.tag ~ ' -> ' ~ u[0].image.split(':')[-1] ~ ', schematic '
-                                       ~ (n.running_schematic or '?')[:8] ~ ' -> ' ~ u[0].image.split('/')[-1][:8])
+          {#-   The image's tag, after its pinned digest is set aside. -#}
+          {%-   set tagged = (u[0].image if u else '').split('@')[0] -%}
+          {%-   set _ = out.update({n.name: ('Talos ' ~ n.tag ~ ' -> ' ~ tagged.split(':')[-1] ~ ', schematic '
+                                       ~ (n.running_schematic or '?')[:8] ~ ' -> ' ~ tagged.split('/')[-1][:8])
                                       if u else 'up to date (Talos ' ~ n.tag ~ ')'}) -%}
           {%- endfor -%}
           {{ out }}

@@ -23,9 +23,11 @@
         talos_render: >-
           {%- set out = [] -%}
           {%- for n in talos_nodes -%}
+          {#- Each node's schematic as pinned, at its pinned digest: a pin missing for a setup fails here. -#}
+          {%-   set key = talos_schematic_pins[n.schematic] ~ ':' ~ talos_version -%}
           {%-   set _ = out.append(n | combine({'version': talos_version, 'contract': talos_contract,
                   'kubernetes_version': talos_kubernetes_version,
-                  'install_image': 'factory.talos.dev/metal-installer/' ~ kubernetes_iso_schematic ~ ':' ~ talos_version})) -%}
+                  'install_image': 'factory.talos.dev/metal-installer/' ~ key ~ '@' ~ talos_installer_digests[key]})) -%}
           {%- endfor -%}
           {{ out }}
 
@@ -54,7 +56,8 @@
         _install: >-
           {{ lookup('ansible.builtin.file', talos_validate_dir.path ~ '/' ~ item.name ~ '.yaml') | from_yaml_all
              | selectattr('kind', 'defined') | selectattr('kind', 'eq', 'UnattendedInstallConfig') | list }}
-        _image: "{{ 'factory.talos.dev/metal-installer/' ~ kubernetes_iso_schematic ~ ':' ~ talos_version }}"
+        _key: "{{ talos_schematic_pins[item.schematic] ~ ':' ~ talos_version }}"
+        _image: "{{ 'factory.talos.dev/metal-installer/' ~ _key ~ '@' ~ talos_installer_digests[_key] }}"
       loop: "{{ talos_nodes }}"
       loop_control:
         label: "{{ setup.name }}: {{ item.name }}"

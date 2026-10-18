@@ -7,7 +7,12 @@ flux_bootstrap_kubeconfig: ""
 # The Flux Operator's release, such as v0.61.0, installed from its install.yaml. Empty does nothing.
 flux_bootstrap_operator_version: ""
 flux_bootstrap_operator_url: https://github.com/controlplaneio-fluxcd/flux-operator/releases/download
-# The FluxInstance: {version (a Flux minor, 2.9.x), url (an https Git repository), ref, path}.
+# What that release must be, both required with a version: install.yaml's SHA-256 (hex), checked before anything in
+# it is applied, and the digest of the operator's image (sha256:...), which its Deployment is given beside the tag.
+flux_bootstrap_operator_sha256: ""
+flux_bootstrap_operator_digest: ""
+# The FluxInstance: {version (an exact Flux release, such as 2.9.6), artifact (the operator's manifests artifact,
+# oci://... pinned by @sha256:...), url (an https Git repository), ref, path}.
 flux_bootstrap_instance: {}
 # The keys and values of the flux-system/cluster-settings ConfigMap, which every Flux Kustomization substitutes
 # into its manifests. Strings only: Flux substitutes text.

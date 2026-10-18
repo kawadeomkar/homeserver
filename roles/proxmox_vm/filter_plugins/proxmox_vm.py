@@ -27,6 +27,7 @@ SIZE_UNITS = {"": 1, "K": 2**10, "M": 2**20, "G": 2**30, "T": 2**40}
 VM_NAME = re.compile(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$", re.IGNORECASE)
 MAC = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$", re.IGNORECASE)
 DISK_SLOT = re.compile(r"^scsi([0-9]|[12][0-9]|30)$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def props(text, default_key):
@@ -200,6 +201,11 @@ def input_errors(vms, isos):
     for iso in isos:
         if not iso.get("storage") or not iso.get("filename") or not iso.get("url"):
             errors.append(f"Each ISO in proxmox_vm_isos needs storage, filename and url: {iso}.")
+        elif not SHA256.match(str(iso.get("sha256") or "")):
+            errors.append(
+                f"{iso['filename']} in proxmox_vm_isos needs sha256, the file's SHA-256 (64 lower-case hex digits),"
+                " which Proxmox checks before keeping the download."
+            )
     return errors
 
 

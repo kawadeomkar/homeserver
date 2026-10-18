@@ -30,7 +30,7 @@
 
 - name: render | Keep the pod network it gives
   ansible.builtin.set_fact:
-    talos_pod_subnets: "{{ ((_network + [{}]) | first).podSubnets | default([]) }}"
+    talos_pod_subnets: "{{ (_network | first | default({}, true)).podSubnets | default([]) }}"
   vars:
     _network: >-
       {{ lookup('ansible.builtin.file', talos_workspace ~ '/defaults.yaml') | from_yaml_all | select('mapping')

@@ -297,12 +297,20 @@ class TestPlan:
         assert result["set"] == [] and f"has the MAC {OTHER_MAC}" in result["warnings"][0]
 
 
+ISO = {"storage": "local", "filename": "a.iso", "url": "https://example.org/a.iso", "sha256": "ab" * 32}
+
+
 class TestInputs:
     def test_good_inputs(self):
-        assert (
-            pv.input_errors([vm()], [{"storage": "local", "filename": "a.iso", "url": "https://example.org/a.iso"}])
-            == []
-        )
+        assert pv.input_errors([vm()], [ISO]) == []
+
+    @pytest.mark.parametrize("sha256", [None, "", "AB" * 32, "ab" * 31, "sha256:" + "ab" * 32])
+    def test_an_iso_needs_its_sha256(self, sha256):
+        errors = pv.input_errors([vm()], [ISO | {"sha256": sha256}])
+        assert errors == [
+            "a.iso in proxmox_vm_isos needs sha256, the file's SHA-256 (64 lower-case hex digits), which Proxmox"
+            " checks before keeping the download."
+        ]
 
     @pytest.mark.parametrize(
         ("change", "message"),

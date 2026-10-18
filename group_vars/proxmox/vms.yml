@@ -10,7 +10,8 @@ kubernetes_iso_storage: local
 kubernetes_iso_filename: "talos-{{ talos_version }}-{{ kubernetes_iso_schematic[:8] }}-metal-amd64.iso"
 proxmox_vm_isos: >-
   {{ [{'storage': kubernetes_iso_storage, 'filename': kubernetes_iso_filename,
-       'url': 'https://factory.talos.dev/image/' ~ kubernetes_iso_schematic ~ '/' ~ talos_version ~ '/metal-amd64.iso'}]
+       'url': 'https://factory.talos.dev/image/' ~ kubernetes_iso_schematic ~ '/' ~ talos_version ~ '/metal-amd64.iso',
+       'sha256': kubernetes_iso_sha256}]
      if kubernetes_present else [] }}
 
 # The bridge the installer creates.

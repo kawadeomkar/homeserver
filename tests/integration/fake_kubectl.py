@@ -1,27 +1,24 @@
 """The kubectl verbs roles/flux_bootstrap uses, for fake_talos.py's kubectl (its docstring has the state).
 
-`apply --server-side --field-manager M -f -|<url>`, `diff --server-side --field-manager M -f -`, `get <kind> <name>
+`apply --server-side --field-manager M -f -|<file>`, `diff --server-side --field-manager M -f -`, `get <kind> <name>
 -n <namespace> -o json`, `get kustomizations -A`, `create secret generic ... --dry-run=client -o yaml` and `wait
 --for=condition=<Available|Ready> <kind>/<name> -n <namespace> --timeout=<d>`. Objects live in the state's
 `objects`, keyed "<kind>/<namespace>/<name>". As on a real cluster, every verb but the client-side render needs a
 reachable cluster, and apply and diff fail for a namespace that does not exist or a kind no CRD defines. A diff
 prints the whole new object, values included, as kubectl diff prints them, so a test proves the role never shows a
-Secret's. `apply -f <url>` never fetches anything: it takes the Flux Operator's release URL alone and installs the
-flux-system namespace, the FluxInstance and Kustomization definitions and a flux-operator Deployment of that
-release; any other URL fails.
+Secret's. `apply -f <file>` takes a Flux Operator release, which its Deployment flux-system/flux-operator marks
+(operator_objects, as the tests' release server serves it): applied in order, as kubectl applies a file, its
+operator's image recorded in `operator_installs`.
 """
 
 import base64
 import json
-import re
 import sys
 from pathlib import Path
 
 import yaml
 
-OPERATOR_URL = re.compile(
-    r"^https://github\.com/controlplaneio-fluxcd/flux-operator/releases/download/(v\d+\.\d+\.\d+)/install\.yaml$"
-)
+OPERATOR_KEY = "Deployment/flux-system/flux-operator"
 BUILT_IN = {
     "Namespace": False,
     "ConfigMap": True,
@@ -120,7 +117,9 @@ def operator_objects(version):
 def documents(source, fail):
     if source == "-":
         return [doc for doc in yaml.safe_load_all(sys.stdin.read()) if doc]
-    fail(f"error: the fake reads manifests from stdin or the operator's URL only: {source}")
+    if Path(source).is_file():
+        return [doc for doc in yaml.safe_load_all(Path(source).read_text()) if doc]
+    fail(f"error: the path {source} does not exist")
     return []
 
 
@@ -152,15 +151,16 @@ def run(state, kubeconfig, args, reach, fail):
         if not flags.get("--server-side") or flags.get("--field-manager") != "homeserver-ansible":
             fail("the fake applies and diffs server-side, under the field manager homeserver-ansible, only")
         source = flags["-f"]
-        found = OPERATOR_URL.match(source)
-        if found and verb == "apply":
-            for obj in operator_objects(found.group(1)):
-                objects[key(obj)] = obj
-            state.setdefault("operator_installs", []).append(found.group(1))
-            state["mutations"] = state.get("mutations", 0) + 1
-            print(f"deployment.apps/flux-operator serverside-applied ({found.group(1)})")
-            return
         docs = documents(source, fail)
+        if verb == "apply" and source != "-" and any(key(doc) == OPERATOR_KEY for doc in docs):
+            for doc in docs:
+                check(state, doc, fail)
+                objects[key(doc)] = doc
+            image = objects[OPERATOR_KEY]["spec"]["template"]["spec"]["containers"][0]["image"]
+            state.setdefault("operator_installs", []).append(image.rpartition("/")[2])
+            state["mutations"] = state.get("mutations", 0) + 1
+            print(f"deployment.apps/flux-operator serverside-applied ({image})")
+            return
         for doc in docs:
             check(state, doc, fail)
         if verb == "diff":

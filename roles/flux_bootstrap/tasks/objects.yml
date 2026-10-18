@@ -4,31 +4,75 @@
 # writes, and would miss a key removed from the settings.
 
 # ------------------------------------------------------------------------------------------- operator ---
+# The release's install.yaml is applied only once its SHA-256 is the pinned one, with the operator's image given its
+# digest beside the tag; the running operator is the pinned release when its image is that tag and digest.
 - name: objects | Work out whether the operator is the pinned release
   ansible.builtin.set_fact:
+    flux_bootstrap_operator_pinned: "flux-operator:{{ flux_bootstrap_operator_version }}@{{ flux_bootstrap_operator_digest }}"
     flux_bootstrap_operator_current: >-
-      {{ ((flux_bootstrap_operator.stdout | from_json).spec.template.spec.containers | first).image.split(':') | last
+      {{ ((flux_bootstrap_operator.stdout | from_json).spec.template.spec.containers | first).image.rpartition('/')[2]
          if flux_bootstrap_operator.rc == 0 else none }}
 
 - name: objects | Install or upgrade the Flux Operator
-  ansible.builtin.command:
-    argv:
-      - kubectl
-      - --kubeconfig
-      - "{{ flux_bootstrap_kubeconfig }}"
-      - apply
-      - --server-side
-      - --field-manager=homeserver-ansible
-      - -f
-      - "{{ flux_bootstrap_operator_url }}/{{ flux_bootstrap_operator_version }}/install.yaml"
-  changed_when: true
-  when: flux_bootstrap_operator_current != flux_bootstrap_operator_version
+  when:
+    - flux_bootstrap_operator_current != flux_bootstrap_operator_pinned
+    - not ansible_check_mode
+  block:
+    - name: objects | Make a scratch directory for the release
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .flux-operator
+      register: flux_bootstrap_scratch
+
+    - name: objects | Download the release's install.yaml, checking its SHA-256
+      ansible.builtin.get_url:
+        url: "{{ flux_bootstrap_operator_url }}/{{ flux_bootstrap_operator_version }}/install.yaml"
+        dest: "{{ flux_bootstrap_scratch.path }}/install.yaml"
+        checksum: "sha256:{{ flux_bootstrap_operator_sha256 }}"
+        mode: "0600"
+
+    - name: objects | Pin the operator's image by digest
+      ansible.builtin.replace:
+        path: "{{ flux_bootstrap_scratch.path }}/install.yaml"
+        regexp: '^(\s*(?:-\s+)?image:\s*\S+/flux-operator:{{ flux_bootstrap_operator_version | regex_escape }})\s*$'
+        replace: '\1@{{ flux_bootstrap_operator_digest }}'
+
+    - name: objects | Refuse a release whose operator image was not pinned
+      ansible.builtin.assert:
+        that: (_text | regex_findall('image:\s*\S+/' ~ (flux_bootstrap_operator_pinned | regex_escape))) | length == 1
+        fail_msg: >-
+          {{ flux_bootstrap_operator_version }}'s install.yaml does not name the image flux-operator:{{
+          flux_bootstrap_operator_version }} exactly once, so its digest could not be pinned; nothing was applied.
+        quiet: true
+      vars:
+        _text: "{{ lookup('ansible.builtin.file', flux_bootstrap_scratch.path ~ '/install.yaml') }}"
+
+    - name: objects | Apply the release
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig
+          - "{{ flux_bootstrap_kubeconfig }}"
+          - apply
+          - --server-side
+          - --field-manager=homeserver-ansible
+          - -f
+          - "{{ flux_bootstrap_scratch.path }}/install.yaml"
+      changed_when: true
+  always:
+    - name: objects | Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ flux_bootstrap_scratch.path }}"
+        state: absent
+      when: flux_bootstrap_scratch.path is defined
 
 - name: objects | Say the operator would be upgraded
   ansible.builtin.debug:
-    msg: Would move the Flux Operator from {{ flux_bootstrap_operator_current }} to {{ flux_bootstrap_operator_version }}.
+    msg: >-
+      Would move the Flux Operator from {{ flux_bootstrap_operator_current | default('none', true) }} to
+      {{ flux_bootstrap_operator_pinned }}, once its install.yaml has the pinned SHA-256.
   changed_when: true
-  when: ansible_check_mode and flux_bootstrap_operator_current != flux_bootstrap_operator_version
+  when: ansible_check_mode and flux_bootstrap_operator_current != flux_bootstrap_operator_pinned
 
 - name: objects | Wait for the operator
   ansible.builtin.command:
@@ -93,7 +137,7 @@
         distribution:
           version: "{{ flux_bootstrap_instance.version }}"
           registry: ghcr.io/fluxcd
-          artifact: oci://ghcr.io/controlplaneio-fluxcd/flux-operator-manifests
+          artifact: "{{ flux_bootstrap_instance.artifact }}"
         components: [source-controller, kustomize-controller, helm-controller, notification-controller]
         cluster: {type: kubernetes, size: small, multitenant: false, networkPolicy: true, domain: cluster.local}
         sync:

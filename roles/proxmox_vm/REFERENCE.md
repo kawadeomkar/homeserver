@@ -45,7 +45,7 @@ Description: Create Proxmox VE VMs and keep the settings it manages as configure
     - **Type**: list
     - **Default**: []
   
-    - **Description**: ISOs to download, each with storage, filename and url. Never deleted.
+    - **Description**: ISOs to download, each with storage, filename, url and sha256 (the file's SHA-256, which Proxmox checks before keeping the download). Never deleted.
   
   
   

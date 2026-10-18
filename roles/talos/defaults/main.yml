@@ -42,6 +42,11 @@ talos_allow_bootstrap: false
 # takes its configuration, the cluster's keys with it, from whoever sends it, unauthenticated, so once the cluster
 # exists the role sends it only to a node named here (a list, or names joined by commas).
 talos_reinstall: []
+# What the Image Factory must answer: each schematic's id, by name ({base: <id>}), refused otherwise, and the digest
+# of each installer image the nodes install and upgrade from, by "<schematic id>:<version>", given beside the tag.
+# Empty checks nothing; once set, the pinned version's images must each have one.
+talos_schematic_pins: {}
+talos_installer_digests: {}
 # Keep each node's rendered configuration in talos_config_dir/rendered/ (mode 0600; it holds the secrets), to compare
 # by hand with talosctl apply-config --dry-run, until the next run without it, which removes them. Otherwise it goes
 # with the run's scratch directory.

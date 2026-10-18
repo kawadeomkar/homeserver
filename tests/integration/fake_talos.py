@@ -285,7 +285,7 @@ def rendered(path):
     found = re.search(r"^# install-image: (\S+)$", text, re.MULTILINE)
     if not found:
         fail(f"{path}: not a configuration the fake rendered")
-    image = found.group(1)
+    image = found.group(1).split("@")[0]  # a pinned digest says nothing of the version
     return text, image.rsplit(":", 1)[1], image.rsplit("/", 1)[1].split(":")[0]
 
 
@@ -507,7 +507,8 @@ def cmd_upgrade(state, globals_, args):
     address, node = target(state, flags)
     reach(state, address, node, flags, False)
     image = one(flags, "--image", "-i")
-    node.update(version=image.rsplit(":", 1)[1], schematic=image.rsplit("/", 1)[1].split(":")[0])
+    tagged = image.split("@")[0]  # a pinned digest says nothing of the version
+    node.update(version=tagged.rsplit(":", 1)[1], schematic=tagged.rsplit("/", 1)[1].split(":")[0])
     # Talos records the new installer image in the node's configuration.
     reconfigure(node, "install-image", image)
     state.setdefault("upgrades", []).append(address)

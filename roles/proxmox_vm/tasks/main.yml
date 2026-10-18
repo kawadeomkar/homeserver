@@ -61,7 +61,8 @@
       loop: "{{ proxmox_vm_isos | map(attribute='storage') | unique }}"
 
     # The version and schematic are in the file name, so a new version is a new file. The Image Factory publishes
-    # no checksum to anyone without a subscription, so there is none to check.
+    # no checksum to anyone without a subscription, so the pin is the configuration's own (sha256): Proxmox checks
+    # each download against it and keeps no file that differs.
     - name: Work out the ISOs to download
       ansible.builtin.set_fact:
         proxmox_vm_iso_volumes: "{{ _volumes }}"
@@ -93,6 +94,10 @@
           - "{{ item.filename }}"
           - --url
           - "{{ item.url }}"
+          - --checksum
+          - "{{ item.sha256 }}"
+          - --checksum-algorithm
+          - sha256
       register: proxmox_vm_downloads
       loop: "{{ proxmox_vm_iso_missing }}"
       loop_control:

@@ -18,9 +18,25 @@
       {%- if flux_bootstrap_operator_version is not match('^v\d+\.\d+\.\d+$') -%}
       {%-   set _ = out.append('flux_bootstrap_operator_version must be a release such as v0.61.0.') -%}
       {%- endif -%}
-      {%- for key in ['version', 'url', 'ref', 'path'] if not flux_bootstrap_instance[key] | default('', true) -%}
+      {%- if flux_bootstrap_operator_sha256 is not match('^[0-9a-f]{64}$') -%}
+      {%-   set _ = out.append('flux_bootstrap_operator_sha256 must be the SHA-256 of the release\'s install.yaml, 64 '
+                               ~ 'lower-case hex digits.') -%}
+      {%- endif -%}
+      {%- if flux_bootstrap_operator_digest is not match('^sha256:[0-9a-f]{64}$') -%}
+      {%-   set _ = out.append('flux_bootstrap_operator_digest must be the digest of the operator\'s image, '
+                               ~ 'sha256:<64 hex digits>.') -%}
+      {%- endif -%}
+      {%- for key in ['version', 'artifact', 'url', 'ref', 'path'] if not flux_bootstrap_instance[key] | default('', true) -%}
       {%-   set _ = out.append('flux_bootstrap_instance needs ' ~ key ~ '.') -%}
       {%- endfor -%}
+      {%- if flux_bootstrap_instance.version | default('') | string is not match('^\d+\.\d+\.\d+$') -%}
+      {%-   set _ = out.append('flux_bootstrap_instance.version must be an exact Flux release such as 2.9.6: a range '
+                               ~ 'would let the operator move Flux unreviewed.') -%}
+      {%- endif -%}
+      {%- if flux_bootstrap_instance.artifact | default('') is not match('^oci://[^@\s]+@sha256:[0-9a-f]{64}$') -%}
+      {%-   set _ = out.append('flux_bootstrap_instance.artifact must be the operator\'s manifests artifact pinned by '
+                               ~ 'digest, oci://<repository>@sha256:<64 hex digits>.') -%}
+      {%- endif -%}
       {%- if flux_bootstrap_instance.url | default('') is not match('^https://[^<>\s]+$') -%}
       {%-   set _ = out.append('flux_bootstrap_instance.url must be the https URL of the Git repository to sync, with no '
                                ~ 'placeholder left in it.') -%}

@@ -610,6 +610,8 @@ def download_url(state, node, sid, opts):
     if any(v["volid"] == volid for v in content):
         fail(f"refusing to override existing file '{opts['filename']}'")
     upid = f"UPID:{NODE}:0000{len(state.get('tasks', {})):04X}:00000000:00000000:download:{opts['filename']}:root@pam:"
+    # What was asked, the checksum among it: the fake has no file to check it against.
+    state.setdefault("downloads", []).append(dict(opts))
     failed = state.get("download_fails")
     state.setdefault("tasks", {})[upid] = {
         "status": "stopped",

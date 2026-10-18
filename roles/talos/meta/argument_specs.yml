@@ -114,6 +114,18 @@ argument_specs:
           The nodes, by name, that may be installed although the cluster was bootstrapped before (a list, or names
           joined by commas). A node in maintenance mode takes its configuration, the cluster's keys with it, from
           whoever sends it, unauthenticated, so once the cluster exists the role sends it only to a node named here.
+      talos_schematic_pins:
+        type: dict
+        default: {}
+        description: >-
+          Each schematic's id, by its name in talos_schematics: the Image Factory's answer is refused otherwise. Empty
+          checks nothing.
+      talos_installer_digests:
+        type: dict
+        default: {}
+        description: >-
+          The digest of each installer image, by "<schematic id>:<version>", which the nodes are given beside the
+          tag. Once set, every schematic in use at talos_version must have one.
       talos_keep_rendered:
         type: bool
         default: false

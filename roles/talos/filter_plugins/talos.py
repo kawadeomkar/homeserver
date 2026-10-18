@@ -102,9 +102,18 @@ def server_version(stdout):
     return str(version).lstrip("v") if version else None
 
 
+def installer_image(installer, schematic_id, version, digests):
+    """The installer image of a schematic at a version, with its pinned digest when talos_installer_digests has one
+    for that pair ("<schematic id>:<version>")."""
+    image = f"{installer}/{schematic_id}:{version}"
+    digest = (digests or {}).get(f"{schematic_id}:{version}")
+    return f"{image}@{digest}" if digest else image
+
+
 class FilterModule:
     def filters(self):
         return {
+            "talos_installer_image": installer_image,
             "talos_node_tag": node_tag,
             "talos_client_minor": client_minor,
             "talos_minor": minor,

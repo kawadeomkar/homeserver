@@ -26,7 +26,9 @@ argument_specs:
         type: list
         elements: dict
         default: []
-        description: ISOs to download, each with storage, filename and url. Never deleted.
+        description: >-
+          ISOs to download, each with storage, filename, url and sha256 (the file's SHA-256, which Proxmox checks
+          before keeping the download). Never deleted.
       proxmox_vm_pending_storages:
         type: list
         elements: str
