@@ -195,5 +195,25 @@
   loop: [endpoint, node]
 
 - name: prepare | Find out what each node runs
+# A run is removed by its own block's always, which an interrupted run (Ctrl-C, a lost terminal) never reaches,
+# leaving a copy of the secrets bundle behind. Any such directory a day old is an earlier run's: removed here.
+- name: prepare | Look for scratch directories interrupted runs left
+  ansible.builtin.find:
+    paths: "{{ talos_workspace | dirname }}"
+    patterns: ["ansible.*.talos"]
+    file_type: directory
+    age: 1d
+  register: talos_stale_scratch
+  check_mode: false
+
+- name: prepare | Remove them
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  check_mode: false
+  loop: "{{ talos_stale_scratch.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+
   ansible.builtin.import_tasks: probe.yml
   when: not talos_prepare_minimal | default(false)

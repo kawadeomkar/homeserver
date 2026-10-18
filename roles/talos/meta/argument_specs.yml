@@ -119,7 +119,8 @@ argument_specs:
         default: false
         description: >-
           Keep each node's rendered configuration in talos_config_dir/rendered/ (mode 0600; it holds the secrets),
-          to compare by hand with talosctl apply-config --dry-run.
+          to compare by hand with talosctl apply-config --dry-run, until the next run without it, which removes
+          them.
   upgrade:
     short_description: Move the running nodes to the pinned Talos and Kubernetes versions
     description:

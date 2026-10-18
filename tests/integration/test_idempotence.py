@@ -1658,6 +1658,34 @@ def test_talos_dry_run_on_a_fresh_host(tmp_path, factory):
 
 
 @pytest.mark.cluster
+def test_talos_leaves_no_keys_behind(tmp_path, factory):
+    """A scratch directory an interrupted run left, a day old, is removed by the next run, while a newer one, maybe
+    another run's, stays. The rendered configurations a run kept on request go with the next run that does not ask."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    scratch = tmp_path / "tmp"
+    scratch.mkdir()
+    env["TMPDIR"] = str(scratch)
+    stale, fresh = scratch / "ansible.interrupted.talos", scratch / "ansible.running.talos"
+    for directory in (stale, fresh):
+        directory.mkdir()
+        (directory / "secrets.yaml").write_text("cluster: {}\n")
+    two_days_ago = time.time() - 2 * 86400
+    os.utime(stale, (two_days_ago, two_days_ago))
+    state = Path(extra["fake_talos_state"])
+    talos_state(state)
+
+    kept = extra | {"talos_keep_rendered": True}
+    expect(run("talos.yml", kept, env=env), "homeserver-k8s", changed=True, note="a build keeping its renders")
+    assert not stale.exists() and fresh.exists()
+    rendered = Path(extra["talos_config_dir"]) / "rendered"
+    assert sorted(p.name for p in rendered.iterdir()) == ["homeserver-cp-1.yaml", "homeserver-worker-1.yaml"]
+
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=1, note="the renders removed")
+    assert not rendered.exists()
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=0, note="nothing left to remove")
+
+
+@pytest.mark.cluster
 def test_talos_waits_for_a_slow_node_and_reports_a_failed_install(tmp_path, factory):
     """A node that answers only after a few questions is installed on the same run. One that never answers fails a
     real run after the retries, naming the MAC setting. One whose install fails reports why, not a timeout. A

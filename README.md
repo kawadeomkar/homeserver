@@ -60,6 +60,10 @@ No address is ever written in a tracked file: tasks and role defaults read them 
 values live only in `local.yml`. Kubernetes Secrets are **not**
 kept in the vault — see `k8s/README-secrets.md`.
 
+`make vault-edit` decrypts the vault into a temporary file that `ansible-vault` removes afterwards, but what your
+editor writes beside it is the editor's own: a swap, backup or persistent undo file can keep the decrypted secrets.
+With vim, open it without them: `EDITOR="vim -n -i NONE --cmd 'set noundofile nobackup nowritebackup'" make vault-edit`.
+
 ## Ansible
 
 ```bash

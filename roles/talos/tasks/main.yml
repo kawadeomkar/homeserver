@@ -95,6 +95,13 @@
 
     - name: Say which configured nodes were left as they are
       ansible.builtin.debug:
+    # Kept until the next run that does not ask: they hold every key of the cluster.
+    - name: Remove the rendered configurations an earlier run kept
+      ansible.builtin.file:
+        path: "{{ talos_config_dir }}/rendered"
+        state: absent
+      when: not talos_keep_rendered | bool
+
         msg: >-
           Not checked for drift this run, since the cluster's Kubernetes version could not be read (no kubeconfig on
           this machine yet): {{ talos_unrendered | join(', ') }}. The run fetches one; the next run checks them.

@@ -44,7 +44,9 @@ What `main` does, in order:
 The secrets bundle comes from `talos_secrets_file`, which must exist, be readable by its owner alone (mode 0600) and
 lie outside the repository: it holds every key of the cluster, so it is never committed, even encrypted. It is
 checked by its text alone and only ever written with `no_log`; the rendered files live in a scratch directory
-removed at the end of every run, unless `talos_keep_rendered` keeps a copy.
+removed at the end of every run, unless `talos_keep_rendered` keeps a copy, which the next run without it removes.
+A run that is interrupted never reaches that removal, so each run removes the scratch directories (`ansible.*.talos`
+in the temporary directory) a day old or older.
 
 ## Variables
 
@@ -71,7 +73,9 @@ removed at the end of every run, unless `talos_keep_rendered` keeps a copy.
 | `talos_install_retries` | `60` | How many times it reads an installing node's status before giving up |
 | `talos_allow_bootstrap` | `false` | Bootstrap etcd although this cluster was bootstrapped before: a new, empty cluster |
 | `talos_reinstall` | `[]` | The nodes, by name, that may be installed although the cluster was bootstrapped (a list, or names joined by commas) |
-| `talos_keep_rendered` | `false` | Keep each node's rendered configuration in `talos_config_dir/rendered/` (mode 0600) |
+| `talos_schematic_pins` | `{}` | Each schematic's id, by name: the Image Factory's answer is refused otherwise |
+| `talos_installer_digests` | `{}` | Each installer image's digest, by `<schematic id>:<version>`, given beside the tag; once set, each schematic in use at `talos_version` needs one |
+| `talos_keep_rendered` | `false` | Keep each node's rendered configuration in `talos_config_dir/rendered/` (mode 0600), until the next run without it |
 
 A variable for one run goes through `ANSIBLE_ARGS`: `make kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'`.
 `scripts/runbooks/talos.md` covers building, upgrading and restoring; this repository's configuration is

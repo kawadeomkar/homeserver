@@ -67,6 +67,30 @@ restore that directory before the first run. `etcd/` holds the etcd snapshots.
 
 Both client certificates are valid for a year; every run renews one that expires within 30 days.
 
+### When the workstation, or a copy of its credentials, is lost
+
+talosconfig (`os:admin`) and kubeconfig (`system:masters`) cannot be revoked: whoever holds either keeps full
+control for the rest of its year, renewed or not. The way to end that is to rotate the CAs that signed them, from a
+workstation you trust, with the bundle restored from the password manager:
+
+```bash
+talosctl -n <control plane address> rotate-ca --dry-run=false --talos=true --kubernetes=false
+talosctl -n <control plane address> rotate-ca --dry-run=false --talos=false --kubernetes=true
+```
+
+Neither reboots a node; the Kubernetes rotation restarts the kubelets' connections, and pods that cache the old CA
+may need restarting. The first writes a new talosconfig into the current directory: move it to
+`~/.talos/homeserver/talosconfig`, and fetch a new kubeconfig with `talosctl kubeconfig`. Each prints the new CA's
+certificate and key: put them into the bundle's `certs.os` and `certs.k8s`, and update its copy in the password
+manager, since `roles/talos` renders from the bundle and refuses credentials of another CA.
+
+That covers credentials copied off the machine. A lost workstation holds the bundle itself, every key of the
+cluster (etcd's encryption key and the service account key among them), which no rotation replaces: rebuild the
+cluster with a new bundle (`talosctl gen secrets`, then the first build above), and treat the age key, `.vault_pass`, the
+TrueNAS API key and the Proxmox host's SSH key as lost too: make a new age key and Secrets
+(`k8s/README-secrets.md`), re-key the vault, make a new API key through the role, and remove the old SSH key from
+the host.
+
 ## Configuration changes
 
 A change to the patches (`group_vars/kubernetes/talos.yml`) is applied by `make kubernetes` without a reboot:
@@ -80,7 +104,8 @@ change to their settings (`KubeFlannelCNIConfig`, say) reaches the cluster throu
 the diff first; the run's note gives the command). A setting read only at boot, such as a kernel argument, takes
 effect at the node's next reboot, by hand. A dry run says which nodes differ, never how, since the difference can hold secrets; to see it,
 run with `ANSIBLE_ARGS='-e talos_keep_rendered=true'`, which keeps each node's rendered configuration in
-`~/.talos/homeserver/rendered/` (mode 0600, delete it afterwards), then
+`~/.talos/homeserver/rendered/` (mode 0600, holding the cluster's keys, until the next run without it removes
+them), then
 `talosctl apply-config -n <address> -f ~/.talos/homeserver/rendered/<node>.yaml --dry-run`.
 
 ## Upgrades
