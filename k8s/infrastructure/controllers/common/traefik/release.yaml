@@ -45,8 +45,25 @@ spec:
         externalTrafficPolicy: Local
         allocateLoadBalancerNodePorts: false
     ports:
+      # Header names that alias another (X_Forwarded_For or X.Forwarded.For for X-Forwarded-For) are deleted on every
+      # entrypoint: Go counts them as other headers, so Traefik never overwrites them, while PHP and Python backends
+      # (Nextcloud, SABnzbd) read them as the header they alias, those Traefik sets included (CVE-2026-88011). Browsers
+      # and these apps' clients send none. Left unset, Traefik warns about it for each entrypoint at every start.
+      traefik:
+        http:
+          aliasHeadersStrategy: delete
+      metrics:
+        http:
+          aliasHeadersStrategy: delete
       # Every route on both entrypoints answers only the allowed range (k8s/infrastructure/configs/traefik.yaml).
-      # Until infra-configs applies that Middleware, Traefik refuses the routes that name it: closed, not open.
+      # Until infra-configs applies that Middleware, Traefik refuses the routes that name it: closed, not open. Traefik
+      # also builds web's redirect before its CRD provider has read the Middleware, so a start can log that it does not
+      # exist for web-to-443@internal: a known race (github.com/traefik/traefik/issues/9779), closed too, and gone a
+      # moment later. Upstream's way round it, the allowlist on websecure alone, would open Jellyfin's plain HTTP.
+      # Both refuse an encoded NUL in a path, which no file name or route holds. The other encoded characters Traefik
+      # can refuse stay allowed: Nextcloud's and FileBrowser's file names hold %, #, ? and ;, and with every rule
+      # matching on the host alone, a path Traefik and an app read differently sidesteps no route or Middleware. One
+      # refusal also tells Traefik the choice was made, which it otherwise warns about at every start.
       web:
         http:
           # Plain HTTP only redirects to HTTPS, through a router Traefik generates at this priority, above every
@@ -60,6 +77,9 @@ spec:
               priority: 1000
           middlewares:
             - traefik-lan-allowlist@kubernetescrd
+          aliasHeadersStrategy: delete
+          encodedCharacters:
+            allowEncodedNullCharacter: false
         transport:
           respondingTimeouts:
             # Large uploads take longer than the 60-second default (Jellyfin's, over plain HTTP).
@@ -71,6 +91,9 @@ spec:
           middlewares:
             - traefik-lan-allowlist@kubernetescrd
             - traefik-hsts@kubernetescrd
+          aliasHeadersStrategy: delete
+          encodedCharacters:
+            allowEncodedNullCharacter: false
         transport:
           respondingTimeouts:
             # Large uploads (Nextcloud, PhotoPrism, FileBrowser) take longer than the 60-second default.
