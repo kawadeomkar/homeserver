@@ -1723,6 +1723,42 @@ def test_talos_bootstraps_once(tmp_path, factory):
 
 
 @pytest.mark.cluster
+def test_talos_reinstalls_only_a_named_node(tmp_path, factory):
+    """Once the cluster is bootstrapped, a node answering in maintenance mode gets nothing, in a dry run or a real
+    one, since its configuration holds the cluster's keys and nothing proves who answers: the run fails and names
+    the way to reinstall it. Named in talos_reinstall, as a list or a comma-separated string, it is installed."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state)
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="first build")
+
+    # The worker's system disk was wiped: it boots the ISO into maintenance mode again.
+    s = read(state)
+    s["nodes"][NODE_ADDRESSES["homeserver-worker-1"]] = {"mode": "maintenance", "version": "v1.14.2", "schematic": "iso"}
+    write(state, s)
+    mutations = read(state)["mutations"]
+    for check in (True, False):
+        rc, _, out = run("talos.yml", extra, check=check, env=env)
+        assert rc != 0 and "homeserver-worker-1 answers at 127.0.0.31 in maintenance mode" in out, out[-3000:]
+        assert "-e talos_reinstall=homeserver-worker-1" in out, out[-3000:]
+    assert read(state)["mutations"] == mutations, "sent the configuration to a node no run named"
+
+    expect(
+        run("talos.yml", extra | {"talos_reinstall": "homeserver-worker-1, homeserver-cp-1"}, env=env),
+        "homeserver-k8s",
+        changed=True,
+        note="the reinstall named",
+    )
+    assert read(state)["nodes"][NODE_ADDRESSES["homeserver-worker-1"]]["mode"] == "configured"
+    expect(
+        run("talos.yml", extra | {"talos_reinstall": ["homeserver-worker-1"]}, env=env),
+        "homeserver-k8s",
+        changed=0,
+        note="the name left in place",
+    )
+
+
+@pytest.mark.cluster
 def test_talos_refuses_another_clusters_credentials(tmp_path, factory):
     """talos_config_dir belongs to one cluster. A kubeconfig there naming another control plane (the home cluster's,
     on a test host), or credentials from another CA than the secrets bundle's, stop a run, a dry run too, before

@@ -101,6 +101,33 @@
       when: talos_unrendered | length > 0
 
     # ----------------------------------------------------------------------------------------- install ---
+    # A node in maintenance mode takes its configuration from whoever sends it, over TLS that verifies nothing, and
+    # the configuration holds the cluster's keys: anything answering at a node's address in maintenance mode, a
+    # device spoofing it or the node's own address taken over while it reboots, would get them. Before the bootstrap
+    # that is the only way in. After it, a node in maintenance mode is a reinstall the run must name.
+    - name: Look for the record of the bootstrap
+      ansible.builtin.stat:
+        path: "{{ talos_config_dir }}/bootstrapped"
+      register: talos_bootstrap_record
+
+    - name: Refuse to send a bootstrapped cluster's keys to a node the run does not name
+      ansible.builtin.assert:
+        that: _unnamed | length == 0
+        fail_msg: >-
+          {% for n in _unnamed %}{{ n.name }} answers at {{ n.address }} in maintenance mode. {% endfor %}This cluster
+          was bootstrapped before ({{ talos_config_dir }}/bootstrapped), and installing a node sends it the cluster's
+          keys unauthenticated, to whatever answers at its address. If you are reinstalling it (its system disk wiped,
+          its VM made anew), check on its VM's console in Proxmox that it waits in maintenance mode at that address,
+          then run again naming it: make kubernetes ANSIBLE_ARGS='-e talos_reinstall={{ _unnamed | map(attribute='name') | join(',') }}'.
+          Otherwise, something else is answering at its address: find it before anything else.
+        quiet: true
+      when:
+        - talos_bootstrap_record.stat.exists
+        - not talos_allow_bootstrap | bool
+      vars:
+        _named: "{{ talos_reinstall.split(',') | map('trim') | list if talos_reinstall is string else talos_reinstall }}"
+        _unnamed: "{{ talos_state.values() | selectattr('state', 'eq', 'maintenance') | rejectattr('name', 'in', _named) | list }}"
+
     - name: Say which nodes would be installed
       ansible.builtin.debug:
         msg: "Would install {{ item.name }} at {{ item.address }}{{ ' once its VM is up' if item.state == 'absent' else '' }}"

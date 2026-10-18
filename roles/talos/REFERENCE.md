@@ -22,6 +22,7 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
 - Runs on the controller with talosctl. Renders each node's machine configuration from the secrets bundle and the patches, installs it on a node in maintenance mode and waits until its install status reads installed, and applies configuration drift to a configured node without rebooting it (Talos 1.14 applies any configuration that way); after a change to the control plane it says how to restart etcd.
 - Renders a configured node with the versions it runs, never the pins, so a pin bump changes nothing until the upgrade entry point moves the node; a pending upgrade is reported.
 - Bootstraps etcd once, recording it in talos_config_dir. With that record and etcd not running, it refuses to bootstrap again, which would make a new, empty cluster, unless talos_allow_bootstrap.
+- With that record, refuses to install a node in maintenance mode that talos_reinstall does not name, since the configuration it would send holds the cluster's keys and nothing proves who answers at the address.
 - Writes talosconfig and kubeconfig to talos_config_dir, outside the repository, and renews their client certificates before they expire. Refuses a talosconfig or kubeconfig there of another cluster (another endpoint, or another CA than the secrets bundle's).
 - Checks that every user volume the patches declare is ready once the cluster is healthy.
 - The defaults do nothing. README.md describes each variable.
@@ -228,6 +229,16 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
     - **Default**: False
   
     - **Description**: Bootstrap etcd again although this cluster was bootstrapped before, making a new, empty cluster.
+  
+  
+  
+
+  - **talos_reinstall**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: The nodes, by name, that may be installed although the cluster was bootstrapped before (a list, or names joined by commas). A node in maintenance mode takes its configuration, the cluster's keys with it, from whoever sends it, unauthenticated, so once the cluster exists the role sends it only to a node named here.
   
   
   
@@ -455,6 +466,16 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
   
   
 
+  - **talos_reinstall**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: The nodes, by name, that may be installed although the cluster was bootstrapped before (a list, or names joined by commas). A node in maintenance mode takes its configuration, the cluster's keys with it, from whoever sends it, unauthenticated, so once the cluster exists the role sends it only to a node named here.
+  
+  
+  
+
   - **talos_keep_rendered**
     - **Required**: false
     - **Type**: bool
@@ -677,6 +698,16 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
   
   
 
+  - **talos_reinstall**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: The nodes, by name, that may be installed although the cluster was bootstrapped before (a list, or names joined by commas). A node in maintenance mode takes its configuration, the cluster's keys with it, from whoever sends it, unauthenticated, so once the cluster exists the role sends it only to a node named here.
+  
+  
+  
+
   - **talos_keep_rendered**
     - **Required**: false
     - **Type**: bool
@@ -722,7 +753,8 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
 | [talos_probe_delay](defaults/main.yml#L37)   | int | `10` |    
 | [talos_install_retries](defaults/main.yml#L38)   | int | `60` |    
 | [talos_allow_bootstrap](defaults/main.yml#L40)   | bool | `False` |    
-| [talos_keep_rendered](defaults/main.yml#L43)   | bool | `False` |    
+| [talos_reinstall](defaults/main.yml#L44)   | list | `[]` |    
+| [talos_keep_rendered](defaults/main.yml#L47)   | bool | `False` |    
 
 
 
@@ -766,6 +798,8 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
 | Render the configurations | ansible.builtin.include_tasks | False |
 | Keep the rendered configurations, when asked | ansible.builtin.copy | True |
 | Say which configured nodes were left as they are | ansible.builtin.debug | True |
+| Look for the record of the bootstrap | ansible.builtin.stat | False |
+| Refuse to send a bootstrapped cluster's keys to a node the run does not name | ansible.builtin.assert | True |
 | Say which nodes would be installed | ansible.builtin.debug | True |
 | Install Talos on the nodes in maintenance mode | ansible.builtin.command | False |
 | Wait for each node to install and boot from its system disk | ansible.builtin.command | True |
@@ -940,26 +974,28 @@ classDef rescue stroke:#665352,stroke-width:2px;
   Work_out_what_to_render_for_each_node5-->|Include task| Render_the_configurations_render_yml_6[render the configurations<br>include_task: render yml]:::includeTasks
   Render_the_configurations_render_yml_6-->|Task| Keep_the_rendered_configurations__when_asked7[keep the rendered configurations  when asked<br>When: **talos keep rendered   bool**]:::task
   Keep_the_rendered_configurations__when_asked7-->|Task| Say_which_configured_nodes_were_left_as_they_are8[say which configured nodes were left as they are<br>When: **talos unrendered   length   0**]:::task
-  Say_which_configured_nodes_were_left_as_they_are8-->|Task| Say_which_nodes_would_be_installed9[say which nodes would be installed<br>When: **ansible check mode**]:::task
-  Say_which_nodes_would_be_installed9-->|Task| Install_Talos_on_the_nodes_in_maintenance_mode10[install talos on the nodes in maintenance mode]:::task
-  Install_Talos_on_the_nodes_in_maintenance_mode10-->|Task| Wait_for_each_node_to_install_and_boot_from_its_system_disk11[wait for each node to install and boot from its<br>system disk<br>When: **not ansible check mode**]:::task
-  Wait_for_each_node_to_install_and_boot_from_its_system_disk11-->|Task| Refuse_to_go_on_with_a_node_that_did_not_install12[refuse to go on with a node that did not install<br>When: **status phase     installed**]:::task
-  Refuse_to_go_on_with_a_node_that_did_not_install12-->|Task| Compare_each_configured_node_s_configuration13[compare each configured node s configuration]:::task
-  Compare_each_configured_node_s_configuration13-->|Task| Work_out_which_nodes_differ14[work out which nodes differ]:::task
-  Work_out_which_nodes_differ14-->|Task| Show_the_nodes_whose_configuration_differs15[show the nodes whose configuration differs<br>When: **talos drifted   length   0**]:::task
-  Show_the_nodes_whose_configuration_differs15-->|Task| Apply_the_configuration_without_a_reboot16[apply the configuration without a reboot]:::task
-  Apply_the_configuration_without_a_reboot16-->|Task| Refuse_to_go_on_when_a_configuration_was_not_applied17[refuse to go on when a configuration was not<br>applied<br>When: **item rc    0**]:::task
-  Refuse_to_go_on_when_a_configuration_was_not_applied17-->|Import task| Bootstrap_etcd__once_bootstrap_yml_18[/bootstrap etcd  once<br>import_task: bootstrap yml/]:::importTasks
-  Bootstrap_etcd__once_bootstrap_yml_18-->|Task| Wait_for_the_cluster_to_be_healthy19[wait for the cluster to be healthy<br>When: **not ansible check mode**]:::task
-  Wait_for_the_cluster_to_be_healthy19-->|Task| Read_each_node_s_volumes20[read each node s volumes<br>When: **not ansible check mode and item patches   default <br>     talos user volumes   length   0**]:::task
-  Read_each_node_s_volumes20-->|Task| Refuse_a_user_volume_that_is_not_ready21[refuse a user volume that is not ready<br>When: **unready   length   0**]:::task
-  Refuse_a_user_volume_that_is_not_ready21-->|Task| Check_the_kubeconfig_s_client_certificate22[check the kubeconfig s client certificate<br>When: **talos kubeconfig file stat exists**]:::task
-  Check_the_kubeconfig_s_client_certificate22-->|Task| Fetch_a_kubeconfig__or_renew_one_that_expires_soon23[fetch a kubeconfig  or renew one that expires soon<br>When: **not talos kubeconfig file stat exists or talos<br>kubeconfig cert rc    0**]:::task
-  Fetch_a_kubeconfig__or_renew_one_that_expires_soon23-->|Task| Say_the_kubeconfig_would_be_fetched_or_renewed24[say the kubeconfig would be fetched or renewed<br>When: **ansible check mode and  not talos kubeconfig file<br>stat exists or talos kubeconfig cert rc    0**]:::task
-  Say_the_kubeconfig_would_be_fetched_or_renewed24-->|Task| Keep_the_kubeconfig_readable_by_its_owner_alone25[keep the kubeconfig readable by its owner alone<br>When: **not ansible check mode**]:::task
-  Keep_the_kubeconfig_readable_by_its_owner_alone25-->|Task| Report_the_versions_running__and_any_upgrade_the_pins_wait_for26[report the versions running  and any upgrade the<br>pins wait for]:::task
-  Report_the_versions_running__and_any_upgrade_the_pins_wait_for26-.->|End of Block| Build_the_cluster1_block_start_0
-  Report_the_versions_running__and_any_upgrade_the_pins_wait_for26-->End
+  Say_which_configured_nodes_were_left_as_they_are8-->|Task| Look_for_the_record_of_the_bootstrap9[look for the record of the bootstrap]:::task
+  Look_for_the_record_of_the_bootstrap9-->|Task| Refuse_to_send_a_bootstrapped_cluster_s_keys_to_a_node_the_run_does_not_name10[refuse to send a bootstrapped cluster s keys to a<br>node the run does not name<br>When: **talos bootstrap record stat exists and not talos<br>allow bootstrap   bool**]:::task
+  Refuse_to_send_a_bootstrapped_cluster_s_keys_to_a_node_the_run_does_not_name10-->|Task| Say_which_nodes_would_be_installed11[say which nodes would be installed<br>When: **ansible check mode**]:::task
+  Say_which_nodes_would_be_installed11-->|Task| Install_Talos_on_the_nodes_in_maintenance_mode12[install talos on the nodes in maintenance mode]:::task
+  Install_Talos_on_the_nodes_in_maintenance_mode12-->|Task| Wait_for_each_node_to_install_and_boot_from_its_system_disk13[wait for each node to install and boot from its<br>system disk<br>When: **not ansible check mode**]:::task
+  Wait_for_each_node_to_install_and_boot_from_its_system_disk13-->|Task| Refuse_to_go_on_with_a_node_that_did_not_install14[refuse to go on with a node that did not install<br>When: **status phase     installed**]:::task
+  Refuse_to_go_on_with_a_node_that_did_not_install14-->|Task| Compare_each_configured_node_s_configuration15[compare each configured node s configuration]:::task
+  Compare_each_configured_node_s_configuration15-->|Task| Work_out_which_nodes_differ16[work out which nodes differ]:::task
+  Work_out_which_nodes_differ16-->|Task| Show_the_nodes_whose_configuration_differs17[show the nodes whose configuration differs<br>When: **talos drifted   length   0**]:::task
+  Show_the_nodes_whose_configuration_differs17-->|Task| Apply_the_configuration_without_a_reboot18[apply the configuration without a reboot]:::task
+  Apply_the_configuration_without_a_reboot18-->|Task| Refuse_to_go_on_when_a_configuration_was_not_applied19[refuse to go on when a configuration was not<br>applied<br>When: **item rc    0**]:::task
+  Refuse_to_go_on_when_a_configuration_was_not_applied19-->|Import task| Bootstrap_etcd__once_bootstrap_yml_20[/bootstrap etcd  once<br>import_task: bootstrap yml/]:::importTasks
+  Bootstrap_etcd__once_bootstrap_yml_20-->|Task| Wait_for_the_cluster_to_be_healthy21[wait for the cluster to be healthy<br>When: **not ansible check mode**]:::task
+  Wait_for_the_cluster_to_be_healthy21-->|Task| Read_each_node_s_volumes22[read each node s volumes<br>When: **not ansible check mode and item patches   default <br>     talos user volumes   length   0**]:::task
+  Read_each_node_s_volumes22-->|Task| Refuse_a_user_volume_that_is_not_ready23[refuse a user volume that is not ready<br>When: **unready   length   0**]:::task
+  Refuse_a_user_volume_that_is_not_ready23-->|Task| Check_the_kubeconfig_s_client_certificate24[check the kubeconfig s client certificate<br>When: **talos kubeconfig file stat exists**]:::task
+  Check_the_kubeconfig_s_client_certificate24-->|Task| Fetch_a_kubeconfig__or_renew_one_that_expires_soon25[fetch a kubeconfig  or renew one that expires soon<br>When: **not talos kubeconfig file stat exists or talos<br>kubeconfig cert rc    0**]:::task
+  Fetch_a_kubeconfig__or_renew_one_that_expires_soon25-->|Task| Say_the_kubeconfig_would_be_fetched_or_renewed26[say the kubeconfig would be fetched or renewed<br>When: **ansible check mode and  not talos kubeconfig file<br>stat exists or talos kubeconfig cert rc    0**]:::task
+  Say_the_kubeconfig_would_be_fetched_or_renewed26-->|Task| Keep_the_kubeconfig_readable_by_its_owner_alone27[keep the kubeconfig readable by its owner alone<br>When: **not ansible check mode**]:::task
+  Keep_the_kubeconfig_readable_by_its_owner_alone27-->|Task| Report_the_versions_running__and_any_upgrade_the_pins_wait_for28[report the versions running  and any upgrade the<br>pins wait for]:::task
+  Report_the_versions_running__and_any_upgrade_the_pins_wait_for28-.->|End of Block| Build_the_cluster1_block_start_0
+  Report_the_versions_running__and_any_upgrade_the_pins_wait_for28-->End
 ```
 
 

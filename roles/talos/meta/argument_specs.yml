@@ -11,6 +11,8 @@ argument_specs:
         the upgrade entry point moves the node; a pending upgrade is reported.
       - Bootstraps etcd once, recording it in talos_config_dir. With that record and etcd not running, it refuses
         to bootstrap again, which would make a new, empty cluster, unless talos_allow_bootstrap.
+      - With that record, refuses to install a node in maintenance mode that talos_reinstall does not name, since
+        the configuration it would send holds the cluster's keys and nothing proves who answers at the address.
       - Writes talosconfig and kubeconfig to talos_config_dir, outside the repository, and renews their client
         certificates before they expire. Refuses a talosconfig or kubeconfig there of another cluster (another
         endpoint, or another CA than the secrets bundle's).
@@ -104,6 +106,14 @@ argument_specs:
         type: bool
         default: false
         description: Bootstrap etcd again although this cluster was bootstrapped before, making a new, empty cluster.
+      talos_reinstall:
+        type: list
+        elements: str
+        default: []
+        description: >-
+          The nodes, by name, that may be installed although the cluster was bootstrapped before (a list, or names
+          joined by commas). A node in maintenance mode takes its configuration, the cluster's keys with it, from
+          whoever sends it, unauthenticated, so once the cluster exists the role sends it only to a node named here.
       talos_keep_rendered:
         type: bool
         default: false

@@ -38,6 +38,10 @@ talos_probe_delay: 10
 talos_install_retries: 60
 # Bootstrap etcd although this cluster was bootstrapped before, which makes a new, empty cluster.
 talos_allow_bootstrap: false
+# The nodes, by name, that may be installed although the cluster was bootstrapped before: a node in maintenance mode
+# takes its configuration, the cluster's keys with it, from whoever sends it, unauthenticated, so once the cluster
+# exists the role sends it only to a node named here (a list, or names joined by commas).
+talos_reinstall: []
 # Keep each node's rendered configuration in talos_config_dir/rendered/ (mode 0600; it holds the secrets), to compare
 # by hand with talosctl apply-config --dry-run. Otherwise it goes with the run's scratch directory.
 talos_keep_rendered: false

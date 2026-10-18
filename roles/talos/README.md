@@ -26,6 +26,9 @@ What `main` does, in order:
 - **Installs** a node in maintenance mode with `apply-config --insecure`, then waits on its install status until
   it reports `installed` (`talos_install_retries`): Talos installs in the background from the ISO and reboots into
   its system disk. A disk selector that matches nothing shows up as a lasting `pending`, with Talos's error.
+  Once the cluster was bootstrapped, a node in maintenance mode is installed only when `talos_reinstall` names it
+  (or `talos_allow_bootstrap` starts a new cluster): its configuration holds the cluster's keys, and nothing proves
+  that what answers at its address in maintenance mode is the node.
 - **Corrects drift** on a configured node: `apply-config --dry-run` finds it (the diff is never printed, since it
   can hold secrets), and `--mode no-reboot` applies it at once, which Talos 1.14 does for any configuration. etcd
   reads its settings only when it starts, so after a change to the control plane the run says how to restart it.
@@ -65,6 +68,7 @@ removed at the end of every run, unless `talos_keep_rendered` keeps a copy.
 | `talos_probe_delay` | `10` | Seconds between those questions, and between install status reads |
 | `talos_install_retries` | `60` | How many times it reads an installing node's status before giving up |
 | `talos_allow_bootstrap` | `false` | Bootstrap etcd although this cluster was bootstrapped before: a new, empty cluster |
+| `talos_reinstall` | `[]` | The nodes, by name, that may be installed although the cluster was bootstrapped (a list, or names joined by commas) |
 | `talos_keep_rendered` | `false` | Keep each node's rendered configuration in `talos_config_dir/rendered/` (mode 0600) |
 
 A variable for one run goes through `ANSIBLE_ARGS`: `make kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'`.

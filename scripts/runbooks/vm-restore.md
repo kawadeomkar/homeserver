@@ -89,7 +89,8 @@ before, rather than building an empty cluster over the old data.
 ## Without a backup
 
 If no backup survived, the cluster is rebuilt from Git, a new cluster on purpose (`talos_allow_bootstrap`, since
-the bootstrap marker in `~/.talos/homeserver` remembers the old one):
+the bootstrap marker in `~/.talos/homeserver` remembers the old one; it also lets the run install the new VMs, which
+wait in maintenance mode):
 
 ```bash
 make kubernetes ANSIBLE_ARGS='-e proxmox_vm_ignore_existing_volumes=true -e talos_allow_bootstrap=true'
