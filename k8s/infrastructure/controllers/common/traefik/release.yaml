@@ -30,6 +30,12 @@ spec:
         enabled: true
       kubernetesGateway:
         enabled: false
+    # The legacy names for what the CRD provider generates, set rather than left to the default: the entrypoints
+    # below name their Middlewares that way (<namespace>-<name>@kubernetescrd), while collision-safe naming spells a
+    # reference <namespace>_<name>, which would leave every route naming a Middleware that does not exist. Unset,
+    # Traefik warns about it at every start. The chart passes the option only when true, hence the argument.
+    additionalArguments:
+      - --providers.kubernetescrd.safeNaming=false
     service:
       annotations:
         metallb.io/loadBalancerIPs: "${LB_TRAEFIK_IP}"
