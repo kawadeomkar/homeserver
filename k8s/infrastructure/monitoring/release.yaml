@@ -21,6 +21,14 @@ spec:
   upgrade:
     crds: CreateReplace
   values:
+    # The overcommit alerts ask whether the pods' requests would still fit with the largest node gone. With a NAS the
+    # one node left would be the control plane, which the apps may not use, so they fire for as long as the apps
+    # request more than it has: always, from the first minutes. A pod that finds no room still raises KubePodNotReady
+    # and the replica-mismatch alerts.
+    defaultRules:
+      disabled:
+        KubeCPUOvercommit: true
+        KubeMemoryOvercommit: true
     alertmanager:
       alertmanagerSpec:
         replicas: 1
