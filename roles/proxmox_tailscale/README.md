@@ -123,3 +123,8 @@ run says it would install Tailscale without simulating it.
 
 The tailnet's side lives in Tailscale's admin console and is set by hand: the policy (the tag's owner, the route's
 auto-approver, the grants), split DNS and the auth key. In this repo, `scripts/runbooks/tailscale.md` says how.
+
+## Reference
+
+[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make docs` from the role itself:
+its argument specs, defaults and vars, and each tasks file as a table and a flow graph. Never edit it by hand.
