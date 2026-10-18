@@ -36,8 +36,10 @@ What `main` does, in order:
 - **Writes** talosconfig (the control plane as endpoint and node) and kubeconfig to `talos_config_dir`, mode 0600,
   and renews them `talos_renew_before_days` before their client certificates expire; a dry run says it would.
 
-The secrets bundle is checked by its text alone and only ever written with `no_log`; the rendered files live in a
-scratch directory removed at the end of every run, unless `talos_keep_rendered` keeps a copy.
+The secrets bundle comes from `talos_secrets_file`, which must exist, be readable by its owner alone (mode 0600) and
+lie outside the repository: it holds every key of the cluster, so it is never committed, even encrypted. It is
+checked by its text alone and only ever written with `no_log`; the rendered files live in a scratch directory
+removed at the end of every run, unless `talos_keep_rendered` keeps a copy.
 
 ## Variables
 
@@ -49,7 +51,7 @@ scratch directory removed at the end of every run, unless `talos_keep_rendered` 
 | `talos_version` | `""` | The Talos release a new node is installed with, such as `v1.14.2` |
 | `talos_contract` | `""` | The configuration contract talosctl renders for, `talos_version`'s minor |
 | `talos_kubernetes_version` | `""` | The Kubernetes version a new cluster runs |
-| `talos_secrets` | `""` | The secrets bundle (`talosctl gen secrets -o -`), as YAML text; never printed |
+| `talos_secrets_file` | `""` | The file holding the secrets bundle (`talosctl gen secrets`), mode 0600, outside the repository; never printed |
 | `talos_nodes` | `[]` | Each node: `name`, `role` (`controlplane` or `worker`), `address`, `schematic`, `patches` |
 | `talos_schematics` | `{}` | Image Factory schematics by name, each a list of official extensions |
 | `talos_image_factory_url` | `https://factory.talos.dev` | The Image Factory |
@@ -77,7 +79,7 @@ talos_endpoint: https://192.0.2.30:6443
 talos_version: v1.14.2
 talos_contract: v1.14
 talos_kubernetes_version: 1.37.1
-talos_secrets: "{{ vault_talos_secrets }}"
+talos_secrets_file: "{{ lookup('env', 'HOME') }}/.talos/homelab/secrets.yaml"
 talos_config_dir: "{{ lookup('env', 'HOME') }}/.talos/homelab"
 talos_schematics: {base: [siderolabs/qemu-guest-agent]}
 talos_nodes:

@@ -12,8 +12,8 @@ talos_extra_sans: []
 talos_version: ""
 talos_contract: ""
 talos_kubernetes_version: ""
-# The secrets bundle (talosctl gen secrets) as YAML. Never printed.
-talos_secrets: ""
+# The file holding the secrets bundle (talosctl gen secrets), mode 0600, outside any repository. Never printed.
+talos_secrets_file: ""
 # Nodes, each: name, role (controlplane or worker), address, schematic (a key of talos_schematics), and patches
 # (YAML documents, as strings) of its own.
 talos_nodes: []

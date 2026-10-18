@@ -7,8 +7,10 @@ configuration and the database are on local volumes.
 ## First start
 
 1. Make the Secret `nextcloud/nextcloud-db` (`k8s/README-secrets.md`) and list it in `kustomization.yaml`.
-2. Open `http://nextcloud.<domain>/` and run the setup wizard: an admin account of your choosing, and the database
-   **MySQL/MariaDB** with the user, password and database name from the Secret, on host `nextcloud-db`.
+2. Through a port forward, before the LAN can reach it (`scripts/runbooks/first-run.md`:
+   `kubectl -n nextcloud port-forward svc/nextcloud 8080:80`, then http://localhost:8080), run the setup wizard: an
+   admin account of your choosing, and the database **MySQL/MariaDB** with the user, password and database name
+   from the Secret, on host `nextcloud-db`.
 3. Tell Nextcloud the name and the proxy it is reached through (the namespace's pod, `deploy/nextcloud`):
 
    ```bash

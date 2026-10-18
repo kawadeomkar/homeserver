@@ -3,8 +3,10 @@
 # (talos_version, talos_contract, talos_kubernetes_version) are in group_vars/all/kubernetes.yml, since the Proxmox
 # play reads them too; the nodes' addresses come from local.yml.
 talos_cluster_name: homeserver
-# The secrets bundle (talosctl gen secrets -o -), kept in the vault as a block of YAML text.
-talos_secrets: "{{ vault_talos_secrets }}"
+# The secrets bundle (talosctl gen secrets): every key of the cluster, so never in a repository, this public one least
+# of all, even encrypted. It lives with the cluster's credentials, mode 0600, with a copy in your password manager
+# (scripts/runbooks/talos.md); kubernetes_settings_error refuses it in the vault.
+talos_secrets_file: "{{ talos_config_dir }}/secrets.yaml"
 # Outside the repository: talosconfig, kubeconfig, the record of the bootstrap and the etcd snapshots. Back it up
 # with the age key (scripts/runbooks/talos.md). One per cluster: a test host's local.yml names its own
 # (kubernetes_talos_config_dir), and the role refuses a directory holding another cluster's credentials.

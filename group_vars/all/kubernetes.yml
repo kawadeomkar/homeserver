@@ -82,11 +82,14 @@ kubernetes_timezone: America/Los_Angeles
 #   - without a cluster, the section's other settings: what a misspelt kubernetes_node_addresses looks like;
 #   - with a cluster, node addresses that are not a mapping or not this setup's nodes, two nodes with one address
 #     or one MAC, a node without a locally administered MAC, no repository for Flux to sync or one not over
-#     HTTPS, MetalLB's addresses missing, a LoadBalancer address outside MetalLB's range or used twice, a node
-#     address inside that range, sizes that are not whole numbers, and a data or media disk under the 10 GiB its
-#     Talos volume needs;
+#     HTTPS, a branch other than main without flux_sync_ref_unprotected, MetalLB's addresses missing, a
+#     LoadBalancer address outside MetalLB's range or used twice, a node address inside that range, an allowed
+#     ingress range that is not an IPv4 CIDR, sizes that are not whole numbers, and a data or media disk under the
+#     10 GiB its Talos volume needs;
 #   - without a NAS, a node without every size, a data disk, or a media disk (unless media goes on the data
-#     volume, when its size may be left out).
+#     volume, when its size may be left out);
+#   - in any setup, the Talos secrets bundle in the vault (vault_talos_secrets), where this public repository
+#     would publish it: it lives in talos_config_dir.
 kubernetes_settings_error: >-
   {%- set out = [] -%}
   {%- set given = {'kubernetes_node_macs': kubernetes_node_macs | default(''),
@@ -102,6 +105,8 @@ kubernetes_settings_error: >-
                    'sops_age_key_file': sops_age_key_file | default(''),
                    'flux_sync_url': flux_sync_url | default(''),
                    'flux_sync_ref': flux_sync_ref | default(''),
+                   'flux_sync_ref_unprotected': flux_sync_ref_unprotected | default(''),
+                   'kubernetes_ingress_allowed_range': kubernetes_ingress_allowed_range | default(''),
                    'haos_url': haos_url | default('')}
                   | dict2items | selectattr('value') | map(attribute='key') | list -%}
   {%- if kubernetes_present is not boolean -%}
@@ -156,6 +161,16 @@ kubernetes_settings_error: >-
   {%-   if flux_sync_ref | default('', true) and (flux_sync_ref | string) is not match('refs/') -%}
   {%-     set _ = out.append('flux_sync_ref must be a full reference, such as refs/heads/' ~ flux_sync_ref
                              ~ ': Flux resolves nothing else, and would wait for its source until it times out.') -%}
+  {#- Flux applies what the synced branch holds with cluster-admin rights, so whoever can push to it owns the
+      cluster. Only main is protected here (a pull request and CI required, no force-push), so another branch
+      needs saying so, for a test cluster, with its source suspended whenever it is not being tested. -#}
+  {%-   elif (flux_sync_ref | default('refs/heads/main', true) | string | trim) != 'refs/heads/main'
+             and not (flux_sync_ref_unprotected | default(false) | bool) -%}
+  {%-     set _ = out.append('flux_sync_ref names ' ~ flux_sync_ref ~ ', not refs/heads/main. Flux applies that branch '
+                             ~ 'with cluster-admin rights, so anyone who can push to it owns the cluster, and only main '
+                             ~ 'is protected (a pull request and CI required, no force-push). Sync main, or for a test '
+                             ~ "cluster set flux_sync_ref_unprotected: true in group_vars/all/local.yml and keep Flux's "
+                             ~ 'source suspended while you are not testing (scripts/runbooks/talos.md).') -%}
   {%-   endif -%}
   {%-   set url = flux_sync_url | default('', true) | string | trim -%}
   {%-   if not url or '<' in url or '>' in url or url is not match('https://') -%}
@@ -208,6 +223,13 @@ kubernetes_settings_error: >-
                                  ~ 'cannot share one address here.') -%}
   {%-       endif -%}
   {%-     endif -%}
+  {%-   endif -%}
+  {%-   set allowed = kubernetes_ingress_allowed_range | default('', true) | string | trim -%}
+  {%-   if allowed and not (allowed is match('^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})$')
+                            and allowed.split('/')[0].split('.') | map('int') | max <= 255
+                            and allowed.split('/')[1] | int <= 32) -%}
+  {%-     set _ = out.append("kubernetes_ingress_allowed_range must be one IPv4 range in CIDR form, such as your LAN's "
+                             ~ '192.0.2.0/24: the clients Traefik serves.') -%}
   {%-   endif -%}
   {%-   if kubernetes_api_sans | default([], true) is string -%}
   {%-     set _ = out.append('kubernetes_api_sans must be a list of names, not a string.') -%}
@@ -262,6 +284,14 @@ kubernetes_settings_error: >-
   {%-       endif -%}
   {%-     endif -%}
   {%-   endif -%}
+  {%- endif -%}
+  {%- if vault_talos_secrets is defined -%}
+  {%-   set _ = out.append('The vault holds vault_talos_secrets, the Talos secrets bundle: every key of the cluster, which '
+                           ~ 'a vault committed to this public repository would publish. It lives in secrets.yaml in the '
+                           ~ "cluster's credentials directory now (~/.talos/homeserver, or kubernetes_talos_config_dir). "
+                           ~ 'Move it there (ansible-vault view group_vars/all/vault.yml), mode 0600, and delete it from '
+                           ~ 'the vault with make vault-edit; scripts/runbooks/talos.md says why a bundle that was ever '
+                           ~ 'committed is better replaced.') -%}
   {%- endif -%}
   {{ out }}
 

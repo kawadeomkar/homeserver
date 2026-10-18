@@ -271,7 +271,7 @@ vault-init: ## Without a NAS: an empty vault of your own, with a new .vault_pass
 	elif [ -f group_vars/all/vault.yml ] && ! { tracked=$$(git rev-parse -q --verify :group_vars/all/vault.yml 2>/dev/null) \
 	    && [ -n "$$tracked" ] && [ "$$(git hash-object group_vars/all/vault.yml)" = "$$tracked" ]; }; then \
 	  echo "group_vars/all/vault.yml does not open with .vault_pass and is not the tracked vault, so it may be yours," \
-	    "with the cluster's secrets in it: restore the .vault_pass that opens it rather than replace it. To start" \
+	    "with your secrets in it: restore the .vault_pass that opens it rather than replace it. To start" \
 	    "afresh all the same, move the file out of the repository first."; \
 	  exit 1; \
 	else \

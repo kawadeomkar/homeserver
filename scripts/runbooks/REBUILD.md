@@ -28,18 +28,18 @@ Everything runs from a checkout of this repo.
 3. Restore the two files only you have:
    - **`.vault_pass`**: the vault password, from your password manager, readable by you alone
      (`chmod 600 .vault_pass`).
-   - **`group_vars/all/vault.yml`**, without a NAS and with a cluster: your own vault, which holds the cluster's
-     secrets bundle (`vault_talos_secrets`) and is in no repository. Restore it from your password manager over
-     the tracked one, then `git update-index --skip-worktree group_vars/all/vault.yml` so it stays out of your
-     commits; `make vault-init` then says `nothing to do`. Never let `make vault-init` make a new one while a
-     cluster exists: a new vault has no secrets bundle, and a cluster without it can no longer be managed. Without
-     a NAS and without a cluster there is nothing to restore: `make vault-init` makes both files (see `README.md`).
+   - **`group_vars/all/vault.yml`**, without a NAS, if you put secrets of your own in it: your own vault, in no
+     repository. Restore it from your password manager over the tracked one, then
+     `git update-index --skip-worktree group_vars/all/vault.yml` so it stays out of your commits; `make vault-init`
+     then says `nothing to do`. With nothing of yours in it, `make vault-init` makes both files (see `README.md`).
    - **`group_vars/all/local.yml`**: addresses, disk serials, the certificate pin, and the cluster's node
      addresses and MACs. Keep a copy of this file in your password manager. If it's lost, refill it from
      `local.yml.example`; the comments there say where each value comes from. The MACs must be the ones the
      router's DHCP reservations name.
-   - **`~/.talos/homeserver`**, with a cluster: talosconfig, kubeconfig and `bootstrapped`, the record that the
-     cluster was bootstrapped, without which the role cannot tell a first build from a cluster that lost its etcd.
+   - **`~/.talos/homeserver`**, with a cluster: `secrets.yaml`, the cluster's secrets bundle (every key of the
+     cluster: without it the cluster can no longer be managed, and is rebuilt), talosconfig, kubeconfig and
+     `bootstrapped`, the record that the cluster was bootstrapped, without which the role cannot tell a first build
+     from a cluster that lost its etcd. Mode 0700 for the directory, 0600 for `secrets.yaml`.
    - **`~/.config/sops/age/homeserver.agekey`**, with a cluster: the key that decrypts the cluster's secrets.
 4. Check the toolchain works: `make lint && make test-idempotence`.
 
@@ -150,8 +150,8 @@ its boot drive; the worker's data disk survives on the NAS. The order is fixed:
    downloads it again and starts them. It finds configured nodes and a running etcd, and installs and bootstraps
    nothing. `kubectl get nodes` shows them Ready.
 
-Prerequisites, before `make kubernetes`: `vault_talos_secrets` in the vault (it is, unless the vault was lost:
-then the cluster cannot be managed and is rebuilt), `~/.talos/homeserver` restored (section 1), the age key, the
+Prerequisites, before `make kubernetes`: `~/.talos/homeserver` restored with its `secrets.yaml` (section 1; without
+the bundle the cluster cannot be managed and is rebuilt), the age key, the
 MACs' DHCP reservations, and the inventory's `[kubernetes]` group. `scripts/runbooks/talos.md` covers building,
 upgrading and the watchdog; a worker that stays down is `scripts/runbooks/dead-worker.md`.
 

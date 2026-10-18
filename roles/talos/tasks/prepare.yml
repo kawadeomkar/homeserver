@@ -50,6 +50,48 @@
     talos_installer: "{{ talos_image_factory_url | urlsplit('hostname') }}/metal-installer"
   when: not talos_prepare_minimal | default(false)
 
+# The secrets bundle, from its own file outside any repository: every key of the cluster (its CAs, the service
+# account key, etcd's encryption key), so it must be the owner's alone, as talosctl gen secrets writes it, and it is
+# never printed. Checked by its text alone: a YAML parser's error could quote a line of it.
+- name: prepare | Look for the secrets bundle
+  ansible.builtin.stat:
+    path: "{{ talos_secrets_file }}"
+  register: talos_secrets_stat
+
+- name: prepare | Refuse a missing secrets bundle
+  ansible.builtin.assert:
+    that: talos_secrets_stat.stat.exists and talos_secrets_stat.stat.isreg
+    fail_msg: >-
+      There is no secrets bundle at {{ talos_secrets_file }}. A cluster that runs needs its own: restore it from
+      your password manager, since without it the cluster cannot be managed. A new cluster gets a new one: talosctl
+      gen secrets -o {{ talos_secrets_file }}, and a copy in your password manager (scripts/runbooks/talos.md).
+    quiet: true
+
+- name: prepare | Refuse a secrets bundle others can read
+  ansible.builtin.assert:
+    that: talos_secrets_stat.stat.mode in ['0600', '0400']
+    fail_msg: >-
+      {{ talos_secrets_file }} has mode {{ talos_secrets_stat.stat.mode }}: it holds every key of the cluster, so
+      only you may read it. chmod 600 {{ talos_secrets_file }}, and consider whoever could read it before.
+    quiet: true
+
+- name: prepare | Read the secrets bundle
+  ansible.builtin.slurp:
+    src: "{{ talos_secrets_file }}"
+  register: talos_secrets_read
+  no_log: true
+
+- name: prepare | Keep it for this run
+  ansible.builtin.set_fact:
+    talos_secrets: "{{ talos_secrets_read.content | b64decode }}"
+  no_log: true
+
+- name: prepare | Refuse a file that is not a secrets bundle
+  ansible.builtin.assert:
+    that: talos_secrets is search('^certs:', multiline=True)
+    fail_msg: "{{ talos_secrets_file }} is not the secrets bundle talosctl gen secrets writes."
+    quiet: true
+
 # talos_config_dir belongs to one cluster. A talosconfig or kubeconfig there that names another control plane, or
 # was signed by another CA than the secrets bundle's, is another cluster's: the home cluster's on a test host whose
 # local.yml leaves kubernetes_talos_config_dir unset, say. Kept, it would answer for that cluster (its Kubernetes

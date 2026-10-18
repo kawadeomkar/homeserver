@@ -1453,13 +1453,22 @@ def schematic_id(extensions):
     return hashlib.sha256(body.encode()).hexdigest()
 
 
+def bundle_file(path, text=TALOS_SECRETS):
+    """A secrets bundle in a file of its own, mode 0600, as talosctl gen secrets writes it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    path.chmod(0o600)
+    return str(path)
+
+
 def talos_vars(tmp_path, factory, nas=True, **more):
-    """The talos test playbook's variables, isolated in tmp_path: its HOME, talos_config_dir and secrets are the
-    test's own, never the owner's."""
+    """The talos test playbook's variables, isolated in tmp_path: its HOME, talos_config_dir and secrets bundle are
+    the test's own, never the owner's. The bundle lies outside the test's home, so it is not among what a run left
+    there."""
     extra = {
         "fake_talos_state": str(tmp_path / "talos.json"),
         "talos_config_dir": str(tmp_path / "home" / ".talos" / "homeserver"),
-        "vault_talos_secrets": TALOS_SECRETS,
+        "talos_secrets_file": bundle_file(tmp_path / "talos-secrets.yaml"),
         "talos_image_factory_url": factory["url"],
         "talos_probe_delay": 0,
         "talos_probe_retries": 3,
@@ -1735,8 +1744,11 @@ def test_talos_refuses_another_clusters_credentials(tmp_path, factory):
         assert "https://127.0.0.99:6443, not https://127.0.0.30:6443" in out and "kubernetes_talos_config_dir" in out
     assert {f.name: f.read_bytes() for f in home.iterdir()} == kept and read(state)["mutations"] == mutations
 
-    # The test host's own directory, from local.yml's setting through group_vars/kubernetes/talos.yml.
-    own = {k: v for k, v in extra.items() if k != "talos_config_dir"} | {"kubernetes_talos_config_dir": "~/.talos/test"}
+    # The test host's own directory, from local.yml's setting through group_vars/kubernetes/talos.yml, with its
+    # secrets bundle in it, where group_vars/kubernetes/talos.yml looks.
+    own = {k: v for k, v in extra.items() if k not in ("talos_config_dir", "talos_secrets_file")}
+    own |= {"kubernetes_talos_config_dir": "~/.talos/test"}
+    bundle_file(tmp_path / "home" / ".talos" / "test" / "secrets.yaml")
     expect(run("talos.yml", own, env=env), "homeserver-k8s", changed=True, note="a directory of its own")
     assert (tmp_path / "home" / ".talos" / "test" / "kubeconfig").exists()
     assert {f.name: f.read_bytes() for f in home.iterdir()} == kept
@@ -1744,11 +1756,41 @@ def test_talos_refuses_another_clusters_credentials(tmp_path, factory):
     # Another secrets bundle: neither file was made from it.
     other = TALOS_SECRETS.replace(base64.b64encode(b"TEST-OS-CA").decode(), base64.b64encode(b"OTHER-CA").decode())
     other = other.replace(base64.b64encode(b"TEST-K8S-CA").decode(), base64.b64encode(b"OTHER-K8S").decode())
-    rc, _, out = run("talos.yml", own | {"vault_talos_secrets": other}, check=True, env=env)
+    other = bundle_file(tmp_path / "other-secrets.yaml", other)
+    rc, _, out = run("talos.yml", own | {"talos_secrets_file": other}, check=True, env=env)
     assert rc != 0 and "its talosconfig trusts another CA" in out and "its kubeconfig trusts another CA" in out, out[
         -3000:
     ]
     no_talos_secret([out])
+
+
+@pytest.mark.cluster
+def test_talos_refuses_a_missing_or_open_secrets_bundle(tmp_path, factory):
+    """The secrets bundle is a file of its own outside the repository, readable by its owner alone: missing, open
+    to others, or inside the repository, it stops a run, a dry run too, before any node is asked, and is never
+    printed."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state)
+    bundle = Path(extra["talos_secrets_file"])
+    bundle.chmod(0o644)
+    outputs = []
+    for check in (True, False):
+        rc, _, out = run("talos.yml", extra, check=check, env=env)
+        assert rc != 0 and f"{bundle} has mode 0644" in out and "chmod 600" in out, out[-3000:]
+        outputs.append(out)
+    bundle.unlink()
+    rc, _, out = run("talos.yml", extra, env=env)
+    assert rc != 0 and f"There is no secrets bundle at {bundle}" in out, out[-3000:]
+    assert "talosctl gen secrets -o" in out and "password manager" in out, out[-3000:]
+    outputs.append(out)
+    # The role knows the repository as the playbook's directory, which for these tests is this one.
+    inside = HERE / "secrets.yaml"
+    rc, _, out = run("talos.yml", extra | {"talos_secrets_file": str(inside)}, check=True, env=env)
+    assert rc != 0 and "talos_secrets_file must be outside the repository" in out, out[-3000:]
+    assert not inside.exists()
+    assert read(state)["mutations"] == 0 and talos_files(tmp_path) == []
+    no_talos_secret(outputs)
 
 
 @pytest.mark.cluster

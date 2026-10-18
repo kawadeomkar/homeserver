@@ -62,6 +62,7 @@ SECRET_NAME = re.compile(r"pass(?!ive)|secret|token|key", re.IGNORECASE)
 NOT_SECRET = {
     ("truenas_resource", "key"): "the names of the fields that identify an entry",
     ("flux_bootstrap", "flux_bootstrap_age_key_file"): "the key file's path; the role reads the key, never prints it",
+    ("talos", "talos_secrets_file"): "the bundle's path; the role reads the bundle under no_log, never prints it",
 }
 
 # The modules import their role's module_utils as ansible.module_utils.<name>, as Ansible ships them.
@@ -193,7 +194,7 @@ def argspec_pass(tree, playbook="site.yml", *extra):
         "ansible-playbook",
         *["-i", "inventory.example", playbook, "--tags", "__argspec_only__", "--skip-tags", "truenas_info"],
         *["-e", "ansible_connection=local", "-e", "vault_truenas_api_key=stub"],
-        *["-e", "vault_truenas_mail_password=stub", "-e", json.dumps({"vault_talos_secrets": "certs: {}\n"}), *extra],
+        *["-e", "vault_truenas_mail_password=stub", *extra],
     )
 
 
@@ -447,9 +448,11 @@ def test_flux_settings_resolve_on_the_kubernetes_host(tmp_path, local_yml, path,
         tree, "homeserver-k8s", "[flux_bootstrap_settings, flux_bootstrap_instance]", *CLUSTER_ARGS
     )
     common = {"DOMAIN", "TZ", "LB_RANGE", "LB_TRAEFIK_IP", "LB_FRIGATE_IP", "DATA_NODE", "CONTROL_PLANE_ADDRESS"}
-    common |= {"GPU_I915", "FRIGATE_DETECTOR_DEVICE"}
+    common |= {"GPU_I915", "FRIGATE_DETECTOR_DEVICE", "INGRESS_ALLOWED_RANGE"}
     assert set(settings) == common | {"PROMETHEUS_RETENTION", "PROMETHEUS_RETENTION_SIZE"} | storage_keys
     assert settings["CONTROL_PLANE_ADDRESS"] == "192.0.2.30"
+    # Nobody until local.yml names the range: a new cluster's apps are set up through port forwards first.
+    assert settings["INGRESS_ALLOWED_RANGE"] == "127.0.0.1/32"
     assert all(isinstance(value, str) and value for value in settings.values()), settings
     assert instance["path"] == path and instance["url"] == CLUSTER_VARS["flux_sync_url"]
     if local_yml is None:
@@ -799,6 +802,37 @@ def without(settings, *names):
             CLUSTER_VARS | {"flux_sync_ref": "small-host"},
             ["flux_sync_ref must be a full reference, such as refs/heads/small-host"],
             id="flux-ref-a-branch-name",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"flux_sync_ref": "refs/heads/small-host"},
+            ["flux_sync_ref names refs/heads/small-host, not refs/heads/main", "flux_sync_ref_unprotected: true"],
+            id="flux-ref-unprotected",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"flux_sync_ref": "refs/heads/small-host", "flux_sync_ref_unprotected": True},
+            [],
+            id="flux-ref-unprotected-said-so",
+        ),
+        pytest.param(None, CLUSTER_VARS | {"kubernetes_ingress_allowed_range": "192.0.2.0/24"}, [], id="ingress-range"),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_ingress_allowed_range": "192.0.2.0"},
+            ["kubernetes_ingress_allowed_range must be one IPv4 range in CIDR form"],
+            id="ingress-range-an-address",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_ingress_allowed_range": "192.0.256.0/24"},
+            ["kubernetes_ingress_allowed_range must be one IPv4 range in CIDR form"],
+            id="ingress-range-out-of-bounds",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"vault_talos_secrets": "certs: {}\n"},
+            ["The vault holds vault_talos_secrets", "secrets.yaml in the cluster's credentials directory"],
+            id="talos-bundle-in-the-vault",
         ),
         pytest.param(
             None,

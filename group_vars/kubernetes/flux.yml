@@ -8,7 +8,8 @@ flux_bootstrap_instance:
   # The repository this cluster syncs, from local.yml: it has no default, since Flux applies whatever it holds with
   # cluster-admin rights, and a fork must sync its own (kubernetes_settings_error refuses it missing).
   url: "{{ flux_sync_url }}"
-  # A validation branch for a test cluster, from local.yml; main otherwise.
+  # main, the one protected branch. A validation branch for a test cluster comes from local.yml, with
+  # flux_sync_ref_unprotected (kubernetes_settings_error refuses it without).
   ref: "{{ flux_sync_ref | default('refs/heads/main', true) }}"
   path: "k8s/clusters/{{ 'nas' if nas_present else 'local' }}"
 # This cluster's own key, in a file of its own: the whole file goes into the cluster.
@@ -21,6 +22,8 @@ flux_bootstrap_age_key_file: "{{ sops_age_key_file | default('~/.config/sops/age
 # control plane's address (never tracked), and keeps less history without a NAS, whose node is smaller. With the
 # host's iGPU passed to the workload node (local.yml's kubernetes_gpu_mapping), Jellyfin and Frigate ask for it
 # (GPU_I915 1) and Frigate detects on it; without, they ask for none (a limit of 0 schedules anywhere) and use the CPU.
+# INGRESS_ALLOWED_RANGE is who Traefik serves: local.yml's kubernetes_ingress_allowed_range, set once every app's
+# first-run setup is done, and until then the loopback address, which no client has (scripts/runbooks/first-run.md).
 flux_bootstrap_settings: >-
   {{ {'DOMAIN': kubernetes_domain | default(kubernetes_domain_default, true),
       'TZ': kubernetes_timezone,
@@ -39,5 +42,6 @@ flux_bootstrap_settings: >-
                 'FRIGATE_DETECTOR_DEVICE': 'GPU' if kubernetes_gpu_mapping | default('', true) else 'CPU'})
      | combine({'CONTROL_PLANE_ADDRESS': kubernetes_node_addresses[kubernetes_controlplane.name] | trim,
                 'PROMETHEUS_RETENTION': '15d' if nas_present else '7d',
-                'PROMETHEUS_RETENTION_SIZE': '15GB' if nas_present else '5GB'})
+                'PROMETHEUS_RETENTION_SIZE': '15GB' if nas_present else '5GB',
+                'INGRESS_ALLOWED_RANGE': kubernetes_ingress_allowed_range | default('127.0.0.1/32', true) | string | trim})
      | combine({'HAOS_URL': haos_url} if haos_url | default('', true) else {}) }}

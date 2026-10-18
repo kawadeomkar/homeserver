@@ -1,8 +1,10 @@
 ---
-# Monitoring (Flux Kustomization infra-monitoring): kube-prometheus-stack, with its namespace.
+# Monitoring (Flux Kustomization infra-monitoring): kube-prometheus-stack, with its namespace and the role
+# Grafana's sidecars get.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - namespace.yaml
   - repository.yaml
+  - grafana-rbac.yaml
   - release.yaml

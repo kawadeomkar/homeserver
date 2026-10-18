@@ -22,6 +22,8 @@ without a kind, are not objects.
   every pod that mounts a shared NAS or static volume chowns its mount point first, and none sets fsGroup on an NFS
   volume, which would chown the whole volume at every start.
 - No PodDisruptionBudget: with one node for the apps, it would only stop a drain.
+- No service account outside kube-system and flux-system may read Secrets in every namespace, flux-system's age key
+  among them, bar the few listed below; in what the charts render too.
 - Every Secret is SOPS-encrypted.
 - LinuxServer.io images use the immutable x.y.z-lsNNN form of their tags.
 - Every container's requests and limits, and every volume's size, is a Kubernetes quantity once Flux substitutes the
@@ -614,6 +616,88 @@ def test_chart_fixtures_match_the_settings(settings):
     exactly the keys roles/flux_bootstrap puts in that setup's cluster-settings."""
     fixtures = yaml.safe_load((ROOT / "tests" / "fixtures" / "cluster-settings.yaml").read_text())
     assert {setup: set(keys) for setup, keys in fixtures.items()} == settings
+
+
+# The service accounts outside kube-system and flux-system that may read every Secret in the cluster, as
+# namespace/name, each with its reason. Any of them reaches flux-system's age key, which decrypts every SOPS file in
+# this public repository's history, so one more needs a reason in the pull request. kube-system's (csi-driver-nfs's
+# provisioner) and flux-system's (Flux, cluster-admin by design) are not listed.
+CLUSTER_SECRET_READERS = {
+    # Reads the TLS Secrets its routes name. Its chart grants every Secret, and namespaced RBAC, the chart's one way to
+    # narrow that, cannot serve the IngressClass. It answers the LAN: the one to narrow next.
+    "traefik/traefik",
+    # Writes Prometheus's and Alertmanager's configuration as Secrets and reads those a ServiceMonitor names. It
+    # answers nothing.
+    "monitoring/kube-prometheus-stack-operator",
+}
+# Kubernetes's own ClusterRoles that read Secrets, which a binding can name without the repository defining them.
+BUILTIN_SECRET_ROLES = {"cluster-admin", "admin", "edit"}
+
+
+def reads_every_secret(rule):
+    """Whether an RBAC rule lets its holder read Secrets it does not name: resourceNames narrows a rule to them."""
+    return (
+        {"", "*"} & set(rule.get("apiGroups") or [])
+        and {"secrets", "*"} & set(rule.get("resources") or [])
+        and {"get", "list", "watch", "*"} & set(rule.get("verbs") or [])
+        and not rule.get("resourceNames")
+    )
+
+
+def cluster_secret_readers(objects):
+    """The service accounts a ClusterRoleBinding lets read Secrets in every namespace, as namespace/name. A
+    RoleBinding to a ClusterRole grants it in that namespace alone, so it is not one."""
+    roles = {
+        obj["metadata"]["name"]
+        for _, obj in objects
+        if obj["kind"] == "ClusterRole" and any(reads_every_secret(rule) for rule in obj.get("rules") or [])
+    } | BUILTIN_SECRET_ROLES
+    return {
+        f"{subject['namespace']}/{subject['name']}"
+        for _, obj in objects
+        if obj["kind"] == "ClusterRoleBinding" and obj["roleRef"]["name"] in roles
+        for subject in obj.get("subjects") or []
+        if subject["kind"] == "ServiceAccount"
+    }
+
+
+def test_few_read_every_secret():
+    """Grafana's chart once gave its LAN-facing pod every Secret, and kube-state-metrics lists them all for its
+    metrics: both are narrowed in their HelmRelease's values, and a chart bump that widens one fails here."""
+    readers = cluster_secret_readers(manifests() + rendered())
+    wrong = sorted(r for r in readers if r.split("/")[0] not in {"kube-system", "flux-system"})
+    assert sorted(set(wrong) - CLUSTER_SECRET_READERS) == [], (
+        "these can read every Secret, flux-system's age key included: narrow their role, or list them with a reason"
+    )
+    if rendered():
+        assert sorted(CLUSTER_SECRET_READERS - set(wrong)) == [], (
+            "these read every Secret no more: drop them from the list"
+        )
+
+
+def test_secret_readers_are_found():
+    """The check above finds a binding to a role that reads Secrets, and lets through a rule narrowed by name."""
+    role = {
+        "kind": "ClusterRole",
+        "metadata": {"name": "r"},
+        "rules": [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["list"]}],
+    }
+    named = {
+        "kind": "ClusterRole",
+        "metadata": {"name": "n"},
+        "rules": [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"], "resourceNames": ["one"]}],
+    }
+
+    def binding(name, ref):
+        return {
+            "kind": "ClusterRoleBinding",
+            "metadata": {"name": name},
+            "roleRef": {"name": ref},
+            "subjects": [{"kind": "ServiceAccount", "namespace": "apps", "name": name}],
+        }
+
+    objects = [(None, o) for o in (role, named, binding("a", "r"), binding("b", "n"), binding("c", "edit"))]
+    assert cluster_secret_readers(objects) == {"apps/a", "apps/c"}
 
 
 # ------------------------------------------------------------------------------------------- the apps ---

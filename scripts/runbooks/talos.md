@@ -11,16 +11,19 @@ and never moves one to another version; `make talos-upgrade` does that. Addresse
    `group_vars/all/kubernetes.yml`; `brew install siderolabs/tap/talosctl`), `kubectl`, `flux`, `sops`, `age`,
    `helm` and `kustomize`. The role refuses a `talosctl` of another minor release, since its defaults follow its
    own.
-2. **The secrets bundle**, in the vault: `make vault-edit`, then add
+2. **The secrets bundle**, beside the cluster's credentials (`kubernetes_talos_config_dir`'s directory, when
+   `local.yml` sets one) and in no repository:
 
-   ```yaml
-   vault_talos_secrets: |
-     <the output of: talosctl gen secrets -o - (indent it under the key)>
+   ```bash
+   mkdir -p ~/.talos/homeserver && chmod 700 ~/.talos/homeserver
+   talosctl gen secrets -o ~/.talos/homeserver/secrets.yaml && chmod 600 ~/.talos/homeserver/secrets.yaml
    ```
 
-   It is the cluster's CA and keys: lose it and the cluster can no longer be managed. Without a NAS, the vault is
-   the one `make vault-init` made, yours alone and in no repository: keep a copy of it and `.vault_pass` in your
-   password manager, and pull past a change to the tracked vault as `README.md` says, setting yours aside.
+   It is every key of the cluster (its CAs, the service-account key, etcd's encryption key): whoever holds it holds
+   the cluster, and without it the cluster can no longer be managed. Keep a copy in your password manager. Never
+   commit it, not even in the vault, which this public repository publishes as ciphertext no stronger than
+   `.vault_pass` (every playbook refuses `vault_talos_secrets`): a bundle that was ever committed is replaced, with a
+   new cluster, which costs least before the cluster holds anything.
 3. **MACs and addresses.** Choose a locally administered MAC per node (lower case, the second hex digit 2, 6, a or
    e) and put it in `local.yml` as `kubernetes_node_macs`, with each node's address in
    `kubernetes_node_addresses`. In the router (OPNsense with a NAS), reserve each address for its MAC, outside the
@@ -57,8 +60,8 @@ talosctl health
 kubectl get nodes
 ```
 
-**Back up `~/.talos/homeserver`** with the age key, in the password manager. Besides talosconfig and kubeconfig it
-holds `bootstrapped`, which is how the role tells a first build from a cluster that lost its etcd: with it and no
+**Back up `~/.talos/homeserver`** with the age key, in the password manager. Besides the secrets bundle,
+talosconfig and kubeconfig it holds `bootstrapped`, which is how the role tells a first build from a cluster that lost its etcd: with it and no
 running etcd, a run refuses to bootstrap again, which would make a new, empty cluster. On a new workstation,
 restore that directory before the first run. `etcd/` holds the etcd snapshots.
 
@@ -120,6 +123,27 @@ object goes back to. Snapshots come only from `make etcd-snapshot` and the start
 wiped reaches maintenance mode only from it. The boot order puts the system disk first, so an installed node
 never boots it. Old ISOs stay in `local` until removed by hand; the Proxmox play lists the ones no VM uses.
 
+## Syncing a branch other than main
+
+Flux applies the synced branch with cluster-admin rights, so whoever can push to it owns the cluster. Only `main` is
+protected (the "Protect main" ruleset: a pull request and CI required, no force-push, no deletion), so every playbook
+refuses another branch unless `local.yml` says you know, as for a test cluster validating a branch:
+
+```yaml
+flux_sync_ref: refs/heads/<branch>
+flux_sync_ref_unprotected: true
+```
+
+Keep its source suspended while you are not testing, so a push to the branch deploys nothing:
+
+```bash
+flux suspend source git flux-system -n flux-system    # once a change is checked
+flux resume source git flux-system -n flux-system     # before pushing the next one
+```
+
+Once the branch is merged, delete both settings and run `make kubernetes`: the cluster follows `main` again, and
+`flux resume source git flux-system -n flux-system` lets it.
+
 ## Validating on a test host without a NAS
 
 On a small host, use a fresh clone of the repository, without your `.vault_pass`, whose `local.yml` holds
@@ -135,12 +159,12 @@ kubernetes_talos_config_dir: ~/.talos/homeserver-test
 
 A run refuses a directory that holds another cluster's talosconfig or kubeconfig, so leaving the setting out stops
 at the first task that would use them. Give the test cluster a secrets bundle of its own too, never the home
-cluster's: in that clone, `make vault-init` (a vault of its own; see `README.md`), then `make vault-edit` and add
-`vault_talos_secrets` from a new `talosctl gen secrets -o -`, as in step 2 above. It is thrown away with the test
-cluster.
+cluster's: `talosctl gen secrets` into that directory, as in step 2 above, and in that clone `make vault-init` (a
+vault of its own; see `README.md`). It is thrown away with the test cluster.
 
 Never set `proxmox_vm_allow_overcommit` on a host whose thin pool other VMs share: a full pool gives them all I/O
 errors. Once Flux is up, keep the homepage and media apps and suspend the rest
 (`flux suspend kustomization apps-nextcloud apps-photoprism apps-frigate -n flux-system`), or point
-`flux_sync_ref` at a branch that lists fewer apps (`refs/heads/<branch>`, a full reference). Afterwards: `qm stop 300 && qm destroy 300 --purge`, delete VM
+`flux_sync_ref` at a branch that lists fewer apps (`refs/heads/<branch>`, a full reference, with
+`flux_sync_ref_unprotected`; see below). Afterwards: `qm stop 300 && qm destroy 300 --purge`, delete VM
 300's backups and the ISO, the clone, and its `kubernetes_talos_config_dir`.

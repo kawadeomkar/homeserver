@@ -120,11 +120,11 @@ That writes a new password to `.vault_pass`, readable by you alone, and an empty
 already opens with `.vault_pass` is left alone, and one that does not but is not the tracked vault either is
 refused, since it may be yours with its password lost.
 
-**With a cluster, that vault is what the cluster cannot do without**: it holds `vault_talos_secrets`, the
-cluster's CA and keys (`scripts/runbooks/talos.md`), and exists nowhere else. Keep a copy of it, with
-`.vault_pass`, in your password manager, and never replace it with a new one. When the tracked vault changes
-upstream, `git pull` refuses, saying your local changes to `group_vars/all/vault.yml` would be overwritten. Set
-your vault aside, put the tracked file back, pull, and put yours back:
+Your vault holds whatever secrets you put in it and exists nowhere else: keep a copy of it, with `.vault_pass`,
+in your password manager, and never replace it with a new one. (A cluster's secrets bundle is never in a vault: it
+lives in `~/.talos/homeserver`, `scripts/runbooks/talos.md`.) When the tracked vault changes upstream, `git pull`
+refuses, saying your local changes to `group_vars/all/vault.yml` would be overwritten. Set your vault aside, put
+the tracked file back, pull, and put yours back:
 
 ```bash
 cp -p group_vars/all/vault.yml ~/homeserver-vault.yml
@@ -188,9 +188,10 @@ moment they start. If your `inventory` predates the cluster, add `[kubernetes]` 
 `inventory.example`; the cluster's playbook refuses to run without it. Then `make check-kubernetes` and
 `make kubernetes` create the VMs on the Proxmox host, start them, report each one's MAC, install Talos on them,
 bootstrap the cluster and write `~/.talos/homeserver/talosconfig` and `kubeconfig` (back that directory up).
-It needs `talosctl` of the pinned minor release on this machine and the Talos secrets in the vault
-(`vault_talos_secrets`); `scripts/runbooks/talos.md` has the whole procedure, and upgrades, which only
-`make talos-upgrade` makes. Last, it installs the Flux Operator and hands the cluster to Flux, which from then on
+It needs `talosctl` of the pinned minor release on this machine and the cluster's secrets bundle, made once with
+`talosctl gen secrets` into `~/.talos/homeserver/secrets.yaml` and kept in your password manager, never in a
+repository; `scripts/runbooks/talos.md` has the whole procedure, and upgrades, which only `make talos-upgrade`
+makes. Last, it installs the Flux Operator and hands the cluster to Flux, which from then on
 applies `k8s/clusters/nas` (or `local`) from the repository `flux_sync_url` names: Flux holds cluster-admin, so
 whoever can merge to that branch controls the cluster.
 
@@ -242,8 +243,8 @@ are yours. Without it, the same manifests run both apps on the CPU.
 `scripts/runbooks/REBUILD.md` is the recovery procedure. A reinstalled NAS needs a new API user and key and an
 updated certificate pin before Ansible can reach it, and a reinstalled Proxmox host needs root SSH access. Keep a
 copy of what is not in this repo in your password manager: `group_vars/all/local.yml` and `.vault_pass`; with a
-cluster, the age key (`~/.config/sops/age/homeserver.agekey`) and `~/.talos/homeserver`; and without a NAS your
-own vault, `group_vars/all/vault.yml`, which with a cluster holds its secrets bundle.
+cluster, the age key (`~/.config/sops/age/homeserver.agekey`) and `~/.talos/homeserver`, whose `secrets.yaml` is
+every key of the cluster; and without a NAS your own vault, `group_vars/all/vault.yml`.
 
 ## Manifests
 
@@ -257,20 +258,19 @@ Flux applies them. `roles/flux_bootstrap` points the cluster at `k8s/clusters/na
    `photoprism`, `frigate` and `homepage`.
 
 Each app answers at `http://<app>.<domain>` through Traefik, Homepage at the domain itself, once the router has a
-wildcard DNS record for `*.<domain>` pointing at `kubernetes_lb_traefik_ip`. Flux reconciles `main` every minute:
+wildcard DNS record for `*.<domain>` pointing at `kubernetes_lb_traefik_ip` and `kubernetes_ingress_allowed_range`
+lets your address in. A new cluster lets nobody in: several apps make their first visitor the admin, so set each one
+up through a port forward first (`scripts/runbooks/first-run.md`), then open the LAN. Flux reconciles `main` every minute:
 a merged change reaches the cluster without anyone running anything. To see what Flux sees:
 `flux get kustomizations` (KUBECONFIG as in `scripts/runbooks/talos.md`).
 
 Monitoring is kube-prometheus-stack: Grafana answers at `http://grafana.<domain>`, with the admin password the
 chart generated (CLAUDE.md, Monitoring, says how to read it).
 
-Secrets are SOPS files (`k8s/README-secrets.md`); an app whose Secret you have not made yet waits for it. Some apps
-need a step in their own UI after the first start: Nextcloud's setup wizard (`k8s/apps/nextcloud/README.md`),
-Jellyfin's transcode path (`/transcode`), SABnzbd's incomplete folder (`/data/usenet/incomplete`) and host whitelist
-(`sabnzbd.<domain>`), and Frigate's cameras. A fresh SABnzbd refuses every host name not on its whitelist, its own
-ingress's included ("Hostname verification failed"), so reach it the first time through a port forward:
-`kubectl -n media port-forward deploy/sabnzbd 8080`, then http://localhost:8080, and add `sabnzbd.<domain>` under
-Config → Special → host_whitelist.
+Secrets are SOPS files (`k8s/README-secrets.md`); an app whose Secret you have not made yet waits for it. Each
+app's first visit, through a port forward, is `scripts/runbooks/first-run.md`: the wizards and logins, Jellyfin's
+transcode path, SABnzbd's folders and host whitelist (a fresh SABnzbd refuses every host name not on it, its own
+ingress's included). Frigate's cameras come after.
 
 **Moving the media library into place, once, with a NAS.** The media dataset predates the cluster: its old layout
 had `jellyfin/config` and `jellyfin/data` under it. Before the media apps import anything, from a pod that mounts the

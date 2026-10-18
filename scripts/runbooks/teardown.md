@@ -50,13 +50,13 @@ The `vm-nightly` job stays, covering `vm_backup_extra_vmids` if any; with none, 
 ## 3. The workstation
 
 ```bash
-rm -rf ~/.talos/homeserver                   # talosconfig, kubeconfig, the bootstrap record, etcd snapshots
+rm -rf ~/.talos/homeserver                   # the secrets bundle, talosconfig, kubeconfig, the bootstrap record, etcd snapshots
 ```
 
 In `group_vars/all/local.yml`, delete the Kubernetes section (every `kubernetes_*`, `flux_*`, `sops_*` and
 `haos_url` setting): without node addresses the NAS and Proxmox plays leave the cluster's parts alone, and
-`make kubernetes` ends by itself. `make vault-edit` and delete `vault_talos_secrets`: a new cluster gets a new
-bundle. Keep the age key (`~/.config/sops/age/homeserver.agekey`) only if the SOPS files under `k8s/` stay; they
+`make kubernetes` ends by itself. The secrets bundle went with the directory: a new cluster gets a new one, and so
+does the password manager's copy. Keep the age key (`~/.config/sops/age/homeserver.agekey`) only if the SOPS files under `k8s/` stay; they
 decrypt with it alone.
 
 ## 4. The NAS (with a NAS)

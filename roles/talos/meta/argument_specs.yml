@@ -42,11 +42,10 @@ argument_specs:
         type: str
         default: ""
         description: The Kubernetes version a cluster is built with, such as 1.37.1.
-      talos_secrets:
+      talos_secrets_file:
         type: str
         default: ""
-        no_log: true
-        description: The secrets bundle as YAML (talosctl gen secrets).
+        description: The file holding the secrets bundle (talosctl gen secrets), mode 0600, outside the repository.
       talos_nodes:
         type: list
         elements: dict

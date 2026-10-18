@@ -27,21 +27,21 @@
                                ~ ' is not in talos_schematics.') -%}
       {%- endfor -%}
       {%- for name in ['talos_cluster_name', 'talos_endpoint', 'talos_version', 'talos_contract',
-                       'talos_kubernetes_version', 'talos_config_dir'] if not lookup('vars', name) -%}
+                       'talos_kubernetes_version', 'talos_config_dir', 'talos_secrets_file'] if not lookup('vars', name) -%}
       {%-   set _ = out.append(name ~ ' must be set.') -%}
       {%- endfor -%}
       {%- if talos_version and talos_contract and (talos_version | talos_minor) != talos_contract -%}
       {%-   set _ = out.append('talos_contract ' ~ talos_contract ~ ' is not talos_version ' ~ talos_version
                                ~ "'s major and minor.") -%}
       {%- endif -%}
-      {#- Checked by its text alone: a parser's error could quote a line of the secrets. -#}
-      {%- if talos_secrets is not string or talos_secrets is not search('^certs:', multiline=True) -%}
-      {%-   set _ = out.append('talos_secrets must be the secrets bundle talosctl gen secrets writes, as YAML.') -%}
-      {%- endif -%}
       {%- set repo = playbook_dir | realpath -%}
       {%- if talos_config_dir and ((talos_config_dir | realpath) == repo
                                    or (talos_config_dir | realpath).startswith(repo ~ '/')) -%}
       {%-   set _ = out.append('talos_config_dir must be outside the repository: it holds talosconfig and kubeconfig, '
                                ~ 'which give full control of the cluster.') -%}
+      {%- endif -%}
+      {%- if talos_secrets_file and ((talos_secrets_file | realpath).startswith(repo ~ '/')) -%}
+      {%-   set _ = out.append('talos_secrets_file must be outside the repository: the secrets bundle holds every key of '
+                               ~ 'the cluster, and a commit would publish it.') -%}
       {%- endif -%}
       {{ out }}

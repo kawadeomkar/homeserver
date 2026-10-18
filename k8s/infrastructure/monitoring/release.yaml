@@ -57,7 +57,19 @@ spec:
           requests:
             cpu: 10m
             memory: 16Mi
+      # Its sidecars read dashboards and datasources from ConfigMaps in this namespace alone, through the Role in
+      # grafana-rbac.yaml: no ClusterRole, and no Secret anywhere (the chart's default reads both kinds, in every
+      # namespace for dashboards).
+      rbac:
+        namespaced: true
+        useExistingRole: grafana-sidecar
       sidecar:
+        dashboards:
+          searchNamespace: [monitoring]
+          resource: configmap
+        datasources:
+          searchNamespace: [monitoring]
+          resource: configmap
         resources:
           requests:
             cpu: 10m
@@ -105,6 +117,8 @@ spec:
                 requests:
                   storage: 20Gi
     kube-state-metrics:
+      # Its secrets collector lists every Secret in the cluster, values and all, for metrics that name them.
+      collectorsExclude: [secrets]
       resources:
         requests:
           cpu: 10m

@@ -127,8 +127,8 @@ reboot (`talosctl reboot -n <worker>`), keep its data, and come back from a VM b
       with root mapped to root, and that `chown-mount` can chown its mount point
 - [ ] The TrueNAS CORE snapshot of 2024 on the media dataset pins every block the move replaces: decide with the
       "TrueNAS CORE leftovers" item whether to delete it, through the role
-- [ ] After each app's first start, its own steps (`README.md`, Manifests): Nextcloud's wizard and `occ` settings,
-      Jellyfin's transcode path, SABnzbd's incomplete folder and host whitelist, Frigate's cameras
+- [ ] After each app's first start, its own steps through a port forward (`scripts/runbooks/first-run.md`), then
+      `kubernetes_ingress_allowed_range` to open the LAN; Frigate's cameras after
 - [ ] Enforce network policies (CLAUDE.md, Landmines): turn on `kubeNetworkPoliciesEnabled` in a
       `KubeFlannelCNIConfig` control-plane patch, add a NetworkPolicy in `frigate` that opens only 8971, 8554 and
       8555 (TCP and UDP), and check that Frigate's probes on 5000, from the kubelet, still pass and that Flux's own

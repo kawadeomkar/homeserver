@@ -101,8 +101,13 @@ kubernetes_lb_frigate_ip: 192.0.2.41
 # rights. There is no default: name your own.
 flux_sync_url: https://github.com/<you>/homeserver.git
 # The branch, when not main, as a full reference (refs/heads/<branch>): a
-# validation branch for a test cluster, say.
+# validation branch for a test cluster, say. Only main is protected (a pull
+# request and CI required), and whoever can push to the synced branch owns the
+# cluster, so another branch is refused unless flux_sync_ref_unprotected says
+# you know; keep Flux's source suspended while you are not testing
+# (scripts/runbooks/talos.md).
 # flux_sync_ref: refs/heads/main
+# flux_sync_ref_unprotected: true
 # Where this machine keeps the cluster's talosconfig, kubeconfig, record of the
 # bootstrap and etcd snapshots, outside the repository. One per cluster: a test
 # host's copy names its own (scripts/runbooks/talos.md).
@@ -110,6 +115,12 @@ flux_sync_url: https://github.com/<you>/homeserver.git
 # The apps answer at <app>.<domain>; point a wildcard DNS record for
 # *.<domain> at kubernetes_lb_traefik_ip.
 # kubernetes_domain: homeserver.internal
+# The clients Traefik serves: one IPv4 range, your LAN's or, with VLANs, your
+# own devices'. Leave it unset on a new cluster: Traefik then answers everyone
+# with 403 while you set each app up through kubectl port-forward, since several
+# make their first visitor the admin (scripts/runbooks/first-run.md). Set it
+# once they are all set up, and run make kubernetes.
+# kubernetes_ingress_allowed_range: 192.0.2.0/24
 # Extra names for the Kubernetes API's certificate, set before the first build,
 # so the API can later be reached by name.
 # kubernetes_api_sans: [k8s-api.home.arpa]
