@@ -27,6 +27,9 @@ spec:
       labels:
         app.kubernetes.io/name: homepage
     spec:
+      # Named, not left out: a Deployment that once named another account keeps its deprecated serviceAccount field,
+      # which would bring that name back.
+      serviceAccountName: default
       automountServiceAccountToken: false
       securityContext:
         runAsUser: 1000
