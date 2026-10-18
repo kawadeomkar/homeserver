@@ -8,7 +8,9 @@ the web UI's Updates → Repositories panel does by hand. With only its defaults
 Repository files are written whole, as deb822 `.sources` files, the form Proxmox VE 9 ships. A file to
 disable is not rewritten: it gets an `Enabled: false` line and keeps the rest, as the UI does, so
 Proxmox's own URIs and Ceph release stay its own. One that does not exist is left alone. The files are
-expected to hold one stanza each, as Proxmox's do.
+expected to hold one stanza each, as Proxmox's do. A repository file named in neither list, such as the
+`tailscale.sources` that `roles/proxmox_tailscale` writes, is left alone too, and the upgrade upgrades its packages
+with the rest.
 
 The upgrade is `apt-get dist-upgrade`, which Proxmox requires in place of a plain upgrade, run
 non-interactively: configuration files changed on the node are kept, and the rest take the package's

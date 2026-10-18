@@ -75,11 +75,6 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 
 ## Proxmox
 
-- [ ] Replace the home host's 40 GbE DAC, a generic Cisco-coded `QSFP-H40G-CU3M`, with a Mellanox-coded one
-      (NVIDIA MC2210130, or a third-party DAC coded for Mellanox). The ConnectX-3 fails its cable check at some
-      boots ("Unsupported cable detected") and the host stays off the network until the cable is re-seated. Then
-      check that `ethtool -m nic2` reads the cable and that a reboot brings the link back. Check the NAS's and
-      the router's cables too: the router's card rejected its cable once.
 - [ ] `make proxmox` says when the host needs a reboot and leaves it to a person. Once the Talos VMs exist,
       decide how that reboot is done: drain the cluster first, or let Proxmox stop the VMs and start them
       again after the boot delay
@@ -91,6 +86,16 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       in `claude-on-proxmox` changes: its `local.yml` for this host sets `proxmox_storage` to the id
 - [ ] Pick a quota for `claude-on-proxmox-ephemeral` (`quota` on its `vm_storage_consumers` entry, in bytes or
       with a binary suffix such as `200G`); the parent's 1 TiB applies meanwhile
+- [ ] Turn on remote access through the host's Tailscale (`scripts/runbooks/tailscale.md`):
+      - the tailnet's policy first, with the NAS limited to tcp/443;
+      - split DNS;
+      - two-factor for `root@pam`;
+      - a one-off tagged key in the vault, and `tailscale_advertise_routes` in `local.yml`;
+      - `make check-proxmox` and `make proxmox` from home;
+      - the checks from outside, each control alone.
+
+      Then compare `tailscale status --json` and `tailscale get --json` on the host with `fake_tailscale.py`, which
+      was written from a 1.102 client, and fix the fake where they differ
 
 ## Manifest defects found in review
 
