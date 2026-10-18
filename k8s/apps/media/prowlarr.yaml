@@ -32,11 +32,13 @@ spec:
       labels:
         app.kubernetes.io/name: prowlarr
     spec:
+      automountServiceAccountToken: false
       securityContext:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        # LinuxServer.io: starts as root, and s6 drops to PUID and PGID; it needs the default capabilities.
+        # LinuxServer.io: starts as root, and s6 drops to PUID and PGID; it needs the default capabilities, but not
+        # NET_RAW, whose raw sockets nothing here opens and which would let it forge its neighbours' packets.
         - name: prowlarr
           image: lscr.io/linuxserver/prowlarr:2.5.2.5491-ls155
           env:
@@ -56,6 +58,8 @@ spec:
               containerPort: 9696
           securityContext:
             allowPrivilegeEscalation: false
+            capabilities:
+              drop: [NET_RAW]
           resources:
             requests:
               cpu: 100m

@@ -54,6 +54,7 @@ spec:
       labels:
         app.kubernetes.io/name: frigate
     spec:
+      automountServiceAccountToken: false
       securityContext:
         seccompProfile:
           type: RuntimeDefault
@@ -67,6 +68,8 @@ spec:
               value: "${FRIGATE_DETECTOR_DEVICE}"
           securityContext:
             allowPrivilegeEscalation: false
+            capabilities:
+              drop: [NET_RAW]
           resources:
             requests:
               cpu: 10m
@@ -103,6 +106,8 @@ spec:
               protocol: UDP
           securityContext:
             allowPrivilegeEscalation: false
+            capabilities:
+              drop: [NET_RAW]
           resources:
             # 2Gi over the process's own budget: the two memory-backed emptyDirs (1Gi each) count against it.
             requests:

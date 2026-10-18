@@ -1,5 +1,5 @@
 ---
-# Frigate runs as root with the default capabilities, which baseline allows: no label.
+# Frigate runs as root with the default capabilities but NET_RAW, which baseline allows: no label.
 apiVersion: v1
 kind: Namespace
 metadata:

@@ -770,6 +770,24 @@ def test_containers_are_hardened():
     assert wrong == []
 
 
+def test_app_containers_cannot_forge_packets():
+    """No app container keeps NET_RAW: raw sockets would let one forge packets to its neighbours on the node's
+    bridge and read the plain HTTP between Traefik and them. One that needs no capability drops them all."""
+    wrong = []
+    for _, obj, spec in app_workloads():
+        for container in containers(spec):
+            dropped = ((container.get("securityContext") or {}).get("capabilities") or {}).get("drop") or []
+            if not {"ALL", "NET_RAW"} & set(dropped):
+                wrong.append(f"{label(obj)}/{container['name']}: keeps NET_RAW")
+    assert wrong == []
+
+
+def test_app_pods_hold_no_token():
+    """No app reads the Kubernetes API, so none gets a service account token a compromise could use."""
+    wrong = [label(obj) for _, obj, spec in app_workloads() if spec.get("automountServiceAccountToken") is not False]
+    assert wrong == []
+
+
 def test_ingresses_use_traefik_and_the_domain():
     wrong = []
     for _, obj in of_kind("Ingress"):

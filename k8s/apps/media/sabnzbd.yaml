@@ -32,6 +32,7 @@ spec:
       labels:
         app.kubernetes.io/name: sabnzbd
     spec:
+      automountServiceAccountToken: false
       securityContext:
         seccompProfile:
           type: RuntimeDefault
@@ -55,7 +56,8 @@ spec:
             - name: media
               mountPath: /mnt/v
       containers:
-        # LinuxServer.io: starts as root, and s6 drops to PUID and PGID; it needs the default capabilities.
+        # LinuxServer.io: starts as root, and s6 drops to PUID and PGID; it needs the default capabilities, but not
+        # NET_RAW, whose raw sockets nothing here opens and which would let it forge its neighbours' packets.
         - name: sabnzbd
           image: lscr.io/linuxserver/sabnzbd:5.0.4-ls263
           env:
@@ -70,6 +72,8 @@ spec:
               containerPort: 8080
           securityContext:
             allowPrivilegeEscalation: false
+            capabilities:
+              drop: [NET_RAW]
           resources:
             requests:
               cpu: 200m

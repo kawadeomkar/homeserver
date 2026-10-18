@@ -5,12 +5,13 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - network-policy.yaml
-  - rbac.yaml
   - homepage.yaml
 # Homepage's configuration, copied into its emptyDir at every start (homepage.yaml). Generated, so its name carries a
 # hash of its content and a change rolls the pods; a plain ConfigMap would be read only at their next start. Each
 # tile links to its app's ingress and checks its Service from inside the cluster. Flux fills in ${DOMAIN} and the
 # optional ${HAOS_URL}. The empty files are ones Homepage would otherwise write a skeleton of into the emptyDir.
+# kubernetes.yaml turns its Kubernetes integration off: no tile reads the cluster, so it holds no token and no role,
+# and a page anyone on the LAN can open lists no pod or node.
 configMapGenerator:
   - name: homepage
     namespace: homepage

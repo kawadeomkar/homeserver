@@ -53,6 +53,7 @@ spec:
       labels:
         app.kubernetes.io/name: nextcloud
     spec:
+      automountServiceAccountToken: false
       securityContext:
         seccompProfile:
           type: RuntimeDefault
@@ -76,7 +77,8 @@ spec:
             - name: data
               mountPath: /mnt/v
       containers:
-        # LinuxServer.io: starts as root, and s6 drops to PUID and PGID; it needs the default capabilities.
+        # LinuxServer.io: starts as root, and s6 drops to PUID and PGID; it needs the default capabilities, but not
+        # NET_RAW, whose raw sockets nothing here opens and which would let it forge its neighbours' packets.
         - name: nextcloud
           image: lscr.io/linuxserver/nextcloud:34.0.2-ls444
           env:
@@ -91,6 +93,8 @@ spec:
               containerPort: 80
           securityContext:
             allowPrivilegeEscalation: false
+            capabilities:
+              drop: [NET_RAW]
           resources:
             requests:
               cpu: 250m

@@ -36,6 +36,7 @@ spec:
       labels:
         app.kubernetes.io/name: photoprism-db
     spec:
+      automountServiceAccountToken: false
       securityContext:
         seccompProfile:
           type: RuntimeDefault
@@ -55,6 +56,8 @@ spec:
               containerPort: 3306
           securityContext:
             allowPrivilegeEscalation: false
+            capabilities:
+              drop: [NET_RAW]
           resources:
             requests:
               cpu: 100m

@@ -34,6 +34,7 @@ spec:
       labels:
         app.kubernetes.io/name: filebrowser
     spec:
+      automountServiceAccountToken: false
       securityContext:
         seccompProfile:
           type: RuntimeDefault

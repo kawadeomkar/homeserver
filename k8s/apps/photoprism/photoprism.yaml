@@ -32,7 +32,7 @@ spec:
       storage: 1Ti
 ---
 # PhotoPrism starts as root, as its s6-overlay init needs (run as 1000 it exits at once: /run belongs to root), with
-# the default capabilities, as the LinuxServer.io images keep theirs. Its entrypoint makes an account for
+# the default capabilities but NET_RAW, as the LinuxServer.io images keep theirs. Its entrypoint makes an account for
 # PHOTOPRISM_UID and runs PhotoPrism as 1000:1000 through setpriv. PHOTOPRISM_DISABLE_CHOWN stops that entrypoint
 # chowning the whole storage volume, thumbnails included, at every start: local-path makes the volume's directory
 # world-writable, so 1000 needs no chown there. It makes originals/ and import/ itself, in the mount point chown-mount
@@ -57,6 +57,7 @@ spec:
       labels:
         app.kubernetes.io/name: photoprism
     spec:
+      automountServiceAccountToken: false
       securityContext:
         seccompProfile:
           type: RuntimeDefault
@@ -117,6 +118,8 @@ spec:
               containerPort: 2342
           securityContext:
             allowPrivilegeEscalation: false
+            capabilities:
+              drop: [NET_RAW]
           resources:
             requests:
               cpu: 500m
