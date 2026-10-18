@@ -103,11 +103,12 @@ jobs:
         run: make test-idempotence PYTEST_ARGS='-m "not cluster"'
 
   # The VM, backup, Talos and Flux roles against their fakes, apart from the test job's matrix: they have no Python
-  # modules of their own, so one Python, the newest, is enough, and the matrix stays within its time limit.
+  # modules of their own, so one Python, the newest, is enough, and the matrix stays within its time limit. About
+  # 13 minutes on a workstation and more on a runner, which cancelled it at 15.
   cluster:
     name: cluster
     runs-on: ubuntu-26.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
