@@ -773,7 +773,7 @@ def test_ingresses_use_traefik_and_the_domain():
         for rule in spec.get("rules") or []:
             if not rule.get("host", "").endswith("${DOMAIN}"):
                 wrong.append(f"{label(obj)}: host {rule.get('host')} is not <app>.${{DOMAIN}}")
-        if any(a.startswith("nginx.ingress.kubernetes.io/") for a in (obj["metadata"].get("annotations") or {})):
+        if any(a.split("/")[0] == "nginx.ingress.kubernetes.io" for a in obj["metadata"].get("annotations") or {}):
             wrong.append(f"{label(obj)}: an nginx annotation, which Traefik ignores")
     assert wrong == []
 
