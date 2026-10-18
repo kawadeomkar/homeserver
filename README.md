@@ -257,14 +257,16 @@ Flux applies them. `roles/flux_bootstrap` points the cluster at `k8s/clusters/na
 3. `k8s/apps/`: `media` (Jellyfin, Sonarr, Radarr, Prowlarr, SABnzbd, Seerr, FileBrowser Quantum), `nextcloud`,
    `photoprism`, `frigate` and `homepage`.
 
-Each app answers at `http://<app>.<domain>` through Traefik, Homepage at the domain itself, once the router has a
+Each app answers at `https://<app>.<domain>` through Traefik, Homepage at the domain itself, once the router has a
 wildcard DNS record for `*.<domain>` pointing at `kubernetes_lb_traefik_ip` and `kubernetes_ingress_allowed_range`
 lets your address in. A new cluster lets nobody in: several apps make their first visitor the admin, so set each one
-up through a port forward first (`scripts/runbooks/first-run.md`), then open the LAN. Flux reconciles `main` every minute:
+up through a port forward first (`scripts/runbooks/first-run.md`), then open the LAN. The certificate comes from the
+cluster's own CA, limited to the domain: trust it once on each device (`scripts/runbooks/tls.md`). Jellyfin also
+answers plain HTTP, for its apps on TVs, which cannot trust a private CA. Flux reconciles `main` every minute:
 a merged change reaches the cluster without anyone running anything. To see what Flux sees:
 `flux get kustomizations` (KUBECONFIG as in `scripts/runbooks/talos.md`).
 
-Monitoring is kube-prometheus-stack: Grafana answers at `http://grafana.<domain>`, with the admin password the
+Monitoring is kube-prometheus-stack: Grafana answers at `https://grafana.<domain>`, with the admin password the
 chart generated (CLAUDE.md, Monitoring, says how to read it).
 
 Secrets are SOPS files (`k8s/README-secrets.md`); an app whose Secret you have not made yet waits for it. Each

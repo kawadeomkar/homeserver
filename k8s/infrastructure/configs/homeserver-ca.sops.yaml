@@ -1,0 +1,24 @@
+apiVersion: v1
+data:
+    tls.crt: ENC[AES256_GCM,data:2I5zHfbS9zLBKBisXo9U9ZqQNwgSqBVYWcT+zjGpvMRVH3/Qs1M7vy2MYrznilGXwnKZYDNIcYWECYnIDilyS5ctGHX4IpPZFoiVymVfW9KdcNV34EZ7Qac3iTB5A2jH0yDev6VoFpi8d2m3gPDbwMpFRcPAgldA0LCye+wSjdCS5pgXk6Yuq/+l6FGlrwozwJ/bIXvapAA3SV4qoBnwpboct3/KMNzygo/NBv4gsaiZpXOq+XdGddjtFGyjNTrKMVw1jWd0DzFzRApYlA213TtxjRPFOVS487XJp4s+QDV9LQqd4tYTTYRayt9kRGxh8VnI6sGdiUTwNnn9yguOtsIPTQV41KTJa89tuByveSJXs8d5cQOMnM5oWAdZbYEVLpVabfMG7G1OFZU6V9UGvftnusuE+PjFlh5SJjldanO0+mMjAJM+uwf8Zb/1FaB6udCcR/pdS/JSaOSriiT5s2SuNKXlDKTI4CXn60fVP5sc7WnChVmgYb1dDfq5lPWHlvry5Jh4DHMj++wPhoMR0sB/7yFTLNTg9xz8nfry+Jh9sKR/vF6rM/H/yCbXk4zLbvHJMH7h+j3v74u2F9jxVx5h941xfERIi71YWG0SDYkQMxXi0uu/jzvyZLJW5h8ndCkj+mPw2X6NB3sK2PCZjE5njSJxAdQ798JlRUFptWVAVCwavv6h3Xw4Xcut2TgL3Kb9/NwljNg1V6JuFsEshux8fE1VXtmQTQOmwOm+nhcWRW5Xhe/7JhlijgTB786gkih64QOFxCKA0U9d1B7o+sh/eSlsgiqUMBfkIUsTtKjAcBMKWaDS7/vJvJRKs7coSQZ9w54UZp3ej36SrAEeg875s0IXnNgPyE0tnOKjIzLNWf3FMtptUpC7LSe7fLn79sq0z1R7YcrEqrjiC/1UiOdv3sNROHk9TGs0LCt6ScLTnbA5Dq21iFLA0JiiRp/p/rn6hQTUHX8C7aisC4leVAqyewGShxY7aLj53zN/AaX0w46iz89Dpp6sKIPxO5S4fUcVFBj9mgpsruEqJwCmjrQ36AwPajqAE12Yrze6hpEsP1BUcaAUF9lA7hv0nluT78zT8EpT3QCDYyx/Q0s0bTf2maDKihbJbSZjVJnc/eI6rPrGsVFcQokmHyZnkPansoMlWCyUKT5pxiDeL6OCmlJG79RaQENT5xTNADhDfqv5D/Edv0tKMANWyAY4Uj31mYhFT5UYlZ2RRV+DXR94vggDKkRlyRQIf/yQxTKA2TWyZbh0lnt3ojRqS3hOKeYhgwVB3iu6byU=,iv:zMuyXa5PW+vFjov/ZTRsltEzA/eIPpXeiugZtad55/M=,tag:s4+IHuQnj3ruGhA4XkbuoQ==,type:str]
+    tls.key: ENC[AES256_GCM,data:UasqNSXo3BFy+DI2vF+0998gdw3oxzpq3yy9BX+bgdbZsrFX+w8OZcKABYsVA63uCw5mHVGecxuCXHifbNITkTXNkQJzZmbe6l3I7dfglnpuXTXUtr1iLNKHMvau4A3Sf8w4VnEl/0oubaugtuEsPOJowE0iqocnxw02JXoX+Sd6NtLda7YyTH2gJphwoNoorBBU9Dpp/r4jC4EzocasAX1Pb4GHwDBi8Z7G3GMe7nAwEFMc1Qwl79Chrxdm5aCJek+BulRfUvM4IS3quxNMStTpeQcdOH9w9sKEaAOKi7x7ZOBHqHN0BW+XjORhHgAb4Isz+8+iUyB5wj5S5doCazck+B811xFjYrUVZ5I0rv07h3Xl/Y5o25NDXkHBR4N67QKzA/ZBRVjaczZ/6zHLqGOWVAXGT5Hk90m/RkoF9A06pCLk,iv:MdfHOCl9865NVWq8xqoM/NOyYPQlwYPe1mCHTiuQh3I=,tag:MdFZn3qtrm8lejspt0hAbw==,type:str]
+kind: Secret
+metadata:
+    name: homeserver-ca
+    namespace: cert-manager
+type: kubernetes.io/tls
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBCNmlIWU5zZW83Q0pTYU9C
+            M2NjMVQxcTgwUE45eWNkVUUwWWlZaEI5aUg0Ckwyb2kxRFB2M0Z5emJ0TE1PcFZr
+            RWZGTERIbVZEc0ZvdlZLSTlhMnVCVFkKLS0tIE5JeXFMZ1UrU3prOWtGR2tiVUVM
+            VWtWRUg5eE41dmNSaUFmdVZHREVSTlUKmPhtizarhgt6/nxPYG3/KIY8vbIqIzZh
+            jb4tgeDqvgh0EoiRG0OY0fxReDSoDZkH6cBxvADYzCkR7s2miDh+Qw==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age19jhwvwxawyjzj7yc0ud700dtj5gws77t9pgm8f3zv9kqgssqgpgs5zq4qw
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-10-18T04:15:15Z"
+    mac: ENC[AES256_GCM,data:MEa98GwsLdQPSX+YrpIkH7YSd6isHLc7imd6mYHP5eX7r4av2VptcR9nXgbjRIEBsVM81JPyqnsSLQJEsESim1qgPIm8GjvZvE7T30PYkQbWTs3vHJjq3I3pvHaArXcESa5oc5VuErDs4+nD8yoGBUxfS2hVcTytJLlP8gCQEG8=,iv:YHCRASYOuHHjk6RzHT/lmPDUPdQhCbi5a+Gur8MSeWU=,tag:8tHO6bOGrxdmQTnAM2AV9w==,type:str]
+    version: 3.13.3

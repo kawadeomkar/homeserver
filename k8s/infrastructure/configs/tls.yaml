@@ -1,0 +1,56 @@
+---
+# The cluster's certificates come from its own CA (homeserver-ca.sops.yaml, made by scripts/runbooks/tls.md): a root
+# limited by its name constraints to the domain, so its key could vouch for nothing else even if it leaked. Install
+# its certificate on each device once (the runbook says how). cert-manager signs and renews a wildcard for the
+# domain, and Traefik serves it as its default certificate on the websecure entrypoint.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: homeserver-ca
+spec:
+  ca:
+    secretName: homeserver-ca
+---
+# 90 days, renewed 30 days before the end: within every browser's limit for a certificate under a private root.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: wildcard
+  namespace: traefik
+spec:
+  secretName: wildcard-tls
+  dnsNames:
+    - "${DOMAIN}"
+    - "*.${DOMAIN}"
+  duration: 2160h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages:
+    - server auth
+    - digital signature
+  issuerRef:
+    kind: ClusterIssuer
+    name: homeserver-ca
+---
+apiVersion: traefik.io/v1alpha1
+kind: TLSStore
+metadata:
+  name: default
+  namespace: traefik
+spec:
+  defaultCertificate:
+    secretName: wildcard-tls
+---
+# Browsers that once reached an app over HTTPS refuse it over plain HTTP for a year, so a stripped redirect cannot
+# downgrade them. On every route of the websecure entrypoint (the HelmRelease's ports.websecure.http.middlewares).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: hsts
+  namespace: traefik
+spec:
+  headers:
+    stsSeconds: 31536000

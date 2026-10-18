@@ -70,6 +70,8 @@ spec:
               value: "1000"
             - name: TZ
               value: "${TZ}"
+            # What clients that discover Jellyfin on the LAN connect to: plain HTTP, since its apps on TVs and
+            # streaming boxes cannot trust the cluster's private CA (its Ingress). Browsers use HTTPS.
             - name: JELLYFIN_PublishedServerUrl
               value: "http://jellyfin.${DOMAIN}"
           ports:
@@ -144,6 +146,10 @@ metadata:
   namespace: media
   labels:
     app.kubernetes.io/name: jellyfin
+  annotations:
+    # Above the priority of Traefik's HTTP-to-HTTPS redirect (its HelmRelease), so Jellyfin alone also answers plain
+    # HTTP: its apps on TVs and streaming boxes cannot trust the cluster's private CA. Browsers get HTTPS and HSTS.
+    traefik.ingress.kubernetes.io/router.priority: "1001"
 spec:
   ingressClassName: traefik
   rules:

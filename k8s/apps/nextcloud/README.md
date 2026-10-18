@@ -16,9 +16,9 @@ configuration and the database are on local volumes.
    ```bash
    kubectl exec -n nextcloud deploy/nextcloud -- occ config:system:set trusted_domains 1 --value=nextcloud.<domain>
    kubectl exec -n nextcloud deploy/nextcloud -- occ config:system:set trusted_proxies 0 --value=<pod network>
-   kubectl exec -n nextcloud deploy/nextcloud -- occ config:system:set overwriteprotocol --value=http
+   kubectl exec -n nextcloud deploy/nextcloud -- occ config:system:set overwriteprotocol --value=https
    ```
 
    `<pod network>` is the cluster's pod subnet, where Traefik runs: Talos's default, which
-   `talosctl get machineconfig -o yaml | grep -A1 podSubnets` shows. Once TLS is in place, set `overwriteprotocol`
-   to `https`.
+   `talosctl get machineconfig -o yaml | grep -A1 podSubnets` shows. `overwriteprotocol` is `https` because Traefik
+   serves Nextcloud over HTTPS (`scripts/runbooks/tls.md`) and talks to it in plain HTTP.

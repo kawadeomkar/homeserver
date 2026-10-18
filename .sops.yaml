@@ -1,9 +1,8 @@
 ---
 # How sops encrypts this repository's Kubernetes Secrets: every k8s/**/*.sops.yaml, for the cluster's age key, the
 # values only (data, stringData), so a diff still shows which keys changed. Flux decrypts them with the same key, which
-# roles/flux_bootstrap gives it (k8s/README-secrets.md). The recipient below is the public half of that key: put
-# yours there before encrypting anything (age-keygen -y ~/.config/sops/age/homeserver.agekey). A fork encrypts for its
-# own cluster's key, and sops refuses to encrypt while the placeholder is here.
+# roles/flux_bootstrap gives it (k8s/README-secrets.md). The recipient below is the public half of the owner's key; a
+# fork puts its own there (age-keygen -y ~/.config/sops/age/homeserver.agekey) and makes every Secret anew.
 creation_rules:
   - path_regex: ^k8s/.*\.sops\.ya?ml$
     encrypted_regex: ^(data|stringData)$

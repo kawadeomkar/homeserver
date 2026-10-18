@@ -1,0 +1,43 @@
+---
+# Who may reach Frigate, and what it may reach. Talos's Flannel enforces it with kube-network-policies
+# (group_vars/kubernetes/talos.yml); each app namespace has one such policy (tests/policy/test_k8s.py).
+# In: its UI (8971, which has a login) from Traefik and Homepage, and its camera streams (8554, 8555) from anywhere,
+# the LAN reaching them through frigate-rtsp; nothing else in the cluster. Never its API on 5000, which has no
+# authentication (a configuration saved there can run commands): only the kubelet's probes reach it, from the node,
+# which a policy never blocks.
+# Out: anywhere but EGRESS_DENIED_ADDRESS, the NAS, whose NFS exports trust the node's address, which a pod's traffic
+# leaves the node with (the Proxmox host without a NAS). Every pod in the cluster stays reachable, DNS included.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frigate
+  namespace: frigate
+  labels:
+    app.kubernetes.io/name: frigate
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: homepage
+      ports:
+        - {port: 8971, protocol: TCP}
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - {port: 8554, protocol: TCP}
+        - {port: 8555, protocol: TCP}
+        - {port: 8555, protocol: UDP}
+  egress:
+    - to:
+        - namespaceSelector: {}
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - "${EGRESS_DENIED_ADDRESS}/32"

@@ -7,4 +7,5 @@ resources:
   - namespace.yaml
   - repository.yaml
   - grafana-rbac.yaml
+  - network-policy.yaml
   - release.yaml

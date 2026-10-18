@@ -79,6 +79,10 @@ spec:
         ingressClassName: traefik
         hosts:
           - "grafana.${DOMAIN}"
+      # Behind Traefik's HTTPS: the address Grafana writes into its links and redirects.
+      grafana.ini:
+        server:
+          root_url: "https://grafana.${DOMAIN}"
     prometheusOperator:
       resources:
         requests:

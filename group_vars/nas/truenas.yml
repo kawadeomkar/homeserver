@@ -117,6 +117,10 @@ truenas_snapshot_tasks: >-
 truenas_nfs_settings:
   # Proxmox checks an NFSv4 storage with rpcinfo, which needs the port mapper NFSv3 brings.
   protocols: [NFSV3, NFSV4]
+  # Only requests from privileged ports (NFS's "secure"), which only root on a client can open. NFS with sec=sys
+  # trusts a client's address, and the shares map root to root: on a device of their own an attacker is root anyway,
+  # but no unprivileged process on the Proxmox host or a node can speak NFS. TrueNAS's default, kept as it is.
+  allow_nonroot: false
 truenas_nfs_shares: "{{ truenas_nfs_shares_vm_classes + truenas_nfs_shares_vm_consumers + truenas_nfs_shares_kubernetes }}"
 truenas_nfs_shares_vm_classes:
   - path: "{{ vm_storage_mount_root }}/{{ vm_storage.persistent.dataset }}"

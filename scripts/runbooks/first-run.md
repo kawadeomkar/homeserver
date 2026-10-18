@@ -49,6 +49,7 @@ kubernetes_ingress_allowed_range: 192.0.2.0/24
 
 Then `make kubernetes`, which writes it into the cluster's settings, and
 `flux reconcile kustomization infra-configs -n flux-system` to apply it without waiting. Each app answers at
-`http://<app>.<domain>` from then on. Check that one app answers from a device in the range and that a request from
-outside it gets 403. An app added later has its own first visit: set it up through a port forward before its
-Ingress is merged, or narrow the range to your own address meanwhile.
+`https://<app>.<domain>` from then on, once the device trusts the cluster's CA (`scripts/runbooks/tls.md`). Check
+that one app answers from a device in the range and that a request from outside it gets 403. An app added later has
+its own first visit: set it up through a port forward before its Ingress is merged, or narrow the range to your own
+address meanwhile.

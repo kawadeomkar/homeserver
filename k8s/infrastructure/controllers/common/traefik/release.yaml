@@ -1,7 +1,7 @@
 ---
 # The cluster's ingress, the default IngressClass, on one LoadBalancer address (LB_TRAEFIK_IP, from the cluster's
-# settings), answering only the clients local.yml allows (INGRESS_ALLOWED_RANGE). Plain HTTP for now: TLS comes with a
-# real domain. Gateway API later, with its CRDs.
+# settings), answering only the clients local.yml allows (INGRESS_ALLOWED_RANGE), over HTTPS with the cluster's own
+# CA, Jellyfin also over plain HTTP. Gateway API later, with its CRDs.
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -39,15 +39,32 @@ spec:
         externalTrafficPolicy: Local
         allocateLoadBalancerNodePorts: false
     ports:
-      websecure:
-        expose:
-          default: false
+      # Every route on both entrypoints answers only the allowed range (k8s/infrastructure/configs/traefik.yaml).
+      # Until infra-configs applies that Middleware, Traefik refuses the routes that name it: closed, not open.
       web:
         http:
-          # Every route on this entrypoint answers only the allowed range (k8s/infrastructure/configs/traefik.yaml).
-          # Until infra-configs applies that Middleware, Traefik refuses the routes that name it: closed, not open.
+          # Plain HTTP only redirects to HTTPS, through a router Traefik generates at this priority, above every
+          # Ingress's own (the length of its rule). Jellyfin's Ingress outranks it, since TV and streaming-box apps
+          # cannot trust a private CA: Jellyfin alone still answers plain HTTP.
+          redirections:
+            entryPoint:
+              to: websecure
+              scheme: https
+              permanent: true
+              priority: 1000
           middlewares:
             - traefik-lan-allowlist@kubernetescrd
+        transport:
+          respondingTimeouts:
+            # Large uploads take longer than the 60-second default (Jellyfin's, over plain HTTP).
+            readTimeout: 0
+      # TLS with the cluster's wildcard certificate (the default TLSStore, k8s/infrastructure/configs/tls.yaml), and
+      # HSTS on every response.
+      websecure:
+        http:
+          middlewares:
+            - traefik-lan-allowlist@kubernetescrd
+            - traefik-hsts@kubernetescrd
         transport:
           respondingTimeouts:
             # Large uploads (Nextcloud, PhotoPrism, FileBrowser) take longer than the 60-second default.

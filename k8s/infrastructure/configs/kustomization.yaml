@@ -1,9 +1,11 @@
 ---
-# Objects that need the controllers' definitions (CRDs), applied once infra-controllers is ready: MetalLB's address
-# pool and Traefik's allowlist now; the ClusterIssuer and TLSStore later. Never a Namespace: each lives with its
-# controller.
+# Objects that need the controllers' definitions (CRDs) or namespaces, applied once infra-controllers is ready:
+# MetalLB's address pool, Traefik's allowlist, and the cluster's CA with the certificate it signs. Never a Namespace:
+# each lives with its controller.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - metallb.yaml
   - traefik.yaml
+  - homeserver-ca.sops.yaml
+  - tls.yaml

@@ -90,7 +90,7 @@ spec:
             - name: PHOTOPRISM_DISABLE_CHOWN
               value: "true"
             - name: PHOTOPRISM_SITE_URL
-              value: "http://photoprism.${DOMAIN}/"
+              value: "https://photoprism.${DOMAIN}/"
             - name: PHOTOPRISM_HTTP_PORT
               value: "2342"
             - name: PHOTOPRISM_ORIGINALS_PATH

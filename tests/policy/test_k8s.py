@@ -22,6 +22,8 @@ without a kind, are not objects.
   every pod that mounts a shared NAS or static volume chowns its mount point first, and none sets fsGroup on an NFS
   volume, which would chown the whole volume at every start.
 - No PodDisruptionBudget: with one node for the apps, it would only stop a drain.
+- Every app namespace has a NetworkPolicy over all its pods that limits who reaches them and keeps them from the one
+  host they must never reach (EGRESS_DENIED_ADDRESS: the NAS, or the Proxmox host without one).
 - No service account outside kube-system and flux-system may read Secrets in every namespace, flux-system's age key
   among them, bar the few listed below; in what the charts render too.
 - Every Secret is SOPS-encrypted.
@@ -629,6 +631,10 @@ CLUSTER_SECRET_READERS = {
     # Writes Prometheus's and Alertmanager's configuration as Secrets and reads those a ServiceMonitor names. It
     # answers nothing.
     "monitoring/kube-prometheus-stack-operator",
+    # cert-manager writes each certificate into a Secret in its Certificate's namespace, and its cainjector copies CA
+    # data out of Secrets into webhook configurations. Neither answers the LAN; their chart has no namespaced RBAC.
+    "cert-manager/cert-manager",
+    "cert-manager/cert-manager-cainjector",
 }
 # Kubernetes's own ClusterRoles that read Secrets, which a binding can name without the repository defining them.
 BUILTIN_SECRET_ROLES = {"cluster-admin", "admin", "edit"}
@@ -816,6 +822,42 @@ def test_apps_are_labelled_by_name():
         and "app.kubernetes.io/name" not in (obj["metadata"].get("labels") or {})
     ]
     assert wrong == []
+
+
+DENIED_EGRESS = "${EGRESS_DENIED_ADDRESS}/32"
+
+
+def test_app_namespaces_are_fenced():
+    """Each app namespace has a NetworkPolicy over every pod in it, for traffic in and out: in, its ingress rules name
+    who may connect (an app namespace never takes the whole cluster); out, any address wide enough to cover the NAS
+    leaves it out, since its NFS exports trust the node's address, which pods' traffic leaves with."""
+    app_namespaces = {obj["metadata"]["name"] for path, obj in of_kind("Namespace") if path.is_relative_to("k8s/apps")}
+    assert app_namespaces, "no app namespace found"
+    fenced, wrong = set(), []
+    for _, obj in of_kind("NetworkPolicy"):
+        spec = obj["spec"]
+        if namespace(obj) not in app_namespaces:
+            continue
+        if spec.get("podSelector") == {} and {"Ingress", "Egress"} <= set(spec.get("policyTypes") or []):
+            fenced.add(namespace(obj))
+        for rule in spec.get("ingress") or []:
+            if not rule.get("from"):
+                wrong.append(f"{label(obj)}: an ingress rule without from admits every pod and address")
+        for rule in spec.get("egress") or []:
+            for peer in rule.get("to") or [{}]:
+                block = peer.get("ipBlock")
+                if peer == {} or (
+                    block and DENIED_EGRESS not in (block.get("except") or []) and block["cidr"].endswith("/0")
+                ):
+                    wrong.append(f"{label(obj)}: egress reaches {DENIED_EGRESS}")
+    assert sorted(app_namespaces - fenced) == [], "these app namespaces have no NetworkPolicy over all their pods"
+    assert wrong == []
+
+
+def test_network_policies_are_enforced():
+    """NetworkPolicies do nothing unless Flannel runs its policy agent, which a control-plane patch turns on."""
+    patches = (ROOT / "group_vars" / "kubernetes" / "talos.yml").read_text()
+    assert "kind: KubeFlannelCNIConfig\n  kubeNetworkPoliciesEnabled: true" in patches
 
 
 # ----------------------------------------------------------------------------------------------- Renovate ---

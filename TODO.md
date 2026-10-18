@@ -6,9 +6,18 @@ the tree before the cluster was built.
 
 ## TLS
 
-- [ ] Choose a real domain instead of `*.homeserver.internal`, which public ACME cannot validate, and a DNS
-      provider with an API for cert-manager's DNS-01 challenge. Every Ingress is plain HTTP until then: TLS
-      (cert-manager, a wildcard certificate for Traefik, HTTPS for Nextcloud) waits for both (K8S-14)
+- [ ] Trust the cluster's CA on each device (`scripts/runbooks/tls.md`): every app is HTTPS with a wildcard that
+      cert-manager signs with it, Jellyfin also plain HTTP for TV apps
+- [ ] Optionally, a real domain and a DNS provider with an API for cert-manager's DNS-01 challenge: publicly trusted
+      certificates, nothing to install on devices, and Jellyfin's TV apps on HTTPS too (K8S-14)
+
+## The network
+
+- [ ] Reserve every node's address in the router's DHCP, for its MAC (`kubernetes_node_macs`): the NAS's exports
+      trust the worker's address, so a device that leases it reads the cluster's shares as root
+- [ ] A servers VLAN for the NAS, the Proxmox host and the nodes, which the IoT and Wi-Fi devices cannot reach: NFS
+      with sec=sys trusts addresses, and the nightly VM backups on the NAS hold the cluster's keys and etcd
+      (CLAUDE.md, Landmines). Then narrow `kubernetes_ingress_allowed_range` to the clients' VLAN
 
 ## CI
 
@@ -129,10 +138,6 @@ reboot (`talosctl reboot -n <worker>`), keep its data, and come back from a VM b
       "TrueNAS CORE leftovers" item whether to delete it, through the role
 - [ ] After each app's first start, its own steps through a port forward (`scripts/runbooks/first-run.md`), then
       `kubernetes_ingress_allowed_range` to open the LAN; Frigate's cameras after
-- [ ] Enforce network policies (CLAUDE.md, Landmines): turn on `kubeNetworkPoliciesEnabled` in a
-      `KubeFlannelCNIConfig` control-plane patch, add a NetworkPolicy in `frigate` that opens only 8971, 8554 and
-      8555 (TCP and UDP), and check that Frigate's probes on 5000, from the kubelet, still pass and that Flux's own
-      policies leave it working
 - [ ] With an Intel iGPU in the host, pass it to the workload node for Jellyfin and Frigate
       (`scripts/runbooks/gpu.md`), and run that runbook's checks: the render node's group inside the pods, and
       that without a GPU both apps still schedule

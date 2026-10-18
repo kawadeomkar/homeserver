@@ -420,6 +420,8 @@ def test_talos_nodes_resolve_on_the_kubernetes_host(tmp_path, local_yml, nodes):
     assert {n["name"]: (n["role"], len(n["patches"])) for n in found["nodes"]} == nodes
     assert found["endpoint"] == "https://192.0.2.30:6443" and found["version"] == "v1.14.2"
     assert ("$patch: delete" in found["cp"]) == (local_yml is not None)
+    # Without its policy agent, Flannel would let every NetworkPolicy through unenforced.
+    assert "kind: KubeFlannelCNIConfig\nkubeNetworkPoliciesEnabled: true" in found["cp"]
 
 
 @pytest.mark.parametrize(
@@ -448,11 +450,13 @@ def test_flux_settings_resolve_on_the_kubernetes_host(tmp_path, local_yml, path,
         tree, "homeserver-k8s", "[flux_bootstrap_settings, flux_bootstrap_instance]", *CLUSTER_ARGS
     )
     common = {"DOMAIN", "TZ", "LB_RANGE", "LB_TRAEFIK_IP", "LB_FRIGATE_IP", "DATA_NODE", "CONTROL_PLANE_ADDRESS"}
-    common |= {"GPU_I915", "FRIGATE_DETECTOR_DEVICE", "INGRESS_ALLOWED_RANGE"}
+    common |= {"GPU_I915", "FRIGATE_DETECTOR_DEVICE", "INGRESS_ALLOWED_RANGE", "EGRESS_DENIED_ADDRESS"}
     assert set(settings) == common | {"PROMETHEUS_RETENTION", "PROMETHEUS_RETENTION_SIZE"} | storage_keys
     assert settings["CONTROL_PLANE_ADDRESS"] == "192.0.2.30"
     # Nobody until local.yml names the range: a new cluster's apps are set up through port forwards first.
     assert settings["INGRESS_ALLOWED_RANGE"] == "127.0.0.1/32"
+    # The NAS with one, the Proxmox host without: the host no app pod may reach.
+    assert settings["EGRESS_DENIED_ADDRESS"] == ("192.0.2.10" if local_yml is None else "192.0.2.20")
     assert all(isinstance(value, str) and value for value in settings.values()), settings
     assert instance["path"] == path and instance["url"] == CLUSTER_VARS["flux_sync_url"]
     if local_yml is None:
