@@ -1,12 +1,15 @@
 """Render every chart a setup's Flux Kustomizations install, for make lint-helm.
 
 For each setup (k8s/clusters/<setup>), follows its Flux Kustomizations' paths through their kustomization.yaml files,
-as kustomize does, to the HelmReleases there and their sources (a HelmRepository's URL, or an OCIRepository's URL and
-tag). Each release's values get the setup's placeholder settings (tests/fixtures/cluster-settings.yaml) where they
-name a ${VAR}, as Flux would substitute them, and `helm template` renders the chart at its pinned version into
-<out>/<setup>/<namespace>-<release>.yaml. A chart with a values schema (Traefik's) then refuses a misspelt key.
+as kustomize does, to the HelmReleases there and their sources (an OCIRepository's URL, tag and digest, a
+GitRepository's URL and commit, or a HelmRepository's URL). Each release's values get the setup's placeholder settings
+(tests/fixtures/cluster-settings.yaml) where they name a ${VAR}, as Flux would substitute them, and `helm template`
+renders the chart at its pin into <out>/<setup>/<namespace>-<release>.yaml: an OCI chart by tag and digest, which helm
+refuses once the tag names another digest, and a Git one from its commit, fetched alone. A chart with a values schema
+(Traefik's) then refuses a misspelt key.
 
-helm comes from PATH, with its caches under .cache/helm, so nothing is read from or written to the user's own.
+helm and git come from PATH, with helm's caches and the Git checkouts under .cache/helm, so nothing is read from or
+written to the user's own.
 
     python scripts/ci/render_helm.py --out .cache/helm-rendered
 """
@@ -92,17 +95,44 @@ def substituted(value, settings):
     return value
 
 
-def chart_args(release, sources):
-    """helm template's chart arguments for a HelmRelease: the chart, its repository and its version."""
+def git_chart(source, path, cache):
+    """A chart from a GitRepository pinned to a commit: that commit's chart directory, fetched alone (one commit,
+    shallow, and only the blobs under the chart's path), as Flux would check it out."""
+    commit = source["spec"]["ref"].get("commit")
+    if not commit:
+        sys.exit(f"GitRepository {source['metadata']['name']} names no commit, which this does not reproduce")
+    checkout = cache / "git" / commit
+    chart = checkout / path.removeprefix("./")
+    if not chart.is_dir():
+        shutil.rmtree(checkout, ignore_errors=True)
+        checkout.mkdir(parents=True)
+        for command in (
+            ["init", "-q"],
+            ["fetch", "-q", "--depth", "1", "--filter=blob:none", source["spec"]["url"], commit],
+            ["sparse-checkout", "set", "--no-cone", "/" + path.removeprefix("./").strip("/") + "/"],
+            ["checkout", "-q", "FETCH_HEAD"],
+        ):
+            subprocess.run(["git", "-C", str(checkout), *command], check=True)
+    return chart
+
+
+def chart_args(release, sources, cache):
+    """helm template's chart arguments for a HelmRelease: the chart, its repository and its version. An OCI chart
+    pinned by digest is rendered by tag and digest, which helm refuses when the tag no longer names that digest."""
     spec = release["spec"]
     namespace = release["metadata"]["namespace"]
     if "chartRef" in spec:
         ref = spec["chartRef"]
         source = sources[(ref["kind"], ref.get("namespace", namespace), ref["name"])]
-        return [source["spec"]["url"], "--version", source["spec"]["ref"]["tag"]]
+        pin = source["spec"]["ref"]
+        if pin.get("digest"):
+            return [f"{source['spec']['url']}:{pin['tag']}@{pin['digest']}"]
+        return [source["spec"]["url"], "--version", pin["tag"]]
     chart = spec["chart"]["spec"]
     ref = chart["sourceRef"]
     source = sources[(ref["kind"], ref.get("namespace", namespace), ref["name"])]
+    if ref["kind"] == "GitRepository":
+        return [str(git_chart(source, chart["chart"], cache))]
     return [chart["chart"], "--repo", source["spec"]["url"], "--version", str(chart["version"])]
 
 
@@ -127,7 +157,7 @@ def main():
         sources = {
             (o["kind"], o["metadata"]["namespace"], o["metadata"]["name"]): o
             for o in objects
-            if o["kind"] in ("HelmRepository", "OCIRepository")
+            if o["kind"] in ("HelmRepository", "OCIRepository", "GitRepository")
         }
         (args.out / setup).mkdir(parents=True, exist_ok=True)
         for release in (o for o in objects if o["kind"] == "HelmRelease"):
@@ -147,7 +177,7 @@ def main():
             with tempfile.NamedTemporaryFile("w", suffix=".yaml") as file:
                 yaml.safe_dump(values, file)
                 file.flush()
-                command = [helm, "template", name, *chart_args(release, sources), "--namespace", namespace]
+                command = [helm, "template", name, *chart_args(release, sources, cache), "--namespace", namespace]
                 # Without the charts' test pods, which Flux never runs.
                 command += ["--kube-version", args.kube_version, "--values", file.name, "--skip-tests"]
                 result = subprocess.run(command, env=env, capture_output=True, text=True)

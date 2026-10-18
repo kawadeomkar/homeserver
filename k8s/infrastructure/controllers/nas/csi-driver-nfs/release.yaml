@@ -15,10 +15,9 @@ spec:
   interval: 1h
   chart:
     spec:
-      chart: csi-driver-nfs
-      version: 4.13.5
+      chart: ./charts/v4.13.5/csi-driver-nfs
       sourceRef:
-        kind: HelmRepository
+        kind: GitRepository
         name: csi-driver-nfs
   values:
     # Each image by its version and digest (CLAUDE.md): a chart bump changes both here too.

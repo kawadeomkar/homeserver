@@ -620,6 +620,15 @@ def test_images_are_pinned_by_digest():
     assert wrong == []
 
 
+def test_chart_sources_are_pinned():
+    """Every chart is pulled by something its publisher cannot move: an OCI artifact's digest, or a Git commit. A
+    Helm repository's index can point a version at other contents at any time, so none is used."""
+    wrong = [f"{label(obj)}: no digest" for _, obj in of_kind("OCIRepository") if not obj["spec"]["ref"].get("digest")]
+    wrong += [f"{label(obj)}: no commit" for _, obj in of_kind("GitRepository") if not obj["spec"]["ref"].get("commit")]
+    wrong += [f"{label(obj)}: a Helm repository" for _, obj in of_kind("HelmRepository")]
+    assert wrong == []
+
+
 @pytest.mark.skipif(not RENDERED.is_dir(), reason="make lint-helm renders the charts first")
 def test_chart_images_are_pinned_by_digest():
     """Every image a chart runs is pinned in the release's values: the chart's defaults are tags."""
