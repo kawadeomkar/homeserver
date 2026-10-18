@@ -72,3 +72,8 @@ proxmox_apt_reboot_packages: [dbus, intel-microcode, amd64-microcode, pve-firmwa
 A dry run shows each file it would write or change, with a diff, and the upgrade apt-get would do with the
 lists as last refreshed, and whether it would need a reboot. The real run refreshes the lists after the
 repository changes, so a fresh install's enterprise repository never answers 401.
+
+## Reference
+
+[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make docs` from the role itself:
+its argument specs, defaults and vars, and each tasks file as a table and a flow graph. Never edit it by hand.
