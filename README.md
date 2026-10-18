@@ -207,6 +207,12 @@ age-keygen -o ~/.config/sops/age/homeserver.agekey && chmod 600 ~/.config/sops/a
 export SOPS_AGE_KEY_FILE=~/.config/sops/age/homeserver.agekey    # in your shell profile: sops on macOS reads no ~/.config by default
 ```
 
+To stop the apps without losing anything, before maintenance or to free the host for a while, `make down` scales
+every app to zero and tells Flux to leave it there, and `make up` brings back what it stopped; `make check-down` and
+`make check-up` say what each would do. `ONLY` narrows either to apps or groups, such as
+`make down ONLY=jellyfin,nextcloud` (a group is a directory under `k8s/apps/`). Data, Flux and the platform stay,
+and a stopped app stays down across reboots until `make up`; databases stop after their apps and start before them.
+
 A node that stays down: `scripts/runbooks/dead-worker.md`. Their disks are never
 moved, shrunk or deleted by the playbook, and it refuses to create a VM over the disks or backups an earlier one
 left under the same VMID: restore it instead (`scripts/runbooks/vm-restore.md`). On thin LVM it also refuses disks

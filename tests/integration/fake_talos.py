@@ -1,4 +1,5 @@
-"""Stand-ins for talosctl and kubectl, for the idempotence tests of roles/talos and roles/flux_bootstrap.
+"""Stand-ins for talosctl and kubectl, for the idempotence tests of roles/talos, roles/flux_bootstrap and
+roles/app_scale.
 
 State is a JSON file named by $FAKE_TALOS_STATE:
 
@@ -17,7 +18,8 @@ State is a JSON file named by $FAKE_TALOS_STATE:
 - `bootstrapped` (etcd running), `k8s_version`, `snapshots`, `pre_pulls`, `mutations`, and the failure switches
   `bootstrap_precondition_count` (bootstrap answers FailedPrecondition that many times first) and
   `operator_never_available` (for kubectl wait).
-- `objects`: {"<kind>/<namespace>/<name>": manifest} for kubectl.
+- `objects`: {"<kind>/<namespace>/<name>": manifest} for kubectl, with `pods_linger`, `never_available` and
+  `events` (fake_kubectl.py's docstring).
 
 Written from talosctl v1.14.2's flags and output and the Talos documentation, not from a node: `version` prints the
 client's block first, then each node's under `NODE:`; a node in maintenance mode answers only --insecure, a

@@ -1,0 +1,36 @@
+---
+# Brings back what make down stopped, every app or those ONLY names, and hands each back to Flux:
+#   make check-up
+#   make up ONLY=jellyfin
+# Without a cluster nothing happens.
+- name: Bring the apps back up
+  hosts: kubernetes
+  gather_facts: false
+  pre_tasks:
+    - name: Refuse NAS settings that come without a NAS address
+      ansible.builtin.assert:
+        that: nas_section_error | length == 0
+        fail_msg: "{{ nas_section_error }}"
+        quiet: true
+      tags: [always]
+    - name: Refuse an incomplete Kubernetes section
+      ansible.builtin.assert:
+        that: kubernetes_settings_error | length == 0
+        fail_msg: "{{ kubernetes_settings_error | join(' ') }}"
+        quiet: true
+      tags: [always]
+    - name: Say why the cluster is skipped
+      ansible.builtin.debug:
+        msg: No kubernetes_node_addresses in group_vars/all/local.yml, so this setup has no cluster.
+      when: not kubernetes_present
+      tags: [always]
+    - name: Skip the cluster when local.yml names no nodes
+      ansible.builtin.meta: end_host
+      when: not kubernetes_present
+      tags: [always]
+  roles:
+    - role: app_scale
+      vars:
+        app_scale_state: up
+        # make's ONLY, comma-separated names, passed as -e '{"only": "<names>"}'.
+        app_scale_only: "{{ (only | default('')).split(',') | map('trim') | select | list }}"

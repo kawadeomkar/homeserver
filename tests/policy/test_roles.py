@@ -977,6 +977,43 @@ def test_home_assistant_url_is_a_setting_only_when_given(tmp_path):
     assert settings["HAOS_URL"] == "http://homeassistant.home.arpa:8123"
 
 
+@pytest.mark.parametrize("playbook", ["down.yml", "up.yml"])
+@pytest.mark.parametrize(
+    ("local_yml", "extra", "validations"),
+    [
+        pytest.param(None, CLUSTER_ARGS, 1, id="cluster"),
+        pytest.param(example_without_kubernetes(), (), 0, id="no-cluster"),
+    ],
+)
+def test_down_and_up_pass_the_argument_specs(tmp_path, playbook, local_yml, extra, validations):
+    """make down and make up pass roles/app_scale's checks with the tracked configuration and make's ONLY, and
+    without a cluster end before the role."""
+    tree = example_tree(tmp_path, local_yml)
+    rc, out = argspec_pass(tree, playbook, *extra, "-e", json.dumps({"only": "jellyfin, media"}))
+    assert rc == 0, out[-3000:]
+    assert out.count("Validating arguments against arg spec 'main'") == validations, out[-3000:]
+    if not validations:
+        assert "so this setup has no cluster" in out, out[-3000:]
+
+
+def test_down_and_up_take_only_as_a_list(tmp_path):
+    """ONLY reaches the role as names, blanks and spaces dropped; without it, as no names (every app)."""
+    tree = example_tree(tmp_path)
+    for playbook in ("down.yml", "up.yml"):
+        play = yaml.safe_load((tree / playbook).read_text())[0]
+        assert play["roles"][0]["vars"]["app_scale_state"] == playbook.removesuffix(".yml")
+    expression = yaml.safe_load((tree / "down.yml").read_text())[0]["roles"][0]["vars"]["app_scale_only"]
+    assert expression == yaml.safe_load((tree / "up.yml").read_text())[0]["roles"][0]["vars"]["app_scale_only"]
+    tests = yaml.safe_load((ROOT / "tests" / "integration" / "apps.yml").read_text())[0]["roles"][0]["vars"]
+    assert tests["app_scale_only"] == expression, "tests/integration/apps.yml runs what the playbooks run"
+    inner = expression.strip().removeprefix("{{").removesuffix("}}")
+    assert resolve_on(tree, "homeserver-k8s", inner, "-e", json.dumps({"only": " jellyfin,, media "})) == [
+        "jellyfin",
+        "media",
+    ]
+    assert resolve_on(tree, "homeserver-k8s", inner) == []
+
+
 def test_flux_is_new_enough_to_substitute_strictly(tmp_path):
     """Strict substitution, which fails a manifest naming a setting that does not exist rather than giving it an empty
     string, is kustomize-controller's default from Flux 2.9; roles/flux_bootstrap sets no feature gate for it."""

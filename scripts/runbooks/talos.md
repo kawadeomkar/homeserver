@@ -175,8 +175,8 @@ cluster's: `talosctl gen secrets` into that directory, as in step 2 above, and i
 vault of its own; see `README.md`). It is thrown away with the test cluster.
 
 Never set `proxmox_vm_allow_overcommit` on a host whose thin pool other VMs share: a full pool gives them all I/O
-errors. Once Flux is up, keep the homepage and media apps and suspend the rest
-(`flux suspend kustomization apps-nextcloud apps-photoprism apps-frigate -n flux-system`), or point
+errors. Once Flux is up, keep the homepage and media apps and stop the rest
+(`make down ONLY=nextcloud,photoprism,frigate`, from the clone), or point
 `flux_sync_ref` at a branch that lists fewer apps (`refs/heads/<branch>`, a full reference, with
 `flux_sync_ref_unprotected`; see below). Afterwards: `qm stop 300 && qm destroy 300 --purge`, delete VM
 300's backups and the ISO, the clone, and its `kubernetes_talos_config_dir`.

@@ -23,6 +23,9 @@ POETRY_FOUND = @command -v $(POETRY) >/dev/null || { echo "Poetry is not on PATH
 # Narrow a run to stages, e.g. make check-truenas TAGS=truenas_pools
 TAGS    ?=
 TAG_ARGS := $(if $(TAGS),--tags $(TAGS),)
+# Narrow make down and make up to some apps or groups, e.g. make down ONLY=jellyfin,nextcloud
+ONLY    ?=
+ONLY_ARGS := $(if $(ONLY),-e '{"only": "$(strip $(ONLY))"}',)
 # Anything else for ansible-playbook, such as a variable for one run:
 #   make kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'
 # (make's own -e is not that: it is make's --environment-overrides, and passes nothing to Ansible).
@@ -251,6 +254,22 @@ talos-upgrade: ## Move the running cluster to the pinned Talos and Kubernetes ve
 .PHONY: etcd-snapshot
 etcd-snapshot: ## Snapshot etcd into ~/.talos/homeserver/etcd/
 	$(RUN) etcd-snapshot.yml $(ANSIBLE_ARGS)
+
+.PHONY: check-down
+check-down: ## Show what make down would stop, in order (ONLY=<apps or groups> narrows it)
+	$(RUN) down.yml --check --diff $(ONLY_ARGS) $(ANSIBLE_ARGS)
+
+.PHONY: down
+down: ## Spin the apps down: scaled to zero, Flux told to leave them, data kept (ONLY=jellyfin,media for some)
+	$(RUN) down.yml --diff $(ONLY_ARGS) $(ANSIBLE_ARGS)
+
+.PHONY: check-up
+check-up: ## Show what make up would start, in order (ONLY=<apps or groups> narrows it)
+	$(RUN) up.yml --check --diff $(ONLY_ARGS) $(ANSIBLE_ARGS)
+
+.PHONY: up
+up: ## Bring back what make down stopped, and hand it back to Flux (ONLY=<apps or groups> for some)
+	$(RUN) up.yml --diff $(ONLY_ARGS) $(ANSIBLE_ARGS)
 
 .PHONY: check
 check: ## Dry-run everything
