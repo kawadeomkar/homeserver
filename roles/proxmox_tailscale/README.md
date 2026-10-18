@@ -17,11 +17,13 @@ In order, on every run:
 3. **The guard** (below), loaded before anything is forwarded.
 4. **IPv4 forwarding**, written to `/etc/sysctl.d` and turned on. IPv6 forwarding stays off: it would stop the node
    accepting router advertisements on its bridge. IPv6 routes are refused for the same reason.
-5. **The login.** A logged-out node is logged in once with `proxmox_tailscale_auth_key`, a one-off, pre-approved
-   key tagged with `proxmox_tailscale_tags`. The key reaches tailscale only as `--auth-key=file:<path>`, from a
-   private temporary file removed afterwards, so it never appears in an argument list or in Ansible's output. A
-   node stopped by hand (`tailscale down`) is brought back up without a key. `tailscale up` gets every preference
-   it takes, so the node never runs, even for a moment, with Tailscale's defaults.
+5. **The login.** `tailscaled` is enabled and started if it is not running: stopped by hand, or never started at
+   boot because the guard it requires failed to load. A logged-out node is logged in once with
+   `proxmox_tailscale_auth_key`, a one-off, pre-approved key tagged with `proxmox_tailscale_tags`. The key reaches
+   tailscale only as `--auth-key=file:<path>`, from a private temporary file removed afterwards, so it never appears
+   in an argument list or in Ansible's output. A node stopped by hand (`tailscale down`) is brought back up without
+   a key. `tailscale up` gets every preference it takes, so the node never runs, even for a moment, with Tailscale's
+   defaults.
 6. **The preferences.** The routes and `proxmox_tailscale_settings` are compared with `tailscale get --json`, which
    is keyed by `tailscale set`'s own flag names, and set with one `tailscale set` when anything differs.
 7. **A report** of what only the tailnet's admin console, or the owner on the node, can fix:
@@ -57,7 +59,7 @@ rules (iptables or nftables) and Proxmox's firewalls accept. It:
 **How it is loaded.** Its unit, `tailnet-guard.service`, loads it before `network-pre.target` and before
 `tailscaled`. A drop-in makes `tailscaled` require it, which makes the guard **fail-closed**: if the table cannot
 load, Tailscale does not start and nothing is forwarded, at the cost of remote access until someone fixes it at the
-console.
+console. The next run then loads the guard and starts `tailscaled` again.
 
 **How the role changes it.**
 

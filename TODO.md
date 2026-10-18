@@ -87,7 +87,7 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 - [ ] Pick a quota for `claude-on-proxmox-ephemeral` (`quota` on its `vm_storage_consumers` entry, in bytes or
       with a binary suffix such as `200G`); the parent's 1 TiB applies meanwhile
 - [ ] Turn on remote access through the host's Tailscale (`scripts/runbooks/tailscale.md`):
-      - the tailnet's policy first, with the NAS limited to tcp/443;
+      - the tailnet's policy first, its allow-all rule deleted, the NAS limited to tcp/443 and its tests passing;
       - split DNS;
       - two-factor for `root@pam`;
       - a one-off tagged key in the vault, and `tailscale_advertise_routes` in `local.yml`;

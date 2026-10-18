@@ -21,8 +21,9 @@ addresses are built at run time, never written here.
 
 nft checks a file only for the role's table (`-c`), and loads it when systemctl starts or reloads
 tailnet-guard.service, whose table file is $FAKE_TAILSCALE_GUARD_FILE. systemctl knows the units in
-$FAKE_TAILSCALE_SYSTEMD_DIR once `daemon-reload` has read them, and refuses a plain `restart` of the guard, which would
-restart tailscaled through its drop-in. Anything else exits non-zero, so an unexpected command fails the test.
+$FAKE_TAILSCALE_SYSTEMD_DIR once `daemon-reload` has read them, starts the guard before tailscaled once tailscaled's
+drop-in requires it, and refuses a plain `restart` of the guard, which would restart tailscaled through that drop-in.
+Anything else exits non-zero, so an unexpected command fails the test.
 """
 
 import json
@@ -31,6 +32,7 @@ import sys
 from pathlib import Path
 
 GUARD = "tailnet-guard.service"
+DROPIN = "tailscaled.service.d/10-tailnet-guard.conf"
 # What a fresh Tailscale node's preferences read as on Linux, by `tailscale set` flag name. auto-update is on, as
 # tailnets created after February 2024 turn it on for new devices.
 DEFAULT_PREFS = {
@@ -273,6 +275,17 @@ def systemctl(state, args):
         state.setdefault("loads", []).append(("reload " if unit["active"] else "start ") + name)
         start(state, name, unit)
         state["mutations"] += 1
+    elif verb == "start" and len(args) == 2:
+        if unit is None:
+            fail(state, f"Failed to start {name}: Unit {name} not found.", 5)
+        if not unit["active"]:
+            # tailscaled's drop-in requires the guard: starting it starts the guard first, if it is not running.
+            guard = units.get(GUARD)
+            if name == "tailscaled.service" and DROPIN in state["loaded_units"] and guard and not guard["active"]:
+                state.setdefault("loads", []).append("start " + GUARD)
+                start(state, GUARD, guard)
+            start(state, name, unit)
+            state["mutations"] += 1
     elif verb == "restart" and name == GUARD:
         fail(state, f"fake systemctl: a restart of {GUARD} restarts tailscaled through its drop-in; reload it instead")
     else:

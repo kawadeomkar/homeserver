@@ -3,10 +3,11 @@
 From a fresh Proxmox host: a dry run changes nothing and says what it would do; the first run installs Tailscale,
 loads the guard, turns on forwarding and logs the node in, in that order; a second run and a dry run after it change
 nothing; drift is corrected by one run and left alone by the next. Also: a node stopped by hand is brought back up
-without a key, a logged-out node without a key is refused, the key never reaches an argument list or Ansible's output,
-an upgrade is installed only when asked for, the guard protects the NAS's address with a NAS and nothing without one,
-is reloaded and never restarted, and refuses Debian's nftables service. The role runs with this repo's own
-configuration (group_vars/proxmox/tailscale.yml) and RFC 5737 addresses.
+without a key, a stopped tailscaled is started again after the guard, a logged-out node without a key is refused,
+the key never reaches an argument list or Ansible's output, an upgrade is installed only when asked for, the guard
+protects the NAS's address with a NAS and nothing without one, is reloaded and never restarted, and refuses Debian's
+nftables service. The role runs with this repo's own configuration (group_vars/proxmox/tailscale.yml) and RFC 5737
+addresses.
 
 Run: make test-idempotence
 """
@@ -186,6 +187,37 @@ def test_tailscale_role_brings_a_stopped_node_up(tmp_path):
     up = s["calls"][[i for i, call in enumerate(s["calls"]) if call[:2] == ["tailscale", "up"]][-1]]
     assert not any(arg.startswith("--auth-key") for arg in up), up
     expect(run(PLAYBOOK, extra), "homeserver", changed=0, note="run after bringing it up")
+
+
+def test_tailscale_role_starts_tailscaled_again(tmp_path):
+    """`systemctl stop tailnet-guard` by hand, which stops tailscaled through its drop-in, and tailscaled disabled too:
+    the dry run says it would load the guard and start and enable tailscaled, without asking for a key; the run does
+    it, the guard first, and the node comes back logged in, without a login; the next run changes nothing."""
+    extra, path = settled(tmp_path)
+
+    def stopped(state):
+        state["units"]["tailnet-guard.service"]["active"] = False
+        state["units"]["tailscaled.service"] = {"enabled": False, "active": False}
+
+    change(path, stopped)
+    before = read(path)["mutations"]
+    result = run(PLAYBOOK, extra | {"vault_tailscale_auth_key": ""}, check=True)
+    expect(result, "homeserver", changed=True, note="dry run with tailscaled stopped")
+    assert read(path)["mutations"] == before, "the dry run changed the fake host"
+    for text in ["load the guard (it is not running)", "Would enable tailscaled at boot and start tailscaled"]:
+        assert text in result[2], f"{text!r} missing\n{result[2][-3000:]}"
+    assert "Would log the node in" not in result[2], result[2][-3000:]
+
+    calls = len(read(path)["calls"])
+    expect(run(PLAYBOOK, extra), "homeserver", changed=True, note="run with tailscaled stopped")
+    s = read(path)
+    assert s["units"]["tailscaled.service"] == {"enabled": True, "active": True}
+    assert s["units"]["tailnet-guard.service"]["active"] and s["node"]["backend"] == "Running"
+    run_calls = s["calls"][calls:]
+    guard = position(run_calls, ["systemctl", "reload-or-restart", "tailnet-guard.service"])
+    assert guard < position(run_calls, ["systemctl", "start", "tailscaled.service"])
+    assert not any(call[:2] == ["tailscale", "up"] for call in run_calls)
+    expect(run(PLAYBOOK, extra), "homeserver", changed=0, note="run after starting tailscaled")
 
 
 def test_tailscale_role_needs_an_auth_key(tmp_path):

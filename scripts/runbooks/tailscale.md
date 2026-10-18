@@ -32,7 +32,16 @@ would miss them.
 A new tailnet lets every device reach every other on every port, subnet routes included. **Write this policy before
 the host advertises anything.**
 
-In the admin console, open Access controls and merge this into the policy. Check it in the preview before saving:
+In the admin console, open Access controls:
+
+1. **Delete the rule that allows everything.** It is under `grants` as `{"src": ["*"], "dst": ["*"], "ip": ["*"]}`, or
+   in an older tailnet under `acls` as `{"action": "accept", "src": ["*"], "dst": ["*:*"]}`. Rules only add up, so
+   with it left in, nothing below takes anything away.
+2. **Add the sections below**, with your own login in place of `you@example.com`. Keep any other sections the policy
+   already has.
+3. **Save.** Tailscale runs the `tests` on every save and refuses a policy that fails them. They are the check on the
+   policy alone: the host's guard would hide a policy that lets too much through, so the checks from outside (step 9)
+   cannot. A policy that still allows everything fails the NAS's `deny` lines.
 
 ```jsonc
 {
@@ -51,12 +60,23 @@ In the admin console, open Access controls and merge this into the policy. Check
     { "src": ["autogroup:member"], "dst": ["tag:homeserver"], "ip": ["*"] },
     // Your devices among themselves.
     { "src": ["autogroup:member"], "dst": ["autogroup:self"], "ip": ["*"] }
-  ]
+  ],
   // No grant has tag:homeserver as its source: the host cannot start a connection to any of your devices.
+  // Checked on every save. src is your own login, as the admin console's Users page shows it.
+  "tests": [
+    {
+      "src": "you@example.com",
+      // The NAS's web UI, and the Proxmox UI at the host's LAN address.
+      "accept": ["192.0.2.10:443", "192.0.2.20:8006"],
+      // NFS, the port mapper and SSH on the NAS.
+      "deny": ["192.0.2.10:2049", "192.0.2.10:111", "192.0.2.10:22"]
+    }
+  ]
 }
 ```
 
-Without a NAS, leave out the `ipsets` entry and the NAS's grant, and give the first grant `"dst": ["192.0.2.0/24"]`.
+Without a NAS, leave out the `ipsets` entry, the NAS's grant and the NAS's lines in `tests` (keeping
+`192.0.2.20:8006` and no `deny`), and give the first grant `"dst": ["192.0.2.0/24"]`.
 
 ## 2. DNS
 
@@ -136,7 +156,8 @@ only slower. For direct connections:
 
 ## 9. Check it from outside
 
-From a phone on mobile data:
+The policy's tests check the policy alone on every save (step 1). These check both controls together, then the guard
+alone. From a phone on mobile data:
 
 - **The hosts:**
   - `ssh` into a VM at its LAN address;
@@ -158,9 +179,15 @@ From a phone on mobile data:
   - remote access comes back by itself;
   - `systemd-analyze critical-chain tailscaled.service` shows the guard first.
 
-Test the guard's fail-closed behaviour only at the console, never from away. With a deliberately broken
-`/etc/nftables.d/tailnet-guard.nft`, `systemctl start tailnet-guard` fails and `tailscaled` refuses to start. Then
-`make proxmox` puts the file back. `systemctl stop tailnet-guard` stops Tailscale too.
+Test the guard's fail-closed behaviour only at the console, never from away:
+
+1. Add a line nft rejects to `/etc/nftables.d/tailnet-guard.nft`, then run `systemctl restart tailnet-guard`. The
+   restart stops `tailscaled` along with the guard, the guard fails to start again, and `tailscaled` stays down:
+   `systemctl status tailscaled` names the failed dependency. The old table stays loaded, since the unit has no stop
+   command.
+2. `make proxmox` puts the file back, loads the guard and starts `tailscaled` again.
+
+`systemctl stop tailnet-guard` stops Tailscale the same way, and the next `make proxmox` starts both again.
 
 ## After a reinstall of the host
 
