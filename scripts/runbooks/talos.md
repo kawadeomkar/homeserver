@@ -134,15 +134,24 @@ flux_sync_ref: refs/heads/<branch>
 flux_sync_ref_unprotected: true
 ```
 
-Keep its source suspended while you are not testing, so a push to the branch deploys nothing:
+Keep its source suspended while you are not testing, so a push to the branch deploys nothing. The Flux Operator
+rewrites the source whenever it reconciles the FluxInstance, undoing a plain `flux suspend`, so pause the operator's
+handling of it first (its own annotation); `make kubernetes` leaves both as they are:
 
 ```bash
-flux suspend source git flux-system -n flux-system    # once a change is checked
-flux resume source git flux-system -n flux-system     # before pushing the next one
+kubectl annotate fluxinstance -n flux-system flux fluxcd.controlplane.io/reconcile=disabled --overwrite
+flux suspend source git flux-system -n flux-system
 ```
 
-Once the branch is merged, delete both settings and run `make kubernetes`: the cluster follows `main` again, and
-`flux resume source git flux-system -n flux-system` lets it.
+Before pushing the next change to test, the reverse:
+
+```bash
+flux resume source git flux-system -n flux-system
+kubectl annotate fluxinstance -n flux-system flux fluxcd.controlplane.io/reconcile-
+```
+
+Once the branch is merged, resume as above, delete both settings and run `make kubernetes`: the cluster follows
+`main` again. While the operator is paused it acts on no change to the FluxInstance, a new Flux release included.
 
 ## Validating on a test host without a NAS
 
