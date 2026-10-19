@@ -1,4 +1,4 @@
-"""Stand-ins for talosctl and kubectl, for the idempotence tests of roles/talos.
+"""Stand-ins for talosctl and kubectl, for the idempotence tests of roles/talos and roles/flux_bootstrap.
 
 State is a JSON file named by $FAKE_TALOS_STATE:
 
@@ -14,8 +14,10 @@ State is a JSON file named by $FAKE_TALOS_STATE:
   except those named in `volumes_missing`, which wait, as a volume whose disk selector matches nothing does.
   Applying a configuration (no-reboot, or auto, which Talos 1.14 makes no-reboot) always succeeds, as it does in
   Talos 1.14, unless the state's `apply_fails` holds an error to answer with.
-- `bootstrapped` (etcd running), `k8s_version`, `snapshots`, `pre_pulls`, `mutations`, and the failure switch
-  `bootstrap_precondition_count` (bootstrap answers FailedPrecondition that many times first).
+- `bootstrapped` (etcd running), `k8s_version`, `snapshots`, `pre_pulls`, `mutations`, and the failure switches
+  `bootstrap_precondition_count` (bootstrap answers FailedPrecondition that many times first) and
+  `operator_never_available` (for kubectl wait).
+- `objects`: {"<kind>/<namespace>/<name>": manifest} for kubectl.
 
 Written from talosctl v1.14.2's flags and output and the Talos documentation, not from a node: `version` prints the
 client's block first, then each node's under `NODE:`; a node in maintenance mode answers only --insecure, a
@@ -37,6 +39,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import fake_kubectl
 import yaml
 
 
@@ -581,7 +584,7 @@ def kubectl(state, args):
             )
         )
         return
-    fail(f"the fake kubectl knows version -o json only: {args}")
+    fake_kubectl.run(state, kubeconfig, args, kube_reach, fail)
 
 
 def main():

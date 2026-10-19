@@ -1,8 +1,12 @@
 # Kubernetes secrets
 
 Every Kubernetes Secret in this repository is a `*.sops.yaml` file encrypted with [SOPS](https://getsops.io) for the
-cluster's age key, which Flux decrypts them with as it applies them. Ansible's secrets stay in Ansible Vault
-(`group_vars/all/vault.yml`); never put a Kubernetes Secret there.
+cluster's age key. `roles/flux_bootstrap` keeps the key in the cluster as the Secret `flux-system/sops-age`, and
+Flux decrypts a Secret as it applies it only in a Kustomization that says so: each one listed under
+`k8s/clusters/<setup>/` must carry `decryption: {provider: sops, secretRef: {name: sops-age}}`. The Flux Operator's
+own root Kustomization, which syncs that directory, decrypts nothing and substitutes nothing, so a Secret never goes
+in the directory itself. Ansible's secrets stay in Ansible Vault (`group_vars/all/vault.yml`); never put a
+Kubernetes Secret there.
 
 Only the values are encrypted (`data`, `stringData`), so a diff shows which keys changed. A plaintext Secret
 manifest is never committed: `.gitignore` blocks `k8s/**/*secret*.yaml` outside the safe kinds, gitleaks refuses one

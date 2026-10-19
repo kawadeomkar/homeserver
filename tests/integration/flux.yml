@@ -1,0 +1,17 @@
+---
+# kubernetes.yml's second play's last role, roles/flux_bootstrap with this repo's own configuration, against
+# fake_talos_bin/'s kubectl. Loads what the kubernetes host's groups would, by name.
+- name: Hand the fake cluster to Flux
+  hosts: kubernetes
+  gather_facts: false
+  vars_files:
+    - ../../group_vars/all/storage.yml
+    - ../../group_vars/all/kubernetes.yml
+    - ../../group_vars/kubernetes/talos.yml
+    - ../../group_vars/kubernetes/flux.yml
+  environment:
+    PATH: "{{ playbook_dir }}/fake_talos_bin:{{ lookup('ansible.builtin.env', 'PATH') }}"
+    FAKE_TALOS_STATE: "{{ fake_talos_state }}"
+    FAKE_TALOS_PYTHON: "{{ ansible_playbook_python }}"
+  roles:
+    - role: flux_bootstrap

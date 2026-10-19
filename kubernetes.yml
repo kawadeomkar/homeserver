@@ -1,5 +1,6 @@
 ---
-# Build the Kubernetes cluster: its VMs on the Proxmox host, then Talos on them from this machine. Check first:
+# Build the Kubernetes cluster: its VMs on the Proxmox host, then Talos on them and Flux from this machine. Check
+# first:
 #   make check-kubernetes        (or: ansible-playbook kubernetes.yml --check --diff)
 # Without a cluster (no kubernetes_node_addresses in group_vars/all/local.yml) nothing happens: no VM is created,
 # and the second play ends by itself. Run proxmox.yml first, so the storages the VMs' disks go on exist. Moving
@@ -60,3 +61,4 @@
       tags: [always]
   roles:
     - role: talos
+    - role: flux_bootstrap

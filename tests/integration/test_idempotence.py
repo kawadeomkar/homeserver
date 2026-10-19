@@ -35,6 +35,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import fake_kubectl  # noqa: E402
 import fake_pve  # noqa: E402
 import fake_truenas  # noqa: E402
 
@@ -2022,3 +2023,222 @@ def test_talos_upgrade_and_etcd_snapshot(tmp_path, factory):
 
     # After the upgrade, a normal run renders with the versions now running: no drift.
     expect(run("talos.yml", bumped, check=True, env=env), "homeserver-k8s", changed=0, note="dry run after upgrading")
+
+
+# ------------------------------------------------------------------------------------------------- Flux ---
+
+# A sentinel in the age key's format, built here so gitleaks does not take it for a key.
+AGE_KEY = "-".join(["AGE", "SECRET", "KEY", "1TESTSENTINELNOTAKEY"])
+
+
+@pytest.fixture(scope="module")
+def operator_releases():
+    """The Flux Operator's release downloads: GET /<version>/install.yaml serves the fake's release of that version,
+    whose SHA-256 the test then pins, as the real file's is."""
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            found = re.fullmatch(r"/(v\d+\.\d+\.\d+)/install\.yaml", self.path)
+            if not found:
+                self.send_error(404)
+                return
+            body = operator_release(found.group(1))
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+
+
+def operator_release(version):
+    return yaml.safe_dump_all(fake_kubectl.operator_objects(version)).encode()
+
+
+# What the operator's image is pinned to in the tests: a digest of no real image.
+OPERATOR_DIGEST = "sha256:" + "0" * 63 + "1"
+
+
+def flux_vars(tmp_path, operator_releases, nas=True, **more):
+    """The flux test playbook's variables, isolated in tmp_path: a sentinel age key, never the owner's, and the
+    operator's releases from the test's own server, pinned by the SHA-256 of what it serves. The same two nodes
+    in both setups; without a NAS, the worker sized for a small host, with a media disk."""
+    config_dir = tmp_path / "home" / ".talos" / "homeserver"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    key = tmp_path / "home" / "homeserver.agekey"
+    if not key.exists():
+        key.write_text(f"# created: test\n# public key: age1test\n{AGE_KEY}\n")
+        key.chmod(0o600)
+    extra = {
+        "fake_talos_state": str(tmp_path / "talos.json"),
+        "talos_config_dir": str(config_dir),
+        "sops_age_key_file": str(key),
+        "flux_bootstrap_wait_timeout": "0s",
+        "truenas_static_address": "127.0.0.10/24" if nas else "",
+        "kubernetes_node_addresses": NODE_ADDRESSES,
+        "kubernetes_lb_range": "127.0.0.40-127.0.0.49",
+        "kubernetes_lb_traefik_ip": "127.0.0.40",
+        "kubernetes_lb_frigate_ip": "127.0.0.41",
+        "flux_sync_url": "https://example.invalid/homeserver.git",
+        "flux_bootstrap_operator_url": operator_releases,
+        "flux_bootstrap_operator_sha256": hashlib.sha256(operator_release("v0.61.0")).hexdigest(),
+        "flux_bootstrap_operator_digest": OPERATOR_DIGEST,
+    }
+    if not nas:
+        sizes = {"cores": 4, "memory_mib": 12288, "system_disk_gib": 32, "data_disk_gib": 50, "media_disk_gib": 100}
+        extra["kubernetes_node_sizes"] = {"homeserver-worker-1": sizes}
+    return extra | more
+
+
+def flux_objects(state):
+    return read(state).get("objects", {})
+
+
+def no_age_key(outputs):
+    encoded = base64.b64encode(f"# created: test\n# public key: age1test\n{AGE_KEY}\n".encode()).decode()
+    for out in outputs:
+        assert AGE_KEY not in out and encoded not in out, "the age key reached Ansible's output"
+
+
+@pytest.mark.cluster
+@pytest.mark.parametrize("nas", [True, False], ids=["nas", "without-a-nas"])
+def test_flux_bootstrap(tmp_path, operator_releases, nas):
+    """Before the cluster exists, a dry run says what it would install and a real run stops, naming where the
+    kubeconfig comes from. Then the operator, its image pinned by digest, the age key, the settings and the
+    FluxInstance, an exact Flux release from a pinned artifact, are applied once, and left alone; the setup's own
+    path and settings; a FluxInstance moved to the other setup's path is refused unless the run allows it; a changed
+    or removed setting is applied; an operator bump re-installs it, and a release whose install.yaml is not the
+    pinned one is refused before anything is applied. The key never shows."""
+    extra, env = flux_vars(tmp_path, operator_releases, nas=nas), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    write(state, {"nodes": {}, "mutations": 0})
+    outputs = []
+
+    result = run("flux.yml", extra, check=True, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=True, note="dry run before the cluster")
+    assert "Would install the Flux Operator v0.61.0" in result[2], result[2][-3000:]
+    rc, _, out = run("flux.yml", extra, env=env)
+    assert rc != 0 and "roles/talos writes it into talos_config_dir" in out, out[-3000:]
+
+    # The cluster is up: its kubeconfig exists and it answers.
+    (Path(extra["talos_config_dir"]) / "kubeconfig").write_text("apiVersion: v1\n")
+    s = read(state)
+    s["bootstrapped"] = True
+    write(state, s)
+    result = run("flux.yml", extra, check=True, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=True, note="dry run before the operator")
+    assert flux_objects(state) == {} or read(state)["mutations"] == 0
+
+    result = run("flux.yml", extra, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=True, note="first run")
+    objects = flux_objects(state)
+    assert read(state)["operator_installs"] == [f"flux-operator:v0.61.0@{OPERATOR_DIGEST}"]
+    instance = objects["FluxInstance/flux-system/flux"]["spec"]
+    assert instance["distribution"]["version"] == "2.9.6"
+    assert re.fullmatch(r"oci://\S+/flux-operator-manifests@sha256:[0-9a-f]{64}", instance["distribution"]["artifact"])
+    assert instance["sync"] == {
+        "kind": "GitRepository",
+        "url": "https://example.invalid/homeserver.git",
+        "ref": "refs/heads/main",
+        "path": "k8s/clusters/nas" if nas else "k8s/clusters/local",
+        "interval": "1m",
+    }
+    assert "kustomize" not in instance, "no feature gate is set: strict substitution is Flux 2.9's default"
+    settings = objects["ConfigMap/flux-system/cluster-settings"]["data"]
+    media = {"MEDIA_LOCAL_PATH": "/var/mnt/media/library", "FRIGATE_LOCAL_PATH": "/var/mnt/media/frigate"}
+    assert settings == {
+        "DOMAIN": "homeserver.internal",
+        "TZ": "America/Los_Angeles",
+        "DATA_NODE": "homeserver-worker-1",
+        "CONTROL_PLANE_ADDRESS": NODE_ADDRESSES["homeserver-cp-1"],
+    } | ({} if nas else media)
+    secret = objects["Secret/flux-system/sops-age"]["data"]["age.agekey"]
+    assert AGE_KEY in base64.b64decode(secret).decode()
+
+    for check in (False, True):
+        result = run("flux.yml", extra, check=check, env=env)
+        outputs.append(result[2])
+        expect(result, "homeserver-k8s", changed=0, note=f"{'dry run' if check else 'second run'} after the bootstrap")
+
+    # local.yml rewritten for the other setup would move Flux to the other path, and prune what this one applied:
+    # refused, dry or real, before anything is applied, unless the run allows it.
+    other = flux_vars(tmp_path, operator_releases, nas=not nas)
+    mutations = read(state)["mutations"]
+    for check in (True, False):
+        rc, _, out = run("flux.yml", other, check=check, env=env)
+        assert rc != 0 and f"The FluxInstance syncs {instance['sync']['path']}, and this run would make it" in out, out[
+            -3000:
+        ]
+    assert read(state)["mutations"] == mutations
+    for allowed in (other, extra):
+        result = run("flux.yml", allowed | {"flux_bootstrap_allow_path_change": True}, env=env)
+        outputs.append(result[2])
+        expect(result, "homeserver-k8s", changed=1, note="a path change allowed")
+    assert flux_objects(state)["FluxInstance/flux-system/flux"]["spec"]["sync"]["path"] == instance["sync"]["path"]
+
+    # A setting changed, then one removed: each is applied, and a removed key disappears.
+    result = run("flux.yml", extra | {"kubernetes_domain": "home.example.org"}, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=1, note="a changed setting")
+    assert flux_objects(state)["ConfigMap/flux-system/cluster-settings"]["data"]["DOMAIN"] == "home.example.org"
+    fewer = extra | {"flux_bootstrap_settings": {"DOMAIN": "home.example.org"}}
+    expect(run("flux.yml", fewer, env=env), "homeserver-k8s", changed=1, note="a removed setting")
+    assert flux_objects(state)["ConfigMap/flux-system/cluster-settings"]["data"] == {"DOMAIN": "home.example.org"}
+
+    # A new operator release whose install.yaml is not the pinned one is refused, and nothing is applied.
+    bump = extra | {"flux_bootstrap_operator_version": "v0.62.0"}
+    mutations = read(state)["mutations"]
+    rc, _, out = run("flux.yml", bump, env=env)
+    assert rc != 0 and "did not match" in out, out[-3000:]
+    assert read(state)["mutations"] == mutations and len(read(state)["operator_installs"]) == 1
+
+    # Pinned, it is installed over the old one.
+    bump |= {"flux_bootstrap_operator_sha256": hashlib.sha256(operator_release("v0.62.0")).hexdigest()}
+    result = run("flux.yml", bump, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=True, note="an operator bump")
+    assert read(state)["operator_installs"][1] == f"flux-operator:v0.62.0@{OPERATOR_DIGEST}"
+    no_age_key(outputs)
+
+
+@pytest.mark.cluster
+def test_flux_bootstrap_refuses_a_shared_key_and_reports_a_stuck_operator(tmp_path, operator_releases):
+    """An age key file holding two keys, one others can read, or none, is refused before anything is applied. An
+    operator that never becomes available fails the run."""
+    extra, env = flux_vars(tmp_path, operator_releases), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    (Path(extra["talos_config_dir"]) / "kubeconfig").write_text("apiVersion: v1\n")
+    write(state, {"nodes": {}, "mutations": 0, "bootstrapped": True})
+    key = Path(extra["sops_age_key_file"])
+    for content, mode in ((f"{AGE_KEY}\n{AGE_KEY}2\n", 0o600), (f"{AGE_KEY}\n", 0o644), ("# no key\n", 0o600)):
+        key.write_text(content)
+        key.chmod(mode)
+        rc, _, out = run("flux.yml", extra, check=True, env=env)
+        assert rc != 0 and "must exist, be readable by you alone (mode 0600), and hold exactly one" in out, out[-3000:]
+        assert AGE_KEY not in out
+    assert read(state)["mutations"] == 0
+    key.write_text(f"{AGE_KEY}\n")
+    key.chmod(0o600)
+
+    s = read(state)
+    s["operator_never_available"] = True
+    write(state, s)
+    rc, _, out = run("flux.yml", extra, env=env)
+    assert rc != 0 and "timed out waiting for the condition on deployment/flux-operator" in out, out[-3000:]
+
+    # The FluxInstance ready, but a Kustomization below it failing: the run fails, and shows them.
+    s = read(state)
+    s.update(operator_never_available=False, kustomizations_not_ready=True)
+    write(state, s)
+    rc, _, out = run("flux.yml", extra, env=env)
+    assert rc != 0 and "Flux's Kustomizations are not all ready after 0s: error: timed out waiting" in out, out[-3000:]
+    assert "flux-system   flux-system" in out, out[-3000:]

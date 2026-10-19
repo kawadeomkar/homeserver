@@ -1,14 +1,15 @@
 # Talos: building, using and upgrading the cluster
 
 The cluster is built by `make kubernetes` (`kubernetes.yml`): the VMs on the Proxmox host (`roles/proxmox_vm`),
-then Talos on them from this machine (`roles/talos`). It never reboots a node and never moves one to another
-version; `make talos-upgrade` does that. Addresses and MACs live only in `group_vars/all/local.yml`.
+then Talos on them from this machine (`roles/talos`), then Flux (`roles/flux_bootstrap`). It never reboots a node
+and never moves one to another version; `make talos-upgrade` does that. Addresses and MACs live only in
+`group_vars/all/local.yml`.
 
 ## Before the first build
 
 1. **Workstation tools**, from Homebrew: `talosctl` of the pinned minor release (`talos_version` in
-   `group_vars/all/kubernetes.yml`; `brew install siderolabs/tap/talosctl`) and `kubectl`. The role refuses a
-   `talosctl` of another minor release, since its defaults follow its own.
+   `group_vars/all/kubernetes.yml`; `brew install siderolabs/tap/talosctl`), `kubectl`, `flux`, `sops` and
+   `age`. The role refuses a `talosctl` of another minor release, since its defaults follow its own.
 2. **The secrets bundle**, beside the cluster's credentials (`kubernetes_talos_config_dir`'s directory, when
    `local.yml` sets one) and in no repository:
 
@@ -27,6 +28,14 @@ version; `make talos-upgrade` does that. Addresses and MACs live only in `group_
    `kubernetes_node_addresses`. In the router (OPNsense with a NAS), reserve each address for its MAC, outside the
    DHCP range. All before the first run: a VM leases an address the moment it starts.
 4. **The inventory** has `[kubernetes]` with `homeserver-k8s`, as in `inventory.example`.
+5. **The age key** that decrypts the cluster's SOPS secrets, a file holding this cluster's key alone, which Flux
+   receives whole (`README.md`, Kubernetes secrets). age-keygen makes no directories:
+
+   ```bash
+   mkdir -p ~/.config/sops/age && chmod 700 ~/.config/sops/age
+   age-keygen -o ~/.config/sops/age/homeserver.agekey && chmod 600 ~/.config/sops/age/homeserver.agekey
+   ```
+
 ## The first build
 
 ```bash
@@ -49,7 +58,7 @@ talosctl health
 kubectl get nodes
 ```
 
-**Back up `~/.talos/homeserver`** in the password manager. Besides the secrets bundle,
+**Back up `~/.talos/homeserver`** with the age key, in the password manager. Besides the secrets bundle,
 talosconfig and kubeconfig it holds `bootstrapped`, which is how the role tells a first build from a cluster that lost its etcd: with it and no
 running etcd, a run refuses to bootstrap again, which would make a new, empty cluster. On a new workstation,
 restore that directory before the first run. `etcd/` holds the etcd snapshots.
@@ -75,9 +84,10 @@ manager, since `roles/talos` renders from the bundle and refuses credentials of 
 
 That covers credentials copied off the machine. A lost workstation holds the bundle itself, every key of the
 cluster (etcd's encryption key and the service account key among them), which no rotation replaces: rebuild the
-cluster with a new bundle (`talosctl gen secrets`, then the first build above), and treat `.vault_pass`, the
-TrueNAS API key and the Proxmox host's SSH key as lost too: re-key the vault, make a new API key through the role,
-and remove the old SSH key from the host.
+cluster with a new bundle (`talosctl gen secrets`, then the first build above), and treat the age key, `.vault_pass`, the
+TrueNAS API key and the Proxmox host's SSH key as lost too: make a new age key and Secrets
+(`k8s/README-secrets.md`), re-key the vault, make a new API key through the role, and remove the old SSH key from
+the host.
 
 ## Configuration changes
 
@@ -144,6 +154,36 @@ object goes back to. Snapshots come only from `make etcd-snapshot` and the start
 wiped reaches maintenance mode only from it. The boot order puts the system disk first, so an installed node
 never boots it. Old ISOs stay in `local` until removed by hand; the Proxmox play lists the ones no VM uses.
 
+## Syncing a branch other than main
+
+Flux applies the synced branch with cluster-admin rights, so whoever can push to it owns the cluster. Only `main` is
+protected (the "Protect main" ruleset: a pull request and CI required, no force-push, no deletion), so every playbook
+refuses another branch unless `local.yml` says you know, as for a test cluster validating a branch:
+
+```yaml
+flux_sync_ref: refs/heads/<branch>
+flux_sync_ref_unprotected: true
+```
+
+Keep its source suspended while you are not testing, so a push to the branch deploys nothing. The Flux Operator
+rewrites the source whenever it reconciles the FluxInstance, undoing a plain `flux suspend`, so pause the operator's
+handling of it first (its own annotation); `make kubernetes` leaves both as they are:
+
+```bash
+kubectl annotate fluxinstance -n flux-system flux fluxcd.controlplane.io/reconcile=disabled --overwrite
+flux suspend source git flux-system -n flux-system
+```
+
+Before pushing the next change to test, the reverse:
+
+```bash
+flux resume source git flux-system -n flux-system
+kubectl annotate fluxinstance -n flux-system flux fluxcd.controlplane.io/reconcile-
+```
+
+Once the branch is merged, resume as above, delete both settings and run `make kubernetes`: the cluster follows
+`main` again. While the operator is paused it acts on no change to the FluxInstance, a new Flux release included.
+
 ## Validating on a test host without a NAS
 
 On a small host, use a fresh clone of the repository, without your `.vault_pass`, whose `local.yml` holds
@@ -157,6 +197,7 @@ kubernetes_node_sizes:
   homeserver-worker-1: {cores: 2, memory_mib: 6144, system_disk_gib: 10, data_disk_gib: 10, media_disk_gib: 0}
 kubernetes_media_on_data_volume: true
 kubernetes_talos_config_dir: ~/.talos/homeserver-test
+sops_age_key_file: ~/.config/sops/age/homeserver-test.agekey
 ```
 
 That is about 8 GiB of memory and 30 GiB of disk on the installer's storage, which the disk budget counts with the
@@ -166,6 +207,13 @@ A run refuses a directory that holds another cluster's talosconfig or kubeconfig
 at the first task that would use them. Give the test cluster a secrets bundle of its own too, never the home
 cluster's: `talosctl gen secrets` into that directory, as in step 2 above, and in that clone `make vault-init` (a
 vault of its own; see `README.md`). It is thrown away with the test cluster.
+
+Give it an age key of its own as well (`age-keygen -o ~/.config/sops/age/homeserver-test.agekey`, mode 0600), named
+by `sops_age_key_file` above: left out, the setting means the home cluster's key, which Flux would copy into the test
+cluster. The repository's Secrets are encrypted for the home key alone (`.sops.yaml` has one recipient), so the test
+cluster cannot decrypt them, and an app that needs one does not start there. That is the price of keeping the home
+key out of a cluster that is thrown away. To test those apps, encrypt their Secrets anew for the test key on the
+validation branch the test cluster syncs, and never merge that branch.
 
 Never set `proxmox_vm_allow_overcommit` on a host whose thin pool other VMs share: a full pool gives them all I/O
 errors. Afterwards: `qm stop 300 301`, then `qm destroy 300 --purge` and `qm destroy 301 --purge`, delete their
