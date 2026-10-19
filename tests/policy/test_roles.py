@@ -432,6 +432,46 @@ def test_vms_resolve_on_the_proxmox_host(tmp_path, local_yml, nodes, system):
     assert found == nodes
 
 
+def test_talos_pins_match_the_makefile_and_ci():
+    """The Kubernetes version Talos runs is the one kubeconform validates the manifests against, and the talosctl CI
+    validates the Talos configurations with is the pinned release."""
+    pins = yaml.safe_load((ROOT / "group_vars" / "all" / "kubernetes.yml").read_text())
+    makefile = (ROOT / "Makefile").read_text()
+    assert re.search(rf"^KUBERNETES_VERSION \?= {re.escape(str(pins['talos_kubernetes_version']))}$", makefile, re.M)
+    assert pins["talos_contract"] == ".".join(pins["talos_version"].split(".")[:2])
+    ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    assert "v" + ci["env"]["TALOSCTL_VERSION"] == pins["talos_version"]
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "nodes"),
+    [
+        pytest.param(None, {"homeserver-cp-1": ("controlplane", 1), "homeserver-worker-1": ("worker", 2)}, id="nas"),
+        pytest.param(
+            PROXMOX_ONLY_CLUSTER_LOCAL_YML,
+            {"homeserver-cp-1": ("controlplane", 1), "homeserver-worker-1": ("worker", 3)},
+            id="proxmox-only",
+        ),
+    ],
+)
+def test_talos_nodes_resolve_on_the_kubernetes_host(tmp_path, local_yml, nodes):
+    """The Talos nodes resolve on the kubernetes host through the real inventory layout, from what its groups see:
+    the version pins and the NAS address are in group_vars/all, since this host never sees group_vars/proxmox.
+    Both setups have the same two nodes, the worker with a media volume without a NAS, and the control plane keeps
+    its taint in both."""
+    tree = example_tree(tmp_path, local_yml)
+    found = resolve_on(
+        tree,
+        "homeserver-k8s",
+        "{'nodes': talos_nodes, 'endpoint': talos_endpoint, 'version': talos_version, "
+        "'cp': talos_patches_controlplane | join('\\n'), 'patches': talos_patches_common + talos_patches_controlplane}",
+        *CLUSTER_ARGS,
+    )
+    assert {n["name"]: (n["role"], len(n["patches"])) for n in found["nodes"]} == nodes
+    assert found["endpoint"] == "https://192.0.2.30:6443" and found["version"] == "v1.14.2"
+    assert "$patch: delete" not in found["cp"] and "KubeNodeConfig" not in found["cp"]
+
+
 def test_nas_gets_a_dataset_and_share_per_vm_storage(tmp_path):
     """With a NAS, the NAS configuration derives one dataset and one share for each VM class and each project
     pool, so an export and the storage that mounts it come from one entry. A project pool gets the ephemeral
@@ -679,6 +719,12 @@ def without(settings, *names):
             {},
             ["group_vars/all/local.yml sets kubernetes_media_on_data_volume but no kubernetes_node_addresses"],
             id="misspelt-addresses",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_api_sans": "k8s-api.home.arpa"},
+            ["kubernetes_api_sans must be a list of names, not a string."],
+            id="api-sans-a-string",
         ),
         pytest.param(
             None,

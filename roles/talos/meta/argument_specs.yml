@@ -1,0 +1,43 @@
+---
+argument_specs:
+  main:
+    short_description: Render Talos Linux machine configurations for the cluster's nodes
+    description:
+      - Runs on the controller with talosctl. render.yml renders each node's machine configuration from a secrets
+        bundle and the patches, into a scratch directory the caller names (talos_workspace), for the nodes the
+        caller lists (talos_render). It asks talosctl for the pod network its defaults give a cluster
+        (talos_pod_subnets), which the patches may use.
+      - The defaults do nothing. README.md describes each variable.
+    options:
+      talos_cluster_name:
+        type: str
+        default: ""
+        description: The cluster's name.
+      talos_endpoint:
+        type: str
+        default: ""
+        description: The Kubernetes API endpoint, https://<control plane address>:6443.
+      talos_extra_sans:
+        type: list
+        elements: str
+        default: []
+        description: Extra names for the API server's certificate.
+      talos_contract:
+        type: str
+        default: ""
+        description: The configuration contract talosctl renders for, such as v1.14.
+      talos_patches_common:
+        type: list
+        elements: str
+        default: []
+        description: Configuration patches for every node, as YAML documents in strings.
+      talos_patches_controlplane:
+        type: list
+        elements: str
+        default: []
+        description: Configuration patches for control planes.
+      talos_patches_worker:
+        type: list
+        elements: str
+        default: []
+        description: Configuration patches for workers.

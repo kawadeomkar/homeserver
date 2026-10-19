@@ -1,0 +1,74 @@
+---
+# This cluster's Talos configuration, rendered by roles/talos. The version pins (talos_version, talos_contract,
+# talos_kubernetes_version) are in group_vars/all/kubernetes.yml, since the Proxmox play reads them too; the nodes'
+# addresses come from local.yml.
+talos_cluster_name: homeserver
+# The schematics the nodes boot: the QEMU guest agent. No CPU microcode in a VM: the host applies it.
+talos_schematics:
+  base: [siderolabs/qemu-guest-agent]
+
+kubernetes_controlplane: "{{ kubernetes_nodes | selectattr('role', 'equalto', 'controlplane') | first }}"
+talos_endpoint: "https://{{ kubernetes_node_addresses[kubernetes_controlplane.name] | trim }}:6443"
+# Names the API can later be reached by, set before the first build (local.yml's kubernetes_api_sans).
+talos_extra_sans: "{{ kubernetes_api_sans | default([], true) }}"
+
+# Each node: its hostname, and the volumes on its data and media disks. Disks are found by the by-id link QEMU names
+# after their slot (kubernetes_disk_slots, group_vars/all/kubernetes.yml).
+talos_nodes: >-
+  {%- set out = [] -%}
+  {%- for n in kubernetes_nodes -%}
+  {%-   set patches = ['apiVersion: v1alpha1\nkind: HostnameConfig\nhostname: ' ~ n.name ~ '\nauto: "off"\n'] -%}
+  {%-   for volume, slot, size in [('local-path-provisioner', kubernetes_disk_slots.data, n.data_disk_gib | default(0)),
+                                   ('media', kubernetes_disk_slots.media, n.media_disk_gib | default(0))] if size | int > 0 -%}
+  {%-     set _ = patches.append('apiVersion: v1alpha1\nkind: UserVolumeConfig\nname: ' ~ volume ~ '\nprovisioning:\n'
+                                 ~ '  diskSelector:\n    match: "!system_disk && disk.symlinks.exists(s, s.endsWith(\'_'
+                                 ~ 'drive-' ~ slot ~ '\'))"\n  minSize: 10GiB\n  grow: true\nfilesystem:\n  type: xfs\n') -%}
+  {%-   endfor -%}
+  {%-   set _ = out.append({'name': n.name, 'role': n.role, 'address': kubernetes_node_addresses[n.name] | trim,
+                            'schematic': 'base', 'patches': patches}) -%}
+  {%- endfor -%}
+  {{ out }}
+
+# Every node: installed on the disk in the system disk's slot (its by-id link ends in _drive-scsi0), wiped first; and
+# the VM's i6300esb watchdog armed, so a hung node is reset within two minutes.
+talos_patches_common: "{{ [talos_patch_install, talos_patch_watchdog] }}"
+talos_patch_install: |
+  apiVersion: v1alpha1
+  kind: UnattendedInstallConfig
+  provisioning:
+    diskSelector:
+      match: "disk.symlinks.exists(s, s.endsWith('_drive-{{ kubernetes_disk_slots.system }}'))"
+    wipe: true
+talos_patch_watchdog: |
+  apiVersion: v1alpha1
+  kind: WatchdogTimerConfig
+  device: /dev/watchdog0
+  timeout: 2m
+
+# The control plane's components serve their metrics beyond localhost, for kube-prometheus-stack. Set before the
+# first build: etcd reads its settings only when it starts, so a later change waits for a restart of etcd by hand.
+# The control plane keeps Talos's taint and the label that keeps load balancers off it in both setups: the worker
+# runs the apps.
+talos_patches_controlplane: "{{ talos_patches_controlplane_metrics }}"
+talos_patches_controlplane_metrics:
+  - |
+    apiVersion: v1alpha1
+    kind: KubeControllerManagerConfig
+    extraArgs:
+      bind-address: 0.0.0.0
+  - |
+    apiVersion: v1alpha1
+    kind: KubeSchedulerConfig
+    extraArgs:
+      bind-address: 0.0.0.0
+  - |
+    apiVersion: v1alpha1
+    kind: KubeProxyConfig
+    config:
+      metricsBindAddress: 0.0.0.0:10249
+  - |
+    cluster:
+      etcd:
+        extraArgs:
+          listen-metrics-urls: http://0.0.0.0:2381
+talos_patches_worker: []
