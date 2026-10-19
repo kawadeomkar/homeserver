@@ -24,7 +24,7 @@ POETRY_FOUND = @command -v $(POETRY) >/dev/null || { echo "Poetry is not on PATH
 TAGS    ?=
 TAG_ARGS := $(if $(TAGS),--tags $(TAGS),)
 # Anything else for ansible-playbook, such as a variable for one run:
-#   make kubernetes ANSIBLE_ARGS='-e proxmox_vm_ignore_existing_volumes=true'
+#   make kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'
 # (make's own -e is not that: it is make's --environment-overrides, and passes nothing to Ansible).
 ANSIBLE_ARGS ?=
 PLAYBOOK := $(BIN)/ansible-playbook
@@ -167,9 +167,9 @@ secrets-push: ## Secrets and identifiers in the commits being pushed (the pre-pu
 
 .PHONY: test-idempotence
 # One pytest worker per CPU: each test runs its own fakes and playbooks, so they run side by side, and in sequence
-# the suite outgrew the CI job's timeout. CI runs the tests marked cluster (the VM and backup playbooks) in a job of
-# their own, on one Python, and the rest on each: PYTEST_ARGS='-m cluster' or PYTEST_ARGS='-m "not cluster"'. Empty
-# runs them all.
+# the suite outgrew the CI job's timeout. CI runs the tests marked cluster (the VM, backup and Talos playbooks) in a
+# job of their own, on one Python, and the rest on each: PYTEST_ARGS='-m cluster' or PYTEST_ARGS='-m "not cluster"'.
+# Empty runs them all.
 PYTEST_ARGS ?=
 # Work stealing: the tests take from a second to a minute each, so a worker that runs out of tests takes some queued
 # for another, rather than idling while the others finish theirs.
@@ -220,11 +220,11 @@ proxmox: ## Configure the Proxmox host: repositories and upgrade, then VM storag
 	$(RUN) proxmox.yml --diff $(ANSIBLE_ARGS)
 
 .PHONY: check-kubernetes
-check-kubernetes: ## Dry-run the Kubernetes cluster: its VMs
+check-kubernetes: ## Dry-run the Kubernetes cluster: its VMs, then Talos
 	$(RUN) kubernetes.yml --check --diff $(TAG_ARGS) $(ANSIBLE_ARGS)
 
 .PHONY: kubernetes
-kubernetes: ## Create or correct the Kubernetes cluster's VMs (needs proxmox first)
+kubernetes: ## Build or correct the Kubernetes cluster: its VMs, then Talos (needs proxmox first)
 	$(RUN) kubernetes.yml --diff $(TAG_ARGS) $(ANSIBLE_ARGS)
 
 .PHONY: check

@@ -71,8 +71,8 @@ kubeconfig
 kubeconfig.*
 *.kubeconfig
 k3s.yaml
-# Talos's generated files (talosctl gen secrets, gen config), which hold a cluster's keys. They are never written
-# inside the repository; these are a safety net.
+# Talos's generated files (talosctl gen secrets, gen config). roles/talos keeps them outside the repository, in a
+# scratch directory and ~/.talos; these are a safety net.
 secrets.yaml
 controlplane.yaml
 worker.yaml

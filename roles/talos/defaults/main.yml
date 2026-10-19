@@ -7,9 +7,47 @@ talos_cluster_name: ""
 talos_endpoint: ""
 # Extra names for the API server's certificate (talosctl gen config --additional-sans).
 talos_extra_sans: []
-# The configuration contract talosctl renders for (v1.14).
+# The versions a node is installed with: Talos (v1.14.2), the configuration contract talosctl renders for (v1.14),
+# and Kubernetes (1.37.1). A running node keeps what it runs.
+talos_version: ""
 talos_contract: ""
+talos_kubernetes_version: ""
+# The file holding the secrets bundle (talosctl gen secrets), mode 0600, outside any repository. Never printed.
+talos_secrets_file: ""
+# Nodes, each: name, role (controlplane or worker), address, schematic (a key of talos_schematics), and patches
+# (YAML documents, as strings) of its own.
+talos_nodes: []
+# Image Factory schematics by name: each a list of official system extensions. Their ids are asked of the factory.
+talos_schematics: {}
+talos_image_factory_url: https://factory.talos.dev
 # Configuration patches, as YAML documents in strings: for every node, for control planes, for workers.
 talos_patches_common: []
 talos_patches_controlplane: []
 talos_patches_worker: []
+# Where talosconfig, kubeconfig, the bootstrapped marker and etcd snapshots live: outside the repository. Back it
+# up: the marker is how the role tells a first build from a cluster that lost its etcd.
+talos_config_dir: ""
+# Renew talosconfig's and kubeconfig's client certificates that expire within this many days.
+talos_renew_before_days: 30
+# How long `talosctl health` waits for the cluster.
+talos_health_timeout: 10m
+# How often, and how long apart, a real run asks a node that does not answer yet (a VM started seconds before),
+# and how many times it reads an installing node's status before giving up.
+talos_probe_retries: 30
+talos_probe_delay: 10
+talos_install_retries: 60
+# Bootstrap etcd although this cluster was bootstrapped before, which makes a new, empty cluster.
+talos_allow_bootstrap: false
+# The nodes, by name, that may be installed although the cluster was bootstrapped before: a node in maintenance mode
+# takes its configuration, the cluster's keys with it, from whoever sends it, unauthenticated, so once the cluster
+# exists the role sends it only to a node named here (a list, or names joined by commas).
+talos_reinstall: []
+# What the Image Factory must answer: each schematic's id, by name ({base: <id>}), refused otherwise, and the digest
+# of each installer image the nodes install and upgrade from, by "<schematic id>:<version>", given beside the tag.
+# Empty checks nothing; once set, the pinned version's images must each have one.
+talos_schematic_pins: {}
+talos_installer_digests: {}
+# Keep each node's rendered configuration in talos_config_dir/rendered/ (mode 0600; it holds the secrets), to compare
+# by hand with talosctl apply-config --dry-run, until the next run without it, which removes them. Otherwise it goes
+# with the run's scratch directory.
+talos_keep_rendered: false

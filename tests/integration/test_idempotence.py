@@ -16,16 +16,22 @@ directory.
 Needs the project virtualenv and openssl. Run: make test-idempotence
 """
 
+import base64
+import hashlib
+import http.server
 import json
 import os
 import re
 import socket
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from pathlib import Path
 
 import pytest
+import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -60,11 +66,12 @@ def free_port():
         return s.getsockname()[1]
 
 
-def run(playbook, extra, check=False):
-    """Run a test playbook; return (return code, {host: stats}, combined output)."""
+def run(playbook, extra, check=False, env=None):
+    """Run a test playbook; return (return code, {host: stats}, combined output). `env` adds to the environment,
+    such as a HOME of the test's own."""
     # ANSIBLE_FORCE_COLOR overrides ANSIBLE_NOCOLOR, and a coloured PLAY RECAP does not match RECAP.
-    env = {k: v for k, v in os.environ.items() if k != "ANSIBLE_FORCE_COLOR"}
-    env |= {"ANSIBLE_CONFIG": str(HERE / "ansible.cfg"), "ANSIBLE_NOCOLOR": "1"}
+    environment = {k: v for k, v in os.environ.items() if k != "ANSIBLE_FORCE_COLOR"}
+    environment |= {"ANSIBLE_CONFIG": str(HERE / "ansible.cfg"), "ANSIBLE_NOCOLOR": "1", **(env or {})}
     cmd = [
         PLAYBOOK,
         str(HERE / playbook),
@@ -74,7 +81,7 @@ def run(playbook, extra, check=False):
     ]
     if check:
         cmd.append("--check")
-    proc = subprocess.run(cmd, env=env, cwd=HERE, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    proc = subprocess.run(cmd, env=environment, cwd=HERE, capture_output=True, text=True, stdin=subprocess.DEVNULL)
     out = proc.stdout + proc.stderr
     stats = {
         h: {"ok": int(o), "changed": int(c), "unreachable": int(u), "failed": int(f)}
@@ -1445,3 +1452,521 @@ def test_proxmox_vm_recovers_from_a_failed_download_and_start(tmp_path):
     assert all(vm["status"] == "running" for vm in vms_of(state).values())
     assert read(state)["mutations"] - created == 1, "more than the start happened"
     expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="second run after the failed start")
+
+
+# ------------------------------------------------------------------------------------------------ Talos ---
+
+# Sentinels that must never reach Ansible's output: the secrets bundle's cluster secret, which the fake carries into
+# every configuration it renders and echoes in its diffs.
+TALOS_SENTINEL = "sentinel-in-the-talos-bundle"
+TALOS_SECRETS = (
+    f"certs:\n  os: {{crt: {base64.b64encode(b'TEST-OS-CA').decode()}, key: y}}\n"
+    f"  k8s: {{crt: {base64.b64encode(b'TEST-K8S-CA').decode()}, key: z}}\n"
+    f"cluster:\n  id: test\n  secret: {TALOS_SENTINEL}\n"
+)
+
+
+@pytest.fixture(scope="module")
+def factory():
+    """The Image Factory: POST /schematics answers 201 Created with the body's sha256 as the id, as the real one
+    does (a schematic's id is the hash of its content)."""
+    posted = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            if self.path != "/schematics":
+                self.send_error(404)
+                return
+            posted.append(body.decode())
+            reply = json.dumps({"id": hashlib.sha256(body).hexdigest()}).encode()
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(reply)))
+            self.end_headers()
+            self.wfile.write(reply)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield {"url": f"http://127.0.0.1:{server.server_address[1]}", "posted": posted}
+    server.shutdown()
+
+
+# The schematics of group_vars/kubernetes/talos.yml, and the digest the tests pin every installer image to.
+SCHEMATICS = {"base": ["siderolabs/qemu-guest-agent"]}
+INSTALLER_DIGEST = "sha256:" + "0" * 63 + "2"
+
+
+def schematic_id(extensions):
+    """The id the factory fixture gives a schematic, computed as the role's request makes it."""
+    body = yaml.dump(
+        {"customization": {"systemExtensions": {"officialExtensions": extensions}}},
+        Dumper=yaml.SafeDumper,
+        default_flow_style=False,
+        indent=4,
+        allow_unicode=True,
+    )
+    return hashlib.sha256(body.encode()).hexdigest()
+
+
+def bundle_file(path, text=TALOS_SECRETS):
+    """A secrets bundle in a file of its own, mode 0600, as talosctl gen secrets writes it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    path.chmod(0o600)
+    return str(path)
+
+
+def talos_vars(tmp_path, factory, nas=True, **more):
+    """The talos test playbook's variables, isolated in tmp_path: its HOME, talos_config_dir and secrets bundle are
+    the test's own, never the owner's. The bundle lies outside the test's home, so it is not among what a run left
+    there."""
+    extra = {
+        "fake_talos_state": str(tmp_path / "talos.json"),
+        "talos_config_dir": str(tmp_path / "home" / ".talos" / "homeserver"),
+        "talos_secrets_file": bundle_file(tmp_path / "talos-secrets.yaml"),
+        "talos_image_factory_url": factory["url"],
+        "talos_probe_delay": 0,
+        "talos_probe_retries": 3,
+        "talos_install_retries": 5,
+        # The fake factory's ids, pinned, and a digest of no real image for each installer.
+        "talos_schematic_pins": {name: schematic_id(extensions) for name, extensions in SCHEMATICS.items()},
+        "talos_installer_digests": {
+            f"{schematic_id(extensions)}:{version}": INSTALLER_DIGEST
+            for extensions in SCHEMATICS.values()
+            for version in ("v1.14.2", "v1.14.3")
+        },
+        "truenas_static_address": "127.0.0.10/24" if nas else "",
+        "kubernetes_node_addresses": NODE_ADDRESSES,
+    }
+    if not nas:
+        extra["kubernetes_node_sizes"] = SMALL_SIZES
+    return extra | more
+
+
+def talos_env(tmp_path, client="v1.14.9"):
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    return {"HOME": str(home), "FAKE_TALOSCTL_CLIENT_TAG": client}
+
+
+def talos_state(path, mode="maintenance", **more):
+    """The fake nodes, the same two in both setups: booted from the v1.14.2 ISO into maintenance mode, unless told
+    otherwise."""
+    nodes = {a: {"mode": mode, "version": "v1.14.2", "schematic": "iso"} for a in NODE_ADDRESSES.values()}
+    write(path, {"nodes": nodes, "mutations": 0, **more})
+
+
+def talos_files(tmp_path):
+    """Everything the run left under the test's home."""
+    return sorted(str(p.relative_to(tmp_path)) for p in (tmp_path / "home").rglob("*") if p.is_file())
+
+
+def no_talos_secret(outputs):
+    for out in outputs:
+        assert TALOS_SENTINEL not in out, "the Talos secrets reached Ansible's output"
+
+
+@pytest.mark.cluster
+def test_talos_with_a_nas(tmp_path, factory):
+    """Two nodes in maintenance mode are installed, the cluster bootstrapped once, health-checked, and talosconfig and
+    kubeconfig written under the test's home; later runs change nothing; drift is applied without a reboot, as
+    Talos 1.14 applies anything, with a word about etcd when the control plane's changed, and an apply that fails
+    stops the run with its error; a pin bump upgrades nothing and is reported. The secrets never show."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state)
+    outputs = []
+
+    result = run("talos.yml", extra, check=True, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=True, note="dry run")
+    assert "Would install homeserver-worker-1 at 127.0.0.31" in result[2] and "Would bootstrap etcd" in result[2]
+    assert read(state)["mutations"] == 0 and talos_files(tmp_path) == [], "the dry run changed something"
+
+    result = run("talos.yml", extra, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=True, note="first run")
+    s = read(state)
+    assert s["bootstrapped"] and s.get("bootstrap_calls") == 1
+    assert all(n["mode"] == "configured" for n in s["nodes"].values())
+    base = schematic_id(["siderolabs/qemu-guest-agent"])
+    assert all(n["schematic"] == base and n["version"] == "v1.14.2" for n in s["nodes"].values())
+    cp, worker = s["nodes"]["127.0.0.30"]["config"], s["nodes"]["127.0.0.31"]["config"]
+    assert "# type: controlplane" in cp and "listen-metrics-urls" in cp and "$patch: delete" not in cp
+    assert "# type: worker" in worker and "name: local-path-provisioner" in worker and "_drive-scsi1" in worker
+    assert "hostname: homeserver-worker-1" in worker and "kind: WatchdogTimerConfig" in worker
+    # Each node installs its schematic's installer at the pinned digest.
+    assert f"/metal-installer/{base}:v1.14.2@{INSTALLER_DIGEST}" in worker
+    assert talos_files(tmp_path) == [
+        "home/.talos/homeserver/bootstrapped",
+        "home/.talos/homeserver/kubeconfig",
+        "home/.talos/homeserver/talosconfig",
+    ]
+    config_dir = Path(extra["talos_config_dir"])
+    assert oct(config_dir.stat().st_mode & 0o777) == "0o700"
+    assert all(oct(f.stat().st_mode & 0o777) == "0o600" for f in config_dir.iterdir())
+    talosconfig = yaml_load(config_dir / "talosconfig")
+    assert talosconfig["contexts"]["homeserver"]["endpoints"] == ["127.0.0.30"]
+
+    for check in (False, True):
+        result = run("talos.yml", extra, check=check, env=env)
+        outputs.append(result[2])
+        expect(result, "homeserver-k8s", changed=0, note=f"{'dry run' if check else 'second run'} after the build")
+    # The nodes' own version, never the client's (v1.14.9).
+    assert "Talos v1.14.2, schematic " + base[:8] in result[2] and "v1.14.9" not in result[2], result[2][-3000:]
+
+    # Drift: a node's configuration changed behind the role's back, on the worker, then on the control plane.
+    s = read(state)
+    s["nodes"]["127.0.0.31"].update(config="changed by hand\n", config_sha256="0")
+    write(state, s)
+    result = run("talos.yml", extra, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=1, note="run after drift")
+    assert read(state)["nodes"]["127.0.0.31"]["config"] == worker
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=0, note="second run after drift")
+    s = read(state)
+    s["nodes"]["127.0.0.30"].update(config=cp.replace("listen-metrics-urls", "listen-other-urls"), config_sha256="0")
+    s["apply_fails"] = "another apply configuration is already in progress"
+    write(state, s)
+    result = run("talos.yml", extra, env=env)
+    outputs.append(result[2])
+    assert result[0] != 0 and "homeserver-cp-1: talosctl apply-config failed:" in result[2], result[2][-3000:]
+    assert "another apply configuration is already in progress" in result[2]
+    s = read(state)
+    del s["apply_fails"]
+    write(state, s)
+    result = run("talos.yml", extra, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=1, note="run after drift on the control plane")
+    assert read(state)["nodes"]["127.0.0.30"]["config"] == cp, "applied without a reboot"
+    assert "talosctl -n 127.0.0.30 service etcd restart" in result[2], result[2][-3000:]
+    result = run("talos.yml", extra, env=env)
+    expect(result, "homeserver-k8s", changed=0, note="second run after drift on the control plane")
+    assert "service etcd restart" not in result[2]
+
+    # A pin bump: nothing is applied or upgraded, and the run says what is pinned but not yet running.
+    before = read(state)
+    bumped = extra | {"talos_version": "v1.14.3", "talos_kubernetes_version": "1.37.2"}
+    result = run("talos.yml", bumped, env=env)
+    outputs.append(result[2])
+    expect(result, "homeserver-k8s", changed=0, note="run with bumped pins")
+    after = read(state)
+    assert after["nodes"] == before["nodes"] and after.get("upgrades") is None and after["k8s_version"] == "1.37.1"
+    assert "pinned, not yet running" in result[2], result[2][-3000:]
+    assert "homeserver-worker-1: Talos v1.14.3" in result[2]
+    assert "kubernetes: 1.37.2" in result[2]
+    no_talos_secret(outputs)
+
+
+def yaml_load(path):
+    return yaml.safe_load(Path(path).read_text())
+
+
+@pytest.mark.cluster
+def test_talos_without_a_nas(tmp_path, factory):
+    """The same two nodes as with a NAS: the control plane keeps its taint, and the worker carries the data volume
+    and, without a NAS, the media volume."""
+    extra, env = talos_vars(tmp_path, factory, nas=False), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state)
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="first run")
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=0, note="second run")
+    nodes = read(state)["nodes"]
+    cp, worker = nodes["127.0.0.30"]["config"], nodes["127.0.0.31"]["config"]
+    assert "$patch: delete" not in cp and "UserVolumeConfig" not in cp, cp
+    assert "name: local-path-provisioner" in worker and "name: media" in worker and "_drive-scsi2" in worker
+
+    # A user volume whose disk selector matches nothing is never mounted: the run says so, naming the volume.
+    s = read(state)
+    s["nodes"]["127.0.0.31"]["volumes_missing"] = ["media"]
+    write(state, s)
+    rc, _, out = run("talos.yml", extra, env=env)
+    assert rc != 0 and "homeserver-worker-1's user volumes are not ready: media (waiting)" in out, out[-3000:]
+
+
+@pytest.mark.cluster
+def test_talos_dry_run_on_a_fresh_host(tmp_path, factory):
+    """No VM yet: every node is reported as one to install once it is up, without waiting for it, and nothing fails."""
+    extra, env = talos_vars(tmp_path, factory, talos_probe_delay=60), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state, mode="absent")
+    started = time.monotonic()
+    result = run("talos.yml", extra, check=True, env=env)
+    expect(result, "homeserver-k8s", changed=True, note="dry run with no node up")
+    assert time.monotonic() - started < 50, "the dry run waited for the nodes"
+    assert "Would install homeserver-cp-1 at 127.0.0.30 once its VM is up" in result[2], result[2][-3000:]
+    assert read(state)["mutations"] == 0 and talos_files(tmp_path) == []
+
+
+@pytest.fixture
+def short_tmp():
+    """An empty directory with a short path, for a test's TMPDIR. ansible-playbook binds a Unix socket in TMPDIR, and
+    one under tmp_path can be too long for a socket's path: Python then moves the socket to /tmp, but its check counts
+    four characters fewer than the path it makes, so on Linux a TMPDIR of 76 to 79 characters gets through and
+    ansible-playbook fails with "Local RPC server did not start". tmp_path / "tmp" in CI's cluster job is 76."""
+    with tempfile.TemporaryDirectory(prefix="talos-") as path:
+        yield Path(path)
+
+
+@pytest.mark.cluster
+def test_talos_leaves_no_keys_behind(tmp_path, short_tmp, factory):
+    """A scratch directory an interrupted run left, a day old, is removed by the next run, while a newer one, maybe
+    another run's, stays. The rendered configurations a run kept on request go with the next run that does not ask."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    scratch = short_tmp
+    env["TMPDIR"] = str(scratch)
+    stale, fresh = scratch / "ansible.interrupted.talos", scratch / "ansible.running.talos"
+    for directory in (stale, fresh):
+        directory.mkdir()
+        (directory / "secrets.yaml").write_text("cluster: {}\n")
+    two_days_ago = time.time() - 2 * 86400
+    os.utime(stale, (two_days_ago, two_days_ago))
+    state = Path(extra["fake_talos_state"])
+    talos_state(state)
+
+    kept = extra | {"talos_keep_rendered": True}
+    expect(run("talos.yml", kept, env=env), "homeserver-k8s", changed=True, note="a build keeping its renders")
+    assert not stale.exists() and fresh.exists()
+    rendered = Path(extra["talos_config_dir"]) / "rendered"
+    assert sorted(p.name for p in rendered.iterdir()) == ["homeserver-cp-1.yaml", "homeserver-worker-1.yaml"]
+
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=1, note="the renders removed")
+    assert not rendered.exists()
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=0, note="nothing left to remove")
+
+
+@pytest.mark.cluster
+def test_talos_refuses_what_the_factory_answers_unpinned(tmp_path, factory):
+    """A schematic id the factory gives other than the pinned one, and an installer image of the pinned version
+    without a digest, are refused before any node is asked anything, in a dry run too."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state)
+    other = extra | {"talos_schematic_pins": extra["talos_schematic_pins"] | {"base": "ab" * 32}}
+    rc, _, out = run("talos.yml", other, check=True, env=env)
+    assert rc != 0 and f"gave the schematic base the id {schematic_id(SCHEMATICS['base'])}" in out, out[-3000:]
+    assert f"talos_schematic_pins holds {'ab' * 32}" in out, out[-3000:]
+    rc, _, out = run("talos.yml", extra | {"talos_version": "v1.14.9"}, check=True, env=env)
+    assert rc != 0 and f"no digest for the installer image {schematic_id(SCHEMATICS['base'])}:v1.14.9" in out
+    assert read(state)["mutations"] == 0
+
+
+@pytest.mark.cluster
+def test_talos_waits_for_a_slow_node_and_reports_a_failed_install(tmp_path, factory):
+    """A node that answers only after a few questions is installed on the same run. One that never answers fails a
+    real run after the retries, naming the MAC setting. One whose install fails reports why, not a timeout. A
+    talosctl of another minor release is refused before anything connects."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state)
+    s = read(state)
+    s["nodes"]["127.0.0.31"] = {"mode": "absent", "answers_after": 3, "version": "v1.14.2"}
+    write(state, s)
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="a slow node")
+    assert read(state)["nodes"]["127.0.0.31"]["mode"] == "configured"
+
+    talos_state(state)
+    s = read(state)
+    s["nodes"]["127.0.0.31"] = {"mode": "absent"}
+    write(state, s)
+    rc, _, out = run("talos.yml", extra, env=env)
+    assert rc != 0 and "homeserver-worker-1 at 127.0.0.31 does not answer" in out and "kubernetes_node_macs" in out, (
+        out[-3000:]
+    )
+
+    # A node configured in maintenance mode answers with the talosconfig at once, still running from the ISO, so only
+    # its install status tells. A selector that matches nothing keeps it pending, named before any bootstrap.
+    talos_state(state)
+    s = read(state)
+    s["nodes"]["127.0.0.31"]["install_error"] = "no disk matched the selector"
+    write(state, s)
+    rc, _, out = run("talos.yml", extra | {"talos_config_dir": str(tmp_path / "home" / "other")}, env=env)
+    assert rc != 0 and "homeserver-worker-1 did not install: still pending after 5 tries" in out, out[-3000:]
+    assert ": no disk matched the selector. No disk matched the install selector" in out, out[-3000:]
+    assert read(state)["nodes"]["127.0.0.31"]["mode"] == "configured" and "bootstrap_calls" not in read(state)
+
+    talos_state(state)
+    s = read(state)
+    s["nodes"]["127.0.0.30"]["install_fails"] = "installer exited with code 1"
+    write(state, s)
+    rc, _, out = run("talos.yml", extra | {"talos_config_dir": str(tmp_path / "home" / "failed")}, env=env)
+    assert rc != 0 and "homeserver-cp-1 did not install: the installer failed: installer exited with code 1" in out
+    assert "bootstrap_calls" not in read(state)
+
+    rc, _, out = run("talos.yml", extra, env=talos_env(tmp_path, client="v1.13.5"), check=True)
+    assert rc != 0 and "talosctl on this machine is v1.13" in out and "install talosctl v1.14.x" in out, out[-3000:]
+
+
+@pytest.mark.cluster
+def test_talos_bootstraps_once(tmp_path, factory):
+    """The record of a bootstrap stops a second one: with it and no running etcd the run fails, names the ways back,
+    and bootstraps nothing, unless allowed. Without the record, a cluster whose first build failed half way is
+    bootstrapped. A control plane not ready yet (FailedPrecondition) is asked again."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state, bootstrap_precondition_count=2)
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="first run, retried bootstrap")
+    assert read(state)["bootstrap_calls"] == 1
+
+    # The control plane lost its etcd.
+    s = read(state)
+    s["bootstrapped"] = False
+    write(state, s)
+    rc, _, out = run("talos.yml", extra, env=env)
+    assert rc != 0 and "talosctl bootstrap --recover-from=<snapshot>" in out and "vm-restore.md" in out, out[-3000:]
+    assert read(state)["bootstrap_calls"] == 1, "bootstrapped over a lost cluster"
+    expect(
+        run("talos.yml", extra | {"talos_allow_bootstrap": True}, env=env),
+        "homeserver-k8s",
+        changed=True,
+        note="a new cluster on purpose",
+    )
+    assert read(state)["bootstrap_calls"] == 2
+
+    # No record, the nodes configured but etcd never bootstrapped: a first build that stopped half way.
+    (Path(extra["talos_config_dir"]) / "bootstrapped").unlink()
+    s = read(state)
+    s["bootstrapped"] = False
+    write(state, s)
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="a build that stopped half way")
+    assert read(state)["bootstrap_calls"] == 3 and (Path(extra["talos_config_dir"]) / "bootstrapped").exists()
+
+
+@pytest.mark.cluster
+def test_talos_reinstalls_only_a_named_node(tmp_path, factory):
+    """Once the cluster is bootstrapped, a node answering in maintenance mode gets nothing, in a dry run or a real
+    one, since its configuration holds the cluster's keys and nothing proves who answers: the run fails and names
+    the way to reinstall it. Named in talos_reinstall, as a list or a comma-separated string, it is installed."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state)
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="first build")
+
+    # The worker's system disk was wiped: it boots the ISO into maintenance mode again.
+    s = read(state)
+    s["nodes"][NODE_ADDRESSES["homeserver-worker-1"]] = {
+        "mode": "maintenance",
+        "version": "v1.14.2",
+        "schematic": "iso",
+    }
+    write(state, s)
+    mutations = read(state)["mutations"]
+    for check in (True, False):
+        rc, _, out = run("talos.yml", extra, check=check, env=env)
+        assert rc != 0 and "homeserver-worker-1 answers at 127.0.0.31 in maintenance mode" in out, out[-3000:]
+        assert "-e talos_reinstall=homeserver-worker-1" in out, out[-3000:]
+    assert read(state)["mutations"] == mutations, "sent the configuration to a node no run named"
+
+    expect(
+        run("talos.yml", extra | {"talos_reinstall": "homeserver-worker-1, homeserver-cp-1"}, env=env),
+        "homeserver-k8s",
+        changed=True,
+        note="the reinstall named",
+    )
+    assert read(state)["nodes"][NODE_ADDRESSES["homeserver-worker-1"]]["mode"] == "configured"
+    expect(
+        run("talos.yml", extra | {"talos_reinstall": ["homeserver-worker-1"]}, env=env),
+        "homeserver-k8s",
+        changed=0,
+        note="the name left in place",
+    )
+
+
+@pytest.mark.cluster
+def test_talos_refuses_another_clusters_credentials(tmp_path, factory):
+    """talos_config_dir belongs to one cluster. A kubeconfig there naming another control plane (the home cluster's,
+    on a test host), or credentials from another CA than the secrets bundle's, stop a run, a dry run too, before
+    anything changes; local.yml's kubernetes_talos_config_dir gives a test host a directory of its own."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state)
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="first run")
+    home = Path(extra["talos_config_dir"])
+    kubeconfig = yaml_load(home / "kubeconfig")
+    assert kubeconfig["clusters"][0]["cluster"]["server"] == "https://127.0.0.30:6443"
+
+    kubeconfig["clusters"][0]["cluster"]["server"] = "https://127.0.0.99:6443"
+    (home / "kubeconfig").write_text(yaml.safe_dump(kubeconfig))
+    kept = {f.name: f.read_bytes() for f in home.iterdir()}
+    mutations = read(state)["mutations"]
+    for check in (True, False):
+        rc, _, out = run("talos.yml", extra, check=check, env=env)
+        assert rc != 0 and "holds another cluster's credentials: its kubeconfig names the server" in out, out[-3000:]
+        assert "https://127.0.0.99:6443, not https://127.0.0.30:6443" in out and "kubernetes_talos_config_dir" in out
+    assert {f.name: f.read_bytes() for f in home.iterdir()} == kept and read(state)["mutations"] == mutations
+
+    # The test host's own directory, from local.yml's setting through group_vars/kubernetes/talos.yml, with its
+    # secrets bundle in it, where group_vars/kubernetes/talos.yml looks.
+    own = {k: v for k, v in extra.items() if k not in ("talos_config_dir", "talos_secrets_file")}
+    own |= {"kubernetes_talos_config_dir": "~/.talos/test"}
+    bundle_file(tmp_path / "home" / ".talos" / "test" / "secrets.yaml")
+    expect(run("talos.yml", own, env=env), "homeserver-k8s", changed=True, note="a directory of its own")
+    assert (tmp_path / "home" / ".talos" / "test" / "kubeconfig").exists()
+    assert {f.name: f.read_bytes() for f in home.iterdir()} == kept
+
+    # Another secrets bundle: neither file was made from it.
+    other = TALOS_SECRETS.replace(base64.b64encode(b"TEST-OS-CA").decode(), base64.b64encode(b"OTHER-CA").decode())
+    other = other.replace(base64.b64encode(b"TEST-K8S-CA").decode(), base64.b64encode(b"OTHER-K8S").decode())
+    other = bundle_file(tmp_path / "other-secrets.yaml", other)
+    rc, _, out = run("talos.yml", own | {"talos_secrets_file": other}, check=True, env=env)
+    assert rc != 0 and "its talosconfig trusts another CA" in out and "its kubeconfig trusts another CA" in out, out[
+        -3000:
+    ]
+    no_talos_secret([out])
+
+
+@pytest.mark.cluster
+def test_talos_refuses_a_missing_or_open_secrets_bundle(tmp_path, factory):
+    """The secrets bundle is a file of its own outside the repository, readable by its owner alone: missing, open
+    to others, or inside the repository, it stops a run, a dry run too, before any node is asked, and is never
+    printed."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state)
+    bundle = Path(extra["talos_secrets_file"])
+    bundle.chmod(0o644)
+    outputs = []
+    for check in (True, False):
+        rc, _, out = run("talos.yml", extra, check=check, env=env)
+        assert rc != 0 and f"{bundle} has mode 0644" in out and "chmod 600" in out, out[-3000:]
+        outputs.append(out)
+    bundle.unlink()
+    rc, _, out = run("talos.yml", extra, env=env)
+    assert rc != 0 and f"There is no secrets bundle at {bundle}" in out, out[-3000:]
+    assert "talosctl gen secrets -o" in out and "password manager" in out, out[-3000:]
+    outputs.append(out)
+    # The role knows the repository as the playbook's directory, which for these tests is this one.
+    inside = HERE / "secrets.yaml"
+    rc, _, out = run("talos.yml", extra | {"talos_secrets_file": str(inside)}, check=True, env=env)
+    assert rc != 0 and "talos_secrets_file must be outside the repository" in out, out[-3000:]
+    assert not inside.exists()
+    assert read(state)["mutations"] == 0 and talos_files(tmp_path) == []
+    no_talos_secret(outputs)
+
+
+@pytest.mark.cluster
+def test_talos_renews_expiring_credentials(tmp_path, factory):
+    """Client certificates that expire within talos_renew_before_days are renewed: a dry run says so and writes
+    nothing, the run replaces talosconfig and kubeconfig, and the next run leaves them alone."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state, cert_days=10)
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="build, certificates of 10 days")
+    home = Path(extra["talos_config_dir"])
+    old = {name: (home / name).read_bytes() for name in ("talosconfig", "kubeconfig")}
+    s = read(state)
+    s["cert_days"] = 365
+    write(state, s)
+    result = run("talos.yml", extra, check=True, env=env)
+    expect(result, "homeserver-k8s", changed=True, note="dry run, certificates expiring")
+    assert "Would renew the kubeconfig" in result[2], result[2][-3000:]
+    assert {name: (home / name).read_bytes() for name in old} == old, "the dry run wrote something"
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="renewal")
+    new = {name: (home / name).read_bytes() for name in old}
+    assert all(new[name] != old[name] for name in old), "not both renewed"
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=0, note="after the renewal")
+    assert {name: (home / name).read_bytes() for name in old} == new

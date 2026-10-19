@@ -173,3 +173,8 @@ Blocked on the per-server hardware inventory.
       `kube-prometheus-stack` once the cluster is built. Decided in October 2026; until then the
       hand-written tree is left as it is, including its two open defects listed above
 - [ ] dashdot's placement — inside a VM it reports the VM's virtual disk, not real hardware (K8S-10)
+
+## The cluster's secrets
+
+- [ ] Keep a copy of the cluster's Talos secrets bundle (`~/.talos/homeserver/secrets.yaml`) in the password
+      manager. The repo never holds it, so a lost workstation without it means a new cluster (`README.md`)
