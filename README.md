@@ -97,7 +97,8 @@ names the settings it found.
 
 Two things still apply. The inventory keeps the `truenas` host: the addresses decide whether a NAS exists,
 not the inventory. And `.vault_pass` must exist, because `ansible.cfg` names it, and the tracked vault is
-decrypted on every run. Nothing in it is needed without a NAS, so replace it with an empty vault of your own:
+decrypted on every run. The tracked vault holds the maintainer's NAS key, which is no use without a NAS, so
+replace it with a vault of your own:
 
 ```bash
 make vault-init
@@ -106,16 +107,26 @@ make vault-init
 That writes a new password to `.vault_pass`, readable by you alone, and an empty vault encrypted with it over
 `group_vars/all/vault.yml`. It then tells git to leave that file out of your commits
 (`git update-index --skip-worktree`), so your vault never reaches a commit or a pull request. A vault that
-already opens with `.vault_pass` is left alone. When the tracked vault changes upstream, `git pull` refuses,
-saying your local changes to `group_vars/all/vault.yml` would be overwritten. Put the tracked file back, pull,
-and make your vault again, which keeps your password:
+already opens with `.vault_pass` is left alone, and one that does not but is not the tracked vault either is
+refused, since it may be yours with its password lost.
+
+Your vault holds whatever secrets you put in it and exists nowhere else: keep a copy of it, with `.vault_pass`,
+in your password manager, and never replace it with a new one. When the tracked vault changes upstream, `git pull`
+refuses, saying your local changes to `group_vars/all/vault.yml` would be overwritten. Set your vault aside, put
+the tracked file back, pull, and put yours back:
 
 ```bash
+cp -p group_vars/all/vault.yml ~/homeserver-vault.yml
 git update-index --no-skip-worktree group_vars/all/vault.yml
 git checkout -- group_vars/all/vault.yml
 git pull
-make vault-init
+cp -p ~/homeserver-vault.yml group_vars/all/vault.yml
+git update-index --skip-worktree group_vars/all/vault.yml
+make vault-init && rm ~/homeserver-vault.yml
 ```
+
+The last `make vault-init` only checks: it says `nothing to do` when your vault opens with `.vault_pass`. Remove
+the copy only then.
 
 This mode is covered by the fake-backed tests and the argument-spec pass in both modes; the maintainer's own
 setup has a NAS.
@@ -149,8 +160,8 @@ project's pool. Tools name their storage and are unaffected.
 
 `scripts/runbooks/REBUILD.md` is the recovery procedure. A reinstalled NAS needs a new API user and key and an
 updated certificate pin before Ansible can reach it, and a reinstalled Proxmox host needs root SSH access. Keep a
-copy of `group_vars/all/local.yml` and `.vault_pass` in your password manager: they are the only files not in this
-repo.
+copy of what is not in this repo in your password manager: `group_vars/all/local.yml` and `.vault_pass`; and
+without a NAS your own vault, `group_vars/all/vault.yml`.
 
 ## Manifests
 

@@ -9,6 +9,15 @@
     fail_msg: Set truenas_api_key and at least one address in truenas_api_hosts.
     quiet: true
 
+- name: validate | Refuse to send the API key to an unproven server
+  ansible.builtin.assert:
+    that: truenas_validate_certs | bool or truenas_api_cert_sha256 | length > 0
+    fail_msg: >-
+      Certificate validation is off and truenas_api_cert_sha256 is empty, so nothing would prove that what answers
+      is the NAS before the API key goes to it. Pin the certificate's SHA-256 (local.yml; the rebuild runbook says
+      how to read it), or turn truenas_validate_certs on with a certificate the controller trusts.
+    quiet: true
+
 - name: validate | Check a static address has what it needs
   ansible.builtin.assert:
     that: truenas_static_address | length > 0 and truenas_gateway | length > 0

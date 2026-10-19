@@ -14,7 +14,7 @@ by their variable in `group_vars/all/local.yml`; the real values live only there
 | NAS network card | Everything on disk | Everything, once the NAS is reachable | Update the router's DHCP reservation to the new MAC |
 | Proxmox boot drive | VM disks, on the NAS | The no-subscription repository, the upgrade, Tailscale with its guard, the NFS storages and the start-on-boot delay | Reinstall, root SSH key; with remote access, delete the old machine in Tailscale's admin console and put a new auth key in the vault; recreate VM definitions |
 | Proxmox boot drive, in a setup without a NAS | Nothing: the VM disks were on it | The repository, the upgrade, Tailscale with its guard, and the check that `local-lvm` can hold VM disks | Reinstall, root SSH key; with remote access, the old machine and a new auth key as above; recreate the VMs from backups, if any |
-| The controller (this Mac) | The repo on GitHub, the vault (encrypted) | — | Restore `.vault_pass` and `local.yml` from your password manager |
+| The controller (this Mac) | The repo on GitHub, with a NAS the vault (encrypted) | — | Restore `.vault_pass` and `local.yml` from your password manager, and without a NAS your own vault too |
 
 ## 1. The controller
 
@@ -27,8 +27,11 @@ Everything runs from a checkout of this repo.
 2. `make init`, which creates `inventory` and `group_vars/all/local.yml` from their examples.
 3. Restore the two files only you have:
    - **`.vault_pass`**: the vault password, from your password manager, readable by you alone
-     (`chmod 600 .vault_pass`). Without a NAS there is nothing to restore: `make vault-init` makes a new one, with
-     an empty vault (see `README.md`).
+     (`chmod 600 .vault_pass`).
+   - **`group_vars/all/vault.yml`**, without a NAS, if you put secrets of your own in it: your own vault, in no
+     repository. Restore it from your password manager over the tracked one, then
+     `git update-index --skip-worktree group_vars/all/vault.yml` so it stays out of your commits; `make vault-init`
+     then says `nothing to do`. With nothing of yours in it, `make vault-init` makes both files (see `README.md`).
    - **`group_vars/all/local.yml`**: addresses, disk serials and the certificate pin. Keep a copy of this file in
      your password manager. If it's lost, refill it from `local.yml.example`; the comments there say where each
      value comes from.

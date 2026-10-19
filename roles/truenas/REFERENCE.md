@@ -73,7 +73,7 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
     - **Type**: str
     - **Default**: 
   
-    - **Description**: SHA-256 fingerprint of the NAS's certificate; when set, the API key goes only to that server.
+    - **Description**: SHA-256 fingerprint of the NAS's certificate; the API key goes only to that server. Required while truenas_validate_certs is off.
   
   
   
@@ -606,6 +606,7 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 | Name | Module | Has Conditions |
 | ---- | ------ | -------------- |
 | validate ¦ Check the connection settings | ansible.builtin.assert | False |
+| validate ¦ Refuse to send the API key to an unproven server | ansible.builtin.assert | False |
 | validate ¦ Check a static address has what it needs | ansible.builtin.assert | True |
 | validate ¦ Refuse an NFS share open to every host | ansible.builtin.assert | False |
 
@@ -842,9 +843,10 @@ classDef includeVars stroke:#8e44ad,stroke-width:2px;
 classDef rescue stroke:#665352,stroke-width:2px;
 
   Start-->|Task| validate___Check_the_connection_settings0[validate   check the connection settings]:::task
-  validate___Check_the_connection_settings0-->|Task| validate___Check_a_static_address_has_what_it_needs1[validate   check a static address has what it<br>needs<br>When: **truenas network mode     static**]:::task
-  validate___Check_a_static_address_has_what_it_needs1-->|Task| validate___Refuse_an_NFS_share_open_to_every_host2[validate   refuse an nfs share open to every host]:::task
-  validate___Refuse_an_NFS_share_open_to_every_host2-->End
+  validate___Check_the_connection_settings0-->|Task| validate___Refuse_to_send_the_API_key_to_an_unproven_server1[validate   refuse to send the api key to an<br>unproven server]:::task
+  validate___Refuse_to_send_the_API_key_to_an_unproven_server1-->|Task| validate___Check_a_static_address_has_what_it_needs2[validate   check a static address has what it<br>needs<br>When: **truenas network mode     static**]:::task
+  validate___Check_a_static_address_has_what_it_needs2-->|Task| validate___Refuse_an_NFS_share_open_to_every_host3[validate   refuse an nfs share open to every host]:::task
+  validate___Refuse_an_NFS_share_open_to_every_host3-->End
 ```
 
 

@@ -157,7 +157,16 @@ def nas(monkeypatch, clock):
 
 
 def client(**options):
-    return api.TrueNASClient(NAS, "a-key", **options)
+    # Certificates count as validated: the fake has no TLS, and a client with neither validation nor a pin refuses.
+    return api.TrueNASClient(NAS, "a-key", **({"validate_certs": True} | options))
+
+
+class TestCertificates:
+    def test_neither_validation_nor_a_pin_is_refused_before_connecting(self, nas):
+        fake = nas({"auth.login_with_api_key": True})
+        with pytest.raises(api.TrueNASCertificateError, match=r"nothing proves .* is the NAS.*key was not sent"):
+            client(validate_certs=False)
+        assert fake.sockets == []
 
 
 class TestLogin:
@@ -312,6 +321,7 @@ def interface_nas(nas, commit, login=True, pending=(False, False), waiting=(None
 INTERFACE_ARGS = {
     "api_host": OLD,
     "api_key": "a-key",
+    "validate_certs": True,
     "interface": "eno1",
     "address": f"{NEW}/24",
     "gateway": GATEWAY,
@@ -384,6 +394,7 @@ GENERAL = {
 CONFIG_ARGS = {
     "api_host": NAS,
     "api_key": "a-key",
+    "validate_certs": True,
     "namespace": "system.general",
     "settings": {"ui_httpsredirect": True, "ui_certificate": 1},
 }
@@ -425,6 +436,7 @@ MAIL = {"outgoingserver": "smtp.example.org", "port": 587, "pass": PASSWORD, "id
 MAIL_ARGS = {
     "api_host": NAS,
     "api_key": "a-key",
+    "validate_certs": True,
     "namespace": "mail",
     "settings": {"outgoingserver": "smtp.example.org", "port": 587},
     "secret_settings": {"pass": "FAKE-ROTATED-PASSWORD"},
