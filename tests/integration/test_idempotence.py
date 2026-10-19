@@ -472,6 +472,11 @@ def pve_vars(tmp_path, settled=False, nas=True):
         (sources / name).write_text(("Enabled: false\n" if settled and enterprise else "") + text)
     if settled:
         (sources / "proxmox.sources").write_text(NO_SUBSCRIPTION)
+    # Mode 0644, as the installer leaves them and the role writes proxmox.sources, whatever this process's umask:
+    # under a user's 0002, a settled file would read 0664, and a run would report changing it.
+    for path in sources.iterdir():
+        path.chmod(0o644)
+    if settled:
         s = fake_pve.fresh_state()
         s["packages"]["installed"] = s["packages"]["lists"] = dict(s["packages"]["repository"])
         write(state, s)
