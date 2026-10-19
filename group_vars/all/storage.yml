@@ -15,19 +15,39 @@ nas_present: "{{ (truenas_static_address | default('', true) | trim | length > 0
 # misspelt address looks like, and it would otherwise pass for a setup without a NAS, so both playbooks
 # refuse to run (the first pre-task of truenas.yml and of proxmox.yml). A value left blank counts as unset,
 # so a section with every value blank still means no NAS. It also refuses nas_present given on the command
-# line, as in -e nas_present=false: that makes it the string "false", which counts as true.
+# line, as in -e nas_present=false: that makes it the string "false", which counts as true. With a NAS, it refuses
+# alert mail TrueNAS would refuse: a mail server without a sender address (truenas_mail_from, or truenas_mail_user
+# when that is an address), and an alert address without a mail server to send through.
 nas_section_error: >-
   {%- set given = {'truenas_api_cert_sha256': truenas_api_cert_sha256 | default(''),
                    'truenas_gateway': truenas_gateway | default(''),
                    'truenas_nameservers': truenas_nameservers | default(''),
                    'truenas_pool_disks': truenas_pool_disks | default(''),
                    'truenas_pool_persistent': truenas_pool_persistent | default(''),
-                   'truenas_pool_ephemeral': truenas_pool_ephemeral | default('')}
+                   'truenas_pool_ephemeral': truenas_pool_ephemeral | default(''),
+                   'truenas_mail_server': truenas_mail_server | default(''),
+                   'truenas_mail_port': truenas_mail_port | default(''),
+                   'truenas_mail_security': truenas_mail_security | default(''),
+                   'truenas_mail_user': truenas_mail_user | default(''),
+                   'truenas_mail_from': truenas_mail_from | default(''),
+                   'truenas_alert_email': truenas_alert_email | default('')}
                   | dict2items | selectattr('value') | map(attribute='key') | list -%}
+  {%- set sender = truenas_mail_from | default('', true) or truenas_mail_user | default('', true) -%}
+  {%- set mail = [] -%}
+  {%- if truenas_mail_server | default('', true) and (sender | string | trim) is not match('^[^@\\s]+@[^@\\s]+$') -%}
+  {%-   set _ = mail.append('group_vars/all/local.yml sets truenas_mail_server but no sender address: set '
+                            ~ 'truenas_mail_from, or truenas_mail_user when it is an address, since TrueNAS refuses '
+                            ~ 'mail settings without one.') -%}
+  {%- endif -%}
+  {%- if truenas_alert_email | default('', true) and not truenas_mail_server | default('', true) -%}
+  {%-   set _ = mail.append('group_vars/all/local.yml sets truenas_alert_email but no truenas_mail_server for the '
+                            ~ 'alerts to go through: set it, or remove the alert address.') -%}
+  {%- endif -%}
   {{ 'nas_present is worked out from the NAS addresses in group_vars/all/local.yml, not set: given with -e it '
      ~ 'is a string, which counts as true whatever it says. To run without a NAS, delete the TrueNAS section '
      ~ 'there or leave its values blank.' if nas_present is not boolean else
-     '' if nas_present or not given else
+     mail | join(' ') if nas_present else
+     '' if not given else
      'group_vars/all/local.yml sets ' ~ given | join(', ') ~ ' but neither truenas_static_address nor '
      ~ 'truenas_bootstrap_address, which usually means one of them is misspelt. Correct it, or delete the '
      ~ 'whole TrueNAS section to run without a NAS.' }}

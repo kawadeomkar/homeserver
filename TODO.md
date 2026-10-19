@@ -76,8 +76,9 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 - [ ] Decide whether to delete the TrueNAS CORE leftovers on the `ephemeral` pool: an orphaned snapshot of
       the media dataset and the old `.system` dataset. The role leaves both alone
 - [ ] Decide whether the NAS keeps IPv6 autoconfiguration (`truenas_ipv6_auto`)
-- [ ] Set up email alerts. Nothing is configured, so a degraded pool is silent. Needs SMTP credentials in
-      the vault
+- [ ] Give the NAS a mail server for its alerts: the `truenas_mail_*` settings and `truenas_alert_email` in
+      `local.yml` (`local.yml.example` lists them), and `vault_truenas_mail_password` in the vault. Until
+      then nothing is mailed, so a degraded pool shows only in the web UI
 - [ ] Decide which host, if any, mounts the `ephemeral/jellyfin` media dataset, then export it to that
       host only. Until then it stays unexported
 - [ ] Before upgrading the NAS to TrueNAS 26, replace the role's hand-written WebSocket client

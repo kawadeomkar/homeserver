@@ -45,6 +45,17 @@ truenas_pool_disks:
 # are called something else; the keys of truenas_pool_disks follow suit.
 # truenas_pool_persistent: tank
 # truenas_pool_ephemeral: scratch
+# Alert e-mail (a degraded pool, a pool filling up): the mail server the NAS
+# sends through, and where alerts go. Its password goes in the vault, as
+# vault_truenas_mail_password (make vault-edit). Without these, no mail is set.
+# With a server, a sender address is required: truenas_mail_from, or
+# truenas_mail_user when that is an address. An alert address needs a server.
+# truenas_mail_server: smtp.example.org
+# truenas_mail_port: 587
+# truenas_mail_security: TLS
+# truenas_mail_user: nas@example.org
+# truenas_mail_from: nas@example.org
+# truenas_alert_email: admin@example.org
 
 # ------------------------------------------------------------------ Proxmox ---
 # The Proxmox host: reached over root SSH, and the only host allowed to mount

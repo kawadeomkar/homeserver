@@ -36,6 +36,9 @@ RECAP = re.compile(r"^(\S+)\s+:\s+ok=(\d+)\s+changed=(\d+)\s+unreachable=(\d+)\s
 PLAYBOOK = str(Path(sys.executable).parent / "ansible-playbook")
 NAS_ADDRESS = "127.0.0.1"
 PROXMOX_ADDRESS = "127.0.0.20"
+# Sentinels that must never reach Ansible's output.
+MAIL_PASSWORD = "mail-password-sentinel-6c1f"
+ROTATED_MAIL_PASSWORD = "mail-password-sentinel-rotated-91ad"
 
 
 def free_port():
@@ -183,6 +186,10 @@ def nas_vars(nas):
         "truenas_ui_restart_wait": 0,
         "truenas_api_connect_wait": 5,
         "vm_storage_ephemeral_reservation": "100G",
+        "truenas_mail_server": "smtp.example.org",
+        "truenas_mail_user": "nas@example.org",
+        "truenas_alert_email": "admin@example.org",
+        "vault_truenas_mail_password": MAIL_PASSWORD,
     }
 
 
@@ -247,6 +254,21 @@ def test_truenas_role_is_idempotent(nas):
         "/mnt/persistent/proxmox/vm",
     ]
     assert all(sh["hosts"] == [PROXMOX_ADDRESS] and sh["maproot_user"] == "root" for sh in s["shares"])
+    # Snapshot tasks: the persistent VMs' disks hourly and daily, nothing on the ephemeral pool.
+    tasks = {(t["dataset"], t["naming_schema"].split("-")[0]): t for t in s["snapshot_tasks"]}
+    assert sorted(tasks) == sorted([("persistent/proxmox/vm", "hourly"), ("persistent/proxmox/vm", "daily")])
+    assert (
+        tasks[("persistent/proxmox/vm", "daily")]["lifetime_value"],
+        tasks[("persistent/proxmox/vm", "daily")]["lifetime_unit"],
+    ) == (7, "DAY")
+    assert {key: t["allow_empty"] for key, t in tasks.items()} == {key: key[1] != "hourly" for key in tasks}
+    # Alert mail, with the password from the vault.
+    assert (s["mail"]["outgoingserver"], s["mail"]["smtp"], s["mail"]["pass"]) == (
+        "smtp.example.org",
+        True,
+        MAIL_PASSWORD,
+    )
+    assert [(a["name"], a["attributes"]["email"]) for a in s["alert_services"]] == [("Email", "admin@example.org")]
     services = {sv["service"]: sv for sv in s["services"]}
     assert services["nfs"]["enable"] and services["nfs"]["state"] == "RUNNING"
     assert not services["ssh"]["enable"] and services["ssh"]["state"] == "STOPPED"
@@ -263,6 +285,8 @@ def test_truenas_role_is_idempotent(nas):
     s["scrubs"][0]["threshold"] = 7
     s["ntp"][0]["minpoll"] = 4
     s["network"]["nameserver1"] = "127.0.0.99"
+    s["snapshot_tasks"][0]["lifetime_value"] = 9
+    s["alert_services"][0]["level"] = "CRITICAL"
     write(nas["state"], s)
 
     result = run("truenas.yml", extra)
@@ -283,6 +307,13 @@ def test_truenas_role_is_idempotent(nas):
     assert all(t["threshold"] == 35 for t in s["scrubs"])
     assert all(n["minpoll"] == 6 for n in s["ntp"])
     assert s["network"]["nameserver1"] == "127.0.0.53"
+    assert s["snapshot_tasks"][0]["lifetime_value"] == 1 and s["alert_services"][0]["level"] == "WARNING"
+
+    # A new alert address in local.yml: alertservice.update takes the whole service, which the fake enforces.
+    moved = {**extra, "truenas_alert_email": "alerts@example.org"}
+    expect(run("truenas.yml", moved), "truenas", changed=1, note="a new alert address")
+    assert [a["attributes"]["email"] for a in read(nas["state"])["alert_services"]] == ["alerts@example.org"]
+    expect(run("truenas.yml", extra), "truenas", changed=1, note="the alert address back")
 
     # A reservation removed from the configuration is removed on the NAS too: it is sent as 0, none.
     unreserved = {**extra, "vm_storage_ephemeral_reservation": None}
@@ -291,9 +322,22 @@ def test_truenas_role_is_idempotent(nas):
     expect(run("truenas.yml", unreserved), "truenas", changed=0, note="the reservation removed, second run")
     expect(run("truenas.yml", extra), "truenas", changed=1, note="the reservation back")
 
+    # A rotated mail password reaches the NAS on the next run, as a change, and the run after changes nothing.
+    rotated = {**extra, "vault_truenas_mail_password": ROTATED_MAIL_PASSWORD}
+    result = run("truenas.yml", rotated, check=True)
+    outputs.append(result[2])
+    expect(result, "truenas", changed=1, note="dry run with a rotated mail password")
+    assert "<secret, changed>" in result[2], result[2][-3000:]
+    for n in (1, 2):
+        result = run("truenas.yml", rotated)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=1 if n == 1 else 0, note=f"run {n} with a rotated mail password")
+    assert read(nas["state"])["mail"]["pass"] == ROTATED_MAIL_PASSWORD
+
     for out in outputs:
         assert fake_truenas.PRIVATE_KEY not in out, "the UI certificate's private key reached Ansible output"
         assert fake_truenas.API_KEY not in out, "the API key reached Ansible output"
+        assert MAIL_PASSWORD not in out and ROTATED_MAIL_PASSWORD not in out, "the mail password reached Ansible output"
 
 
 def test_truenas_role_with_defaults_changes_nothing(nas):

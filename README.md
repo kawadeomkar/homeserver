@@ -66,10 +66,15 @@ make check-proxmox && make proxmox
 ```
 
 Each TrueNAS stage can be run on its own with `TAGS=truenas_network`, `truenas_pools`, `truenas_system`,
-`truenas_datasets`, `truenas_nfs` or `truenas_services`. Always run the check first: the idempotence tests use
+`truenas_datasets`, `truenas_snapshots`, `truenas_nfs`, `truenas_alerts` or `truenas_services`. Always run the check first: the idempotence tests use
 fakes, which cannot prove the real machines behave the same. Every `make proxmox` also refreshes the package lists
 and upgrades the Proxmox host, and says when an upgrade of the kernel, its firmware, the CPU's microcode or dbus waits for a reboot,
 which is then done by hand.
+
+Alert e-mail is optional: with `truenas_mail_server` and `truenas_alert_email` in `local.yml`, and the server's
+password in the vault as `vault_truenas_mail_password` (`make vault-edit`), the NAS mails its warnings, a
+degraded or filling pool among them. Send a test from the TrueNAS UI (Alerts → the e-mail service → Send Test
+Alert) after the first run. Changing the password in the vault is enough: the next run sends it.
 
 The roles are generic and change nothing by default; this setup's configuration is in `group_vars/`
 (`all/storage.yml`, `nas/truenas.yml`, `proxmox/apt.yml`, `proxmox/tailscale.yml`, `proxmox/storage.yml`), with

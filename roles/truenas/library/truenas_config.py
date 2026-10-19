@@ -10,6 +10,8 @@ description:
     C(systemdataset), C(network.configuration) and similar namespaces.
   - Only the managed fields are returned, never the whole configuration. Some configurations carry
     secrets (C(system.general.config) includes the UI certificate's private key).
+  - A field in O(secret_settings) is compared and sent like the others, but its value never appears in the
+    result, and Ansible masks it wherever else it would print it.
   - A field holding an object with an C(id), such as C(ui_certificate), is compared by that id.
 options:
   namespace:
@@ -26,6 +28,12 @@ options:
         O(settings) are sent even when they already match.
       - Used for C(systemdataset), whose C(pool) reads as C(boot-pool) even when no pool was ever
         chosen (C(pool_set) false), in which case TrueNAS moves it to the first data pool imported.
+    type: dict
+    default: {}
+  secret_settings:
+    description:
+      - Fields to set like O(settings) whose values are secrets, such as the mail server's C(pass). In the
+        returned C(config) and C(diff) each reads C(<secret>), or C(<secret, changed>) on the side that differs.
     type: dict
     default: {}
   update_options:
@@ -68,18 +76,29 @@ def normalised(config, keys):
     return out
 
 
+SECRET = "<secret>"
+CHANGED_SECRET = "<secret, changed>"
+
+
+def redacted(config, secrets):
+    """The configuration with each secret field's value replaced by a marker."""
+    return {key: (SECRET if key in secrets else value) for key, value in config.items()}
+
+
 def main():
     spec = api_argument_spec()
     spec.update(
         namespace=dict(type="str", required=True),
         settings=dict(type="dict", required=True),
+        secret_settings=dict(type="dict", default={}, no_log=True),
         match=dict(type="dict", default={}),
         update_options=dict(type="dict", default={}),
         job=dict(type="bool", default=False),
     )
     module = AnsibleModule(argument_spec=spec, supports_check_mode=True)
     namespace = module.params["namespace"]
-    settings = module.params["settings"]
+    secrets = module.params["secret_settings"]
+    settings = {**module.params["settings"], **secrets}
     match = module.params["match"]
     keys = list(dict.fromkeys([*settings, *match]))
 
@@ -89,10 +108,15 @@ def main():
             current = normalised(api.call(f"{namespace}.config"), keys)
             changes = differences(current, settings)
             mismatched = differences(current, match)
+            # A secret that differs shows as changed in the diff, never with its value.
+            changed_secrets = {key: CHANGED_SECRET for key in secrets if key in changes}
             result = {
                 "changed": bool(changes or mismatched),
-                "config": current,
-                "diff": {"before": current, "after": {**current, **settings, **match}},
+                "config": redacted(current, secrets),
+                "diff": {
+                    "before": redacted(current, secrets),
+                    "after": {**redacted({**current, **settings, **match}, secrets), **changed_secrets},
+                },
             }
             if not result["changed"] or module.check_mode:
                 module.exit_json(**result)
@@ -108,9 +132,9 @@ def main():
             if still:
                 module.fail_json(
                     msg=f"{namespace}.update was accepted but these fields did not take: {sorted(still)}",
-                    config=after,
+                    config=redacted(after, secrets),
                 )
-            result["config"] = after
+            result["config"] = redacted(after, secrets)
         except TrueNASError as exc:
             module.fail_json(msg=str(exc))
     module.exit_json(**result)

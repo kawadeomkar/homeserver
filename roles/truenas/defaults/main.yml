@@ -75,6 +75,12 @@ truenas_ntp_server_defaults: {}
 # create_ancestors, allow_acl_change. Listed parents first. None is ever deleted.
 truenas_datasets: []
 
+# ------------------------------------------------------------------- snapshots ---
+# Periodic snapshot tasks, each with dataset and naming_schema (which identify it) and the fields of
+# pool.snapshottask.create: lifetime_value, lifetime_unit, schedule, recursive, allow_empty, enabled. None is ever
+# deleted.
+truenas_snapshot_tasks: []
+
 # ------------------------------------------------------------------------- NFS ---
 # Fields for nfs.update, e.g. {protocols: [NFSV3, NFSV4]}.
 truenas_nfs_settings: {}
@@ -83,6 +89,16 @@ truenas_nfs_settings: {}
 truenas_nfs_shares: []
 # Fields laid under every share; a share's own value wins.
 truenas_nfs_share_defaults: {}
+
+# ---------------------------------------------------------------------- alerts ---
+# Fields for mail.update, e.g. {outgoingserver: smtp.example.org, port: 587, security: TLS, smtp: true,
+# user: nas, fromemail: nas@example.org}; empty leaves the mail settings alone.
+truenas_mail: {}
+# The mail server's password, sent as mail.update's pass: compared on every run, never printed.
+truenas_mail_password: ""
+# Alert services, each with name (which identifies it) and the fields of alertservice.create: attributes
+# ({type: Mail, email: ...}), level, enabled. None is ever deleted.
+truenas_alert_services: []
 
 # -------------------------------------------------------------------- services ---
 # Service name -> {enabled: bool, state: started|stopped}. Applied last, after the shares exist.
