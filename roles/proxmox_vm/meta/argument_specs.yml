@@ -1,0 +1,48 @@
+---
+argument_specs:
+  main:
+    short_description: Create Proxmox VE VMs and keep the settings it manages as configured
+    description:
+      - Downloads the ISOs of proxmox_vm_isos, creates each VM of proxmox_vm_vms with qm, every option given, and
+        on later runs corrects its cores, memory, CPU type, ballooning, start-on-boot, startup order, watchdog,
+        agent, tags, PCI devices and CD-ROM, adds a configured disk it lacks and grows a disk configured larger.
+        Starts a stopped VM marked start.
+      - Never moves, shrinks or detaches a disk, never deletes a VM or an ISO, and never restarts a VM; a setting
+        that waits for a restart is reported.
+      - Refuses a VMID that belongs to another VM, a missing VM whose VMID still has disks or backups, a disk
+        storage that does not exist or holds no images, and disks whose provisioned sizes would add up to more
+        than a thin LVM or ZFS storage holds. Warns when the VMs' memory would exceed the node's.
+      - The defaults change nothing.
+    options:
+      proxmox_vm_vms:
+        type: list
+        elements: dict
+        default: []
+        description: >-
+          VMs, each with vmid, name, cores, memory_mib, disks ({slot, storage, size_gib, serial, format, backup})
+          and net ({bridge, mac}); optional machine, bios, efidisk_storage, cpu, scsihw, iso, boot, watchdog,
+          onboot, startup, tags, hostpci and start.
+      proxmox_vm_isos:
+        type: list
+        elements: dict
+        default: []
+        description: >-
+          ISOs to download, each with storage, filename, url and sha256 (the file's SHA-256, which Proxmox checks
+          before keeping the download). Never deleted.
+      proxmox_vm_pending_storages:
+        type: list
+        elements: str
+        default: []
+        description: Storage ids an earlier role creates on a real run; reported as pending in check mode.
+      proxmox_vm_allow_overcommit:
+        type: bool
+        default: false
+        description: Let the disks on a thin LVM or ZFS storage add up to more than it holds.
+      proxmox_vm_ignore_existing_volumes:
+        type: bool
+        default: false
+        description: Create a missing VM even though its VMID still has disks or backups.
+      proxmox_vm_node:
+        type: str
+        default: ""
+        description: The node's name in Proxmox. Empty means the host's short hostname.
