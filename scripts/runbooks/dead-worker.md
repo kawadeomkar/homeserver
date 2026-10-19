@@ -67,3 +67,19 @@ scheduled, Flux stops, and `kubectl` does not answer: use the Proxmox console an
   and so does every Kubernetes object: a claim made since is gone, and Flux re-creates it on a new, empty
   directory while the data written since sits orphaned on the worker's data volume. Compare `kubectl get pvc -A`
   with what the apps hold afterwards.
+- **If only etcd is lost**, restore it from a snapshot. The snapshot's age is the point every Kubernetes object
+  goes back to: a claim made since is gone, and Flux re-creates it on a new, empty directory while the data
+  written since sits orphaned on the worker's data volume. Snapshots come only from `make etcd-snapshot` and from
+  the start of every `make talos-upgrade`, so take one before any risky change, or run `make etcd-snapshot` on a
+  schedule from the workstation (cron or launchd). Talos recovers etcd only on a node whose etcd waits to be
+  bootstrapped (`Preparing`), so wipe etcd's partition alone first:
+
+  ```bash
+  ls -t ~/.talos/homeserver/etcd/ | head -1                  # the newest snapshot, and its date
+  talosctl reset -n <control plane address> --graceful=false --reboot --system-labels-to-wipe=EPHEMERAL
+  talosctl service etcd -n <control plane address>           # wait for STATE Preparing
+  talosctl bootstrap -n <control plane address> --recover-from="$HOME/.talos/homeserver/etcd/<that file>"
+  ```
+
+  Never any other `--system-labels-to-wipe` or `--wipe-mode`. `--recover-from` alone, on a node whose etcd is
+  running or failing, is refused. This path is not yet tried on a real host; try it on a test host first.

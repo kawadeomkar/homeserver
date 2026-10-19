@@ -1,0 +1,30 @@
+---
+# One node's Talos upgrade, then the cluster's health, before upgrade.yml moves on to the next node: a node that
+# comes back broken stops the run with the rest of the cluster still up. Takes item, an entry of talos_upgrades.
+
+- name: upgrade-node | Upgrade Talos on the node
+  ansible.builtin.command:
+    argv:
+      - talosctl
+      - --talosconfig
+      - "{{ talos_workspace }}/talosconfig"
+      - -e
+      - "{{ talos_controlplane.address }}"
+      - -n
+      - "{{ item.address }}"
+      - upgrade
+      - --image
+      - "{{ item.image }}"
+      - --progress
+      - plain
+  changed_when: true
+
+- name: upgrade-node | Wait for the cluster to be healthy before the next node
+  ansible.builtin.command:
+    argv: >-
+      {{ ['talosctl', '--talosconfig', talos_workspace ~ '/talosconfig', '-e', talos_controlplane.address,
+          '-n', talos_controlplane.address, 'health', '--wait-timeout', talos_health_timeout,
+          '--control-plane-nodes', talos_controlplane.address]
+         + (['--worker-nodes', talos_workers | map(attribute='address') | join(',')] if talos_workers else []) }}
+  changed_when: false
+  when: not ansible_check_mode

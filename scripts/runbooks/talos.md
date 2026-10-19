@@ -1,8 +1,8 @@
-# Talos: building and using the cluster
+# Talos: building, using and upgrading the cluster
 
 The cluster is built by `make kubernetes` (`kubernetes.yml`): the VMs on the Proxmox host (`roles/proxmox_vm`),
 then Talos on them from this machine (`roles/talos`). It never reboots a node and never moves one to another
-version. Addresses and MACs live only in `group_vars/all/local.yml`.
+version; `make talos-upgrade` does that. Addresses and MACs live only in `group_vars/all/local.yml`.
 
 ## Before the first build
 
@@ -52,7 +52,7 @@ kubectl get nodes
 **Back up `~/.talos/homeserver`** in the password manager. Besides the secrets bundle,
 talosconfig and kubeconfig it holds `bootstrapped`, which is how the role tells a first build from a cluster that lost its etcd: with it and no
 running etcd, a run refuses to bootstrap again, which would make a new, empty cluster. On a new workstation,
-restore that directory before the first run.
+restore that directory before the first run. `etcd/` holds the etcd snapshots.
 
 Both client certificates are valid for a year; every run renews one that expires within 30 days.
 
@@ -93,6 +93,30 @@ run with `ANSIBLE_ARGS='-e talos_keep_rendered=true'`, which keeps each node's r
 them), then
 `talosctl apply-config -n <address> -f ~/.talos/homeserver/rendered/<node>.yaml --dry-run`.
 
+## Upgrades
+
+1. Bump the pins together in `group_vars/all/kubernetes.yml` (`talos_version`, `talos_contract`,
+   `talos_kubernetes_version`), the Makefile's `KUBERNETES_VERSION` and CI's `TALOSCTL_VERSION` and
+   `TALOSCTL_SHA256`, and upgrade the workstation's `talosctl`. Move to adjacent minor releases only, the latest
+   patch of each. With them, what the Image Factory must serve for the new version, since it publishes no checksum:
+   `kubernetes_iso_sha256` (`sha256sum` of the new ISO, downloaded from the URL `proxmox_vm_isos` names) and a
+   `talos_installer_digests` entry for each schematic at the new version (`crane digest
+   factory.talos.dev/metal-installer/<schematic id>:<version>`), keeping the old version's entries until every
+   node has moved, since a node is rendered with what it runs. The schematic ids stay, unless a schematic changed.
+2. `make kubernetes` between the bump and the upgrade changes nothing on the nodes: it renders each node with what
+   it runs, and reports the pending upgrade. It also downloads the new ISO, which nodes built later boot.
+3. `make check-talos-upgrade`: the plan per node, and Kubernetes's own upgrade dry run, deprecated APIs included.
+   Read it.
+4. `make talos-upgrade`: an etcd snapshot, each node's upgrade, control plane first (drained, then rebooted into
+   the new release), each followed by a wait for the whole cluster's health before the next node goes down, then
+   `talosctl upgrade-k8s`, which also updates kube-proxy and CoreDNS. With one node of each kind, both upgrades take
+   something down for a few minutes: the control plane's, the Kubernetes API (the apps keep running, but nothing
+   is scheduled or changed); the worker's, every app, since draining it leaves them nowhere to go. Choose a quiet
+   time.
+5. `make kubernetes`: a dry run after the upgrade shows no change.
+
+`make etcd-snapshot` takes a snapshot on its own.
+
 ## The watchdog
 
 Every VM has Proxmox's `i6300esb` watchdog, which resets a VM whose Talos stops feeding it for two minutes
@@ -105,6 +129,14 @@ talosctl -n <address> get watchdogtimerstatus                         # timeout 
 
 If `watchdog0` is the q35 chipset's `iTCO_wdt` instead, point `WatchdogTimerConfig.device` at the i6300ESB's
 device in `group_vars/kubernetes/talos.yml`.
+
+## Restoring etcd
+
+From a VM backup, preferably: `scripts/runbooks/vm-restore.md`. From a snapshot in `~/.talos/homeserver/etcd/`:
+`talosctl bootstrap --recover-from=<file>` on a control plane whose etcd waits to be bootstrapped (`Preparing`),
+installed and configured, as after a reinstall; on a running node, wipe etcd's partition alone first, as
+`scripts/runbooks/dead-worker.md` says, which also warns that the snapshot's age is the point every Kubernetes
+object goes back to. Snapshots come only from `make etcd-snapshot` and the start of every `make talos-upgrade`.
 
 ## The ISO
 

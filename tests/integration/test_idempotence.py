@@ -1651,7 +1651,7 @@ def test_talos_with_a_nas(tmp_path, factory):
     expect(result, "homeserver-k8s", changed=0, note="second run after drift on the control plane")
     assert "service etcd restart" not in result[2]
 
-    # A pin bump: nothing is applied or upgraded, and the run says what is pinned but not yet running.
+    # A pin bump: nothing is applied or upgraded, and the run says what waits for make talos-upgrade.
     before = read(state)
     bumped = extra | {"talos_version": "v1.14.3", "talos_kubernetes_version": "1.37.2"}
     result = run("talos.yml", bumped, env=env)
@@ -1659,8 +1659,7 @@ def test_talos_with_a_nas(tmp_path, factory):
     expect(result, "homeserver-k8s", changed=0, note="run with bumped pins")
     after = read(state)
     assert after["nodes"] == before["nodes"] and after.get("upgrades") is None and after["k8s_version"] == "1.37.1"
-    assert "pinned, not yet running" in result[2], result[2][-3000:]
-    assert "homeserver-worker-1: Talos v1.14.3" in result[2]
+    assert "make talos-upgrade" in result[2] and "homeserver-worker-1: Talos v1.14.3" in result[2], result[2][-3000:]
     assert "kubernetes: 1.37.2" in result[2]
     no_talos_secret(outputs)
 
@@ -1973,3 +1972,53 @@ def test_talos_renews_expiring_credentials(tmp_path, factory):
     assert all(new[name] != old[name] for name in old), "not both renewed"
     expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=0, note="after the renewal")
     assert {name: (home / name).read_bytes() for name in old} == new
+
+
+@pytest.mark.cluster
+def test_talos_upgrade_and_etcd_snapshot(tmp_path, factory):
+    """make check-talos-upgrade changes nothing and shows the plan; make talos-upgrade snapshots etcd first, upgrades
+    the control plane before the worker, then Kubernetes, and has nothing left to do the second time. make
+    etcd-snapshot writes a snapshot and nothing else."""
+    extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    talos_state(state)
+    expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="build")
+
+    # A snapshot needs the control plane alone: here the worker is down and the Image Factory unreachable.
+    s = read(state)
+    worker = s["nodes"]["127.0.0.31"]
+    s["nodes"]["127.0.0.31"] = {"mode": "absent"}
+    write(state, s)
+    before = read(state)
+    started = time.monotonic()
+    snapshot = extra | {"talos_entry": "etcd-snapshot", "talos_image_factory_url": "http://127.0.0.1:9"}
+    result = run("talos_upgrade.yml", snapshot | {"talos_probe_delay": 60}, env=env)
+    expect(result, "homeserver-k8s", changed=True, note="etcd snapshot")
+    assert time.monotonic() - started < 50, "the snapshot waited for the worker"
+    after = read(state)
+    assert (
+        len(after["snapshots"]) == 1 and Path(after["snapshots"][0]).parent == Path(extra["talos_config_dir"]) / "etcd"
+    )
+    assert after["nodes"] == before["nodes"] and after["mutations"] == before["mutations"]
+    after["nodes"]["127.0.0.31"] = worker
+    write(state, after)
+
+    bumped = extra | {"talos_version": "v1.14.3", "talos_kubernetes_version": "1.37.2"}
+    result = run("talos_upgrade.yml", bumped, check=True, env=env)
+    expect(result, "homeserver-k8s", changed=True, note="check-talos-upgrade")
+    assert "Talos v1.14.2 -> v1.14.3" in result[2] and "1.37.1 -> 1.37.2" in result[2], result[2][-3000:]
+    assert "no deprecated APIs found" in result[2] and read(state)["mutations"] == after["mutations"]
+    assert not read(state).get("pre_pulls"), "the dry run pulled images onto the nodes"
+
+    result = run("talos_upgrade.yml", bumped, env=env)
+    expect(result, "homeserver-k8s", changed=True, note="talos-upgrade")
+    s = read(state)
+    assert s["upgrades"] == ["127.0.0.30", "127.0.0.31"], "the control plane was not upgraded first"
+    assert len(s["snapshots"]) == 2 and s["k8s_version"] == "1.37.2"
+    assert all(n["version"] == "v1.14.3" for n in s["nodes"].values())
+    result = run("talos_upgrade.yml", bumped, env=env)
+    expect(result, "homeserver-k8s", changed=0, note="talos-upgrade again")
+    assert len(read(state)["snapshots"]) == 2
+
+    # After the upgrade, a normal run renders with the versions now running: no drift.
+    expect(run("talos.yml", bumped, check=True, env=env), "homeserver-k8s", changed=0, note="dry run after upgrading")

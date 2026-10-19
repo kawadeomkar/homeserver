@@ -14,7 +14,7 @@ State is a JSON file named by $FAKE_TALOS_STATE:
   except those named in `volumes_missing`, which wait, as a volume whose disk selector matches nothing does.
   Applying a configuration (no-reboot, or auto, which Talos 1.14 makes no-reboot) always succeeds, as it does in
   Talos 1.14, unless the state's `apply_fails` holds an error to answer with.
-- `bootstrapped` (etcd running), `k8s_version`, `mutations`, and the failure switch
+- `bootstrapped` (etcd running), `k8s_version`, `snapshots`, `pre_pulls`, `mutations`, and the failure switch
   `bootstrap_precondition_count` (bootstrap answers FailedPrecondition that many times first).
 
 Written from talosctl v1.14.2's flags and output and the Talos documentation, not from a node: `version` prints the
@@ -487,6 +487,59 @@ def cmd_gen(state, globals_, args):
     Path(output).write_text("\n".join(lines) + "\n")
 
 
+def cmd_etcd(state, globals_, args):
+    if args[:1] != ["snapshot"] or len(args) < 2:
+        fail(f"the fake knows etcd snapshot <path> only: {args}")
+    flags, positional = parse(globals_ + args[1:], set(), set())
+    address, node = target(state, flags)
+    reach(state, address, node, flags, False)
+    if not state.get("bootstrapped"):
+        fail("rpc error: code = Unavailable desc = etcd is not running")
+    Path(positional[0]).write_text("fake etcd snapshot\n")
+    state.setdefault("snapshots", []).append(positional[0])
+
+
+def cmd_upgrade(state, globals_, args):
+    flags, _ = parse(globals_ + args, {"--image", "-i", "--progress"}, set())
+    address, node = target(state, flags)
+    reach(state, address, node, flags, False)
+    image = one(flags, "--image", "-i")
+    tagged = image.split("@")[0]  # a pinned digest says nothing of the version
+    node.update(version=tagged.rsplit(":", 1)[1], schematic=tagged.rsplit("/", 1)[1].split(":")[0])
+    # Talos records the new installer image in the node's configuration.
+    reconfigure(node, "install-image", image)
+    state.setdefault("upgrades", []).append(address)
+    mutated(state)
+
+
+def reconfigure(node, field, value):
+    """A node's stored configuration with one of the rendered inputs changed, as an upgrade changes it."""
+    text = re.sub(rf"^# {field}: .*$", f"# {field}: {value}", node.get("config", ""), flags=re.MULTILINE)
+    node.update(config=text, config_sha256=hashlib.sha256(text.encode()).hexdigest())
+
+
+def cmd_upgrade_k8s(state, globals_, args):
+    flags, _ = parse(globals_ + args, {"--to", "--endpoint", "--pre-pull-images"}, {"--dry-run"})
+    address, node = target(state, flags)
+    reach(state, address, node, flags, False)
+    to = one(flags, "--to")
+    # As talosctl 1.14.2 does: the images are pulled onto the nodes first, dry run or not, unless told otherwise.
+    if one(flags, "--pre-pull-images") not in ("false",):
+        state["pre_pulls"] = state.get("pre_pulls", 0) + 1
+    if "--dry-run" in flags:
+        print(
+            f"automatically detected the lowest Kubernetes version {state.get('k8s_version')}\n"
+            f"checking for removed Kubernetes component flags\nupgrading to {to} (dry run): no deprecated APIs found"
+        )
+        return
+    state["k8s_version"] = to
+    # upgrade-k8s updates every node's configuration to the new version.
+    for each in state.get("nodes", {}).values():
+        if each.get("mode") == "configured":
+            reconfigure(each, "kubernetes-version", to)
+    mutated(state)
+
+
 COMMANDS = {
     "version": cmd_version,
     "get": cmd_get,
@@ -497,6 +550,9 @@ COMMANDS = {
     "kubeconfig": cmd_kubeconfig,
     "config": cmd_config,
     "gen": cmd_gen,
+    "etcd": cmd_etcd,
+    "upgrade": cmd_upgrade,
+    "upgrade-k8s": cmd_upgrade_k8s,
 }
 
 

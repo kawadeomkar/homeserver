@@ -292,6 +292,7 @@ def test_inventory_without_the_nas_host(tmp_path):
     assert out.count("Validating arguments against arg spec 'main'") == 5, out[-3000:]
 
 
+@pytest.mark.parametrize("playbook", ["site.yml", "talos-upgrade.yml", "etcd-snapshot.yml"])
 @pytest.mark.parametrize(
     ("local_yml", "extra", "refused"),
     [
@@ -299,17 +300,35 @@ def test_inventory_without_the_nas_host(tmp_path):
         pytest.param(PROXMOX_ONLY_CLUSTER_LOCAL_YML, CLUSTER_ARGS, True, id="cluster"),
     ],
 )
-def test_inventory_without_the_kubernetes_group(tmp_path, local_yml, extra, refused):
+def test_inventory_without_the_kubernetes_group(tmp_path, playbook, local_yml, extra, refused):
     """An inventory made before the cluster has no kubernetes group. Without a cluster it still works; with one the
-    run is refused before any VM is made, rather than creating the VMs and matching no host to build Talos on."""
+    run is refused before any VM is made, rather than creating the VMs and matching no host to build Talos on, and
+    an upgrade or a snapshot is refused rather than matching no host and ending without a word."""
     tree = example_tree(tmp_path, local_yml)
     inventory = tree / "inventory.example"
     inventory.write_text(re.sub(r"(?ms)^# The Kubernetes cluster.*\Z", "", inventory.read_text()))
     assert "kubernetes" not in inventory.read_text()
-    rc, out = argspec_pass(tree, "site.yml", *extra)
+    rc, out = argspec_pass(tree, playbook, *extra)
     assert (rc != 0) == refused, out[-3000:]
     if refused:
         assert "add [kubernetes] and homeserver-k8s to" in out and "TASK [proxmox_vm" not in out, out[-3000:]
+
+
+@pytest.mark.parametrize("playbook", ["talos-upgrade.yml", "etcd-snapshot.yml"])
+@pytest.mark.parametrize(
+    ("local_yml", "extra", "skipped"),
+    [
+        pytest.param(None, CLUSTER_ARGS, False, id="nas-cluster"),
+        pytest.param(PROXMOX_ONLY_CLUSTER_LOCAL_YML, CLUSTER_ARGS, False, id="proxmox-only-cluster"),
+        pytest.param(EXAMPLE_LOCAL_YML, (), True, id="no-cluster"),
+    ],
+)
+def test_cluster_playbooks_pass_their_checks(tmp_path, playbook, local_yml, extra, skipped):
+    """The upgrade and snapshot playbooks check the same settings as kubernetes.yml, and pass them in each setup;
+    without a cluster they say so and end."""
+    rc, out = argspec_pass(example_tree(tmp_path, local_yml), playbook, *extra)
+    assert rc == 0, out[-3000:]
+    assert ("so this setup has no cluster" in out) == skipped, out[-3000:]
 
 
 @pytest.mark.parametrize("playbook", ["site.yml", "proxmox.yml"])

@@ -1,7 +1,7 @@
 ---
 # Builds the cluster from the controller with talosctl: installs Talos on nodes in maintenance mode, keeps a
 # configured node's configuration, bootstraps etcd once, and writes talosconfig and kubeconfig to
-# talos_config_dir. Never reboots a node and never moves one to another version.
+# talos_config_dir. Never reboots a node and never moves one to another version: upgrade.yml does that.
 
 - name: Check the role's inputs
   ansible.builtin.import_tasks: validate.yml
@@ -51,7 +51,7 @@
     # ------------------------------------------------------------------------------------------ render ---
     # A node in maintenance mode gets the pins. A configured node gets what it runs: its own Talos release, the
     # contract of that release, the schematic it booted, and the cluster's running Kubernetes version, so a pin
-    # bump never changes a running node here. Without the Kubernetes version (no
+    # bump never changes a running node here; only upgrade.yml moves versions. Without the Kubernetes version (no
     # kubeconfig yet on this workstation) a configured node is not rendered this run.
     - name: Work out what to render for each node
       ansible.builtin.set_fact:
@@ -389,7 +389,8 @@
     - name: Report the versions running, and any upgrade the pins wait for
       ansible.builtin.debug:
         msg: >-
-          {{ {'running': _running} | combine({'pinned, not yet running': _pending} if _pending else {})
+          {{ {'running': _running} | combine({'pinned, not yet running (make talos-upgrade moves them)': _pending}
+                                             if _pending else {})
              | combine({'applied to the control plane: etcd reads its settings only when it starts, so after a change '
                         ~ 'to cluster.etcd, restart it': 'talosctl -n ' ~ talos_controlplane.address ~ ' service etcd restart'}
                        if _etcd else {}) }}

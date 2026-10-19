@@ -154,8 +154,8 @@ backup, and the worker's media disk, never backed up, is lost. The order is fixe
 
 Prerequisites, before `make kubernetes`: `~/.talos/homeserver` restored with its `secrets.yaml` (section 1; without
 the bundle the cluster cannot be managed and is rebuilt), the
-MACs' DHCP reservations, and the inventory's `[kubernetes]` group. `scripts/runbooks/talos.md` covers building
-and the watchdog; a worker that stays down is `scripts/runbooks/dead-worker.md`.
+MACs' DHCP reservations, and the inventory's `[kubernetes]` group. `scripts/runbooks/talos.md` covers building,
+upgrading and the watchdog; a worker that stays down is `scripts/runbooks/dead-worker.md`.
 
 ## Known limits
 

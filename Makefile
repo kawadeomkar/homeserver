@@ -224,8 +224,20 @@ check-kubernetes: ## Dry-run the Kubernetes cluster: its VMs, then Talos
 	$(RUN) kubernetes.yml --check --diff $(TAG_ARGS) $(ANSIBLE_ARGS)
 
 .PHONY: kubernetes
-kubernetes: ## Build or correct the Kubernetes cluster: its VMs, then Talos (needs proxmox first)
+kubernetes: ## Build or correct the Kubernetes cluster: its VMs, then Talos (needs proxmox first; never upgrades)
 	$(RUN) kubernetes.yml --diff $(TAG_ARGS) $(ANSIBLE_ARGS)
+
+.PHONY: check-talos-upgrade
+check-talos-upgrade: ## Show what talos-upgrade would move, with Kubernetes's own upgrade dry run
+	$(RUN) talos-upgrade.yml --check --diff $(ANSIBLE_ARGS)
+
+.PHONY: talos-upgrade
+talos-upgrade: ## Move the running cluster to the pinned Talos and Kubernetes versions (etcd snapshot first)
+	$(RUN) talos-upgrade.yml --diff $(ANSIBLE_ARGS)
+
+.PHONY: etcd-snapshot
+etcd-snapshot: ## Snapshot etcd into ~/.talos/homeserver/etcd/
+	$(RUN) etcd-snapshot.yml $(ANSIBLE_ARGS)
 
 .PHONY: check
 check: ## Dry-run everything
