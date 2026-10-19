@@ -130,6 +130,8 @@ def nas(tmp_path_factory):
         .split("=", 1)[1]
     )
     calls = Path(os.environ.get("FAKE_TRUENAS_CALL_LOG") or work / "calls.jsonl")
+    # Run in parallel, each worker starts its own fake NAS, so a test may read the log before any call.
+    calls.touch()
     port = free_port()
     log = (work / "fake.log").open("w")
     proc = subprocess.Popen(

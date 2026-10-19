@@ -23,6 +23,8 @@ dev = [
     "pytest==9.1.1",
     # Coverage of the in-process tests in `make test`: a report, not a gate (.coveragerc).
     "pytest-cov==7.1.0",
+    # Runs the idempotence tests in parallel (`make test-idempotence`): each role run is a separate ansible-playbook.
+    "pytest-xdist==3.8.0",
     # Lints and formats the Python, configured in ruff.toml.
     "ruff==0.16.9",
     # Used by tests/integration/fake_truenas.py, the stand-in NAS for the idempotence tests.
