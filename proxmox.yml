@@ -4,8 +4,10 @@
 # remote access, then its VM-disk storage, then the nightly backup of its VMs. Tailscale comes before the storage,
 # so remote access never waits on a storage the run refuses. With a NAS, its NFS shares are added as storage: run
 # truenas.yml first, so the shares exist and are exported to this host. Without one (no NAS address in
-# group_vars/all/local.yml), the installer's own storage is checked to hold VM disks. A TrueNAS section that keeps
-# other settings but gives no address stops the play, as in truenas.yml.
+# group_vars/all/local.yml), the installer's own storage is checked to hold VM disks, as it is with a NAS when there
+# is a cluster, whose system disks go there. A TrueNAS section that keeps other settings but gives no address stops
+# the play, as in truenas.yml, and so does an incomplete Kubernetes section, since the backup covers the cluster's
+# VMs.
 - name: Configure the Proxmox host's packages and VM storage
   hosts: proxmox
   gather_facts: false
@@ -14,6 +16,12 @@
       ansible.builtin.assert:
         that: nas_section_error | length == 0
         fail_msg: "{{ nas_section_error }}"
+        quiet: true
+      tags: [always]
+    - name: Refuse an incomplete Kubernetes section
+      ansible.builtin.assert:
+        that: kubernetes_settings_error | length == 0
+        fail_msg: "{{ kubernetes_settings_error | join(' ') }}"
         quiet: true
       tags: [always]
   roles:

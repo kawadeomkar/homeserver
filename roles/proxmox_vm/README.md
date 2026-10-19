@@ -30,11 +30,16 @@ its size, property strings in any order, numbers as text), so every setting is c
   - a missing VM while a storage is enabled but not active (an unplugged USB disk, an unreachable NAS), which could
     hold its old disks or backups unseen; `proxmox_vm_ignore_existing_volumes` lifts this too;
   - a disk storage that does not exist, is disabled or holds no images (in check mode, one listed in
-    `proxmox_vm_pending_storages` is reported as pending instead);
-  - **the disk budget**: on thin LVM and ZFS, the provisioned sizes of every disk on the storage, other VMs' and
+    `proxmox_vm_pending_storages` is reported as pending instead, with `proxmox_vm_pending_storages_hint`, which a real
+    run that finds one missing repeats);
+  - **the disk budget**: on thin LVM, ZFS, a directory or BTRFS, the provisioned sizes of every disk on the storage, other VMs' and
     containers' included, plus what this run adds, may not exceed the storage's size. It is counted from what is
-    provisioned, never from what is free, so the answer is the same on every run. `proxmox_vm_allow_overcommit`
-    lifts it;
+    provisioned, never from what is free. A thin pool's size is its own, so on thin LVM the answer is the same on
+    every run. A ZFS storage's size is its dataset's use plus the pool's free space, which the host's own datasets
+    share (on a ZFS install, the root filesystem): it shrinks as they grow. A directory or BTRFS storage's size is its
+    filesystem's, which the host's own files share the same way. `proxmox_vm_host_headroom_gib` keeps that much of
+    such a storage out of the budget, and a plan that passed can still be refused later. An NFS storage is not
+    budgeted: cap it where it lives, such as with a quota on the NAS. `proxmox_vm_allow_overcommit` lifts it;
   - a disk configured smaller than it is, on another storage than it is, or a disk slot the configuration no
     longer lists.
 - **Warns** when the running VMs' memory plus the VMs it would start exceed the node's memory less 2 GiB.
@@ -48,7 +53,9 @@ A download's own task status is checked: `pvesh` can exit 0 for a download that 
 | `proxmox_vm_vms` | `[]` | VMs (below) |
 | `proxmox_vm_isos` | `[]` | ISOs to download: `storage`, `filename`, `url`, and `sha256`, the file's SHA-256, which Proxmox checks before keeping the download |
 | `proxmox_vm_pending_storages` | `[]` | Storage ids an earlier role adds on a real run; pending in check mode |
-| `proxmox_vm_allow_overcommit` | `false` | Let the disks on thin LVM or ZFS add up to more than it holds |
+| `proxmox_vm_pending_storages_hint` | `""` | What adds them, such as the play to run first: shown in check mode and when one is missing |
+| `proxmox_vm_allow_overcommit` | `false` | Let the disks on thin LVM, ZFS, a directory or BTRFS add up to more than it holds |
+| `proxmox_vm_host_headroom_gib` | `0` | GiB of a ZFS, directory or BTRFS storage kept out of the disk budget, for the host's own files |
 | `proxmox_vm_ignore_existing_volumes` | `false` | Create a missing VM over its VMID's old disks or backups |
 | `proxmox_vm_node` | `""` | Node name; empty means the host's short hostname |
 

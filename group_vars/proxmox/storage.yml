@@ -8,13 +8,23 @@
 proxmox_storage_nfs_server: "{{ nas_address }}"
 # With a NAS, its shares, one per VM class and per project pool; without one, nothing to add.
 proxmox_storage_nfs: "{{ vm_storage_nfs_exports if nas_present else [] }}"
-# Without a NAS, the installer's storage, which is then the ephemeral class and the only one, must be able to
-# hold VM disks: local-lvm, or proxmox_local_vm_storage from local.yml (see group_vars/all/storage.yml). That
-# is the variable to change when the role refuses the storage.
-proxmox_storage_local: "{{ [] if nas_present else [vm_storage.ephemeral.proxmox_id] }}"
+# The installer's storage must be able to hold VM disks without a NAS, when it is the ephemeral class and the only
+# one, and with a cluster in either setup, since the cluster's system disks go on it: local-lvm, or
+# proxmox_local_vm_storage from local.yml (vm_storage_installer, group_vars/all/storage.yml). That is the variable
+# to change when the role refuses the storage.
+proxmox_storage_local: "{{ [vm_storage_installer] if not nas_present or kubernetes_present else [] }}"
 # Pinned so an upgrade on either side cannot silently change the protocol version. nconnect is
 # left out until it has been measured.
 proxmox_storage_nfs_options: vers=4.2
-# The NAS boots more slowly than Proxmox; VMs marked start-on-boot wait this long after a power cut.
-# Without a NAS there is nothing to wait for, and the node's setting is left alone.
+# The NAS boots more slowly than Proxmox; VMs marked start-on-boot wait this long after a power cut, then until
+# each of the NAS's storages that holds VM disks is active, for at most ten minutes more: Proxmox tries each start
+# once, and a VM whose disk is on a storage that is not active fails to start. Without a NAS there is nothing to
+# wait for: the node's delay is left alone, and the wait's drop-in removed.
 proxmox_storage_startall_delay: "{{ 120 if nas_present else none }}"
+proxmox_storage_startall_wait: >-
+  {%- set out = [] -%}
+  {%- for s in proxmox_storage_nfs if 'images' in s.content | default(['images']) -%}
+  {%-   set _ = out.append(s.id) -%}
+  {%- endfor -%}
+  {{ out }}
+proxmox_storage_startall_wait_timeout: 600

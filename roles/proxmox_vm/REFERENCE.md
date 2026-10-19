@@ -21,7 +21,7 @@ Description: Create Proxmox VE VMs and keep the settings it manages as configure
 **Description**: 
 - Downloads the ISOs of proxmox_vm_isos, creates each VM of proxmox_vm_vms with qm, every option given, and on later runs corrects its cores, memory, CPU type, ballooning, start-on-boot, startup order, watchdog, agent, tags, PCI devices and CD-ROM, adds a configured disk it lacks and grows a disk configured larger. Starts a stopped VM marked start.
 - Never moves, shrinks or detaches a disk, never deletes a VM or an ISO, and never restarts a VM; a setting that waits for a restart is reported.
-- Refuses a VMID that belongs to another VM, a missing VM whose VMID still has disks or backups, a disk storage that does not exist or holds no images, and disks whose provisioned sizes would add up to more than a thin LVM or ZFS storage holds. Warns when the VMs' memory would exceed the node's.
+- Refuses a VMID that belongs to another VM, a missing VM whose VMID still has disks or backups, a disk storage that does not exist or holds no images, and disks whose provisioned sizes would add up to more than a thin LVM, ZFS, directory or BTRFS storage holds, less proxmox_vm_host_headroom_gib on all but thin LVM. Warns when the VMs' memory would exceed the node's.
 - The defaults change nothing.
 
 
@@ -62,12 +62,32 @@ Description: Create Proxmox VE VMs and keep the settings it manages as configure
   
   
 
+  - **proxmox_vm_pending_storages_hint**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: What creates the pending storages, such as the play to run first: shown beside them in check mode, and when one is missing on a real run.
+  
+  
+  
+
   - **proxmox_vm_allow_overcommit**
     - **Required**: false
     - **Type**: bool
     - **Default**: False
   
-    - **Description**: Let the disks on a thin LVM or ZFS storage add up to more than it holds.
+    - **Description**: Let the disks on a thin LVM, ZFS, directory or BTRFS storage add up to more than it holds.
+  
+  
+  
+
+  - **proxmox_vm_host_headroom_gib**
+    - **Required**: false
+    - **Type**: int
+    - **Default**: 0
+  
+    - **Description**: GiB of a ZFS, directory or BTRFS storage's size kept out of the disk budget, for the host's own files that share its pool or filesystem.
   
   
   
@@ -110,9 +130,11 @@ Description: Create Proxmox VE VMs and keep the settings it manages as configure
 | [proxmox_vm_vms](defaults/main.yml#L9)   | list | `[]` |    
 | [proxmox_vm_isos](defaults/main.yml#L11)   | list | `[]` |    
 | [proxmox_vm_pending_storages](defaults/main.yml#L14)   | list | `[]` |    
-| [proxmox_vm_allow_overcommit](defaults/main.yml#L17)   | bool | `False` |    
-| [proxmox_vm_ignore_existing_volumes](defaults/main.yml#L20)   | bool | `False` |    
-| [proxmox_vm_node](defaults/main.yml#L22)   | str |  |    
+| [proxmox_vm_pending_storages_hint](defaults/main.yml#L17)   | str |  |    
+| [proxmox_vm_allow_overcommit](defaults/main.yml#L20)   | bool | `False` |    
+| [proxmox_vm_host_headroom_gib](defaults/main.yml#L24)   | int | `0` |    
+| [proxmox_vm_ignore_existing_volumes](defaults/main.yml#L27)   | bool | `False` |    
+| [proxmox_vm_node](defaults/main.yml#L29)   | str |  |    
 
 
 

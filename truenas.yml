@@ -5,7 +5,8 @@
 # truenas_datasets, truenas_nfs or truenas_services.
 # Without a NAS (no truenas_static_address or truenas_bootstrap_address in group_vars/all/local.yml)
 # the play says so and ends before the role runs. A TrueNAS section that keeps other settings but gives
-# no address stops it instead: that is what a misspelt address looks like.
+# no address stops it instead: that is what a misspelt address looks like. An incomplete Kubernetes section
+# stops it too, as it does every playbook.
 - name: Configure the TrueNAS storage server
   hosts: nas
   gather_facts: false
@@ -14,6 +15,12 @@
       ansible.builtin.assert:
         that: nas_section_error | length == 0
         fail_msg: "{{ nas_section_error }}"
+        quiet: true
+      tags: [always]
+    - name: Refuse an incomplete Kubernetes section
+      ansible.builtin.assert:
+        that: kubernetes_settings_error | length == 0
+        fail_msg: "{{ kubernetes_settings_error | join(' ') }}"
         quiet: true
       tags: [always]
     - name: Say why the NAS is skipped

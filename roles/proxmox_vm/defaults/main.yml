@@ -12,9 +12,16 @@ proxmox_vm_isos: []
 # Storage ids that an earlier role creates on a real run, such as the NFS storages proxmox_storage adds. A dry run
 # on a fresh host reports a VM's missing storage from this list as pending instead of refusing it.
 proxmox_vm_pending_storages: []
-# On thin LVM and ZFS, the disks' provisioned sizes, other VMs' included, may not add up to more than the storage
-# holds, or a full pool gives every VM on it I/O errors. True lets them.
+# What creates those storages, such as the play to run first: said beside them in a dry run, and when one is missing
+# on a real run.
+proxmox_vm_pending_storages_hint: ""
+# On thin LVM, ZFS, a directory or BTRFS, the disks' provisioned sizes, other VMs' included, may not add up to more
+# than the storage holds, or a full storage gives every VM on it I/O errors. True lets them.
 proxmox_vm_allow_overcommit: false
+# GiB of a ZFS, directory or BTRFS storage's size kept out of that budget: its pool or filesystem also holds the
+# host's own files, its root filesystem among them on the installer's storage, and the storage's size shrinks as
+# they grow.
+proxmox_vm_host_headroom_gib: 0
 # A missing VM whose VMID still has disks or backups somewhere is refused: it is being rebuilt, and would get new,
 # empty disks beside the old ones. True builds it new anyway.
 proxmox_vm_ignore_existing_volumes: false
