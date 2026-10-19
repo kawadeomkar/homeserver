@@ -157,9 +157,10 @@ test-gitleaks-rules: ## .gitleaks.toml against generated fixtures (gitleaks from
 GITLEAKS_FOUND = @command -v gitleaks >/dev/null || { echo "gitleaks is not on PATH (brew install gitleaks)"; exit 1; }
 
 .PHONY: secrets-staged secrets-push
-secrets-staged: ## gitleaks over the staged changes (the pre-commit hook)
+secrets-staged: ## gitleaks over the staged changes, and no unencrypted *.sops.yaml (the pre-commit hook)
 	$(GITLEAKS_FOUND)
 	gitleaks git --pre-commit --staged --config .gitleaks.toml --ignore-gitleaks-allow --redact --verbose --no-banner
+	scripts/ci/check-sops-staged.sh
 
 secrets-push: ## Secrets and identifiers in the commits being pushed (the pre-push hook)
 	$(GITLEAKS_FOUND)

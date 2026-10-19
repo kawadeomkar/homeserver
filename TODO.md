@@ -9,8 +9,8 @@ the full audit with file/line references; the finding ids below refer to it.
 - [ ] Add Renovate for the 21 container image tags, which are pinned and bumped by hand. Wait until the
       cluster exists, and split the ruleset first so an app with write access cannot merge on its own
       (REPO-3). Dependabot covers the SHA-pinned actions and the Python lock, not image tags
-- [ ] Implement the SOPS + age decision for Kubernetes Secrets, and write down where the age key lives and
-      how it is backed up. Until then nextcloud and photoprism cannot deploy (see `k8s/README-secrets.md`)
+- [ ] Write nextcloud's and photoprism's Secrets as `*.sops.yaml` files (`k8s/README-secrets.md`, which also says
+      where the age key lives and how it is backed up). Until then neither can deploy
 - [ ] Real domain instead of `*.homeserver.internal`, which public ACME cannot validate. Prerequisite for
       any TLS at all (K8S-14)
 
