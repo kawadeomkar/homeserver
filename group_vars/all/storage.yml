@@ -93,6 +93,12 @@ vm_storage: "{{ vm_storage_classes if nas_present else {'ephemeral': vm_storage_
 # null keeps none. Size it to what the VMs need, such as the sum of the project pools' quotas.
 vm_storage_ephemeral_reservation: null
 
+# The VMs' backups, with a NAS: a dataset on the redundant pool, exported to the Proxmox host and mounted as a
+# storage that holds backups only. Without a NAS, the backups go wherever local.yml's vm_backup_storage says.
+vm_storage_backup:
+  dataset: "{{ nas_pools.persistent }}/proxmox/backup"
+  proxmox_id: homeserver-backup
+
 # One storage pool per project that creates VMs on the Proxmox host, with a NAS: a dataset of its own on the
 # ephemeral pool, exported like the classes, so the project's token can be granted its pool alone and a quota
 # can cap it. A project is told the id and nothing else; it never creates storage and never reads this file.
@@ -103,11 +109,13 @@ vm_storage_consumers:
   - proxmox_id: claude-on-proxmox-ephemeral
     dataset: "{{ nas_pools.ephemeral }}/proxmox/claude-on-proxmox"
 
-# The NAS's exports as Proxmox mounts them: the classes the setup has, then the project pools. Read only when
-# a NAS is present.
+# The NAS's exports as Proxmox mounts them: the classes the setup has, then the project pools, then the backups,
+# which hold nothing else. Read only when a NAS is present.
 vm_storage_nfs_exports: >-
   {%- set out = [] -%}
   {%- for e in (vm_storage.values() | list) + vm_storage_consumers -%}
   {%-   set _ = out.append({'id': e.proxmox_id, 'export': vm_storage_mount_root ~ '/' ~ e.dataset}) -%}
   {%- endfor -%}
+  {%- set _ = out.append({'id': vm_storage_backup.proxmox_id, 'content': ['backup'],
+                          'export': vm_storage_mount_root ~ '/' ~ vm_storage_backup.dataset}) -%}
   {{ out }}

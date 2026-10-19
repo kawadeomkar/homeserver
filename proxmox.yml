@@ -1,11 +1,11 @@
 ---
 # Configure the Proxmox host, over root SSH: its package repositories and upgrades first, then, when
 # group_vars/all/local.yml lists tailscale_advertise_routes, Tailscale, which makes it the LAN's subnet router for
-# remote access, then its VM-disk storage. Tailscale comes before the storage, so remote access never waits on a
-# storage the run refuses. With a NAS, its NFS shares are added as storage: run truenas.yml first, so the shares
-# exist and are exported to this host. Without one (no NAS address in group_vars/all/local.yml), the
-# installer's own storage is checked to hold VM disks. A TrueNAS section that keeps other settings but
-# gives no address stops the play, as in truenas.yml.
+# remote access, then its VM-disk storage, then the nightly backup of its VMs. Tailscale comes before the storage,
+# so remote access never waits on a storage the run refuses. With a NAS, its NFS shares are added as storage: run
+# truenas.yml first, so the shares exist and are exported to this host. Without one (no NAS address in
+# group_vars/all/local.yml), the installer's own storage is checked to hold VM disks. A TrueNAS section that keeps
+# other settings but gives no address stops the play, as in truenas.yml.
 - name: Configure the Proxmox host's packages and VM storage
   hosts: proxmox
   gather_facts: false
@@ -20,3 +20,13 @@
     - role: proxmox_apt
     - role: proxmox_tailscale
     - role: proxmox_storage
+    - role: proxmox_backup
+  post_tasks:
+    - name: Say which VMs have no backup
+      ansible.builtin.debug:
+        msg: >-
+          No backup job: VMs {{ vm_backup_vmids | join(', ') }} are not backed up, because this setup has no NAS and
+          group_vars/all/local.yml names no vm_backup_storage. Add a storage that holds backups (a USB disk set
+          up as a checked mount point, or a Proxmox Backup Server) and name it there.
+      when: vm_backup_vmids | length > 0 and not vm_backup_target
+      tags: [always]

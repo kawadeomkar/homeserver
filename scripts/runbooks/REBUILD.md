@@ -12,8 +12,8 @@ by their variable in `group_vars/all/local.yml`; the real values live only there
 | One disk of the RAIDZ1 pool (`persistent`) | The pool, degraded | Nothing until the pool is healthy: the role only imports ONLINE pools | Replace the disk and resilver (see [Known limits](#known-limits)) |
 | The single disk of `ephemeral` | Nothing: that pool and the media on it are lost | A new, empty pool on a blank replacement disk, then its datasets and share | Allow pool creation and list the new disk |
 | NAS network card | Everything on disk | Everything, once the NAS is reachable | Update the router's DHCP reservation to the new MAC |
-| Proxmox boot drive | VM disks, on the NAS | The no-subscription repository, the upgrade, Tailscale with its guard, the NFS storages and the start-on-boot delay | Reinstall, root SSH key; with remote access, delete the old machine in Tailscale's admin console and put a new auth key in the vault; recreate VM definitions |
-| Proxmox boot drive, in a setup without a NAS | Nothing: the VM disks were on it | The repository, the upgrade, Tailscale with its guard, and the check that `local-lvm` can hold VM disks | Reinstall, root SSH key; with remote access, the old machine and a new auth key as above; recreate the VMs from backups, if any |
+| Proxmox boot drive | VM disks on the NAS, and the VMs' nightly backups | The no-subscription repository, the upgrade, Tailscale with its guard, the NFS storages, the start-on-boot delay and the backup job | Reinstall, root SSH key; with remote access, delete the old machine in Tailscale's admin console and put a new auth key in the vault; restore the VMs from their backups ([vm-restore.md](vm-restore.md)) |
+| Proxmox boot drive, in a setup without a NAS | The backups, if `vm_backup_storage` is a USB disk or a backup server | The repository, the upgrade, Tailscale with its guard, the check that `local-lvm` can hold VM disks, and the backup job | Reinstall, root SSH key; with remote access, the old machine and a new auth key as above; re-add the backup storage before `make proxmox`; restore the VMs ([vm-restore.md](vm-restore.md)) |
 | The controller (this Mac) | The repo on GitHub, with a NAS the vault (encrypted) | — | Restore `.vault_pass` and `local.yml` from your password manager, and without a NAS your own vault too |
 
 ## 1. The controller
@@ -110,23 +110,27 @@ report no change, and `pvesm status` on the host should show every NFS storage a
    (`make vault-edit`). The tailnet's policy, with its route auto-approver, and split DNS live in the console and
    survive. Until this run is done, remote access is down, so do it from home.
    [tailscale.md](tailscale.md) has the details.
+5. **Without a NAS, with `vm_backup_storage`**: re-add that storage by hand, under the same id, before
+   `make check-proxmox`, which refuses a backup storage that does not exist. A USB disk goes back as a checked
+   mount point, as `scripts/runbooks/vm-restore.md` (step 1 of a real restore) shows; the backups on it are what
+   the VMs come back from.
 
 ### Running it
 
 | Step | Command | Expect |
 | --- | --- | --- |
-| 1 | `make check-proxmox` | A `proxmox.sources` file to write, `Enabled: false` for `pve-enterprise` and `ceph`, and no pending upgrade yet (the package lists are refreshed only for real). The plan shows `add` for the NFS storages (`homeserver-persistent`, `homeserver-ephemeral`, `claude-on-proxmox-ephemeral`). Without a NAS: `local-lvm: present` and nothing to add. With remote access: Tailscale to install, the guard to load, forwarding to turn on, and "Would log the node in with the auth key" |
-| 2 | `make proxmox` | Repositories written, package lists refreshed, packages upgraded, and, since that brings a newer kernel, "Reboot the node when it is safe to": reboot the host by hand. With remote access: Tailscale installed, the guard loaded, the host logged in and its route approved ("Nothing for the admin console to fix"). The storages added and active, start-on-boot delay set. Without a NAS: no storage change |
+| 1 | `make check-proxmox` | A `proxmox.sources` file to write, `Enabled: false` for `pve-enterprise` and `ceph`, and no pending upgrade yet (the package lists are refreshed only for real). The plan shows `add` for the NFS storages (`homeserver-persistent`, `homeserver-ephemeral`, `claude-on-proxmox-ephemeral`, `homeserver-backup`) and, when `local.yml` names VMs to back up, `create` for the `vm-nightly` backup job, its storage pending. Without a NAS: `local-lvm: present` and nothing to add, and the backup job on `vm_backup_storage`, re-added in step 5 above. With remote access: Tailscale to install, the guard to load, forwarding to turn on, and "Would log the node in with the auth key" |
+| 2 | `make proxmox` | Repositories written, package lists refreshed, packages upgraded, and, since that brings a newer kernel, "Reboot the node when it is safe to": reboot the host by hand. With remote access: Tailscale installed, the guard loaded, the host logged in and its route approved ("Nothing for the admin console to fix"). The storages added and active, start-on-boot delay set, backup job created. Without a NAS: no storage change |
 | 3 | `make proxmox` | `changed=0` |
 | 4 | `pveum aclmod /storage/claude-on-proxmox-ephemeral -user <user> -role <role>` | With a NAS: the grant for each project pool, with the user and role from that project's README, which also creates them on a fresh host |
 
 A fresh install carries none of the old `truenas-*` storage ids, so nothing needs removing; `README.md`'s
 section on storage for projects that create VMs says what each project is then told.
 
-With a NAS, the VM disks are still on it, but the VM definitions lived on the old boot drive (`/etc/pve`) and
-are gone: recreate the VMs with the VM-provisioning repo and attach the existing disks. Without one, the disks
-went with the boot drive (see the table at the top): restore the VMs from backups, if there are any, or
-recreate them empty. There are no Proxmox backups yet; whether to add them is an open item in `TODO.md`.
+The VM definitions lived on the old boot drive (`/etc/pve`) and are gone. Restore the VMs from their nightly
+backups, which `scripts/runbooks/vm-restore.md` describes, before anything creates them anew. With a NAS, the
+backups are on it; without one, the backups are wherever `vm_backup_storage` pointed.
+VMs that other projects create on the host (claude-on-proxmox's) are theirs to recreate.
 
 ## Known limits
 

@@ -50,6 +50,9 @@ truenas_datasets_vm_classes:
   - name: "{{ vm_storage.persistent.dataset }}"
     # There is no UPS, so persistent VMs keep synchronous writes synchronous.
     properties: {sync: STANDARD, recordsize: 64K}
+  - name: "{{ vm_storage_backup.dataset }}"
+    # vzdump archives: large files written once. Never a snapshot task: it holds backups already.
+    properties: {sync: STANDARD, recordsize: 1M}
   - name: "{{ vm_storage.ephemeral.dataset | dirname }}"
     # 1 TiB. The pool also holds the media dataset and has no redundancy; the quota stops a
     # runaway VM filling it, and the reservation, when group_vars/all/storage.yml sets one, stops the
@@ -75,7 +78,7 @@ truenas_datasets_vm_consumers: >-
 
 # ----------------------------------------------------------------- snapshots ---
 # The persistent VMs' disks keep hourly snapshots for a day and daily for a week, no longer: they hold whole VM
-# disks, whose scratch data older snapshots would pin, and a longer history belongs in a backup of the VMs.
+# disks, whose scratch data older snapshots would pin, and the nightly VM backup keeps the longer history.
 # Nothing on the ephemeral pool is ever snapshotted. The daily task keeps a snapshot even when nothing was written
 # since the last one: it fires at midnight with an hourly one, and TrueNAS destroys a batch of snapshots that are
 # all empty unless a task in it allows empty ones, so on a dataset left alone after 23:00 no daily snapshot would
@@ -104,13 +107,15 @@ truenas_nfs_shares_vm_classes:
     comment: Proxmox disks, persistent VMs
   - path: "{{ vm_storage_mount_root }}/{{ vm_storage.ephemeral.dataset }}"
     comment: Proxmox disks, ephemeral VMs
+  - path: "{{ vm_storage_mount_root }}/{{ vm_storage_backup.dataset }}"
+    comment: Proxmox backups
 truenas_nfs_shares_vm_consumers: >-
   {%- set out = [] -%}
   {%- for c in vm_storage_consumers -%}
   {%-   set _ = out.append({'path': vm_storage_mount_root ~ '/' ~ c.dataset, 'comment': 'Proxmox disks, ' ~ c.proxmox_id}) -%}
   {%- endfor -%}
   {{ out }}
-# Only the Proxmox host may mount them, and it writes disk images as root.
+# Only the Proxmox host may mount the VM and backup shares, and it writes disk images and backups as root.
 truenas_nfs_share_defaults:
   hosts: ["{{ proxmox_address }}"]
   networks: []

@@ -66,6 +66,15 @@ proxmox_address: 192.0.2.20
 # local-lvm unless this names another. A ZFS install calls it local-zfs.
 # proxmox_local_vm_storage: local-zfs
 
+# The nightly backup of the VMs. With a NAS it goes to the NAS. Without one,
+# name a Proxmox storage that holds backups: a USB disk added as a directory
+# storage (set it up as a checked mount point: pvesm set <id> --is_mountpoint
+# yes --create-base-path 0), or a Proxmox Backup Server. Unset, nothing is
+# backed up, and every run says so.
+# vm_backup_storage: usb-backup
+# The VMs to back up, by VMID.
+# vm_backup_extra_vmids: [310]
+
 # Remote access through Tailscale (scripts/runbooks/tailscale.md): the Proxmox
 # host becomes the LAN's subnet router, so every VM, the NAS and the router
 # answer from your tailnet at their LAN addresses. List the LAN's IPv4 prefix
