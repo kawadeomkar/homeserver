@@ -1601,6 +1601,9 @@ def test_talos_with_a_nas(tmp_path, factory):
     assert "hostname: homeserver-worker-1" in worker and "kind: WatchdogTimerConfig" in worker
     # Each node installs its schematic's installer at the pinned digest.
     assert f"/metal-installer/{base}:v1.14.2@{INSTALLER_DIGEST}" in worker
+    # The firewall's rules for the pod network name the one talosctl gave, which the role asked it for.
+    assert "kind: NetworkDefaultActionConfig\ningress: block" in worker
+    assert '{"subnet": "198.51.100.0/24"}' in worker and '{"subnet": "198.51.100.0/24"}' in cp
     assert talos_files(tmp_path) == [
         "home/.talos/homeserver/bootstrapped",
         "home/.talos/homeserver/kubeconfig",
