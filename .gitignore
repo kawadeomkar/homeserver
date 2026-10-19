@@ -18,6 +18,7 @@ group_vars/**/local.yaml*
 # Hardware notes (addresses, MACs, serials) and Talos's client config, wherever they are written.
 /MACHINES*
 talosconfig
+talosconfig.*
 
 # local notes / audits
 docs/*
@@ -52,7 +53,6 @@ k8s/**/*Secret*.yml
 # Exceptions — these carry no plaintext credential by construction, so they are
 # safe (and useful) to commit. Negations must come AFTER the block rules above.
 !k8s/**/*.sops.yaml
-!k8s/**/*sealed*.yaml
 !k8s/**/*.example.yaml
 !k8s/**/*.template.yaml
 !k8s/**/externalsecret*.yaml
@@ -68,7 +68,14 @@ key.txt
 keys.txt
 vault_password*
 kubeconfig
+kubeconfig.*
+*.kubeconfig
 k3s.yaml
+# Talos's generated files (talosctl gen secrets, gen config), which hold a cluster's keys. They are never written
+# inside the repository; these are a safety net.
+secrets.yaml
+controlplane.yaml
+worker.yaml
 *.pem
 id_rsa
 id_rsa.pub
