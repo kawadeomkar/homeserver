@@ -49,6 +49,7 @@ SECRET_NAME = re.compile(r"pass(?!ive)|secret|token|key", re.IGNORECASE)
 # Options whose names match it but hold nothing secret, as (module or role, option): why.
 NOT_SECRET = {
     ("truenas_resource", "key"): "the names of the fields that identify an entry",
+    ("proxmox_tailscale", "proxmox_tailscale_keyring"): "the path of Tailscale's public signing key",
 }
 
 # The modules import their role's module_utils as ansible.module_utils.<name>, as Ansible ships them.
@@ -191,6 +192,12 @@ def blank_nas_local_yml():
     return "\n".join(lines) + "\n"
 
 
+# local.yml.example as it is, and the line that turns on remote access through Tailscale, which it leaves commented.
+EXAMPLE_LOCAL_YML = (ROOT / "group_vars" / "all" / "local.yml.example").read_text()
+TAILSCALE_LOCAL_YML = "tailscale_advertise_routes: [192.0.2.0/24]\n"
+TAILSCALE_CHECK = "TASK [proxmox_tailscale : Check the role's inputs]"
+
+
 def example_tree(tmp_path, local_yml=None):
     """The roles, group_vars and playbooks copied into tmp_path, with local.yml.example or `local_yml` as
     local.yml, and an ansible.cfg that names no vault password file."""
@@ -233,21 +240,35 @@ def argspec_pass(tree, playbook="site.yml", *extra):
     [
         pytest.param(
             None,
-            3,
-            ["validate | Check the connection settings", "skipping: [truenas]"],
+            4,
+            ["validate | Check the connection settings", "skipping: [truenas]", TAILSCALE_CHECK],
             [],
             id="nas",
         ),
         pytest.param(
+            EXAMPLE_LOCAL_YML + TAILSCALE_LOCAL_YML,
+            4,
+            ["validate | Check the connection settings", TAILSCALE_CHECK],
+            [],
+            id="nas-tailscale",
+        ),
+        pytest.param(
             PROXMOX_ONLY_LOCAL_YML,
-            2,
-            ["Skip the NAS when local.yml gives it no address", "ok: [truenas]"],
+            3,
+            ["Skip the NAS when local.yml gives it no address", "ok: [truenas]", TAILSCALE_CHECK],
             ["TASK [truenas :", "validate | Check the connection settings"],
             id="proxmox-only",
         ),
         pytest.param(
+            PROXMOX_ONLY_LOCAL_YML + TAILSCALE_LOCAL_YML,
+            3,
+            ["Skip the NAS when local.yml gives it no address", TAILSCALE_CHECK],
+            ["TASK [truenas :"],
+            id="proxmox-only-tailscale",
+        ),
+        pytest.param(
             blank_nas_local_yml(),
-            2,
+            3,
             ["Skip the NAS when local.yml gives it no address", "ok: [truenas]"],
             ["TASK [truenas :", "validate | Check the connection settings"],
             id="proxmox-only-blank-values",
@@ -291,7 +312,7 @@ def test_inventory_without_the_nas_host(tmp_path):
     rc, out = argspec_pass(tree)
     assert rc == 0, out[-3000:]
     assert "skipping: no hosts matched" in out, out[-3000:]
-    assert out.count("Validating arguments against arg spec 'main'") == 2, out[-3000:]
+    assert out.count("Validating arguments against arg spec 'main'") == 3, out[-3000:]
 
 
 @pytest.mark.parametrize("playbook", ["site.yml", "proxmox.yml"])
@@ -440,3 +461,77 @@ def test_secret_options_are_no_log():
                 flagged.append(f"{owner}: {dotted}")
     assert flagged == [], "options that look like secrets but are not no_log"
     assert excepted == set(NOT_SECRET), "NOT_SECRET names an option that no longer exists or is now no_log"
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "guarded"),
+    [
+        pytest.param(EXAMPLE_LOCAL_YML + TAILSCALE_LOCAL_YML, ["192.0.2.10"], id="nas"),
+        pytest.param(PROXMOX_ONLY_LOCAL_YML + TAILSCALE_LOCAL_YML, [], id="proxmox-only"),
+    ],
+)
+def test_tailscale_guard_follows_the_setup(tmp_path, local_yml, guarded):
+    """The guard protects the NFS servers the Proxmox host mounts, which trust its address: with a NAS, the NAS's
+    static address from local.yml.example; without one, nothing. The routes come from local.yml."""
+    tree = example_tree(tmp_path, local_yml)
+    assert resolve_on(tree, "homeserver", "proxmox_tailscale_guard_hosts") == guarded
+    assert resolve_on(tree, "homeserver", "proxmox_tailscale_advertise_routes") == ["192.0.2.0/24"]
+
+
+@pytest.mark.parametrize(
+    ("given", "refusal"),
+    [
+        pytest.param(
+            {"tailscale_advertise_routes": "192.0.2.0/24"},
+            "proxmox_tailscale_advertise_routes must be a list, not a string.",
+            id="routes-string",
+        ),
+        pytest.param(
+            {"tailscale_advertise_routes": ["2001:db8::/32"]},
+            "IPv6 routes are not advertised",
+            id="routes-ipv6",
+        ),
+        pytest.param(
+            {"tailscale_advertise_routes": ["192.0.2.0"]},
+            "proxmox_tailscale_advertise_routes takes IPv4 networks in CIDR form",
+            id="routes-not-cidr",
+        ),
+        pytest.param(
+            {"proxmox_tailscale_tags": []},
+            "proxmox_tailscale_tags must name at least one tag",
+            id="no-tag",
+        ),
+        pytest.param(
+            {"proxmox_tailscale_tags": ["homeserver"]},
+            "Each of proxmox_tailscale_tags is tag:<name>",
+            id="tag-without-prefix",
+        ),
+        pytest.param(
+            {"proxmox_tailscale_settings": {"advertise-tags": "tag:other"}},
+            "proxmox_tailscale_settings must not hold advertise-tags",
+            id="settings-tags",
+        ),
+        pytest.param(
+            {"proxmox_tailscale_settings": {"accept-dns": ["no"]}},
+            "proxmox_tailscale_settings takes tailscale set flag names, each with a boolean or a string",
+            id="settings-value",
+        ),
+        pytest.param(
+            {"proxmox_tailscale_guard_hosts": ["nas.home.arpa"]},
+            "proxmox_tailscale_guard_hosts takes IPv4 addresses",
+            id="guard-host-name",
+        ),
+        pytest.param(
+            {"proxmox_tailscale_guard_allow": ["https", "tcp/70000"]},
+            "Each of proxmox_tailscale_guard_allow is tcp/<port> or udp/<port>",
+            id="guard-port",
+        ),
+    ],
+)
+def test_tailscale_settings_are_checked(tmp_path, given, refusal):
+    """Each setting the Tailscale role cannot use stops proxmox.yml with its own sentence, before the role does
+    anything."""
+    tree = example_tree(tmp_path, EXAMPLE_LOCAL_YML + TAILSCALE_LOCAL_YML)
+    rc, out = argspec_pass(tree, "proxmox.yml", "-e", json.dumps(given))
+    assert rc != 0, out[-3000:]
+    assert refusal in out, out[-3000:]

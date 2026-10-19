@@ -12,8 +12,8 @@ by their variable in `group_vars/all/local.yml`; the real values live only there
 | One disk of the RAIDZ1 pool (`nvme_gen3`) | The pool, degraded | Nothing until the pool is healthy: the role only imports ONLINE pools | Replace the disk and resilver (see [Known limits](#known-limits)) |
 | The single disk of `ephemeral` | Nothing: that pool and the media on it are lost | A new, empty pool on a blank replacement disk, then its datasets and share | Allow pool creation and list the new disk |
 | NAS network card | Everything on disk | Everything, once the NAS is reachable | Update the router's DHCP reservation to the new MAC |
-| Proxmox boot drive | VM disks, on the NAS | The no-subscription repository, the upgrade, the NFS storages and the start-on-boot delay | Reinstall, root SSH key; recreate VM definitions |
-| Proxmox boot drive, in a setup without a NAS | Nothing: the VM disks were on it | The repository, the upgrade, and the check that `local-lvm` can hold VM disks | Reinstall, root SSH key; recreate the VMs from backups, if any |
+| Proxmox boot drive | VM disks, on the NAS | The no-subscription repository, the upgrade, Tailscale with its guard, the NFS storages and the start-on-boot delay | Reinstall, root SSH key; with remote access, delete the old machine in Tailscale's admin console and put a new auth key in the vault; recreate VM definitions |
+| Proxmox boot drive, in a setup without a NAS | Nothing: the VM disks were on it | The repository, the upgrade, Tailscale with its guard, and the check that `local-lvm` can hold VM disks | Reinstall, root SSH key; with remote access, the old machine and a new auth key as above; recreate the VMs from backups, if any |
 | The controller (this Mac) | The repo on GitHub, the vault (encrypted) | — | Restore `.vault_pass` and `local.yml` from your password manager |
 
 ## 1. The controller
@@ -83,9 +83,9 @@ report no change, and `pvesm status` on the host should show every NFS storage a
 
 ### Before Ansible can run
 
-1. **Install Proxmox VE.** In the installer, pick the 40 GbE port as the management interface, give it
+1. **Install Proxmox VE.** In the installer, pick the port cabled to the LAN as the management interface, give it
    `proxmox_address` with the LAN's prefix, and set the gateway, DNS server and hostname. The installer creates the
-   bridge `vmbr0` on that port. **Leave the web UI's Updates → Repositories panel alone**: the fresh install's
+   bridge `vmbr0` on that port, and the bridge takes its MAC, which is the one the router's DHCP reservation must name. **Leave the web UI's Updates → Repositories panel alone**: the fresh install's
    enterprise repositories and missing no-subscription one are what `make proxmox` fixes first.
 2. **Give the controller root SSH access.** The old host key no longer matches, so remove it first:
    `ssh-keygen -R <proxmox address>`. Then install the controller's key for this host with one password login:
@@ -101,13 +101,19 @@ report no change, and `pvesm status` on the host should show every NFS storage a
    with a `Host` block in `~/.ssh/config` naming the key and `IdentitiesOnly yes`, so Ansible, which connects
    by address, offers the right one.
 3. **If the network card was replaced**, update the router's DHCP reservation. The bridge carries the card's MAC.
+4. **With remote access** (`tailscale_advertise_routes` in `local.yml`), the host's tailnet identity was on the old
+   boot drive. In Tailscale's admin console, delete the old machine, or the new one is named `<hostname>-1`. Then make
+   a new one-off, pre-approved auth key tagged `tag:homeserver` and put it in the vault as `vault_tailscale_auth_key`
+   (`make vault-edit`). The tailnet's policy, with its route auto-approver, and split DNS live in the console and
+   survive. Until this run is done, remote access is down, so do it from home.
+   [tailscale.md](tailscale.md) has the details.
 
 ### Running it
 
 | Step | Command | Expect |
 | --- | --- | --- |
-| 1 | `make check-proxmox` | A `proxmox.sources` file to write, `Enabled: false` for `pve-enterprise` and `ceph`, and no pending upgrade yet (the package lists are refreshed only for real). The plan shows `add` for the NFS storages (`homeserver-persistent`, `homeserver-ephemeral`, `claude-on-proxmox-ephemeral`). Without a NAS: `local-lvm: present` and nothing to add |
-| 2 | `make proxmox` | Repositories written, package lists refreshed, packages upgraded, and, since that brings a newer kernel, "Reboot the node when it is safe to": reboot the host by hand. The storages added and active, start-on-boot delay set. Without a NAS: no storage change |
+| 1 | `make check-proxmox` | A `proxmox.sources` file to write, `Enabled: false` for `pve-enterprise` and `ceph`, and no pending upgrade yet (the package lists are refreshed only for real). The plan shows `add` for the NFS storages (`homeserver-persistent`, `homeserver-ephemeral`, `claude-on-proxmox-ephemeral`). Without a NAS: `local-lvm: present` and nothing to add. With remote access: Tailscale to install, the guard to load, forwarding to turn on, and "Would log the node in with the auth key" |
+| 2 | `make proxmox` | Repositories written, package lists refreshed, packages upgraded, and, since that brings a newer kernel, "Reboot the node when it is safe to": reboot the host by hand. With remote access: Tailscale installed, the guard loaded, the host logged in and its route approved ("Nothing for the admin console to fix"). The storages added and active, start-on-boot delay set. Without a NAS: no storage change |
 | 3 | `make proxmox` | `changed=0` |
 | 4 | `pveum aclmod /storage/claude-on-proxmox-ephemeral -user <user> -role <role>` | With a NAS: the grant for each project pool, with the user and role from that project's README, which also creates them on a fresh host |
 

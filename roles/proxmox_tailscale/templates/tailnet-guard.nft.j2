@@ -1,0 +1,69 @@
+#!/usr/sbin/nft -f
+# Written by roles/proxmox_tailscale. What tailnet clients may reach through this subnet router, whatever the
+# tailnet's policy says. Loaded by tailnet-guard.service, which tailscaled requires: reload it, never restart it.
+# The file replaces the whole table at once, and touches no other table.
+destroy table inet tailnet_guard
+
+table inet tailnet_guard {
+	# The prefixes this node advertises.
+	set routes {
+		type ipv4_addr
+		flags interval
+		auto-merge
+		elements = { {{ proxmox_tailscale_advertise_routes | join(', ') }} }
+	}
+{% if proxmox_tailscale_guard_hosts %}
+
+	# Hosts that trust this node by its address, and what tailnet clients may still reach on them.
+	set guarded {
+		type ipv4_addr
+		elements = { {{ proxmox_tailscale_guard_hosts | unique | join(', ') }} }
+	}
+{% if proxmox_tailscale_guard_allow %}
+
+	set guarded_allow {
+		type ipv4_addr . inet_proto . inet_service
+		elements = {
+{% for host in proxmox_tailscale_guard_hosts | unique %}
+{% for entry in proxmox_tailscale_guard_allow | unique %}
+			{{ host }} . {{ entry.split('/') | first }} . {{ entry.split('/') | last }},
+{% endfor %}
+{% endfor %}
+		}
+	}
+{% endif %}
+
+	counter guarded_dropped {
+	}
+{% endif %}
+
+	counter outside_routes_dropped {
+	}
+
+	counter lan_to_tailnet_dropped {
+	}
+
+	# Before iptables' filter table (priority 0) and Tailscale's own rules. A drop here is final; an accept only ends
+	# this chain, so nothing is allowed here that another firewall refuses.
+	chain forward {
+		type filter hook forward priority filter - 10; policy accept;
+{% if proxmox_tailscale_guard_hosts %}
+		iifname "tailscale0" ip daddr @guarded jump tailnet_to_guarded
+{% endif %}
+		# A subnet router forwards nothing it does not advertise.
+		iifname "tailscale0" meta nfproto ipv6 counter name "outside_routes_dropped" drop
+		iifname "tailscale0" ip daddr != @routes counter name "outside_routes_dropped" drop
+		# The LAN never starts a connection into the tailnet; replies to the tailnet's own connections pass.
+		oifname "tailscale0" ct state != { established, related } counter name "lan_to_tailnet_dropped" drop
+	}
+{% if proxmox_tailscale_guard_hosts %}
+
+	chain tailnet_to_guarded {
+{% if proxmox_tailscale_guard_allow %}
+		meta l4proto { tcp, udp } ip daddr . meta l4proto . th dport @guarded_allow accept
+{% endif %}
+		limit rate 10/minute log prefix "tailnet-guard: " level info
+		counter name "guarded_dropped" drop
+	}
+{% endif %}
+}

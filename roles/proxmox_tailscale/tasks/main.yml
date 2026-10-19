@@ -1,0 +1,103 @@
+---
+# Makes a Proxmox VE node its LAN's Tailscale subnet router: every VM on its bridge, and every other host on the
+# advertised prefixes, answers from the tailnet without Tailscale of its own. In order: Tailscale's repository and
+# packages (install.yml), the forwarding guard (guard.yml), IPv4 forwarding once the guard is loaded
+# (forwarding.yml), then the node's login, routes and preferences (node.yml). Every command runs through `command`,
+# not a module, so the idempotence tests can stand in for it with a fake on PATH.
+
+# Each problem gets its own sentence, naming the variable to change. Argument validation accepts a string for a
+# list (it would split it on commas) but leaves the variable as it was, so the string is refused here before
+# anything iterates its characters. Addresses are matched as patterns only: tailscale and nft check the rest.
+# Tagged always, as the truenas role's checks are, so any run, whatever its tags, refuses bad settings first.
+- name: Check the role's inputs
+  tags: [always]
+  ansible.builtin.assert:
+    that: _errors | length == 0
+    fail_msg: "{{ _errors | join(' ') }}"
+    quiet: true
+  vars:
+    _lists:
+      proxmox_tailscale_advertise_routes: "{{ proxmox_tailscale_advertise_routes }}"
+      proxmox_tailscale_tags: "{{ proxmox_tailscale_tags }}"
+      proxmox_tailscale_guard_hosts: "{{ proxmox_tailscale_guard_hosts }}"
+      proxmox_tailscale_guard_allow: "{{ proxmox_tailscale_guard_allow }}"
+    _octet: "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
+    _address: "{{ _octet }}([.]{{ _octet }}){3}"
+    _routes: "{{ [] if proxmox_tailscale_advertise_routes is string else proxmox_tailscale_advertise_routes | map('string') | list }}"
+    _tags: "{{ [] if proxmox_tailscale_tags is string else proxmox_tailscale_tags | map('string') | list }}"
+    _hosts: "{{ [] if proxmox_tailscale_guard_hosts is string else proxmox_tailscale_guard_hosts | map('string') | list }}"
+    _allow: "{{ [] if proxmox_tailscale_guard_allow is string else proxmox_tailscale_guard_allow | map('string') | list }}"
+    _settings: "{{ proxmox_tailscale_settings if proxmox_tailscale_settings is mapping else {} }}"
+    _errors: >-
+      {%- set out = [] -%}
+      {%- for name, value in _lists.items() if value is string -%}
+      {%-   set _ = out.append(name ~ ' must be a list, not a string.') -%}
+      {%- endfor -%}
+      {%- set ipv6 = _routes | select('search', ':') | list -%}
+      {%- if ipv6 -%}
+      {%-   set _ = out.append('IPv6 routes are not advertised: forwarding IPv6 would stop the node accepting router '
+                               ~ 'advertisements on its bridge. Remove ' ~ ipv6 | join(', ')
+                               ~ ' from proxmox_tailscale_advertise_routes.') -%}
+      {%- endif -%}
+      {%- set malformed = _routes | reject('search', ':') | reject('match', '^' ~ _address ~ '/([0-9]|[12][0-9]|3[0-2])$') | list -%}
+      {%- if malformed -%}
+      {%-   set _ = out.append('proxmox_tailscale_advertise_routes takes IPv4 networks in CIDR form (network/prefix '
+                               ~ 'length); these are not: ' ~ malformed | join(', ') ~ '.') -%}
+      {%- endif -%}
+      {%- if _routes and not _tags -%}
+      {%-   set _ = out.append('proxmox_tailscale_tags must name at least one tag (tag:<name>): an untagged node '
+                               ~ 'belongs to a user, and its key expires, taking remote access with it.') -%}
+      {%- endif -%}
+      {%- set bad_tags = _tags | reject('match', '^tag:[A-Za-z0-9][A-Za-z0-9-]*$') | list -%}
+      {%- if bad_tags -%}
+      {%-   set _ = out.append('Each of proxmox_tailscale_tags is tag:<name>, letters, digits and hyphens; these are '
+                               ~ 'not: ' ~ bad_tags | join(', ') ~ '.') -%}
+      {%- endif -%}
+      {%- if proxmox_tailscale_settings is not mapping -%}
+      {%-   set _ = out.append('proxmox_tailscale_settings must map tailscale set flag names to values.') -%}
+      {%- endif -%}
+      {%- set own = _settings.keys() | select('in', ['advertise-routes', 'advertise-tags']) | list -%}
+      {%- if own -%}
+      {%-   set _ = out.append('proxmox_tailscale_settings must not hold ' ~ own | join(' or ') ~ ', which have '
+                               ~ 'variables of their own: proxmox_tailscale_advertise_routes and proxmox_tailscale_tags.') -%}
+      {%- endif -%}
+      {%- set odd = [] -%}
+      {%- for key, value in _settings.items() if key is not match('^[a-z][a-z-]*$')
+                                                   or (value is not boolean and value is not string) -%}
+      {%-   set _ = odd.append(key) -%}
+      {%- endfor -%}
+      {%- if odd -%}
+      {%-   set _ = out.append('proxmox_tailscale_settings takes tailscale set flag names, each with a boolean or a '
+                               ~ 'string; these are not: ' ~ odd | join(', ') ~ '.') -%}
+      {%- endif -%}
+      {%- set bad_hosts = _hosts | reject('match', '^' ~ _address ~ '$') | list -%}
+      {%- if bad_hosts -%}
+      {%-   set _ = out.append('proxmox_tailscale_guard_hosts takes IPv4 addresses; these are not: '
+                               ~ bad_hosts | join(', ') ~ '.') -%}
+      {%- endif -%}
+      {%- set bad_ports = [] -%}
+      {%- for entry in _allow if entry is not match('^(tcp|udp)/[0-9]+$')
+                                 or (entry.split('/') | last | int) not in range(1, 65536) -%}
+      {%-   set _ = bad_ports.append(entry) -%}
+      {%- endfor -%}
+      {%- if bad_ports -%}
+      {%-   set _ = out.append('Each of proxmox_tailscale_guard_allow is tcp/<port> or udp/<port>, the port from 1 to '
+                               ~ '65535; these are not: ' ~ bad_ports | join(', ') ~ '.') -%}
+      {%- endif -%}
+      {{ out }}
+
+- name: Do nothing without routes to advertise
+  ansible.builtin.meta: end_role
+  when: proxmox_tailscale_advertise_routes | length == 0
+
+- name: Install or upgrade Tailscale
+  ansible.builtin.import_tasks: install.yml
+
+- name: Load the forwarding guard
+  ansible.builtin.import_tasks: guard.yml
+
+- name: Turn on IPv4 forwarding
+  ansible.builtin.import_tasks: forwarding.yml
+
+- name: Log the node in, and keep its routes and preferences
+  ansible.builtin.import_tasks: node.yml

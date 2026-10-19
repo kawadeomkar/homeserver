@@ -1,0 +1,35 @@
+---
+# IPv4 forwarding, which a subnet router needs and a Proxmox node has off. Written to sysctl.d, the only place
+# Debian 13 reads at boot, and turned on now, after the guard is loaded. IPv6 forwarding stays off: it would stop the
+# node accepting router advertisements on its bridge, and no IPv6 route is advertised.
+
+- name: forwarding | Write the forwarding setting
+  ansible.builtin.copy:
+    dest: "{{ proxmox_tailscale_sysctl_file }}"
+    content: |
+      # Written by roles/proxmox_tailscale. The node forwards between the tailnet and the LAN it advertises, behind
+      # the tailnet guard (tailnet-guard.service). IPv6 forwarding stays off.
+      net.ipv4.ip_forward = 1
+    mode: "0644"
+  register: proxmox_tailscale_sysctl_written
+
+- name: forwarding | Read whether forwarding is on
+  ansible.builtin.command:
+    argv: [sysctl, -n, net.ipv4.ip_forward]
+  register: proxmox_tailscale_forwarding
+  changed_when: false
+  check_mode: false
+
+- name: forwarding | Turn forwarding on
+  ansible.builtin.command:
+    argv: [sysctl, -p, "{{ proxmox_tailscale_sysctl_file }}"]
+  changed_when: true
+  when: proxmox_tailscale_sysctl_written is changed or proxmox_tailscale_forwarding.stdout | trim != '1'
+
+- name: forwarding | Say that forwarding would be turned on
+  ansible.builtin.debug:
+    msg: IPv4 forwarding is off on the node; a real run turns it on.
+  changed_when: true
+  when:
+    - ansible_check_mode
+    - proxmox_tailscale_forwarding.stdout | trim != '1'

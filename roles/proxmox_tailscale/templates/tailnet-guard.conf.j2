@@ -1,0 +1,5 @@
+# Written by roles/proxmox_tailscale. Fail-closed: tailscaled starts only once the tailnet guard is loaded, and
+# stops when the guard is stopped, so the node never forwards from the tailnet without it.
+[Unit]
+Requires=tailnet-guard.service
+After=tailnet-guard.service

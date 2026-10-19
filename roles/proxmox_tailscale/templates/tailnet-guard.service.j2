@@ -1,0 +1,22 @@
+# Written by roles/proxmox_tailscale. Loads the tailnet guard's nftables table before the network, and before
+# tailscaled, which requires this unit. Reload it to apply a change: a restart would restart tailscaled too. It has
+# no stop command, so stopping it never removes the table; it stops tailscaled instead.
+[Unit]
+Description=Tailnet forwarding guard (nft table inet tailnet_guard)
+Documentation=man:nft(8)
+DefaultDependencies=no
+Wants=network-pre.target
+Before=network-pre.target tailscaled.service shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+StandardInput=null
+ProtectSystem=full
+ProtectHome=true
+ExecStart=/usr/sbin/nft -f {{ proxmox_tailscale_guard_file }}
+ExecReload=/usr/sbin/nft -f {{ proxmox_tailscale_guard_file }}
+
+[Install]
+WantedBy=sysinit.target

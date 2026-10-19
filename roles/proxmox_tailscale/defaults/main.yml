@@ -1,0 +1,34 @@
+---
+# Neutral defaults: with nothing else set, the role changes nothing. What the node advertises, how it joins and
+# what the guard protects are configuration, set in inventory group_vars; see README.md.
+
+# The LAN prefixes the node advertises to the tailnet, IPv4, in CIDR form. Empty, the role does nothing at all.
+proxmox_tailscale_advertise_routes: []
+# The tags the node joins with, each tag:<name>. A tagged node's key never expires.
+proxmox_tailscale_tags: []
+# A one-off auth key, read only while the node is logged out. Comes from the vault.
+proxmox_tailscale_auth_key: ""
+# Preferences kept on every run with `tailscale set`, by its flag names, such as accept-dns: false.
+proxmox_tailscale_settings: {}
+# Upgrade Tailscale to the repository's latest release on every run. False only ever installs it.
+proxmox_tailscale_upgrade: false
+# LAN hosts that trust this node by its address, which tailnet clients may reach only on
+# proxmox_tailscale_guard_allow, whatever the tailnet's policy says.
+proxmox_tailscale_guard_hosts: []
+# The ports still reachable on those hosts from the tailnet, each tcp/<port> or udp/<port>.
+proxmox_tailscale_guard_allow: []
+
+# The Debian release for Tailscale's repository. Empty reads VERSION_CODENAME from the node's /etc/os-release.
+proxmox_tailscale_suite: ""
+# Tailscale's Debian repository, which also serves its signing key as <release>.noarmor.gpg.
+proxmox_tailscale_repository: https://pkgs.tailscale.com/stable/debian
+# Where the signing key goes. Tailscale's tailscale-archive-keyring package owns the same path once installed.
+proxmox_tailscale_keyring: /usr/share/keyrings/tailscale-archive-keyring.gpg
+# Where apt keeps its deb822 repository files. The idempotence tests point the paths below at scratch directories.
+proxmox_tailscale_sources_dir: /etc/apt/sources.list.d
+# The node's forwarding setting, read at boot by systemd-sysctl.
+proxmox_tailscale_sysctl_file: /etc/sysctl.d/99-tailscale.conf
+# The guard's nftables table, loaded by tailnet-guard.service.
+proxmox_tailscale_guard_file: /etc/nftables.d/tailnet-guard.nft
+# Where the guard's unit and tailscaled's drop-in go.
+proxmox_tailscale_systemd_dir: /etc/systemd/system
