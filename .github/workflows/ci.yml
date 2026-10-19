@@ -65,7 +65,10 @@ jobs:
 
   test:
     name: test (python ${{ matrix.python }})
-    runs-on: ubuntu-26.04
+    # On Arm, as is the cluster job: free for public repositories, and the idempotence suite, which keeps every vCPU
+    # busy, takes about 40% less time there than on x64, whose runners also vary in speed by up to 1.75x from run to
+    # run. The other jobs stay on x64: they download x86-64 tools, or finish within a minute.
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 15
     permissions:
       contents: read
@@ -96,7 +99,7 @@ jobs:
   # so one Python, the newest, is enough, and the matrix stays within its time limit.
   cluster:
     name: cluster
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 60
     permissions:
       contents: read
