@@ -107,12 +107,14 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 - [ ] `make proxmox` says when the host needs a reboot and leaves it to a person. Once the Talos VMs exist,
       decide how that reboot is done: drain the cluster first, or let Proxmox stop the VMs and start them
       again after the boot delay
-- [ ] Move the home host to the owner-and-class storage ids, once, by hand: check with `pvesm list` that
-      `truenas-persistent` and `truenas-ephemeral` hold no volume, `pvesm remove` both (until they are gone
-      every run refuses, naming them), then `make check`, `make site` twice, and grant `claude-on-proxmox`'s
-      token its pool
-      (`pveum aclmod /storage/claude-on-proxmox-ephemeral …`, the line from that project's README). Nothing
-      in `claude-on-proxmox` changes: its `local.yml` for this host sets `proxmox_storage` to the id
+- [ ] Grant `claude-on-proxmox` its pool on the home host, with the line from that project's README
+      (`pveum aclmod /storage/claude-on-proxmox-ephemeral …`), and set `proxmox_storage` to that id in the
+      project's `local.yml` for this host. The storage has existed since the host moved to the owner-and-class
+      ids on 2026-10-17, but the project's user is still granted only `local-lvm`. Nothing in
+      `claude-on-proxmox` itself changes
+- [ ] After the home host's next reboot, remove the two empty mount points the old ids left behind,
+      `/mnt/pve/truenas-persistent` and `/mnt/pve/truenas-ephemeral`. `pvesm remove` does not unmount an NFS
+      storage, so until that reboot both exports stay mounted a second time, at paths nothing uses
 - [ ] Pick a quota for `claude-on-proxmox-ephemeral` (`quota` on its `vm_storage_consumers` entry, in bytes or
       with a binary suffix such as `200G`); the parent's 1 TiB applies meanwhile
 - [ ] Turn on remote access through the host's Tailscale (`scripts/runbooks/tailscale.md`):
