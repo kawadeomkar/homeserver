@@ -40,7 +40,7 @@ make init                         # also installs the git hooks, and copies inve
 make lint                         # make linters, then the unit and policy tests (make test)
 make linters                      # poetry check --lock, yamllint --strict, ansible-lint (production profile, strict), ruff, module docs, GitHub config schemas, role references (make lint-docs)
 make docs                         # every role's REFERENCE.md, written by docsible from the role; make lint-docs fails while one is stale
-make test-idempotence             # each role run repeatedly against local fakes (about 30 s)
+make test-idempotence             # each role run repeatedly against local fakes, one pytest worker per CPU
 make lint-k8s                     # make lint-kubeconform, then make lint-kube-linter
 make lint-kubeconform             # kubeconform -strict against Kubernetes 1.37.1 (Talos's), pinned schemas
 make lint-kube-linter             # kube-linter with .kube-linter.yaml

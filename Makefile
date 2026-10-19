@@ -161,8 +161,10 @@ secrets-push: ## Secrets and identifiers in the commits being pushed (the pre-pu
 	BASE="$${PRE_COMMIT_FROM_REF:-}" HEAD="$${PRE_COMMIT_TO_REF:-HEAD}" scripts/ci/check-range.sh
 
 .PHONY: test-idempotence
+# One pytest worker per CPU: each test runs its own fakes and playbooks, so they run side by side, and in sequence
+# the suite outgrew the CI job's timeout.
 test-idempotence: ## Run each role repeatedly against local fakes of TrueNAS and Proxmox
-	$(BIN)/pytest -q tests/integration
+	$(BIN)/pytest -q -n auto tests/integration
 
 .PHONY: lint-kubeconform
 # kubeconform retries each schema download itself (twice, with backoff), so an invalid manifest fails
