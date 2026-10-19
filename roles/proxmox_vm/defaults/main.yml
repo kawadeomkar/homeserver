@@ -1,0 +1,22 @@
+---
+# Neutral defaults: with nothing else set, the role changes nothing. The VMs and ISOs are configuration, set in
+# inventory group_vars; see README.md.
+
+# VMs, each: vmid, name, cores, memory_mib, disks ({slot, storage, size_gib, serial, format, backup}), net
+# ({bridge, mac}), and optionally machine, bios, efidisk_storage, cpu, scsihw, iso, boot, watchdog ({model,
+# action}), onboot, startup, tags, hostpci ([{mapping, pcie}]) and start. A VM is created once, then corrected;
+# a disk is only ever grown.
+proxmox_vm_vms: []
+# ISOs to download into a storage, each: storage, filename, url. Never deleted.
+proxmox_vm_isos: []
+# Storage ids that an earlier role creates on a real run, such as the NFS storages proxmox_storage adds. A dry run
+# on a fresh host reports a VM's missing storage from this list as pending instead of refusing it.
+proxmox_vm_pending_storages: []
+# On thin LVM and ZFS, the disks' provisioned sizes, other VMs' included, may not add up to more than the storage
+# holds, or a full pool gives every VM on it I/O errors. True lets them.
+proxmox_vm_allow_overcommit: false
+# A missing VM whose VMID still has disks or backups somewhere is refused: it is being rebuilt, and would get new,
+# empty disks beside the old ones. True builds it new anyway.
+proxmox_vm_ignore_existing_volumes: false
+# The Proxmox node's name. Empty means the host's short hostname, which is what Proxmox uses.
+proxmox_vm_node: ""
