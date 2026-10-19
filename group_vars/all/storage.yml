@@ -20,7 +20,9 @@ nas_section_error: >-
   {%- set given = {'truenas_api_cert_sha256': truenas_api_cert_sha256 | default(''),
                    'truenas_gateway': truenas_gateway | default(''),
                    'truenas_nameservers': truenas_nameservers | default(''),
-                   'truenas_pool_disks': truenas_pool_disks | default('')}
+                   'truenas_pool_disks': truenas_pool_disks | default(''),
+                   'truenas_pool_persistent': truenas_pool_persistent | default(''),
+                   'truenas_pool_ephemeral': truenas_pool_ephemeral | default('')}
                   | dict2items | selectattr('value') | map(attribute='key') | list -%}
   {{ 'nas_present is worked out from the NAS addresses in group_vars/all/local.yml, not set: given with -e it '
      ~ 'is a string, which counts as true whatever it says. To run without a NAS, delete the TrueNAS section '
@@ -30,8 +32,20 @@ nas_section_error: >-
      ~ 'truenas_bootstrap_address, which usually means one of them is misspelt. Correct it, or delete the '
      ~ 'whole TrueNAS section to run without a NAS.' }}
 
+# The NAS's address, for whatever mounts its shares, such as Proxmox's NFS storages. Its static address, never
+# the bootstrap one, which is a DHCP lease the NAS play replaces. Empty without a NAS.
+nas_address: "{{ truenas_static_address | default('', true) | trim | split('/') | first }}"
+
 # Where TrueNAS mounts its pools.
 vm_storage_mount_root: /mnt
+
+# The NAS's two pools, named for what they hold, never for the hardware behind them: persistent is redundant,
+# for data that cannot be re-created, and ephemeral has no redundancy, for data that can. A setup whose pools
+# are called something else names them in local.yml (truenas_pool_persistent, truenas_pool_ephemeral). Read
+# here and never set here, like proxmox_local_vm_storage below.
+nas_pools:
+  persistent: "{{ truenas_pool_persistent | default('persistent', true) | trim }}"
+  ephemeral: "{{ truenas_pool_ephemeral | default('ephemeral', true) | trim }}"
 
 # Without a NAS, the ephemeral class uses the storage the Proxmox installer created: local-lvm on an LVM
 # install, or whatever local.yml names as proxmox_local_vm_storage (local-zfs on a ZFS install). It is
@@ -44,14 +58,20 @@ vm_storage_mount_root: /mnt
 vm_storage_classes:
   # Long-term data: on the redundant pool, synchronous writes honoured. Exists only with a NAS.
   persistent:
-    dataset: nvme_gen3/proxmox/vm
+    dataset: "{{ nas_pools.persistent }}/proxmox/vm"
     proxmox_id: homeserver-persistent
   # Throwaway VMs: on the single-disk pool, all data gone when the VM is destroyed. Without a NAS this is
   # the storage the Proxmox installer created, and the only VM storage there is.
   ephemeral:
-    dataset: ephemeral/proxmox/vm
+    dataset: "{{ nas_pools.ephemeral }}/proxmox/vm"
     proxmox_id: "{{ 'homeserver-ephemeral' if nas_present else proxmox_local_vm_storage | default('local-lvm') }}"
 vm_storage: "{{ vm_storage_classes if nas_present else {'ephemeral': vm_storage_classes.ephemeral} }}"
+
+# Space on the ephemeral pool kept for the VMs, with a NAS: a ZFS reservation on the dataset above both the
+# ephemeral class and the project pools, which counts what they hold, so the media dataset on the same pool can
+# never fill it under them. The quota caps the VMs; this guarantees them room. Bytes, or a binary suffix (200G);
+# null keeps none. Size it to what the VMs need, such as the sum of the project pools' quotas.
+vm_storage_ephemeral_reservation: null
 
 # One storage pool per project that creates VMs on the Proxmox host, with a NAS: a dataset of its own on the
 # ephemeral pool, exported like the classes, so the project's token can be granted its pool alone and a quota
@@ -61,7 +81,7 @@ vm_storage: "{{ vm_storage_classes if nas_present else {'ephemeral': vm_storage_
 # quota applies regardless.
 vm_storage_consumers:
   - proxmox_id: claude-on-proxmox-ephemeral
-    dataset: ephemeral/proxmox/claude-on-proxmox
+    dataset: "{{ nas_pools.ephemeral }}/proxmox/claude-on-proxmox"
 
 # The NAS's exports as Proxmox mounts them: the classes the setup has, then the project pools. Read only when
 # a NAS is present.

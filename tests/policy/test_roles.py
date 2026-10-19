@@ -347,14 +347,14 @@ def test_local_yml_names_the_installer_storage(tmp_path, setting, storage):
     assert re.search(rf'"proxmox_storage_local": \[\s*"{storage}"\s*\]', out), out[-3000:]
 
 
-def resolve_on(tree, host, expression):
+def resolve_on(tree, host, expression, *extra):
     """What a Jinja expression resolves to for `host`, through ansible.builtin.debug: the first JSON object in
-    the output, so warnings printed after it do not matter."""
+    the output, so warnings printed after it do not matter. `extra` adds arguments, such as -e."""
     rc, out = ansible_cli(
         tree,
         "ansible",
         *["-i", "inventory.example", host, "-m", "ansible.builtin.debug", "-a", f"msg={{{{ {expression} }}}}"],
-        *["-e", "ansible_connection=local"],
+        *["-e", "ansible_connection=local", *extra],
     )
     assert rc == 0, out[-3000:]
     return json.JSONDecoder().raw_decode(out[out.index("{") :])[0]["msg"]
@@ -367,7 +367,7 @@ def resolve_on(tree, host, expression):
             None,
             ["persistent", "ephemeral"],
             [
-                {"id": "homeserver-persistent", "export": "/mnt/nvme_gen3/proxmox/vm"},
+                {"id": "homeserver-persistent", "export": "/mnt/persistent/proxmox/vm"},
                 {"id": "homeserver-ephemeral", "export": "/mnt/ephemeral/proxmox/vm"},
                 {"id": "claude-on-proxmox-ephemeral", "export": "/mnt/ephemeral/proxmox/claude-on-proxmox"},
             ],
@@ -402,18 +402,68 @@ def test_nas_gets_a_dataset_and_share_per_vm_storage(tmp_path):
         " 'shares': truenas_nfs_shares | map(attribute='path') | list}",
     )
     assert nas["datasets"] == [
-        "nvme_gen3/proxmox",
-        "nvme_gen3/proxmox/vm",
+        "persistent/proxmox",
+        "persistent/proxmox/vm",
         "ephemeral/proxmox",
         "ephemeral/proxmox/vm",
         "ephemeral/proxmox/claude-on-proxmox",
     ]
-    assert nas["pool"] == {"sync": "DISABLED", "recordsize": "64K"}
+    assert nas["pool"] == {"sync": "DISABLED", "recordsize": "64K", "quota": 0}
     assert nas["shares"] == [
-        "/mnt/nvme_gen3/proxmox/vm",
+        "/mnt/persistent/proxmox/vm",
         "/mnt/ephemeral/proxmox/vm",
         "/mnt/ephemeral/proxmox/claude-on-proxmox",
     ]
+
+
+def test_vm_reservation_on_the_ephemeral_pool(tmp_path):
+    """The VMs' dataset on the ephemeral pool gets a reservation when one is set, so the media dataset beside it
+    cannot fill the pool under them; a reservation counts the descendants, where the VMs' disks are. Unset, it is
+    sent as 0, none, so a reservation removed from the configuration is removed on the NAS too."""
+    tree = example_tree(tmp_path)
+    expression = "(truenas_datasets | selectattr('name', 'equalto', 'ephemeral/proxmox') | first).properties"
+    assert resolve_on(tree, "truenas", expression)["reservation"] == 0
+    properties = resolve_on(tree, "truenas", expression, "-e", "vm_storage_ephemeral_reservation=200G")
+    assert properties["reservation"] == "200G" and "refreservation" not in properties
+
+
+def test_pool_names_follow_local_yml(tmp_path):
+    """The pools are named by class unless local.yml names them otherwise, and every pool, dataset, share and
+    Proxmox export follows those names, so no tracked file has to name anyone's hardware."""
+    pools = "truenas_pool_persistent: tank\ntruenas_pool_ephemeral: scratch\n"
+    tree = example_tree(tmp_path, (ROOT / "group_vars" / "all" / "local.yml.example").read_text() + pools)
+    nas = resolve_on(
+        tree,
+        "truenas",
+        "{'pools': truenas_pools | map(attribute='name') | list,"
+        " 'datasets': truenas_datasets | map(attribute='name') | list}",
+    )
+    assert nas == {
+        "pools": ["tank", "scratch"],
+        "datasets": [
+            "tank/proxmox",
+            "tank/proxmox/vm",
+            "scratch/proxmox",
+            "scratch/proxmox/vm",
+            "scratch/proxmox/claude-on-proxmox",
+        ],
+    }
+    exports = resolve_on(tree, "homeserver", "proxmox_storage_nfs | map(attribute='export') | list")
+    assert exports == [
+        "/mnt/tank/proxmox/vm",
+        "/mnt/scratch/proxmox/vm",
+        "/mnt/scratch/proxmox/claude-on-proxmox",
+    ]
+
+
+@pytest.mark.parametrize("setting", ["truenas_pool_persistent: tank", "truenas_pool_ephemeral: scratch"])
+def test_nas_settings_given_without_an_address_are_refused(tmp_path, setting):
+    """Pool names are TrueNAS settings: given without a NAS address they read as a misspelt address."""
+    tree = example_tree(tmp_path, PROXMOX_ONLY_LOCAL_YML + setting + "\n")
+    rc, out = argspec_pass(tree, "proxmox.yml")
+    assert rc != 0, out[-3000:]
+    assert "but neither truenas_static_address nor truenas_bootstrap_address" in out, out[-3000:]
+    assert setting.split(":")[0] in out, out[-3000:]
 
 
 def test_task_arguments_match_module_specs():

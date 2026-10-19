@@ -10,12 +10,12 @@ truenas_network_settings:
 # truenas_static_address, truenas_gateway and truenas_nameservers are set in local.yml.
 
 # --------------------------------------------------------------------- pools ---
-# Both pools already exist and are imported. Their disks, for creation on blank disks only, are
-# listed by serial in local.yml (truenas_pool_disks).
+# Named by class (nas_pools, group_vars/all/storage.yml): imported when they exist, created on blank disks
+# only with truenas_pool_allow_create. Their disks are listed by serial in local.yml (truenas_pool_disks).
 truenas_pools:
-  - name: nvme_gen3
+  - name: "{{ nas_pools.persistent }}"
     layout: RAIDZ1
-  - name: ephemeral
+  - name: "{{ nas_pools.ephemeral }}"
     layout: STRIPE
 # Both pools are SSDs.
 truenas_pool_autotrim: "ON"
@@ -52,19 +52,23 @@ truenas_datasets_vm_classes:
     properties: {sync: STANDARD, recordsize: 64K}
   - name: "{{ vm_storage.ephemeral.dataset | dirname }}"
     # 1 TiB. The pool also holds the media dataset and has no redundancy; the quota stops a
-    # runaway VM filling it.
-    properties: {compression: LZ4, atime: "OFF", acltype: POSIX, aclmode: DISCARD, quota: 1099511627776}
+    # runaway VM filling it, and the reservation, when group_vars/all/storage.yml sets one, stops the
+    # media filling the pool under the VMs.
+    # The reservation is always sent, 0 for none, so removing it from storage.yml reaches the NAS.
+    properties: >-
+      {{ {'compression': 'LZ4', 'atime': 'OFF', 'acltype': 'POSIX', 'aclmode': 'DISCARD', 'quota': 1099511627776,
+          'reservation': vm_storage_ephemeral_reservation or 0} }}
   - name: "{{ vm_storage.ephemeral.dataset }}"
     # A crash can lose the last seconds of writes, accepted for throwaway VMs. Never give this
     # dataset a snapshot task: snapshots would keep deleted VMs' data.
     properties: {sync: DISABLED, recordsize: 64K}
 # A project's pool holds throwaway VMs like the ephemeral class, so it gets the same sync and record size,
-# and never a snapshot task either. A quota, when the entry sets one, caps that project alone.
+# and never a snapshot task either. A quota, when the entry sets one, caps that project alone; without one the
+# quota is 0, none, so a quota removed here is removed on the NAS too.
 truenas_datasets_vm_consumers: >-
   {%- set out = [] -%}
   {%- for c in vm_storage_consumers -%}
-  {%-   set props = {'sync': 'DISABLED', 'recordsize': '64K'} -%}
-  {%-   if c.quota is defined -%}{%- set _ = props.update({'quota': c.quota}) -%}{%- endif -%}
+  {%-   set props = {'sync': 'DISABLED', 'recordsize': '64K', 'quota': c.quota | default(0)} -%}
   {%-   set _ = out.append({'name': c.dataset, 'properties': props}) -%}
   {%- endfor -%}
   {{ out }}

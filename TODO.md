@@ -40,6 +40,28 @@ the full audit with file/line references; the finding ids below refer to it.
 The NAS was reinstalled on TrueNAS Community Edition and is configured only through Ansible:
 `roles/truenas` (`truenas.yml`) and, on the Proxmox side, `roles/proxmox_storage` (`proxmox.yml`).
 
+- [ ] Recreate the home NAS's redundant pool under its class name, `persistent`. It is still called by its
+      old hardware name, so until then `local.yml` must set `truenas_pool_persistent` to that name, or every
+      run looks for a pool called `persistent` and stops. Do it together with the storage-id move under
+      Proxmox, since both re-create the Proxmox storages:
+      1. Check that the pool holds nothing worth keeping: list its datasets (read-only), and run `pvesm list`
+         on the Proxmox storages that mount it.
+      2. Destroy the pool in the TrueNAS UI. The role never destroys a pool.
+      3. In `local.yml`, remove `truenas_pool_persistent`, key the five disk serials under `persistent`, and
+         set `truenas_pool_allow_create: true`.
+      4. Run `make check-truenas`, then `make truenas`.
+      5. Remove `truenas_pool_allow_create`.
+
+      This is the first real run of the role's pool creation, which no test exercises. Leave the `ephemeral`
+      pool alone: it already has its class name and holds the media dataset.
+
+      **Do it before the first live run that creates the cluster's datasets on the pool** (Nextcloud's and
+      PhotoPrism's), while it still holds nothing worth keeping: step 2 destroys it. Once it holds their files
+      and the VM backups, never destroy it to rename it; keep `truenas_pool_persistent` in `local.yml` for good
+      instead.
+- [ ] Size `vm_storage_ephemeral_reservation` (`group_vars/all/storage.yml`) to what the VMs on the ephemeral
+      pool need, such as the sum of the project pools' quotas, before the media apps start writing to the media
+      dataset on the same pool. Until then nothing stops the media from filling the pool under the VMs.
 - [ ] Automate recovery of a degraded pool. `roles/truenas` imports only ONLINE pools, so after a disk
       failure in the RAIDZ1 pool it stops, and replacing the disk and resilvering has no Ansible path yet
       (see `scripts/runbooks/REBUILD.md`)
