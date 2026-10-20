@@ -546,12 +546,21 @@ def test_flux_settings_resolve_on_the_kubernetes_host(tmp_path, local_yml, path,
         *CLUSTER_ARGS,
     )
     common = {"DOMAIN", "TZ", "LB_RANGE", "LB_TRAEFIK_IP", "LB_FRIGATE_IP", "DATA_NODE"}
-    common |= {"GPU_I915", "FRIGATE_DETECTOR_DEVICE", "INGRESS_ALLOWED_RANGE"}
+    common |= {
+        "GPU_I915",
+        "FRIGATE_DETECTOR_DEVICE",
+        "INGRESS_ALLOWED_RANGE",
+        "EGRESS_DENIED_ADDRESS",
+        "PROXMOX_ADDRESS",
+    }
     common |= {"PROMETHEUS_RETENTION", "PROMETHEUS_RETENTION_SIZE"}
     storage = {"NAS_ADDRESS", "NAS_POOL_PERSISTENT", "NAS_POOL_EPHEMERAL", "MEDIA_DATASET"}
     assert set(settings) == common | (storage if media is None else {"MEDIA_LOCAL_PATH", "FRIGATE_LOCAL_PATH"})
     # Nobody until local.yml names the range: a new cluster's apps are set up through port forwards first.
     assert settings["INGRESS_ALLOWED_RANGE"] == "127.0.0.1/32"
+    # The NAS with one, the Proxmox host without: the host no app pod may reach.
+    assert settings["EGRESS_DENIED_ADDRESS"] == ("192.0.2.10" if local_yml is None else "192.0.2.20")
+    assert settings["PROXMOX_ADDRESS"] == "192.0.2.20"
     if media is None:
         assert settings["NAS_ADDRESS"] == "192.0.2.10" and settings["MEDIA_DATASET"] == "/mnt/ephemeral/jellyfin"
         assert (settings["PROMETHEUS_RETENTION"], settings["PROMETHEUS_RETENTION_SIZE"]) == ("15d", "15GB")
@@ -1213,6 +1222,16 @@ def test_secret_options_are_no_log():
                 flagged.append(f"{owner}: {dotted}")
     assert flagged == [], "options that look like secrets but are not no_log"
     assert excepted == set(NOT_SECRET), "NOT_SECRET names an option that no longer exists or is now no_log"
+
+
+def test_home_assistant_url_is_a_setting_only_when_given(tmp_path):
+    """Homepage's tile reads ${HAOS_URL:=}: the setting exists only when local.yml names Home Assistant OS's address,
+    which is never tracked."""
+    tree = example_tree(tmp_path)
+    assert "HAOS_URL" not in resolve_on(tree, "homeserver-k8s", "flux_bootstrap_settings", *CLUSTER_ARGS)
+    given = json.dumps({**CLUSTER_VARS, "haos_url": "http://homeassistant.home.arpa:8123"})
+    settings = resolve_on(tree, "homeserver-k8s", "flux_bootstrap_settings", "-e", given)
+    assert settings["HAOS_URL"] == "http://homeassistant.home.arpa:8123"
 
 
 @pytest.mark.parametrize("local_yml", [None, PROXMOX_ONLY_CLUSTER_LOCAL_YML], ids=["nas", "proxmox-only"])

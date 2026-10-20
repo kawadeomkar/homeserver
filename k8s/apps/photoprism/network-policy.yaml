@@ -1,0 +1,34 @@
+---
+# Who may reach PhotoPrism and its database, and what they may reach. Talos's Flannel enforces it with kube-network-policies
+# (group_vars/kubernetes/talos.yml); each app namespace has one such policy (tests/policy/test_k8s.py).
+# In: each other, Traefik (the ingress) and Homepage (its tile's check); nothing else in the cluster.
+# Out: anywhere but the NAS (EGRESS_DENIED_ADDRESS), whose NFS exports trust the node's address, which a pod's
+# traffic leaves the node with, and the Proxmox host (PROXMOX_ADDRESS), whose API and SSH answer the LAN; without a
+# NAS both name the host. Every pod in the cluster stays reachable, DNS included.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: photoprism
+  namespace: photoprism
+  labels:
+    app.kubernetes.io/name: photoprism
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: homepage
+  egress:
+    - to:
+        - namespaceSelector: {}
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - "${EGRESS_DENIED_ADDRESS}/32"
+              - "${PROXMOX_ADDRESS}/32"

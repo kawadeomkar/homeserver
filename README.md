@@ -5,8 +5,9 @@ applies, and the Ansible that builds the machines and the cluster they run on.
 
 > **Status: built, and run on the real machines.** The Ansible configures the NAS and the Proxmox host, builds the
 > cluster's VMs, installs Talos Linux on them and hands the cluster to Flux, which applies `k8s/`. Every role is
-> tested against local fakes, and the whole chain has run on the home machines, with a NAS. See `CLAUDE.md` for the
-> detailed architecture and the known landmines.
+> tested against local fakes, and the whole chain has run on the home machines, with a NAS. The LAN reaches no app
+> until its first-run setup is done (`scripts/runbooks/first-run.md`). See `CLAUDE.md` for the detailed
+> architecture and the known landmines.
 
 ## Target stack
 
@@ -24,6 +25,7 @@ addresses and serial numbers), so it is absent from a fresh clone.
 ```
 k8s/clusters/            what Flux syncs per setup (nas, local): Flux Kustomizations, one per path below
 k8s/infrastructure/      the platform: controllers (MetalLB, Traefik, cert-manager, local-path, csi-driver-nfs), configs, static volumes, monitoring, the GPU plugin
+k8s/apps/                the apps, one directory and namespace per group: media, nextcloud, photoprism, frigate, homepage
 roles/truenas/           configures the NAS through its API: address, pools, datasets, NFS
 roles/proxmox_apt/       sets Proxmox's package repositories (no subscription), upgrades it on every run, and says when it needs a reboot
 roles/proxmox_storage/   adds the NAS's shares to Proxmox as qcow2 VM-disk storage, or checks its own storage
@@ -302,17 +304,32 @@ Flux applies them. `roles/flux_bootstrap` points the cluster at `k8s/clusters/na
    `k8s/infrastructure/tls/` (the cluster's CA and the wildcard certificate it signs, which nothing waits for),
    `k8s/infrastructure/storage/` (the static volumes: the media library, Nextcloud's files, PhotoPrism's photos,
    Frigate's recordings), `k8s/infrastructure/monitoring/` (kube-prometheus-stack) and `k8s/infrastructure/gpu/`
-   (Intel's GPU plugin, which runs only on a node with the iGPU).
+   (Intel's GPU plugin, which runs only on a node with the iGPU);
+3. `k8s/apps/`: `media` (Jellyfin, Sonarr, Radarr, Prowlarr, SABnzbd, Seerr, FileBrowser Quantum), `nextcloud`,
+   `photoprism`, `frigate` and `homepage`.
 
-The apps come with a later change. Traefik answers at `https://<name>.<domain>`, once the router has a wildcard DNS
-record for `*.<domain>` pointing at `kubernetes_lb_traefik_ip` and `kubernetes_ingress_allowed_range` lets your
-address in; until then it answers everyone with 403. The certificate comes from the cluster's own CA, limited to the
-domain: trust it once on each device (`scripts/runbooks/tls.md`). Flux reconciles `main` every minute:
+Each app answers at `https://<app>.<domain>` through Traefik, Homepage at the domain itself, once the router has a
+wildcard DNS record for `*.<domain>` pointing at `kubernetes_lb_traefik_ip` and `kubernetes_ingress_allowed_range`
+lets your address in. A new cluster lets nobody in: several apps make their first visitor the admin, so set each one
+up through a port forward first (`scripts/runbooks/first-run.md`), then open the LAN. The certificate comes from the
+cluster's own CA, limited to the domain: trust it once on each device (`scripts/runbooks/tls.md`). Jellyfin also
+answers plain HTTP, for its apps on TVs, which cannot trust a private CA. Flux reconciles `main` every minute:
 a merged change reaches the cluster without anyone running anything. To see what Flux sees:
 `flux get kustomizations` (KUBECONFIG as in `scripts/runbooks/talos.md`).
 
 Monitoring is kube-prometheus-stack: Grafana answers at `https://grafana.<domain>`, with the admin password the
 chart generated (CLAUDE.md, Monitoring, says how to read it).
+
+Secrets are SOPS files (`k8s/README-secrets.md`); an app whose Secret you have not made yet waits for it. Each
+app's first visit, through a port forward, is `scripts/runbooks/first-run.md`: the wizards and logins, Jellyfin's
+transcode path, SABnzbd's folders and host whitelist (a fresh SABnzbd refuses every host name not on it, its own
+ingress's included). Frigate's cameras come after.
+
+**Moving the media library into place, once, with a NAS.** The media dataset predates the cluster: its old layout
+had `jellyfin/config` and `jellyfin/data` under it. Before the media apps import anything, from a pod that mounts the
+`media` claim (FileBrowser's, or a one-off busybox pod), move the content into the layout the apps use,
+`/data/media/{tv,movies,...}` and `/data/usenet/{incomplete,complete}`, archive or delete the old `jellyfin/config`,
+and once, as root, `chown -R 1000:1000 /data`: the apps' init containers fix only the mount point.
 
 ### Linting
 

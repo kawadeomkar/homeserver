@@ -74,3 +74,30 @@ unset db_password
 Read a value afterwards, PhotoPrism's admin password say, with `sops -d --extract
 '["data"]["PHOTOPRISM_ADMIN_PASSWORD"]' k8s/apps/photoprism/photoprism.sops.yaml | base64 -d` (kubectl writes the
 values base64-encoded, under `data`), or set your own in its place.
+
+## The Secrets the apps need
+
+| File | Secret | Keys |
+|---|---|---|
+| `k8s/apps/nextcloud/nextcloud-db.sops.yaml` | `nextcloud/nextcloud-db` | `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE` (`nextcloud`), `MYSQL_USER` (`nextcloud`), `MYSQL_PASSWORD` |
+| `k8s/apps/photoprism/photoprism-db.sops.yaml` | `photoprism/photoprism-db` | `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE` and `MYSQL_USER` both exactly `photoprism` (its Deployment names them), `MYSQL_PASSWORD` |
+| `k8s/apps/photoprism/photoprism.sops.yaml` | `photoprism/photoprism` | `PHOTOPRISM_ADMIN_PASSWORD`, `PHOTOPRISM_DATABASE_PASSWORD` (equal to `photoprism-db`'s `MYSQL_PASSWORD`: above) |
+| `k8s/apps/frigate/frigate.sops.yaml` | `frigate/frigate` | `FRIGATE_RTSP_PASSWORD` (the camera restreams' password, user `admin`), and the cameras' and MQTT's hosts and credentials as `FRIGATE_*` variables |
+| `k8s/apps/media/filebrowser.sops.yaml` | `media/filebrowser` | `FILEBROWSER_ADMIN_PASSWORD`, `FILEBROWSER_JWT_TOKEN_SECRET` |
+
+Every app reads its Secret with `envFrom`, so every key becomes an environment variable: the names matter to the
+container. Until an app's Secret exists, its pods wait for it, and its Flux Kustomization does not become ready;
+the other groups are not held up. A SOPS file the cluster cannot decrypt, encrypted for another age key, fails its
+whole Flux Kustomization, every app of the group, and nothing else.
+
+- **nextcloud-db**: `linuxserver/mariadb` treats `MYSQL_DATABASE`, `MYSQL_USER` and `MYSQL_PASSWORD` as all or
+  none. The Nextcloud admin account is made in the web setup wizard: MySQL/MariaDB, database host `nextcloud-db`,
+  database name and user as `MYSQL_DATABASE` and `MYSQL_USER` (`nextcloud`), and `MYSQL_PASSWORD` (`sops -d` reads
+  it); the LinuxServer.io image reads no admin variables.
+- **photoprism-db** and **photoprism**: PhotoPrism builds its database connection from `PHOTOPRISM_DATABASE_*`, the
+  server, name and user set in its Deployment and the password from this Secret, so keep it equal to
+  `photoprism-db`'s `MYSQL_PASSWORD`.
+- **frigate**: its configuration names no camera and no address (this repository is public); Frigate expands
+  `{FRIGATE_<NAME>}` in camera inputs and go2rtc streams from these variables. `FRIGATE_RTSP_PASSWORD` guards the
+  restreams `frigate-rtsp` publishes on the LAN (`rtsp://admin:<password>@<LB_FRIGATE_IP>:8554/<camera>`): without
+  it, any device on the network could watch every camera, so Frigate does not start until it is set.

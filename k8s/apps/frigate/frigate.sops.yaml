@@ -1,0 +1,24 @@
+apiVersion: v1
+data:
+    FRIGATE_RTSP_PASSWORD: ENC[AES256_GCM,data:k69cUoM7WDtSUvIzGjRc0GeGfmJhEQ99L0fustkeG5/1kTh8qXkZ82Yoat0=,iv:rzk4jTJpQOzOLbNVUXXHFsDdMjbIjmCfxkkPJUg03f4=,tag:4bZO0jG/At9amtdTZQXuFw==,type:str]
+kind: Secret
+metadata:
+    labels:
+        app.kubernetes.io/name: frigate
+    name: frigate
+    namespace: frigate
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSA1SDk0Y29YWW9DQVpwUmo5
+            WnozSVdLd2U4SW9zZVg0b09BRHU1dkhXR1VFCnNwQzFKeit1cUJISGNzWTNpakVs
+            aXRPdWovQWxRcVVhTk11cko3Z1MyVGcKLS0tIDZyTTltWndTZ2ZaMDQxem1SVXY5
+            Tmc4c3VsODhPVGQ1bCtleVNYOXpyODgKInZj1ZizF9rNOWdKzeFZmEBfj7JKUhQa
+            5Z89oEtu/Osz7WS93TBrtvBhOFwD7xFNvMrLJ3skfluVrDjWfUHlcw==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age19jhwvwxawyjzj7yc0ud700dtj5gws77t9pgm8f3zv9kqgssqgpgs5zq4qw
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-10-17T18:00:54Z"
+    mac: ENC[AES256_GCM,data:idI92xCDlk8yl66i9t2CdJ/MugEf6EllYo26JN5ugDIF4Z1vR/tJjK4fMrwhJN98Kl7+ub6FjUZ0UsVBupxBcqE89Fv5g4YvgTZaru62kEVPML2wQV07LuFu0DSCa4lOMA8oSP/chwdE2LtYZfFp/NmlWktMV2Rj7WipRqw/9EY=,iv:CXePCpNlehgldg5W9a3ZtlNO6a3qAA0Nn74+1lIpmfE=,tag:rEzLjMox27XIQ00LlbW3qw==,type:str]
+    version: 3.13.3

@@ -133,8 +133,8 @@ flux_sync_url: https://github.com/<you>/homeserver.git
 # The clients Traefik serves: one IPv4 range, your LAN's or, with VLANs, your
 # own devices'. Leave it unset on a new cluster: Traefik then answers everyone
 # with 403 while you set each app up through kubectl port-forward, since several
-# make their first visitor the admin. Set it once they are all set up, and run
-# make kubernetes.
+# make their first visitor the admin (scripts/runbooks/first-run.md). Set it
+# once they are all set up, and run make kubernetes.
 # kubernetes_ingress_allowed_range: 192.0.2.0/24
 # Extra names for the Kubernetes API's certificate, set before the first build,
 # so the API can later be reached by name.
@@ -156,3 +156,6 @@ flux_sync_url: https://github.com/<you>/homeserver.git
 # The host's iGPU for the worker: the id of a Proxmox PCI resource mapping you
 # made for it (scripts/runbooks/gpu.md). Unset, every app runs on the CPU.
 # kubernetes_gpu_mapping: igpu
+# Home Assistant OS's address, for Homepage's tile: its own local name and
+# port, never under the cluster's domain.
+# haos_url: http://homeassistant.home.arpa:8123

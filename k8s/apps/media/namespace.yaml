@@ -1,0 +1,9 @@
+---
+# The media apps share one namespace and one claim on the media library, mounted once at /data in each, so a
+# download moves into the library as a rename (a hardlink), never a copy. Baseline: nothing here needs more.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: media
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
