@@ -1,0 +1,18 @@
+---
+# The media library: the static PersistentVolume media, on the NAS's media dataset with a NAS, and without one on the
+# worker's media disk or, with kubernetes_media_on_data_volume, its data volume (k8s/infrastructure/storage/). One node
+# runs the apps, so ReadWriteOnce, which is per node.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: media
+  namespace: media
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ""
+  volumeName: media
+  resources:
+    requests:
+      storage: 1Ti

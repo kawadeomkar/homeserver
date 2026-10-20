@@ -127,7 +127,8 @@ kubernetes_settings_error: >-
                    'flux_sync_url': flux_sync_url | default(''),
                    'flux_sync_ref': flux_sync_ref | default(''),
                    'flux_sync_ref_unprotected': flux_sync_ref_unprotected | default(''),
-                   'kubernetes_ingress_allowed_range': kubernetes_ingress_allowed_range | default('')}
+                   'kubernetes_ingress_allowed_range': kubernetes_ingress_allowed_range | default(''),
+                   'haos_url': haos_url | default('')}
                   | dict2items | selectattr('value') | map(attribute='key') | list -%}
   {%- if kubernetes_present is not boolean -%}
   {%-   set _ = out.append('kubernetes_present is worked out from kubernetes_node_addresses in group_vars/all/local.yml, '

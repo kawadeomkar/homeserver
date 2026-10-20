@@ -2165,6 +2165,7 @@ def flux_vars(tmp_path, operator_releases, nas=True, **more):
         "kubernetes_lb_range": "127.0.0.40-127.0.0.49",
         "kubernetes_lb_traefik_ip": "127.0.0.40",
         "kubernetes_lb_frigate_ip": "127.0.0.41",
+        "proxmox_address": PROXMOX_ADDRESS,
         "flux_sync_url": "https://example.invalid/homeserver.git",
         "flux_bootstrap_operator_url": operator_releases,
         "flux_bootstrap_operator_sha256": hashlib.sha256(operator_release("v0.61.0")).hexdigest(),
@@ -2239,9 +2240,11 @@ def test_flux_bootstrap(tmp_path, operator_releases, nas):
     assert all(isinstance(v, str) for v in settings.values())
     if nas:
         assert settings["NAS_ADDRESS"] == "127.0.0.10" and settings["MEDIA_DATASET"] == "/mnt/ephemeral/jellyfin"
-        assert not set(media) & set(settings)
+        assert settings["EGRESS_DENIED_ADDRESS"] == "127.0.0.10" and not set(media) & set(settings)
     else:
         assert {k: settings[k] for k in media} == media and "NAS_ADDRESS" not in settings
+        assert settings["EGRESS_DENIED_ADDRESS"] == PROXMOX_ADDRESS
+    assert settings["PROXMOX_ADDRESS"] == PROXMOX_ADDRESS
     secret = objects["Secret/flux-system/sops-age"]["data"]["age.agekey"]
     assert AGE_KEY in base64.b64decode(secret).decode()
 

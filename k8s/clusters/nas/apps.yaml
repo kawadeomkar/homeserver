@@ -1,0 +1,132 @@
+---
+# The apps, one Flux Kustomization per group, each once MetalLB's pool and the static volumes are in place. Both setups
+# run the same apps; on a small test host, suspend the heavy ones (scripts/runbooks/talos.md).
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: apps-media
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: infra-configs
+    - name: infra-storage
+  interval: 10m
+  path: ./k8s/apps/media
+  prune: true
+  wait: true
+  timeout: 10m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
+  postBuild:
+    substituteFrom:
+      - kind: ConfigMap
+        name: cluster-settings
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: apps-nextcloud
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: infra-configs
+    - name: infra-storage
+  interval: 10m
+  path: ./k8s/apps/nextcloud
+  prune: true
+  wait: true
+  timeout: 10m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
+  postBuild:
+    substituteFrom:
+      - kind: ConfigMap
+        name: cluster-settings
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: apps-photoprism
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: infra-configs
+    - name: infra-storage
+  interval: 10m
+  path: ./k8s/apps/photoprism
+  prune: true
+  wait: true
+  timeout: 10m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
+  postBuild:
+    substituteFrom:
+      - kind: ConfigMap
+        name: cluster-settings
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: apps-frigate
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: infra-configs
+    - name: infra-storage
+  interval: 10m
+  path: ./k8s/apps/frigate
+  prune: true
+  wait: true
+  timeout: 10m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
+  postBuild:
+    substituteFrom:
+      - kind: ConfigMap
+        name: cluster-settings
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: apps-homepage
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: infra-configs
+    - name: infra-storage
+  interval: 10m
+  path: ./k8s/apps/homepage
+  prune: true
+  wait: true
+  timeout: 10m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
+  postBuild:
+    substituteFrom:
+      - kind: ConfigMap
+        name: cluster-settings

@@ -2,7 +2,7 @@
 # Who may reach the apps through Traefik: one range of client addresses, on every router of the web entrypoint
 # (the HelmRelease's ports.web.http.middlewares). It is local.yml's kubernetes_ingress_allowed_range, through the
 # cluster's settings; without it, the loopback address, which no client has, so a new cluster answers the LAN with 403
-# until each app's first-run setup is done through kubectl port-forward: several
+# until each app's first-run setup is done through kubectl port-forward (scripts/runbooks/first-run.md): several
 # make their first visitor the admin. Traefik's Service keeps clients' addresses (externalTrafficPolicy: Local), so
 # the range is matched against the client's own address, never a node's.
 apiVersion: traefik.io/v1alpha1
