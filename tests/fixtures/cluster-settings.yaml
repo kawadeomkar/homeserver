@@ -4,6 +4,8 @@
 # here has exactly the keys the configuration gives that setup.
 nas:
   DOMAIN: homeserver.internal
+  GPU_I915: "0"
+  FRIGATE_DETECTOR_DEVICE: CPU
   TZ: America/Los_Angeles
   PROMETHEUS_RETENTION: 15d
   PROMETHEUS_RETENTION_SIZE: 15GB
@@ -18,6 +20,8 @@ nas:
   MEDIA_DATASET: /mnt/ephemeral/jellyfin
 local:
   DOMAIN: homeserver.internal
+  GPU_I915: "0"
+  FRIGATE_DETECTOR_DEVICE: CPU
   TZ: America/Los_Angeles
   PROMETHEUS_RETENTION: 7d
   PROMETHEUS_RETENTION_SIZE: 5GB

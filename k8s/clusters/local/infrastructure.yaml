@@ -129,3 +129,29 @@ spec:
     substituteFrom:
       - kind: ConfigMap
         name: cluster-settings
+---
+# Intel's GPU plugin, vendored (k8s/infrastructure/gpu/README.md): it runs only on the node labelled for the iGPU, so
+# with none it runs nowhere.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: infra-gpu
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: infra-controllers
+  interval: 1h
+  path: ./k8s/infrastructure/gpu
+  prune: true
+  wait: false
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
+  postBuild:
+    substituteFrom:
+      - kind: ConfigMap
+        name: cluster-settings
