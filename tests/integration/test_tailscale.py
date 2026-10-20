@@ -59,10 +59,13 @@ def tailscale_vars(tmp_path, nas=True, **more):
 
 
 def settled(tmp_path, nas=True, **more):
-    """A host this repo's configuration has already been applied to, twice."""
+    """A host this repo's configuration has already been applied to. test_tailscale_role_is_idempotent proves that
+    one run settles a host with a NAS and the default variables; any other setup gets a second run here that proves
+    the same for it."""
     extra = tailscale_vars(tmp_path, nas, **more)
     expect(run(PLAYBOOK, extra), "homeserver", changed=True, note="first run")
-    expect(run(PLAYBOOK, extra), "homeserver", changed=0, note="second run")
+    if not nas or more:
+        expect(run(PLAYBOOK, extra), "homeserver", changed=0, note="second run")
     return extra, Path(extra["fake_tailscale_state"])
 
 
