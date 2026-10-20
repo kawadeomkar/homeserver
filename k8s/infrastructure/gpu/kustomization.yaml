@@ -1,0 +1,30 @@
+---
+# Intel's GPU plugin, as vendored in intel-gpu-plugin.yaml, changed by the patches below rather than by edits to that
+# file (README.md): two pods may share the device (Jellyfin and Frigate), and it runs only on the node labelled for
+# the iGPU, so with none it runs nowhere.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - intel-gpu-plugin.yaml
+images:
+  - name: intel/intel-gpu-plugin
+    newName: docker.io/intel/intel-gpu-plugin
+    newTag: 0.37.1
+    digest: sha256:004641b2547d58f1eadce58473fa160ad71377de1eb588cf1f82832387bf3e33
+patches:
+  - target:
+      kind: DaemonSet
+      name: intel-gpu-plugin
+    patch: |
+      - op: add
+        path: /spec/template/spec/containers/0/args
+        value: [-shared-dev-num=2]
+      - op: add
+        path: /spec/template/spec/nodeSelector/homeserver.internal~1gpu
+        value: intel
+      - op: add
+        path: /metadata/annotations
+        value:
+          ignore-check.kube-linter.io/no-liveness-probe: "It serves nothing to probe: it registers with the kubelet over a socket."
+          ignore-check.kube-linter.io/no-readiness-probe: "It serves nothing to probe: it registers with the kubelet over a socket."

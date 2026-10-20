@@ -29,7 +29,8 @@ proxmox_vm_host_headroom_gib: 16
 # setups"). Each sits in its slot of kubernetes_disk_slots, whose by-id link Talos's disk
 # selectors match; the serials only name the disks for whoever reads the VM's configuration. The CD-ROM always holds
 # the current ISO, so a node whose system disk is wiped reaches
-# maintenance mode from it; it boots from its system disk first. The control plane starts first.
+# maintenance mode from it; it boots from its system disk first. The control plane starts first, and the worker gets
+# the host's iGPU when local.yml names its PCI mapping (kubernetes_gpu_mapping).
 proxmox_vm_vms: >-
   {%- set out = [] -%}
   {%- for n in kubernetes_nodes if kubernetes_present -%}
@@ -44,6 +45,7 @@ proxmox_vm_vms: >-
   {%-     set _ = disks.append({'slot': kubernetes_disk_slots.media, 'storage': kubernetes_system_storage,
                                 'size_gib': n.media_disk_gib, 'serial': 'talos-media', 'backup': false}) -%}
   {%-   endif -%}
+  {%-   set gpu = kubernetes_gpu_mapping | default('', true) and n.name == kubernetes_data_node -%}
   {%-   set _ = out.append({
           'vmid': n.vmid, 'name': n.name, 'cores': n.cores, 'memory_mib': n.memory_mib,
           'machine': 'q35', 'bios': 'ovmf', 'efidisk_storage': kubernetes_system_storage, 'cpu': 'host',
@@ -53,6 +55,7 @@ proxmox_vm_vms: >-
           'watchdog': {'model': 'i6300esb', 'action': 'reset'}, 'onboot': true,
           'startup': 'order=' ~ ('1' if n.role == 'controlplane' else '2') ~ ',up=60,down=120',
           'tags': ['talos', 'k8s'],
+          'hostpci': [{'mapping': kubernetes_gpu_mapping, 'pcie': true}] if gpu else [],
           'start': true}) -%}
   {%- endfor -%}
   {{ out }}
