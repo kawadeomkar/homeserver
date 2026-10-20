@@ -7,6 +7,8 @@ also lets a job be skipped only if it is skipped on pushes alone, so no pull req
 """
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -55,12 +57,23 @@ def test_gate_allows_skipping_only_jobs_that_run_on_every_pull_request():
 
 
 def test_every_idempotence_test_runs_once():
-    """The test job's matrix skips the tests marked cluster and the cluster job runs only those, so each runs, on the
-    matrix's Pythons or on one, and none twice."""
+    """The test job's matrix skips the tests marked cluster and the cluster job runs only those, split into shares
+    that together hold each once, so each runs, on the matrix's Pythons or on one runner, and none twice."""
     jobs = workflow()["jobs"]
 
     def commands(job):
         return [step["run"] for step in jobs[job]["steps"] if "make test-idempotence" in step.get("run", "")]
 
     assert commands("test") == ["make test-idempotence PYTEST_ARGS='-m \"not cluster\"'"]
-    assert commands("cluster") == ["make test-idempotence PYTEST_ARGS='-m cluster'"]
+    assert commands("cluster") == ['make test-idempotence PYTEST_ARGS="-m cluster --shard $SHARD"']
+    shards = jobs["cluster"]["strategy"]["matrix"]["shard"]
+    assert shards == [f"{k}/{len(shards)}" for k in range(1, len(shards) + 1)]
+
+    def collect(*args):
+        command = [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", "-m", "cluster"]
+        result = subprocess.run([*command, *args, "tests/integration"], cwd=ROOT, capture_output=True, text=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+        return [line for line in result.stdout.splitlines() if "::" in line]
+
+    shares = [test for shard in shards for test in collect("--shard", shard)]
+    assert sorted(shares) == sorted(collect())

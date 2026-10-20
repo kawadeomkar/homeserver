@@ -79,8 +79,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # ansible-core 2.21's controller range. The modules run under this Python in the idempotence suite.
-        python: ["3.12", "3.13", "3.14"]
+        # The newest two of ansible-core 2.21's controller range, 3.13 also the Proxmox host's (Debian trixie's). The
+        # modules run under this Python in the idempotence suite. 3.12 is left untested though pyproject.toml allows it.
+        python: ["3.13", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -102,11 +103,17 @@ jobs:
   # The VM and backup roles against their fakes, apart from the test job's matrix: they have no Python modules of
   # their own, so one Python, the newest, is enough, and the matrix stays within its time limit.
   cluster:
-    name: cluster
+    name: cluster (${{ matrix.shard }})
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 60
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # A share each (tests/integration/conftest.py's --shard): the tests are CPU-bound, and pytest-xdist already
+        # keeps every vCPU of one runner busy, so only more runners make the job faster.
+        shard: ["1/2", "2/2"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -118,8 +125,10 @@ jobs:
         run: pipx install "poetry==${POETRY_VERSION}"
       - name: Install the locked tooling
         run: make venv PYTHON=python
-      - name: Idempotence of the cluster's roles against their fakes
-        run: make test-idempotence PYTEST_ARGS='-m cluster'
+      - name: Idempotence of the cluster's roles against their fakes, this runner's share
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: make test-idempotence PYTEST_ARGS="-m cluster --shard $SHARD"
 
   kubernetes:
     name: kubernetes

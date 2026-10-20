@@ -295,7 +295,7 @@ enough alone:
 ## CI
 
 Every pull request and every push to `main` runs `.github/workflows/ci.yml`: every linter, the unit, policy
-and idempotence tests on Python 3.12, 3.13 and 3.14, `make lint-kubeconform`, a gitleaks scan of the commits
+and idempotence tests on Python 3.13 and 3.14, `make lint-kubeconform`, a gitleaks scan of the commits
 the change adds (secrets and network identifiers), and actionlint, zizmor and shellcheck
 over the workflows and scripts. `ci-success` aggregates the jobs and is the one check for the "Protect main"
 ruleset to require; `.github/rulesets/main.json` holds that ruleset's body, applied through the GitHub API. No
