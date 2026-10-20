@@ -47,7 +47,7 @@ group_vars/nas/, group_vars/proxmox/  connection and per-machine configuration
 inventory.example        template for inventory (no addresses in it)
 .gitleaks.toml           gitleaks rules for the identifiers this public repo must never hold
 pyproject.toml           the Python tooling's pins, for Poetry; poetry.lock is its lock (make lock)
-poetry.toml              Poetry's settings: a 7-day cooldown on new releases, wheels only, ./.venv
+poetry.toml              Poetry's settings: a 7-day cooldown on new releases, wheels only
 .github/                 CI (workflows/ci.yml), Dependabot, and the reviewed body of the main-branch ruleset
 tests/unit/              tests for the TrueNAS modules' comparison logic and the cluster roles' planning filters
 tests/policy/            tests of the repo's own rules: the lock, the vault, the ruleset, the leak checks
@@ -71,9 +71,15 @@ With vim, open it without them: `EDITOR="vim -n -i NONE --cmd 'set noundofile no
 
 ## Ansible
 
+The tooling runs from a Python virtualenv of the project's own, which you make and keep where you like; make never
+creates one. With pyenv, for example: `pyenv virtualenv 3.14.6 homeserver && pyenv local homeserver`, after which
+make finds it in this directory without activating it (`.python-version` is gitignored). An activated virtualenv
+(`VIRTUAL_ENV`) works too, and `VENV=<path>` names one outright. `make install` refuses a Python that is not a
+virtualenv, since it removes every package there that `poetry.lock` does not list.
+
 ```bash
 make help                         # every target, the TYPEs each takes, and the other parameters
-make venv PYTHON=<python 3.12+>   # the tooling in .venv, synced from poetry.lock (needs Poetry: pipx install poetry)
+make install                      # the tooling, from poetry.lock, into the project's virtualenv (Poetry: pipx install poetry)
 make init                         # git hooks, then each setting asked for, and what is still missing (TYPE=full: all)
 make lock                         # update poetry.lock after editing pyproject.toml (UPDATE=<packages>: those too)
 make lint                         # every linter; TYPE=lock,yaml,ansible,python,docs,github,manifests,charts,talos

@@ -1,6 +1,6 @@
 ---
 # Configure the NAS through its API. Check first:
-#   make check TYPE=truenas            (or: .venv/bin/ansible-playbook truenas.yml --check --diff)
+#   make check TYPE=truenas            (or, in the project's virtualenv: ansible-playbook truenas.yml --check --diff)
 # One stage at a time: make apply TYPE=truenas TAGS=truenas_network (or truenas_pools, truenas_system,
 # truenas_datasets, truenas_snapshots, truenas_nfs, truenas_alerts or truenas_services).
 # Without a NAS (no truenas_static_address or truenas_bootstrap_address in group_vars/all/local.yml)

@@ -1,20 +1,25 @@
 # Entry points: `make help` lists them. Each does the whole of its job by default; TYPE narrows one to part of it
 # (make lint TYPE=yaml, make check TYPE=proxmox), and the other parameters below say how.
-# Every Python tool comes from the project virtualenv, so the versions locked in
+# Every Python tool comes from the project's virtualenv, so the versions locked in
 # poetry.lock are the ones that run, here and in CI (.github/workflows/ci.yml). Poetry, kubeconform,
 # kube-linter and gitleaks are the exceptions: they come from PATH (pipx or Homebrew locally; CI pins each
 # version, and each binary's checksum), as does openssl, which the idempotence tests and make vault TYPE=new use.
-# The Python environment: the active virtualenv if there is one (VIRTUAL_ENV, set by
-# `pyenv activate <env>` or `source <env>/bin/activate`), otherwise ./.venv. Override with VENV=<path>.
-VENV    ?= $(if $(VIRTUAL_ENV),$(VIRTUAL_ENV),.venv)
+# The virtualenv is yours to make and keep, wherever you keep them (pyenv virtualenv, python3 -m venv): make never
+# creates one, and make install fills it from the lock. make uses the active one (VIRTUAL_ENV, set by
+# `pyenv activate <env>` or `source <env>/bin/activate`), otherwise the one python3 runs from in this directory,
+# which `pyenv local <env>` chooses without activating anything. Override with VENV=<path>. A python3 that fails, or
+# crashes, finds none, and make then stops on any target but help, saying how to point it at one.
+ifeq ($(origin VENV),undefined)
+VENV := $(or $(VIRTUAL_ENV),$(shell (python3 -c 'import sys; print(sys.prefix)' || :) 2>/dev/null))
+endif
+ifeq ($(strip $(VENV)),)
+$(if $(filter-out help,$(MAKECMDGOALS)),$(error No Python environment: activate the project's virtualenv, choose it for this directory with pyenv local <env>, or pass VENV=<its path>))
+endif
 BIN     := $(VENV)/bin
 # Recipes find the virtualenv's tools first, as in an activated virtualenv (ansible-lint warns when its
 # own directory is missing from PATH), and pip skips its check for a newer pip.
 export PATH := $(abspath $(BIN)):$(PATH)
 export PIP_DISABLE_PIP_VERSION_CHECK := 1
-# Any Python 3.12+ works. In a shell where `python3` is broken, pass one explicitly:
-#   make venv PYTHON=/path/to/python3.14
-PYTHON  ?= python3
 # Poetry installs the project virtualenv from poetry.lock. Install it yourself, outside that virtualenv
 # (https://python-poetry.org/docs/#installation, e.g. `pipx install poetry`); pyproject.toml's
 # requires-poetry says which versions work. Override with POETRY=<path>. Every Poetry command gets the
@@ -22,6 +27,13 @@ PYTHON  ?= python3
 POETRY  ?= poetry
 POETRY_RUN   = VIRTUAL_ENV=$(abspath $(VENV)) $(POETRY) --no-interaction
 POETRY_FOUND = @command -v $(POETRY) >/dev/null || { echo "Poetry is not on PATH: install it (pipx install poetry)"; exit 1; }
+# make install and make lock refuse a Python that is not a virtualenv: poetry sync removes every package the lock does
+# not list, so on a Python that is not the project's alone (a pyenv version, the system's) it would uninstall the tools
+# installed there.
+ENV_FOUND    = @$(BIN)/python -c 'import sys; sys.exit(sys.prefix == sys.base_prefix)' 2>/dev/null || { \
+	  echo "$(VENV) is not a virtualenv, and poetry sync would remove every package there that poetry.lock does not list."; \
+	  echo "Make one for this project and use it: pyenv virtualenv <python 3.12+> homeserver && pyenv local homeserver,"; \
+	  echo "or python3 -m venv <dir> && source <dir>/bin/activate. Then make install."; exit 1; }
 
 # TYPE narrows a target to some of what it does: one or more of its types, comma-separated (make lint TYPE=yaml,python),
 # and exactly one for check and apply, which run one playbook (make check TYPE=proxmox). <target>_TYPES lists what each
@@ -78,9 +90,9 @@ PLAYBOOK := $(BIN)/ansible-playbook
 LOG_DIR ?= logs
 STAMP   := $(shell date +%Y%m%d-%H%M%S)
 RUN_LOG  = $(LOG_DIR)/$(STAMP)-$@$(if $(TYPES),-$(TYPES))$(if $(TAGS),-$(subst $(comma),+,$(TAGS))).log
-# A missing playbook binary means no virtualenv is active and there is no ./.venv; say so, rather than
-# leave the shell's "No such file or directory" and a dangling latest.log.
-RUN      = @test -x $(PLAYBOOK) || { echo "$(PLAYBOOK) not found: activate the project virtualenv, pass VENV=<its path>, or create ./.venv with make venv" >&2; exit 2; }; \
+# A missing playbook binary means make found a Python other than the project's virtualenv, or one not yet installed;
+# say so, rather than leave the shell's "No such file or directory" and a dangling latest.log.
+RUN      = @test -x $(PLAYBOOK) || { echo "$(PLAYBOOK) not found: run make install in the project's virtualenv, or point make at it (pyenv local <env>, or VENV=<its path>)" >&2; exit 2; }; \
            umask 077 && mkdir -p $(LOG_DIR) && ln -sf $(notdir $(RUN_LOG)) $(LOG_DIR)/latest.log \
            && echo "Logging to $(RUN_LOG) (Python environment: $(VENV))" && ANSIBLE_LOG_PATH=$(RUN_LOG) $(PLAYBOOK)
 # check and apply run the playbook TYPE names, or site.yml, every one in order, without it.
@@ -141,29 +153,27 @@ help: ## Show this help
 	  apply "$(apply_TYPES)"
 	@printf '\nOther parameters:\n'
 	@printf '  \033[36m%-20s\033[0m %s\n' \
-	  'PYTHON=<python>' 'venv: the Python 3.12+ it creates the virtualenv with' \
 	  'UPDATE=<packages>' 'lock: move these to their newest allowed versions too' \
 	  'PYTEST_ARGS=<args>' "test: more for pytest, e.g. PYTEST_ARGS='-m cluster'" \
 	  'TAGS=<tags>' 'check, apply: those stages only, e.g. TYPE=truenas TAGS=truenas_pools' \
 	  'ONLY=<names>' 'down, up, check TYPE=down|up: some apps, groups or homeassistant' \
 	  'ALL=1' "down, up, check TYPE=down|up: the cluster's VMs too" \
 	  'ANSIBLE_ARGS=<args>' "every playbook: more for ansible-playbook, e.g. '-e talos_allow_bootstrap=true'" \
-	  'VENV=<path>' 'every target: the virtualenv (default: the active one, else ./.venv)'
+	  'VENV=<path>' "every target: the project's virtualenv (default: the active one, else python3's here)"
 
 ##@ Setup
-$(BIN)/activate:
-	$(PYTHON) -m venv $(VENV)
-
-.PHONY: venv
-# Poetry's sync installs exactly the lock (the main and dev groups) and removes anything else, apart from pip.
-venv: $(BIN)/activate ## Create the virtualenv and sync it to poetry.lock (Poetry from PATH)
+.PHONY: install
+# Poetry's sync installs exactly the lock (the main and dev groups) into the project's virtualenv, and removes anything
+# else there, apart from pip.
+install: ## Install the locked tooling into the project's virtualenv (Poetry from PATH)
 	$(POETRY_FOUND)
+	$(ENV_FOUND)
 	$(POETRY_RUN) sync
 
 .PHONY: init
 # The settings are asked for by scripts/init/init.py, which says at the end what is still required. Run it again
 # whenever a setting changes: Enter keeps each one as it is. Without a terminal it only prints that summary.
-init: venv ## The git hooks, then local.yml and the vault asked for one by one, and what is still missing
+init: install ## The git hooks, then local.yml and the vault asked for one by one, and what is still missing
 	$(BIN)/pre-commit install
 	git config blame.ignoreRevsFile .git-blame-ignore-revs
 	@test -f inventory || cp inventory.example inventory
@@ -174,8 +184,9 @@ init: venv ## The git hooks, then local.yml and the vault asked for one by one, 
 # moves those packages to their newest allowed versions too. Either way, only releases at least 7 days old
 # (poetry.toml).
 UPDATE ?=
-lock: $(BIN)/activate ## Update poetry.lock after editing pyproject.toml
+lock: ## Update poetry.lock after editing pyproject.toml
 	$(POETRY_FOUND)
+	$(ENV_FOUND)
 	$(POETRY_RUN) $(if $(UPDATE),update --lock $(UPDATE),lock)
 
 .PHONY: vault vault/edit vault/new

@@ -63,11 +63,15 @@ jobs:
         with:
           python-version: "3.14"
       # pipx, which the runner image has, installs Poetry into a virtualenv of its own, as Poetry's docs
-      # require; make then creates .venv with setup-python's Python and syncs it to poetry.lock.
+      # require. The tooling goes into another, of setup-python's Python and outside the checkout, as a user's
+      # does: make install syncs it to poetry.lock, and every later step's make finds it through VIRTUAL_ENV.
       - name: Install Poetry
         run: pipx install "poetry==${POETRY_VERSION}"
       - name: Install the locked tooling
-        run: make venv PYTHON=python
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "VIRTUAL_ENV=$RUNNER_TEMP/venv" >> "$GITHUB_ENV"
+          VIRTUAL_ENV="$RUNNER_TEMP/venv" make install
       # The real vault password never reaches CI: without .vault_pass, make gives ansible-lint a
       # placeholder, and the vault's contents go unlinted (tests/policy checks it stays encrypted).
       # -k: report every failing linter, not only the first. The tests run in the test job, the Kubernetes checks in
@@ -100,7 +104,10 @@ jobs:
       - name: Install Poetry
         run: pipx install "poetry==${POETRY_VERSION}"
       - name: Install the locked tooling
-        run: make venv PYTHON=python
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "VIRTUAL_ENV=$RUNNER_TEMP/venv" >> "$GITHUB_ENV"
+          VIRTUAL_ENV="$RUNNER_TEMP/venv" make install
       - name: Unit and policy tests
         run: make -k test TYPE=unit,policy
       # Runs the roles against fake_truenas.py and fake_pve_bin; needs openssl, which the image has. The cluster
@@ -132,7 +139,10 @@ jobs:
       - name: Install Poetry
         run: pipx install "poetry==${POETRY_VERSION}"
       - name: Install the locked tooling
-        run: make venv PYTHON=python
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "VIRTUAL_ENV=$RUNNER_TEMP/venv" >> "$GITHUB_ENV"
+          VIRTUAL_ENV="$RUNNER_TEMP/venv" make install
       - name: Idempotence of the cluster's roles against their fakes, this runner's share
         env:
           SHARD: ${{ matrix.shard }}
@@ -155,7 +165,10 @@ jobs:
       - name: Install Poetry
         run: pipx install "poetry==${POETRY_VERSION}"
       - name: Install the locked tooling
-        run: make venv PYTHON=python
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "VIRTUAL_ENV=$RUNNER_TEMP/venv" >> "$GITHUB_ENV"
+          VIRTUAL_ENV="$RUNNER_TEMP/venv" make install
       - name: Install kubeconform, kube-linter, talosctl, kustomize and helm (checksums verified)
         run: |
           cd "$RUNNER_TEMP"
@@ -201,7 +214,10 @@ jobs:
       - name: Install Poetry
         run: pipx install "poetry==${POETRY_VERSION}"
       - name: Install the locked tooling
-        run: make venv PYTHON=python
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "VIRTUAL_ENV=$RUNNER_TEMP/venv" >> "$GITHUB_ENV"
+          VIRTUAL_ENV="$RUNNER_TEMP/venv" make install
       - name: Install gitleaks (checksum verified)
         run: |
           cd "$RUNNER_TEMP"

@@ -2,9 +2,10 @@
 # checkout behaves the same. Environment variables (POETRY_*) still override them.
 
 [virtualenvs]
-# Without an active virtualenv, Poetry uses ./.venv, where make looks for one, and creates it if it is missing.
+# make gives Poetry the project's virtualenv (VIRTUAL_ENV), which the user makes and keeps wherever they like. Run
+# without one, Poetry makes an environment of its own, in its cache, rather than install into whatever Python it finds:
+# poetry sync would remove every package there that the lock does not list.
 create = true
-in-project = true
 
 [solver]
 # Lock only releases at least 7 days old, the cooldown Dependabot keeps too: a malicious release is usually found and

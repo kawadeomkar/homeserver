@@ -21,9 +21,9 @@ by their variable in `group_vars/all/local.yml`; the real values live only there
 Everything runs from a checkout of this repo.
 
 1. Install Poetry outside any project environment (`pipx install poetry`; see
-   https://python-poetry.org/docs/#installation), then clone the repo and create the Python environment:
-   `pyenv virtualenv 3.14.6 homeserver && pyenv activate homeserver && make venv`
-   (or any Python 3.12+: `make venv PYTHON=/path/to/python3`).
+   https://python-poetry.org/docs/#installation), then clone the repo, make the project's virtualenv and install the
+   tooling into it: `pyenv virtualenv 3.14.6 homeserver && pyenv local homeserver && make install` (or any Python
+   3.12+: `python3 -m venv <dir> && source <dir>/bin/activate && make install`).
 2. `make init`, which creates `inventory` and `group_vars/all/local.yml` from their examples, asks for each setting
    and secret, and ends with what is still missing. With the files below restored first, it only shows each value
    for Enter to keep; run it again after restoring any of them.
@@ -46,7 +46,8 @@ Everything runs from a checkout of this repo.
 4. Check the toolchain works: `make -k lint test`. The Kubernetes checks (`make lint TYPE=k8s`) take kubeconform,
    kustomize, helm and kube-linter from Homebrew; until those are installed, `-k` reports them and runs the rest.
 
-Run `make` with the environment active (`pyenv activate homeserver`), or pass `VENV=<path to the env>`.
+`make` finds the environment that `pyenv local` chose for the checkout, or an activated one (`pyenv activate
+homeserver`); `VENV=<path to the env>` names one outright.
 
 ## 2. The NAS
 
