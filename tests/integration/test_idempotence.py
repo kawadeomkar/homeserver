@@ -1184,14 +1184,14 @@ def test_proxmox_vm_with_a_nas(tmp_path):
     expect(result, "homeserver", changed=True, note="dry run on a fresh host")
     out = result[2]
     assert re.search(
-        r'storage pending: make apply TYPE=proxmox adds it: run that first"?:\s*\[\s*"homeserver-persistent"', out
+        r'storage pending: make deploy TYPE=proxmox adds it: run that first"?:\s*\[\s*"homeserver-persistent"', out
     ), out[-3000:]
     assert re.search(r'homeserver-worker-1"?:\s*"?create', out) and "Would download: talos-v1.14.2" in out, out[-3000:]
     assert read(state)["mutations"] == 0, "the dry run changed the host"
 
     rc, _, out = run("kubernetes.yml", extra)
     assert (
-        rc != 0 and "homeserver-persistent: does not exist (make apply TYPE=proxmox adds it: run that first)" in out
+        rc != 0 and "homeserver-persistent: does not exist (make deploy TYPE=proxmox adds it: run that first)" in out
     ), out[-3000:]
     assert vms_of(state) == {}
 
@@ -1487,7 +1487,7 @@ def test_proxmox_vm_refuses_to_build_over_old_volumes(tmp_path):
 @pytest.mark.cluster
 def test_proxmox_vm_starts_vms_restored_after_a_host_reinstall(tmp_path):
     """After a reinstall the VMs come back from their backups, stopped, their CD-ROM naming a Talos ISO that went with
-    the boot disk, so starting them by hand fails (scripts/runbooks/vm-restore.md). make apply TYPE=kubernetes
+    the boot disk, so starting them by hand fails (scripts/runbooks/vm-restore.md). make deploy TYPE=kubernetes
     downloads the ISO again and then starts them, creating nothing."""
     extra = cluster_vars(tmp_path)
     state = Path(extra["fake_pve_state"])
@@ -2786,7 +2786,7 @@ def test_app_scale_refusals_and_timeouts(tmp_path):
 
 @pytest.mark.cluster
 def test_haos_power(tmp_path):
-    """make down shuts Home Assistant's VM down through its own shutdown, never a forced stop, and make up starts
+    """make suspend shuts Home Assistant's VM down through its own shutdown, never a forced stop, and make resume starts
     it again; each leaves a VM already as asked alone, a dry run changes nothing, a VMID that does not exist is
     refused, and a shutdown that never finishes fails the run with the VM still running."""
     extra = {"fake_pve_state": str(tmp_path / "pve.json"), "haos_mac": mac(9)}

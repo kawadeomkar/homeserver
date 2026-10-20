@@ -1,6 +1,6 @@
 ---
-# Scales the cluster's apps to zero and back from the controller, with kubectl: make down and make up. An app is a
-# Deployment that a Flux Kustomization under app_scale_path applies; a group, the apps of one namespace. Down sets
+# Scales the cluster's apps to zero and back from the controller, with kubectl: make suspend and make resume. An app is
+# a Deployment that a Flux Kustomization under app_scale_path applies; a group, the apps of one namespace. Down sets
 # Flux's kustomize.toolkit.fluxcd.io/reconcile: disabled on each, which kustomize-controller reads on the object in
 # the cluster and then neither applies nor prunes it, records its replicas in app_scale_annotation and scales it to
 # zero, in one patch; up restores the replicas and removes both, and Flux takes the app back. Apps labelled
@@ -39,7 +39,7 @@
         that: app_scale_kubeconfig_file.stat.exists
         fail_msg: >-
           No kubeconfig at {{ app_scale_kubeconfig }}: roles/talos writes it there once the cluster is bootstrapped
-          (make apply TYPE=kubernetes).
+          (make deploy TYPE=kubernetes).
         quiet: true
 
     # The kubeconfig holds the cluster's admin key: it is read under no_log, and only its server kept. Another
@@ -102,7 +102,7 @@
           {% endif -%}
           {% if app_scale_state == 'down' %}{% if app_scale_plan.unchanged %}Already down:
           {{ app_scale_plan.unchanged | join(', ') }}. {% endif -%}
-          {{ 'Flux leaves them alone until make up.' if app_scale_plan.order or app_scale_plan.unchanged
+          {{ 'Flux leaves them alone until make resume.' if app_scale_plan.order or app_scale_plan.unchanged
              else 'No app to stop.' }}
           {%- else %}{{ 'Flux takes them back at its next reconciliation.' if app_scale_plan.order
                         else 'No app is down.' }}{% endif %}

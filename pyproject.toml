@@ -8,7 +8,7 @@ description = "The Python tooling for this homelab's Ansible: the playbooks' run
 # ansible-core 2.21's controller range, the Pythons CI tests. Poetry locks for every version in it at once, with
 # environment markers, so one lock serves each of them.
 requires-python = ">=3.12,<3.15"
-# What `make apply TYPE=truenas` and `make apply TYPE=proxmox` need on the controller.
+# What `make deploy TYPE=truenas` and `make deploy TYPE=proxmox` need on the controller.
 dependencies = [
     "ansible-core==2.21.4",
     # Used on the controller by roles/truenas to talk to the TrueNAS WebSocket API.

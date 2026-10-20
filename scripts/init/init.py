@@ -1036,7 +1036,7 @@ class Init:
             if not has_value(v.get("kubernetes_ingress_allowed_range")):
                 manual.append(
                     "After the first build, each app's first visit through a port forward, then "
-                    "kubernetes_ingress_allowed_range and make apply TYPE=kubernetes (scripts/runbooks/first-run.md)"
+                    "kubernetes_ingress_allowed_range and make deploy TYPE=kubernetes (scripts/runbooks/first-run.md)"
                 )
             manual.append("Trust the cluster's CA on each device (scripts/runbooks/tls.md)")
             if has_value(v.get("kubernetes_gpu_mapping")):
@@ -1076,12 +1076,12 @@ class Init:
 
         nexts = []
         if on["nas"]:
-            nexts.append("make check TYPE=truenas && make apply TYPE=truenas")
-        nexts.append("make check TYPE=proxmox && make apply TYPE=proxmox")
+            nexts.append("make check TYPE=truenas && make deploy TYPE=truenas")
+        nexts.append("make check TYPE=proxmox && make deploy TYPE=proxmox")
         if on["homeassistant"]:
-            nexts.append("make check TYPE=homeassistant && make apply TYPE=homeassistant")
+            nexts.append("make check TYPE=homeassistant && make deploy TYPE=homeassistant")
         if on["cluster"]:
-            nexts.append("make check TYPE=kubernetes && make apply TYPE=kubernetes")
+            nexts.append("make check TYPE=kubernetes && make deploy TYPE=kubernetes")
 
         parts = [cfg.SECTIONS[s] for s in cfg.SECTIONS if on[s]]
         title = "Setup: " + ", ".join(parts[:-1]) + (" and " if len(parts) > 1 else "") + parts[-1]

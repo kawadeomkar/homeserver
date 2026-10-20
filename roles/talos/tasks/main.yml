@@ -127,7 +127,7 @@
           was bootstrapped before ({{ talos_config_dir }}/bootstrapped), and installing a node sends it the cluster's
           keys unauthenticated, to whatever answers at its address. If you are reinstalling it (its system disk wiped,
           its VM made anew), check on its VM's console in Proxmox that it waits in maintenance mode at that address,
-          then run again naming it: make apply TYPE=kubernetes ANSIBLE_ARGS='-e talos_reinstall={{ _unnamed | map(attribute='name') | join(',') }}'.
+          then run again naming it: make deploy TYPE=kubernetes ANSIBLE_ARGS='-e talos_reinstall={{ _unnamed | map(attribute='name') | join(',') }}'.
           Otherwise, something else is answering at its address: find it before anything else.
         quiet: true
       when:

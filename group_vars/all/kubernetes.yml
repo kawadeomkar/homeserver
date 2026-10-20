@@ -76,8 +76,8 @@ kubernetes_worker: "{{ kubernetes_nodes | selectattr('role', 'equalto', 'worker'
 kubernetes_data_node: "{{ kubernetes_worker.name }}"
 # Whether the worker has a media disk of its own (without a NAS, unless media lives on the data volume).
 kubernetes_media_disk: "{{ (kubernetes_worker.media_disk_gib | default(0) | int) > 0 }}"
-# The VMs make down ALL=1 shuts down, in this order: the worker, then the control plane, whose API answers until the
-# end. make up ALL=1 starts them the other way round.
+# The VMs make suspend ALL=1 shuts down, in this order: the worker, then the control plane, whose API answers until the
+# end. make resume ALL=1 starts them the other way round.
 kubernetes_power_order: >-
   {{ kubernetes_nodes | rejectattr('role', 'equalto', 'controlplane') | map(attribute='vmid') | list
      + kubernetes_nodes | selectattr('role', 'equalto', 'controlplane') | map(attribute='vmid') | list }}
@@ -209,7 +209,7 @@ kubernetes_settings_error: >-
   {%-   if nas_present and not nas_address -%}
   {%-     set _ = out.append('With a NAS, the cluster mounts its shares at its static address and keeps the apps from '
                              ~ 'reaching it, but group_vars/all/local.yml gives only truenas_bootstrap_address, a DHCP '
-                             ~ 'lease the NAS play replaces: set truenas_static_address, which make apply TYPE=proxmox needs too.') -%}
+                             ~ 'lease the NAS play replaces: set truenas_static_address, which make deploy TYPE=proxmox needs too.') -%}
   {%-   endif -%}
   {#-   Every app's NetworkPolicy keeps the pods off the Proxmox host, in both setups, as a /32 of proxmox_address
         (PROXMOX_ADDRESS, group_vars/kubernetes/flux.yml): a host name or an IPv6 address there makes a policy

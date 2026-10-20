@@ -1,6 +1,6 @@
 # Talos: building, using and upgrading the cluster
 
-The cluster is built by `make apply TYPE=kubernetes` (`kubernetes.yml`): the VMs on the Proxmox host
+The cluster is built by `make deploy TYPE=kubernetes` (`kubernetes.yml`): the VMs on the Proxmox host
 (`roles/proxmox_vm`), then Talos on them from this machine (`roles/talos`), then Flux (`roles/flux_bootstrap`). It never
 reboots a node and never moves one to another version; `make talos-upgrade` does that. Addresses and MACs live only in
 `group_vars/all/local.yml`.
@@ -41,14 +41,14 @@ reboots a node and never moves one to another version; `make talos-upgrade` does
 ## The first build
 
 ```bash
-make check TYPE=truenas && make apply TYPE=truenas   # with a NAS
-make check TYPE=proxmox && make apply TYPE=proxmox
-make check TYPE=kubernetes                           # on a fresh host: what it would create, install and bootstrap
-make apply TYPE=kubernetes
+make check TYPE=truenas && make deploy TYPE=truenas    # with a NAS
+make check TYPE=proxmox && make deploy TYPE=proxmox
+make check TYPE=kubernetes                            # on a fresh host: what it would create, install and bootstrap
+make deploy TYPE=kubernetes
 ```
 
-One `make apply TYPE=kubernetes` creates and starts the VMs, waits for each to boot the Talos ISO into maintenance mode,
-installs Talos on its system disk, bootstraps etcd, waits for `talosctl health`, and writes talosconfig and
+One `make deploy TYPE=kubernetes` creates and starts the VMs, waits for each to boot the Talos ISO into maintenance
+mode, installs Talos on its system disk, bootstraps etcd, waits for `talosctl health`, and writes talosconfig and
 kubeconfig. The run reports each VM's MAC: check them against the DHCP reservations.
 
 ## Using the cluster
@@ -93,8 +93,8 @@ the host.
 
 ## Configuration changes
 
-A change to the patches (`group_vars/kubernetes/talos.yml`) is applied by `make apply TYPE=kubernetes` without a reboot:
-Talos 1.14 applies any configuration at once in that mode (its default mode, `auto`, now means the same), and
+A change to the patches (`group_vars/kubernetes/talos.yml`) is applied by `make deploy TYPE=kubernetes` without a
+reboot: Talos 1.14 applies any configuration at once in that mode (its default mode, `auto`, now means the same), and
 the role never reboots a node. A running service picks up its new settings as Talos reconciles it, except etcd,
 which reads its settings only when it starts: after a change to the control plane the run says so, and a change
 to `cluster.etcd` takes effect after `talosctl -n <address> service etcd restart` (a moment without the API on a
@@ -118,8 +118,8 @@ them), then
    `talos_installer_digests` entry for each schematic at the new version (`crane digest
    factory.talos.dev/metal-installer/<schematic id>:<version>`), keeping the old version's entries until every
    node has moved, since a node is rendered with what it runs. The schematic ids stay, unless a schematic changed.
-2. `make apply TYPE=kubernetes` between the bump and the upgrade changes nothing on the nodes: it renders each node with
-   what it runs, and reports the pending upgrade. It also downloads the new ISO, which nodes built later boot.
+2. `make deploy TYPE=kubernetes` between the bump and the upgrade changes nothing on the nodes: it renders each node
+   with what it runs, and reports the pending upgrade. It also downloads the new ISO, which nodes built later boot.
 3. `make check TYPE=talos-upgrade`: the plan per node, and Kubernetes's own upgrade dry run, deprecated APIs included.
    Read it.
 4. `make talos-upgrade`: an etcd snapshot, each node's upgrade, control plane first (drained, then rebooted into
@@ -128,7 +128,7 @@ them), then
    something down for a few minutes: the control plane's, the Kubernetes API (the apps keep running, but nothing
    is scheduled or changed); the worker's, every app, since draining it leaves them nowhere to go. Choose a quiet
    time.
-5. `make apply TYPE=kubernetes`: a dry run after the upgrade shows no change.
+5. `make deploy TYPE=kubernetes`: a dry run after the upgrade shows no change.
 
 `make etcd-snapshot` takes a snapshot on its own.
 
@@ -172,7 +172,7 @@ flux_sync_ref_unprotected: true
 
 Keep its source suspended while you are not testing, so a push to the branch deploys nothing. The Flux Operator
 rewrites the source whenever it reconciles the FluxInstance, undoing a plain `flux suspend`, so pause the operator's
-handling of it first (its own annotation); `make apply TYPE=kubernetes` leaves both as they are:
+handling of it first (its own annotation); `make deploy TYPE=kubernetes` leaves both as they are:
 
 ```bash
 kubectl annotate fluxinstance -n flux-system flux fluxcd.controlplane.io/reconcile=disabled --overwrite
@@ -186,7 +186,7 @@ flux resume source git flux-system -n flux-system
 kubectl annotate fluxinstance -n flux-system flux fluxcd.controlplane.io/reconcile-
 ```
 
-Once the branch is merged, resume as above, delete both settings and run `make apply TYPE=kubernetes`: the cluster
+Once the branch is merged, resume as above, delete both settings and run `make deploy TYPE=kubernetes`: the cluster
 follows `main` again. While the operator is paused it acts on no change to the FluxInstance, a new Flux release included.
 
 ## Validating on a test host without a NAS
@@ -218,7 +218,7 @@ by `sops_age_key_file` above: left out, the setting means the home cluster's key
 cluster. The repository's Secrets are encrypted for the home key alone (`.sops.yaml` has one recipient), so the test
 cluster cannot decrypt them, and a Flux Kustomization that holds one applies nothing there: `infra-tls`, the cluster's
 CA, so Traefik serves its own certificate, which browsers warn about, and every group of apps with a Secret. Nothing
-else waits for them, but `make apply TYPE=kubernetes` waits for every Flux Kustomization as its last step, so there it ends in
+else waits for them, but `make deploy TYPE=kubernetes` waits for every Flux Kustomization as its last step, so there it ends in
 failure every time, after 10 minutes, naming one that cannot decrypt: the cluster is built and the rest runs. That is
 the price of keeping the home key out of a cluster that is thrown away. To test them, and for a run that passes,
 encrypt their Secrets anew for the test key on the validation branch the test cluster syncs (`.sops.yaml` naming the
@@ -227,7 +227,7 @@ test key there too), and never merge that branch.
 Never set `proxmox_vm_allow_overcommit` on a host whose thin pool other VMs share: a full pool gives them all I/O
 errors. Once Flux is up, Homepage is the one app that starts there, since every other group holds a Secret
 (FileBrowser's, in media). To test a group, encrypt its Secrets for the test key as above, and stop the heavy ones
-once they run (`make down ONLY=nextcloud,photoprism,frigate`, from the clone: it refuses an app that never started),
+once they run (`make suspend ONLY=nextcloud,photoprism,frigate`, from the clone: it refuses an app that never started),
 or point `flux_sync_ref` at a branch that lists fewer apps (`refs/heads/<branch>`, a full reference, with
 `flux_sync_ref_unprotected`; see below). Afterwards: `qm stop 300 301`, then `qm destroy 300 --purge` and
 `qm destroy 301 --purge`, delete their backups and the ISO, the clone, and its `kubernetes_talos_config_dir`.

@@ -71,8 +71,8 @@ def apps(deployments, kustomizations, path, late_label, annotation):
 
 
 def plan(found, state, only, other_names, annotation):
-    """What make down (`state` down) or make up (up) does to the apps `found`, narrowed to the names in `only` (an
-    app's or a group's; none means every app). Names in `other_names` belong to another play and are accepted.
+    """What make suspend (`state` down) or make resume (up) does to the apps `found`, narrowed to the names in `only`
+    (an app's or a group's; none means every app). Names in `other_names` belong to another play and are accepted.
 
     Returns {unknown, apps, groups, waves, order, unchanged}: the names that are none of these, every app's and
     group's name, two waves of steps, the steps' apps as text (each wave's joined), and the apps already as asked,

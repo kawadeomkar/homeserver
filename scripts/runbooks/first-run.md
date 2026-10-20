@@ -47,7 +47,7 @@ Once every app above is set up, set the range of addresses Traefik serves, usual
 kubernetes_ingress_allowed_range: 192.0.2.0/24
 ```
 
-Then `make apply TYPE=kubernetes`, which writes it into the cluster's settings, and
+Then `make deploy TYPE=kubernetes`, which writes it into the cluster's settings, and
 `flux reconcile kustomization infra-configs -n flux-system` to apply it without waiting. Each app answers at
 `https://<app>.<domain>` from then on, once the device trusts the cluster's CA (`scripts/runbooks/tls.md`). Check
 that one app answers from a device in the range and that a request from outside it gets 403. An app added later has

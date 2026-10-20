@@ -85,10 +85,10 @@ make lock                         # update poetry.lock after editing pyproject.t
 make lint                         # every linter; TYPE=lock,yaml,ansible,python,docs,github,manifests,charts,talos
 make test                         # every test; TYPE=unit,policy,gitleaks,idempotence
 make fix                          # what lint can fix: the Python's formatting, the roles' REFERENCE.md; TYPE=python,docs
-make check TYPE=truenas && make apply TYPE=truenas
-make check TYPE=proxmox && make apply TYPE=proxmox
-make check TYPE=homeassistant && make apply TYPE=homeassistant
-make check && make apply          # every machine, the NAS first
+make check TYPE=truenas && make deploy TYPE=truenas
+make check TYPE=proxmox && make deploy TYPE=proxmox
+make check TYPE=homeassistant && make deploy TYPE=homeassistant
+make check && make deploy         # every machine, the NAS first
 ```
 
 `make lint test` is what CI runs, apart from the workflow linters and the scan of a change's commits; `make -k`
@@ -96,13 +96,13 @@ reports every failing type rather than stopping at the first.
 
 Each TrueNAS stage can be run on its own with `TAGS=truenas_network`, `truenas_pools`, `truenas_system`,
 `truenas_datasets`, `truenas_snapshots`, `truenas_nfs`, `truenas_alerts` or `truenas_services`. Always run the check first: the idempotence tests use
-fakes, which cannot prove the real machines behave the same. Every `make apply TYPE=proxmox` also refreshes the package
+fakes, which cannot prove the real machines behave the same. Every `make deploy TYPE=proxmox` also refreshes the package
 lists and upgrades the Proxmox host, and says when an upgrade of the kernel, its firmware, the CPU's microcode or dbus
 waits for a reboot, which is then done by hand.
 
 To give a playbook a variable for one run, put Ansible's own flags in `ANSIBLE_ARGS`:
-`make apply TYPE=kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'`, or `ANSIBLE_ARGS='--limit homeserver'` for
-one host's play. `make apply TYPE=kubernetes -e …` passes nothing to Ansible: make reads `-e` as its own option.
+`make deploy TYPE=kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'`, or `ANSIBLE_ARGS='--limit homeserver'` for
+one host's play. `make deploy TYPE=kubernetes -e …` passes nothing to Ansible: make reads `-e` as its own option.
 
 Alert e-mail is optional: with `truenas_mail_server` and `truenas_alert_email` in `local.yml`, and the server's
 password in the vault as `vault_truenas_mail_password` (`make vault`), the NAS mails its warnings, a
@@ -173,7 +173,7 @@ storage, so the storage id is the whole interface, like the bridge name.
 
 - **With a NAS**, this repo provisions a pool per project. An entry in `vm_storage_consumers`
   (`group_vars/all/storage.yml`) gives it a dataset of its own on the ephemeral pool, an NFS export, and a
-  Proxmox storage under the project's id; the first is `claude-on-proxmox-ephemeral`. After `make apply`, grant
+  Proxmox storage under the project's id; the first is `claude-on-proxmox-ephemeral`. After `make deploy`, grant
   the project's token its pool with the line from that project's README (`pveum aclmod /storage/<id> …`) and
   set the id in the project's own configuration (`proxmox_storage`, for `claude-on-proxmox`). An optional
   `quota` on the entry, in bytes or with a binary suffix such as `200G`, caps the project; the parent dataset's
@@ -208,12 +208,12 @@ checks the section and names any setting it lacks. Fill in, from `local.yml.exam
   cores, 12 GiB and a 32 GiB system disk, with a media disk or `kubernetes_media_on_data_volume: true`; on a small
   host, size the control plane down too;
 - on a ZFS install, `proxmox_local_vm_storage: local-zfs`, with a NAS too: the nodes' system disks go on the
-  installer's storage in both setups, and `make apply TYPE=proxmox` checks that storage whenever there is a cluster.
+  installer's storage in both setups, and `make deploy TYPE=proxmox` checks that storage whenever there is a cluster.
 
 Choose the MACs and reserve the addresses in the router before the first run: the VMs lease their address the
 moment they start. If your `inventory` predates the cluster, add `[kubernetes]` with `homeserver-k8s` to it, as in
 `inventory.example`; the cluster's playbook refuses to run without it. Then `make check TYPE=kubernetes` and
-`make apply TYPE=kubernetes` create the VMs on the Proxmox host, start them, report each one's MAC, install Talos on
+`make deploy TYPE=kubernetes` create the VMs on the Proxmox host, start them, report each one's MAC, install Talos on
 them, bootstrap the cluster and write `~/.talos/homeserver/talosconfig` and `kubeconfig` (back that directory up).
 It needs `talosctl` of the pinned minor release on this machine and the cluster's secrets bundle, made once with
 `talosctl gen secrets` into `~/.talos/homeserver/secrets.yaml` and kept in your password manager, never in a
@@ -233,15 +233,16 @@ age-keygen -o ~/.config/sops/age/homeserver.agekey && chmod 600 ~/.config/sops/a
 export SOPS_AGE_KEY_FILE=~/.config/sops/age/homeserver.agekey    # in your shell profile: sops on macOS reads no ~/.config by default
 ```
 
-To stop the apps without losing anything, before maintenance or to free the host for a while, `make down` scales
-every app to zero and tells Flux to leave it there, then shuts Home Assistant's VM down, and `make up` brings back
-what it stopped; `make check TYPE=down` and `make check TYPE=up` say what each would do. `ONLY` narrows either to apps,
-groups or `homeassistant`, such as `make down ONLY=jellyfin,nextcloud` (a group is a directory under `k8s/apps/`). Data,
-Flux and the platform stay, and a stopped app stays down across reboots until `make up`; databases stop after their
-apps and start before them. Home Assistant's VM starts again with the host, or with `make apply TYPE=homeassistant`.
-`make down ALL=1` stops everything: after the apps and Home Assistant, it shuts the cluster's VMs down too, the
-worker first and the control plane last, each through its own orderly shutdown. `make up ALL=1` starts them, the
-control plane first, waits until every node is Ready, then brings everything else back. `ALL` takes no `ONLY`.
+To stop the apps without losing anything, before maintenance or to free the host for a while, `make suspend` scales
+every app to zero and tells Flux to leave it there, then shuts Home Assistant's VM down, and `make resume` brings back
+what it stopped; `make check TYPE=suspend` and `make check TYPE=resume` say what each would do. `ONLY` narrows either to
+apps, groups or `homeassistant`, such as `make suspend ONLY=jellyfin,nextcloud` (a group is a directory under
+`k8s/apps/`). Data, Flux and the platform stay, and a stopped app stays down across reboots until `make resume`;
+databases stop after their apps and start before them. Home Assistant's VM starts again with the host, or with
+`make deploy TYPE=homeassistant`. `make suspend ALL=1` stops everything: after the apps and Home Assistant, it shuts the
+cluster's VMs down too, the worker first and the control plane last, each through its own orderly shutdown.
+`make resume ALL=1` starts them, the control plane first, waits until every node is Ready, then brings everything else
+back. `ALL` takes no `ONLY`.
 
 A node that stays down: `scripts/runbooks/dead-worker.md`. The playbook never moves, shrinks or deletes their disks, and it refuses to create a VM over the disks or backups an
 earlier one left under the same VMID: restore it instead (`scripts/runbooks/vm-restore.md`). On thin LVM, ZFS, a
@@ -252,7 +253,7 @@ With a NAS, the worker's data disk goes on the NAS, whose quota on the persisten
 may take three quarters of it. A BTRFS install keeps ISOs on `local-btrfs`: name it in `kubernetes_iso_storage` too.
 Taking a cluster down again, a test deployment say, and what it brought with it: `scripts/runbooks/teardown.md`.
 
-With a NAS, `make apply TYPE=truenas` then creates the datasets the cluster mounts (`persistent/nextcloud`,
+With a NAS, `make deploy TYPE=truenas` then creates the datasets the cluster mounts (`persistent/nextcloud`,
 `persistent/photoprism`, `ephemeral/frigate`) and exports them, with the existing media dataset, to the worker
 alone. Whenever `local.yml` changes, update its copy in your password manager.
 
@@ -260,7 +261,7 @@ alone. Whenever `local.yml` changes, update its copy in your password manager.
 
 If the Proxmox host has an Intel iGPU, Jellyfin can transcode and Frigate detect on it: pass it whole to the worker,
 following `scripts/runbooks/gpu.md` (VT-d, the host's `vfio-pci` binding and a PCI resource mapping, all by hand),
-then name the mapping in `local.yml` as `kubernetes_gpu_mapping`. `make apply TYPE=kubernetes` gives the worker the
+then name the mapping in `local.yml` as `kubernetes_gpu_mapping`. `make deploy TYPE=kubernetes` gives the worker the
 device and Talos's i915 driver, and the apps ask for it; restarting that VM and `make talos-upgrade` are yours. Without
 it, the same manifests run both apps on the CPU.
 
@@ -268,33 +269,33 @@ it, the same manifests run both apps on the CPU.
 
 Both setups build the same two VMs. What differs is where the worker's disks live: its data disk on the NAS
 (`homeserver-persistent`, qcow2) with one, and on the installer's storage without, beside a media disk unless media
-goes on the data volume. So once the VMs exist, `make apply TYPE=kubernetes` with a `local.yml` for the other setup
+goes on the data volume. So once the VMs exist, `make deploy TYPE=kubernetes` with a `local.yml` for the other setup
 stops before it changes anything: the worker's data disk is on the other storage, and the refusal names the
 `qm disk move` that would put it where the new setup wants it. The nightly backup covers both VMs in either setup. A
 switch is a migration by hand, not yet tried on a real host:
 
-- **Adding a NAS:** set the NAS up (`make apply TYPE=truenas`), give `local.yml` its addresses, drop the worker's media
-  disk from `kubernetes_node_sizes`, and run `make apply TYPE=proxmox`, which adds the NAS's storages. Shut the worker
+- **Adding a NAS:** set the NAS up (`make deploy TYPE=truenas`), give `local.yml` its addresses, drop the worker's media
+  disk from `kubernetes_node_sizes`, and run `make deploy TYPE=proxmox`, which adds the NAS's storages. Shut the worker
   down (`qm shutdown 301`), copy what its media disk holds to the NAS, then move its data disk with
   `qm disk move 301 scsi1 homeserver-persistent --format qcow2 --delete 1` (without `--format` the copy stays raw)
-  and detach the media disk (`qm disk unlink 301 --idlist scsi2`). Run `make apply TYPE=kubernetes`.
+  and detach the media disk (`qm disk unlink 301 --idlist scsi2`). Run `make deploy TYPE=kubernetes`.
 - **Removing the NAS**, while it still runs: shut the worker down and move its data disk off it,
   `qm disk move 301 scsi1 local-lvm --delete 1` (or your `proxmox_local_vm_storage`). Then remove the NAS from
   `local.yml`, size the worker with a media disk (or set `kubernetes_media_on_data_volume`), and run
-  `make apply TYPE=proxmox` and `make apply TYPE=kubernetes`, which adds the media disk empty.
+  `make deploy TYPE=proxmox` and `make deploy TYPE=kubernetes`, which adds the media disk empty.
 
-Flux's path follows the setup too (`k8s/clusters/nas` or `local`), and `make apply TYPE=kubernetes` refuses to move it
+Flux's path follows the setup too (`k8s/clusters/nas` or `local`), and `make deploy TYPE=kubernetes` refuses to move it
 until run once with `ANSIBLE_ARGS='-e flux_bootstrap_allow_path_change=true'`: Flux prunes what the old path applied, so
 allow it only once the new path holds the apps and their data is where it expects.
 
 The four shared volumes (`media`, `nextcloud-data`, `photoprism-media`, `frigate-media`) keep their names across
 setups but not their kind: NFS shares on the NAS with one, directories on the worker without (on its data volume,
 the library and the recordings on the media disk). Kubernetes never changes an existing volume's kind, and Flux never
-deletes them, so before the path change: stop the apps (`make down`); copy each volume's data across, the users'
+deletes them, so before the path change: stop the apps (`make suspend`); copy each volume's data across, the users'
 files and photos included, not only the media (a pod that mounts the old volume and the new place, say); delete the
 four claims and then the four volumes (`kubectl delete pvc -n <namespace> <name>`, then `kubectl delete pv <name>`,
 which leaves the data where it is, since they are `Retain`); then change the path, which makes them again of the new
-kind, and run `make up`. Switching between a media disk and `kubernetes_media_on_data_volume` moves `media` and
+kind, and run `make resume`. Switching between a media disk and `kubernetes_media_on_data_volume` moves `media` and
 `frigate-media` the same way.
 
 A NAS that is lost takes the worker's data disk with it: that is a restore from backup
@@ -307,16 +308,16 @@ Every night at 02:00 the `vm-nightly` job backs up the cluster's VMs, Home Assis
 to the NAS (`homeserver-backup`, on the redundant pool). Without one, name a Proxmox storage that holds backups
 in `vm_backup_storage`: a USB disk added as a directory storage, set up as a checked mount point
 (`pvesm set <id> --is_mountpoint yes --create-base-path 0`, which the role insists on), or a Proxmox Backup
-Server. Without it nothing is backed up, and every `make apply TYPE=proxmox` says so. Restoring, and the drill that
+Server. Without it nothing is backed up, and every `make deploy TYPE=proxmox` says so. Restoring, and the drill that
 proves a backup restores without disturbing the running cluster: `scripts/runbooks/vm-restore.md`.
 
 ### Home Assistant
 
-Home Assistant runs as a VM of its own, Home Assistant OS, which `make apply TYPE=homeassistant` creates from the pinned
-release's OVA (checked against its sha256) whenever `local.yml` gives its MAC (`haos_mac`), in both setups and with
-or without a cluster: it must keep working while the cluster is down. Before anyone else on the network can, the run
-gives a new Home Assistant its owner account, with the vault's `vault_haos_owner_password`: until it has one, whoever
-reaches it first could claim it. The nightly backup covers it, and Homepage links to it when `local.yml` sets
+Home Assistant runs as a VM of its own, Home Assistant OS, which `make deploy TYPE=homeassistant` creates from the
+pinned release's OVA (checked against its sha256) whenever `local.yml` gives its MAC (`haos_mac`), in both setups and
+with or without a cluster: it must keep working while the cluster is down. Before anyone else on the network can, the
+run gives a new Home Assistant its owner account, with the vault's `vault_haos_owner_password`: until it has one,
+whoever reaches it first could claim it. The nightly backup covers it, and Homepage links to it when `local.yml` sets
 `haos_url`. `scripts/runbooks/haos.md` has the steps before the first run (the DHCP reservation, the password, a
 Zigbee stick) and what comes after.
 
@@ -393,7 +394,7 @@ The host masquerades tailnet traffic to its own address, so nothing on the LAN n
 with or without a NAS, whatever the router.
 
 **Setting it up.** Set `tailscale_advertise_routes` in `group_vars/all/local.yml` to the LAN's prefix, and put a
-one-off, tagged auth key in the vault as `vault_tailscale_auth_key`. Then `make apply TYPE=proxmox`:
+one-off, tagged auth key in the vault as `vault_tailscale_auth_key`. Then `make deploy TYPE=proxmox`:
 
 - installs Tailscale from its own repository, and upgrades it on every run (Tailscale's own updater stays off);
 - loads a forwarding guard;
@@ -417,7 +418,7 @@ enough alone:
 - The tunnel is down whenever the host is: there is no remote access while it reboots, and none at all if it fails to
   come back, from a kernel that does not boot to a network link that does not come up. Reboot it from home, or where
   someone can reach it.
-- `make apply TYPE=proxmox` restarts Tailscale when it upgrades it, so run it from home.
+- `make deploy TYPE=proxmox` restarts Tailscale when it upgrades it, so run it from home.
 - Traffic between the tailnet and the LAN is encrypted by Tailscale, so plain HTTP to the apps stays private on the
   way; on the LAN itself it is still plain until there is TLS.
 

@@ -3,7 +3,7 @@
 Builds a Talos Linux cluster from the controller with `talosctl` and `kubectl`, and keeps its configuration. With
 only its defaults it does nothing. Three entry points:
 
-- **`main`** (`make apply TYPE=kubernetes`): installs Talos on nodes in maintenance mode, keeps a configured node's
+- **`main`** (`make deploy TYPE=kubernetes`): installs Talos on nodes in maintenance mode, keeps a configured node's
   configuration, bootstraps etcd once, waits for the cluster to be healthy, and writes talosconfig and kubeconfig.
   It never reboots a node and never moves one to another version.
 - **`upgrade`** (`make talos-upgrade`; `tasks_from: upgrade`): an etcd snapshot, then each node whose Talos version
@@ -78,7 +78,7 @@ in the temporary directory) a day old or older.
 | `talos_keep_rendered` | `false` | Keep each node's rendered configuration in `talos_config_dir/rendered/` (mode 0600), until the next run without it |
 
 A variable for one run goes through `ANSIBLE_ARGS`:
-`make apply TYPE=kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'`. `scripts/runbooks/talos.md` covers building,
+`make deploy TYPE=kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'`. `scripts/runbooks/talos.md` covers building,
 upgrading and restoring; this repository's configuration is `group_vars/kubernetes/talos.yml`.
 
 ## Example

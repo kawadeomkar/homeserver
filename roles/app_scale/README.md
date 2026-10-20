@@ -1,7 +1,7 @@
 # app_scale
 
-Scales a Flux-managed cluster's apps to zero and back from the controller, with `kubectl`: what `make down` and
-`make up` run. With only its defaults it does nothing.
+Scales a Flux-managed cluster's apps to zero and back from the controller, with `kubectl`: what `make suspend` and
+`make resume` run. With only its defaults it does nothing.
 
 An **app** is a Deployment that a Flux Kustomization whose path lies under `app_scale_path` applies, as the labels
 Flux puts on it say; a **group** is the apps of one namespace. `app_scale_only` names apps or groups (a name that is
@@ -38,8 +38,8 @@ says what it would stop or start, in order.
 | `app_scale_annotation` | `""` | The annotation that records a stopped app's replicas |
 | `app_scale_timeout` | `10m` | How long a real run waits for an app to stop, or to be available |
 
-This repository's `down.yml` and `up.yml` pass the state and `ONLY`, with `homeassistant` as the name their second
-play takes (Home Assistant's VM); the rest is in `group_vars/kubernetes/apps.yml`.
+This repository's `suspend.yml` and `resume.yml` pass the state and `ONLY`, with `homeassistant` as the name their
+second play takes (Home Assistant's VM); the rest is in `group_vars/kubernetes/apps.yml`.
 
 ## Example
 

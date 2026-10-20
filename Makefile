@@ -36,7 +36,7 @@ ENV_FOUND    = @$(BIN)/python -c 'import sys; sys.exit(sys.prefix == sys.base_pr
 	  echo "or python3 -m venv <dir> && source <dir>/bin/activate. Then make install."; exit 1; }
 
 # TYPE narrows a target to some of what it does: one or more of its types, comma-separated (make lint TYPE=yaml,python),
-# and exactly one for check and apply, which run one playbook (make check TYPE=proxmox). <target>_TYPES lists what each
+# and exactly one for check and deploy, which run one playbook (make check TYPE=proxmox). <target>_TYPES lists what each
 # target takes, in the order they run; a target not in TYPED takes none. A type that is not a goal's, or a TYPE for a
 # goal that takes none, stops make before anything runs.
 TYPE    ?=
@@ -44,7 +44,7 @@ comma   := ,
 empty   :=
 space   := $(empty) $(empty)
 TYPES   := $(strip $(subst $(comma), ,$(TYPE)))
-TYPED   := init vault lint test fix check apply
+TYPED   := init vault lint test fix check deploy
 init_TYPES  := full
 vault_TYPES := new
 lint_TYPES  := lock yaml ansible python docs github manifests charts talos
@@ -53,13 +53,13 @@ lint_ALIASES := k8s
 k8s_TYPES   := manifests charts talos
 test_TYPES  := unit policy gitleaks idempotence
 fix_TYPES   := python docs
-apply_TYPES := truenas proxmox homeassistant kubernetes
-check_TYPES := $(apply_TYPES) talos-upgrade down up
+deploy_TYPES := truenas proxmox homeassistant kubernetes
+check_TYPES := $(deploy_TYPES) talos-upgrade suspend resume
 list     = $(subst $(space),$(comma),$(strip $(1)))
 define check_types
 $(if $(filter $(1),$(TYPED)),,$(error make $(1) takes no TYPE))
 $(if $(filter-out $($(1)_TYPES) $($(1)_ALIASES),$(TYPES)),$(error make $(1) takes TYPE=$(call list,$($(1)_TYPES) $($(1)_ALIASES)), not $(call list,$(filter-out $($(1)_TYPES) $($(1)_ALIASES),$(TYPES)))))
-$(if $(and $(filter check apply,$(1)),$(word 2,$(TYPES))),$(error make $(1) runs one playbook: one TYPE at a time))
+$(if $(and $(filter check deploy,$(1)),$(word 2,$(TYPES))),$(error make $(1) runs one playbook: one TYPE at a time))
 endef
 ifneq ($(TYPES),)
 $(foreach goal,$(MAKECMDGOALS),$(eval $(call check_types,$(goal))))
@@ -73,19 +73,19 @@ targets  = $(addprefix $(1)/,$(patsubst k8s,$(k8s_TYPES),$(call pick,$(1))))
 # Narrow a playbook run to stages, e.g. make check TYPE=truenas TAGS=truenas_pools
 TAGS    ?=
 TAG_ARGS := $(if $(TAGS),--tags $(TAGS),)
-# Narrow make down and make up to some apps, groups or homeassistant, e.g. make down ONLY=jellyfin,nextcloud
+# Narrow make suspend and make resume to some apps, groups or homeassistant, e.g. make suspend ONLY=jellyfin,nextcloud
 ONLY    ?=
 ONLY_ARGS := $(if $(ONLY),-e '{"only": "$(strip $(ONLY))"}',)
-# Widen them to the cluster's VMs too, after everything else: make down ALL=1, make up ALL=1. Not with ONLY.
+# Widen them to the cluster's VMs too, after everything else: make suspend ALL=1, make resume ALL=1. Not with ONLY.
 ALL     ?=
 ALL_ARGS := $(if $(ALL),-e '{"cluster_vms": true}',)
 # Anything else for ansible-playbook, such as a variable for one run:
-#   make apply TYPE=kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'
+#   make deploy TYPE=kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'
 # (make's own -e is not that: it is make's --environment-overrides, and passes nothing to Ansible).
 ANSIBLE_ARGS ?=
 PLAYBOOK := $(BIN)/ansible-playbook
 # Every playbook run is also written to its own log (git-ignored: it holds addresses), named after
-# the target, TYPE and TAGS, e.g. logs/20261004-210501-apply-truenas-truenas_network.log. logs/latest.log
+# the target, TYPE and TAGS, e.g. logs/20261004-210501-deploy-truenas-truenas_network.log. logs/latest.log
 # points at the newest. The API key never appears: the modules mark it no_log.
 LOG_DIR ?= logs
 STAMP   := $(shell date +%Y%m%d-%H%M%S)
@@ -95,7 +95,7 @@ RUN_LOG  = $(LOG_DIR)/$(STAMP)-$@$(if $(TYPES),-$(TYPES))$(if $(TAGS),-$(subst $
 RUN      = @test -x $(PLAYBOOK) || { echo "$(PLAYBOOK) not found: run make install in the project's virtualenv, or point make at it (pyenv local <env>, or VENV=<its path>)" >&2; exit 2; }; \
            umask 077 && mkdir -p $(LOG_DIR) && ln -sf $(notdir $(RUN_LOG)) $(LOG_DIR)/latest.log \
            && echo "Logging to $(RUN_LOG) (Python environment: $(VENV))" && ANSIBLE_LOG_PATH=$(RUN_LOG) $(PLAYBOOK)
-# check and apply run the playbook TYPE names, or site.yml, every one in order, without it.
+# check and deploy run the playbook TYPE names, or site.yml, every one in order, without it.
 TYPE_PLAYBOOK = $(if $(TYPES),$(TYPES),site).yml
 
 # Manifests are validated against the Kubernetes version Talos ships (v1.14.2 runs 1.37.1), with the
@@ -142,7 +142,7 @@ help: ## Show this help
 	@printf 'make <target> [TYPE=<type>[,<type>...]] [PARAMETER=<value>...]\n'
 	@awk 'BEGIN {FS = ":.*## "} /^##@ / {printf "\n%s\n", substr($$0, 5); next} \
 	  /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
-	@printf '\nTYPE narrows a target to part of what it does (several, comma-separated; check and apply take one):\n'
+	@printf '\nTYPE narrows a target to part of what it does (several, comma-separated; check and deploy take one):\n'
 	@printf '  \033[36m%-14s\033[0m %s\n' \
 	  init "$(init_TYPES): every optional setting too" \
 	  vault "$(vault_TYPES): an empty vault of your own, for a setup without the maintainer's NAS" \
@@ -150,14 +150,14 @@ help: ## Show this help
 	  test "$(test_TYPES)" \
 	  fix "$(fix_TYPES)" \
 	  check "$(check_TYPES)" \
-	  apply "$(apply_TYPES)"
+	  deploy "$(deploy_TYPES)"
 	@printf '\nOther parameters:\n'
 	@printf '  \033[36m%-20s\033[0m %s\n' \
 	  'UPDATE=<packages>' 'lock: move these to their newest allowed versions too' \
 	  'PYTEST_ARGS=<args>' "test: more for pytest, e.g. PYTEST_ARGS='-m cluster'" \
-	  'TAGS=<tags>' 'check, apply: those stages only, e.g. TYPE=truenas TAGS=truenas_pools' \
-	  'ONLY=<names>' 'down, up, check TYPE=down|up: some apps, groups or homeassistant' \
-	  'ALL=1' "down, up, check TYPE=down|up: the cluster's VMs too" \
+	  'TAGS=<tags>' 'check, deploy: those stages only, e.g. TYPE=truenas TAGS=truenas_pools' \
+	  'ONLY=<names>' 'suspend, resume, check TYPE=suspend|resume: some apps, groups or homeassistant' \
+	  'ALL=1' "suspend, resume, check TYPE=suspend|resume: the cluster's VMs too" \
 	  'ANSIBLE_ARGS=<args>' "every playbook: more for ansible-playbook, e.g. '-e talos_allow_bootstrap=true'" \
 	  'VENV=<path>' "every target: the project's virtualenv (default: the active one, else python3's here)"
 
@@ -341,9 +341,12 @@ test/idempotence:
 .PHONY: fix $(addprefix fix/,$(fix_TYPES))
 fix: $(call targets,fix) ## Write what lint can fix: the Python's formatting and safe fixes, every role's REFERENCE.md
 
-# ruff's safe fixes, then its formatting; what it cannot fix is left for make lint TYPE=python to report.
+# ruff's safe fixes, then its formatting, then a check that reports only what neither could fix (a long line the
+# formatter wrapped is fixed, though the first pass saw it).
 fix/python:
-	@rc=0; $(BIN)/ruff check --fix . || rc=1; $(BIN)/ruff format . || rc=1; exit $$rc
+	$(BIN)/ruff check --fix --exit-zero --silent .
+	$(BIN)/ruff format .
+	$(BIN)/ruff check .
 
 # Every role's REFERENCE.md, written with docsible from the role as it is: never edit one by hand.
 fix/docs:
@@ -352,20 +355,20 @@ fix/docs:
 
 ##@ Machines
 .PHONY: check
-check: ## Dry run of apply, or of TYPE: what it would change, with the diff
-	$(RUN) $(TYPE_PLAYBOOK) --check --diff $(TAG_ARGS) $(if $(filter down up,$(TYPES)),$(ONLY_ARGS) $(ALL_ARGS)) $(ANSIBLE_ARGS)
+check: ## Dry run of deploy, or of TYPE: what it would change, with the diff
+	$(RUN) $(TYPE_PLAYBOOK) --check --diff $(TAG_ARGS) $(if $(filter suspend resume,$(TYPES)),$(ONLY_ARGS) $(ALL_ARGS)) $(ANSIBLE_ARGS)
 
-.PHONY: apply
-apply: ## Configure every machine, the NAS first (its play ends by itself without one), or TYPE alone
+.PHONY: deploy
+deploy: ## Build and configure everything, the NAS first (its play ends by itself without one), or TYPE alone
 	$(RUN) $(TYPE_PLAYBOOK) --diff $(TAG_ARGS) $(ANSIBLE_ARGS)
 
-.PHONY: down
-down: ## Spin the apps down (scaled to zero, Flux told to leave them) and Home Assistant's VM
-	$(RUN) down.yml --diff $(ONLY_ARGS) $(ALL_ARGS) $(ANSIBLE_ARGS)
+.PHONY: suspend
+suspend: ## Suspend the apps (scaled to zero, Flux told to leave them, data kept) and Home Assistant's VM
+	$(RUN) suspend.yml --diff $(ONLY_ARGS) $(ALL_ARGS) $(ANSIBLE_ARGS)
 
-.PHONY: up
-up: ## Bring back what make down stopped, the apps handed back to Flux
-	$(RUN) up.yml --diff $(ONLY_ARGS) $(ALL_ARGS) $(ANSIBLE_ARGS)
+.PHONY: resume
+resume: ## Bring back what make suspend stopped, the apps handed back to Flux
+	$(RUN) resume.yml --diff $(ONLY_ARGS) $(ALL_ARGS) $(ANSIBLE_ARGS)
 
 .PHONY: talos-upgrade
 talos-upgrade: ## Move the running cluster to the pinned Talos and Kubernetes versions (etcd snapshot first)

@@ -115,11 +115,11 @@ left there does nothing.
    - "Would enable the guard at boot and load the guard";
    - "IPv4 forwarding is off";
    - "Would log the node in with the auth key".
-3. Run `make apply TYPE=proxmox`, **from home**. `make apply TYPE=proxmox` upgrades Tailscale on every run, which
+3. Run `make deploy TYPE=proxmox`, **from home**. `make deploy TYPE=proxmox` upgrades Tailscale on every run, which
    restarts it. Run from away, that drops the connection the run itself uses. An OpenSSH session usually rides it out,
    but if dpkg is interrupted, `dpkg --configure -a` over a new session repairs it, and if Tailscale does not come back,
    remote access waits until you are home.
-4. Run `make apply TYPE=proxmox` again. The Tailscale tasks report no change, and the last one says "Nothing for the
+4. Run `make deploy TYPE=proxmox` again. The Tailscale tasks report no change, and the last one says "Nothing for the
    admin console to fix." It may also print Tailscale's own warning that UDP GRO forwarding is suboptimal on `vmbr0`;
    that concerns throughput only.
 5. On the host, check the guard:
@@ -185,16 +185,16 @@ Test the guard's fail-closed behaviour only at the console, never from away:
    restart stops `tailscaled` along with the guard, the guard fails to start again, and `tailscaled` stays down:
    `systemctl status tailscaled` names the failed dependency. The old table stays loaded, since the unit has no stop
    command.
-2. `make apply TYPE=proxmox` puts the file back, loads the guard and starts `tailscaled` again.
+2. `make deploy TYPE=proxmox` puts the file back, loads the guard and starts `tailscaled` again.
 
-`systemctl stop tailnet-guard` stops Tailscale the same way, and the next `make apply TYPE=proxmox` starts both again.
+`systemctl stop tailnet-guard` stops Tailscale the same way, and the next `make deploy TYPE=proxmox` starts both again.
 
 ## After a reinstall of the host
 
 The node's identity lived on the old boot drive.
 
 1. In the admin console, delete the old machine first, or the new one is named `<hostname>-1`.
-2. Make a new key (step 4) and run `make apply TYPE=proxmox`.
+2. Make a new key (step 4) and run `make deploy TYPE=proxmox`.
 
 The auto-approver approves the route again.
 

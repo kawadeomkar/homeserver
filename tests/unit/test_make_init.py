@@ -322,7 +322,7 @@ def test_a_first_run_writes_each_answer_and_says_what_is_missing(repo):
     assert "The vault has no password" in summary
     assert "vault_haos_owner_password" not in summary, "a secret is not reported while the vault does not open"
     assert "secrets bundle" in summary and "age key" in summary
-    assert "make check TYPE=kubernetes && make apply TYPE=kubernetes" in summary
+    assert "make check TYPE=kubernetes && make deploy TYPE=kubernetes" in summary
     assert "vm_backup_storage" in summary.split("RECOMMENDED")[1]
     assert "TYPE=full also asks" in summary
     assert stat.S_IMODE((repo / "group_vars/all/local.yml").stat().st_mode) == 0o600, "readable by its owner alone"

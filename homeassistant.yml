@@ -15,7 +15,7 @@
     proxmox_vm_isos: []
     proxmox_vm_imports: "{{ haos_imports }}"
     proxmox_vm_pending_storages: "{{ haos_pending_storages }}"
-    proxmox_vm_rebuild_command: "make apply TYPE=homeassistant ANSIBLE_ARGS='-e proxmox_vm_ignore_existing_volumes=true'"
+    proxmox_vm_rebuild_command: "make deploy TYPE=homeassistant ANSIBLE_ARGS='-e proxmox_vm_ignore_existing_volumes=true'"
     haos_onboard_vmid: "{{ haos_vm_vmid | int if haos_present else 0 }}"
     haos_onboard_mac: "{{ haos_mac | default('', true) | string | trim }}"
     haos_onboard_name: "{{ haos_owner.name }}"
