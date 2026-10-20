@@ -48,8 +48,10 @@ truenas_datasets_vm_classes:
   - name: "{{ vm_storage.persistent.dataset | dirname }}"
     properties: {compression: LZ4, atime: "OFF", acltype: POSIX, aclmode: DISCARD}
   - name: "{{ vm_storage.persistent.dataset }}"
-    # There is no UPS, so persistent VMs keep synchronous writes synchronous.
-    properties: {sync: STANDARD, recordsize: 64K}
+    # There is no UPS, so persistent VMs keep synchronous writes synchronous. The quota (group_vars/all/storage.yml)
+    # caps the VMs' disks and their snapshots, so a disk that fills never fills the pool under the backups.
+    properties: >-
+      {{ {'sync': 'STANDARD', 'recordsize': '64K', 'quota': (vm_storage_persistent_quota_gib | int) * 1073741824} }}
   - name: "{{ vm_storage_backup.dataset }}"
     # vzdump archives: large files written once. Never a snapshot task: it holds backups already.
     properties: {sync: STANDARD, recordsize: 1M}

@@ -11,9 +11,13 @@ import re
 
 GIB = 2**30
 MIB = 2**20
-# Storage types whose space is shared by every disk on them, and so counted against their size (thin LVM and
-# ZFS). A file or NFS storage is left to whatever caps it (the NAS's quotas).
-BUDGETED_TYPES = ("lvmthin", "zfspool")
+# Storage types whose space is shared by every disk on them, and so counted against their size: thin LVM, ZFS, and
+# the host's own directories and BTRFS, where sparse disks would otherwise fill the root filesystem as they fill. An
+# NFS storage is not budgeted: only a cap set where it lives holds its disks, such as a quota on the NAS's dataset.
+BUDGETED_TYPES = ("lvmthin", "zfspool", "dir", "btrfs")
+# Those whose size also holds the host's own files (a ZFS install's root filesystem on the same pool, a directory's
+# or BTRFS volume's filesystem): their size shrinks as those grow, so host_headroom stays out of the budget.
+HOST_SHARED_TYPES = ("zfspool", "dir", "btrfs")
 # The content types of the volumes counted there: VMs' disks, and containers', which Proxmox lists as rootdir.
 GUEST_CONTENT = ("images", "rootdir")
 # What an EFI disk takes, whatever size it is created with.
@@ -209,14 +213,14 @@ def input_errors(vms, isos):
     return errors
 
 
-def storage_problems(storage, config, content, check_mode, pending):
+def storage_problems(storage, config, content, check_mode, pending, hint=""):
     """Why a storage cannot take what the role puts on it, or None. A storage pending creation by an earlier role
-    passes a dry run."""
+    passes a dry run; on a real run, the hint says what creates it."""
     have = {entry["storage"]: entry for entry in config}
     if storage not in have:
         if check_mode and storage in pending:
             return None
-        return f"{storage}: does not exist"
+        return f"{storage}: does not exist" + (f" ({hint})" if storage in pending and hint else "")
     entry = have[storage]
     if int(entry.get("disable") or 0) == 1:
         return f"{storage}: is disabled"
@@ -252,9 +256,20 @@ def drift(vm, config):
             delete.append(key)
     current = disks_of(config)
     wanted_slots = {disk["slot"] for disk in vm["disks"]}
+    # A volume left unused, such as the disk a restore over the VM kept because the backup excluded it: a slot is
+    # never filled with a new, empty disk while it may hold that slot's data.
+    unused = {key: props(config[key], "volume")["volume"] for key in sorted(config) if re.fullmatch(r"unused\d+", key)}
     for disk in vm["disks"]:
         slot = disk["slot"]
         if slot not in current:
+            if unused:
+                found = ", ".join(f"{key} ({volume})" for key, volume in unused.items())
+                refused.append(
+                    f"VM {vm['vmid']} has no {slot} but keeps {found}, unused: a restore leaves the disks its backup "
+                    f"excluded so. Attach the one {slot} held back (qm set {vm['vmid']} --{slot} <volume>), or remove "
+                    f"it (qm disk unlink {vm['vmid']} --idlist <unusedN> --force) to get a new, empty one"
+                )
+                continue
             options += [f"--{slot}", disk_option(disk)]
             continue
         volume, size = current[slot]
@@ -264,7 +279,17 @@ def drift(vm, config):
                 f"VM {vm['vmid']}'s {slot} is on {volume_storage(volume)}, configured on {disk['storage']}: moving it "
                 f"is by hand (qm disk move {vm['vmid']} {slot} {disk['storage']} --delete 1)"
             )
-        elif size > want:
+            continue
+        # Its serial and whether backups include it are the volume's options, set again on the same volume. Backups
+        # include a disk unless it says backup=0.
+        have = props(config[slot], "volume")
+        settings = {"serial": disk.get("serial"), "backup": "0" if disk.get("backup") is False else None}
+        current_settings = {"serial": have.get("serial"), "backup": "0" if have.get("backup") == "0" else None}
+        if current_settings != settings:
+            kept = {k: v for k, v in have.items() if k not in ("volume", "size", "format", *settings)}
+            kept.update({k: v for k, v in settings.items() if v is not None})
+            options += [f"--{slot}", ",".join([volume, *(f"{k}={v}" for k, v in kept.items())])]
+        if size > want:
             refused.append(
                 f"VM {vm['vmid']}'s {slot} is {gib(size)}, configured as {gib(want)}: a disk is never shrunk. Grow "
                 f"the configuration, or move the data to a new disk by hand"
@@ -295,13 +320,16 @@ def configured_mac(config):
 def plan(vms, facts):
     """Everything the role does on this run, from what it read. `facts`:
 
-    check_mode, pending_storages, allow_overcommit, ignore_existing_volumes: the role's switches;
+    check_mode, pending_storages, allow_overcommit, ignore_existing_volumes: the role's switches; pending_hint: what
+    creates the pending storages, said when one is missing on a real run;
     storage_config: `pvesh get /storage`; qemu: `pvesh get /nodes/<node>/qemu`; lxc: `pvesh get /nodes/<node>/lxc`;
     node_storage: `pvesh get /nodes/<node>/storage`, which says whether each storage is active;
     configs and pending: per existing VM's vmid, its configuration and its pending changes;
     volumes: per missing VM's vmid, what the node's active storages list for its VMID (Proxmox adds files that
     belong to no VMID, such as imports and snippets, which are left out here);
     contents and totals: per budgeted storage, its volumes (every content type) and its size in bytes;
+    host_headroom: bytes of each ZFS, directory or BTRFS storage's size kept out of the budget, for the host's
+    own files;
     memory_total: the node's memory in bytes; isos: the volume ids the role downloads.
     """
     check_mode = bool(facts.get("check_mode"))
@@ -316,7 +344,7 @@ def plan(vms, facts):
         {disk["storage"] for vm in vms for disk in vm["disks"]}
         | {vm["efidisk_storage"] for vm in vms if vm.get("bios", "ovmf") == "ovmf"}
     ):
-        problem = storage_problems(storage, config, "images", check_mode, pending)
+        problem = storage_problems(storage, config, "images", check_mode, pending, facts.get("pending_hint") or "")
         if problem:
             errors.append(f"{problem} (proxmox_vm_vms)")
     containers = {str(entry["vmid"]): entry for entry in facts.get("lxc") or []}
@@ -393,10 +421,14 @@ def plan(vms, facts):
         if waiting:
             result["restart"][vm["name"]] = waiting
 
-    # The disk budget: on thin LVM or ZFS, the disks' provisioned sizes, other guests' included, never add up to more
-    # than the storage's size. Counted from what is provisioned, never from what is free, which shrinks as data is
-    # written, so the check gives the same answer on every run. A container's volumes count too: Proxmox lists them
-    # as rootdir, not images.
+    # The disk budget: on thin LVM, ZFS, a directory or BTRFS, the disks' provisioned sizes, other guests' included,
+    # never add up to more than the storage's size. Counted from what is provisioned, never from what is free, which
+    # shrinks as data is written. A container's volumes count too: Proxmox lists them as rootdir, not images. A thin
+    # pool's size is its own, so on thin LVM the check gives the same answer on every run. A ZFS storage's size is its
+    # dataset's use plus the pool's free space, and the pool also holds the host's own datasets (the installer's root
+    # filesystem and local on rpool): it shrinks as they grow, so a plan that passed can be refused later, and disks
+    # budgeted to the last byte would fill the host's root filesystem as they fill. A directory or BTRFS storage's size
+    # is its filesystem's, which the host's own files share in the same way. host_headroom keeps room for them.
     types = {entry["storage"]: entry.get("type") for entry in config}
     additions = {}
     for vm in vms:
@@ -419,12 +451,14 @@ def plan(vms, facts):
             if v.get("content") in GUEST_CONTENT
         )
         total = int(facts["totals"][storage])
-        if provisioned + added > total and not facts.get("allow_overcommit"):
+        headroom = int(facts.get("host_headroom") or 0) if types[storage] in HOST_SHARED_TYPES else 0
+        if provisioned + added > total - headroom and not facts.get("allow_overcommit"):
+            kept = f" less the {gib(headroom)} kept for the host's own files (proxmox_vm_host_headroom_gib)"
             errors.append(
                 f"{storage}: its disks would be provisioned at {gib(provisioned + added)} ({gib(provisioned)} there "
-                f"now, {gib(added)} more for proxmox_vm_vms), more than its {gib(total)}. A full thin pool gives every "
-                f"VM on it I/O errors: make the disks smaller, free space, or set proxmox_vm_allow_overcommit in "
-                f"local.yml"
+                f"now, {gib(added)} more for proxmox_vm_vms), more than its {gib(total)}{kept if headroom else ''}. "
+                f"A full storage gives every VM on it I/O errors: make the disks smaller, free space, or set "
+                f"proxmox_vm_allow_overcommit in local.yml"
             )
 
     # Memory: a warning, never a refusal.

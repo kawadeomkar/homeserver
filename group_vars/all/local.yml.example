@@ -62,8 +62,11 @@ truenas_pool_disks:
 # the NAS's VM shares.
 proxmox_address: 192.0.2.20
 
-# Without a NAS, VM disks stay on the storage the Proxmox installer created,
-# local-lvm unless this names another. A ZFS install calls it local-zfs.
+# The storage the Proxmox installer created, which holds the VM disks that
+# stay on the host: every VM's without a NAS, and the cluster's system disks
+# with one too. local-lvm unless this names another; a ZFS install calls it
+# local-zfs, and a BTRFS install local-btrfs, and then needs this line in
+# either setup.
 # proxmox_local_vm_storage: local-zfs
 
 # The nightly backup of the VMs. With a NAS it goes to the NAS. Without one,
@@ -72,7 +75,7 @@ proxmox_address: 192.0.2.20
 # yes --create-base-path 0), or a Proxmox Backup Server. Unset, nothing is
 # backed up, and every run says so.
 # vm_backup_storage: usb-backup
-# The VMs to back up, by VMID.
+# Other VMs to back up with the cluster's, such as Home Assistant's.
 # vm_backup_extra_vmids: [310]
 
 # Remote access through Tailscale (scripts/runbooks/tailscale.md): the Proxmox
@@ -81,3 +84,32 @@ proxmox_address: 192.0.2.20
 # in CIDR form. Write the tailnet's policy first, and put a one-off auth key in
 # the vault as vault_tailscale_auth_key. Unset, Tailscale is not installed.
 # tailscale_advertise_routes: [192.0.2.0/24]
+
+# --------------------------------------------------------------- Kubernetes ---
+# No cluster? Delete this whole section. With no node addresses the Kubernetes
+# play creates no VM. A section that keeps other values but no address is
+# refused: that is what a misspelt address looks like.
+#
+# Each node's address, reserved in the router's DHCP outside its dynamic range.
+# Both setups have the same two nodes: a control plane, and a worker that runs
+# every app.
+kubernetes_node_addresses:
+  homeserver-cp-1: 192.0.2.30
+  homeserver-worker-1: 192.0.2.31
+# Each node's MAC, chosen by you and reserved in DHCP for its address before the
+# first run: locally administered, in lower case, its second hex digit 2, 6, a
+# or e. Replace each <mac>; a placeholder left here is refused.
+kubernetes_node_macs:
+  homeserver-cp-1: "<mac>"
+  homeserver-worker-1: "<mac>"
+# The nodes' sizes fit the home host. Without a NAS, size the worker to what
+# the host can spare (required), and on a small host the control plane too
+# (2 GiB of memory and a 10 GiB system disk at least; it takes no data disk):
+# kubernetes_node_sizes:
+#   homeserver-worker-1: {cores: 6, memory_mib: 24576, system_disk_gib: 64, data_disk_gib: 150, media_disk_gib: 1000}
+#   homeserver-cp-1: {cores: 2, memory_mib: 4096, system_disk_gib: 32}
+# Without a NAS and with no room for a media disk: keep the media and camera
+# recordings on the data volume, where they are backed up and share its space.
+# kubernetes_media_on_data_volume: true
+# On a BTRFS install, which disables local, the Talos ISO goes on local-btrfs.
+# kubernetes_iso_storage: local-btrfs

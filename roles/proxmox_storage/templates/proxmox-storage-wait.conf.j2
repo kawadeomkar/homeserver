@@ -1,0 +1,9 @@
+# Written by Ansible (roles/proxmox_storage). After the node's start-on-boot delay, the guests wait until each of
+# these storages is active, for at most {{ proxmox_storage_startall_wait_timeout }} seconds, then start whatever they say: a VM whose disk
+# is on a storage that is not active fails to start, and Proxmox never tries again. The leading "-" keeps a
+# timeout from failing the unit.
+[Service]
+ExecStartPre=-/usr/bin/timeout {{ proxmox_storage_startall_wait_timeout }} /bin/sh -c '\
+  for s in {{ proxmox_storage_startall_wait | join(' ') }}; do \
+    until /usr/sbin/pvesm status --storage "$$s" 2>/dev/null | grep -q " active "; do sleep 5; done; \
+  done'

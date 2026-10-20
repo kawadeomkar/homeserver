@@ -27,3 +27,10 @@ proxmox_storage_node: ""
 # Seconds the node waits at boot before starting VMs marked start-on-boot (0-300). null leaves the
 # node's setting alone.
 proxmox_storage_startall_delay: null
+# Storage ids the guests' start at boot waits for, after that delay, until each is active (a drop-in for
+# pve-guests.service), for at most proxmox_storage_startall_wait_timeout seconds. Empty, there is no drop-in, and
+# one the role wrote before is removed.
+proxmox_storage_startall_wait: []
+proxmox_storage_startall_wait_timeout: 600
+# Where that drop-in goes, in pve-guests.service.d/.
+proxmox_storage_systemd_dir: /etc/systemd/system

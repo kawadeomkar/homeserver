@@ -15,7 +15,9 @@
     # Proxmox's rule for an id (pve-storage-id): two or more letters, digits, hyphens, underscores and dots,
     # starting with a letter and ending with a letter or digit, case not mattering. Checked here so a typo
     # fails the dry run rather than pvesm add.
-    _malformed: "{{ _ids | select | map('string') | reject('match', '^[a-z][a-z0-9_.-]*[a-z0-9]$', ignorecase=True) | list }}"
+    _malformed: >-
+      {{ (_ids + ([] if proxmox_storage_startall_wait is string else proxmox_storage_startall_wait)) | select
+         | map('string') | reject('match', '^[a-z][a-z0-9_.-]*[a-z0-9]$', ignorecase=True) | unique | list }}
     _serverless: "{{ proxmox_storage_nfs | rejectattr('server', 'defined') | map(attribute='id') | list }}"
     # server:export per NFS entry, with the role-wide server filled in.
     _exports: >-
@@ -28,6 +30,13 @@
       {%- set out = [] -%}
       {%- if proxmox_storage_local is string -%}
       {%-   set _ = out.append('proxmox_storage_local must be a list of storage ids, such as [local-lvm], not a string.') -%}
+      {%- endif -%}
+      {%- if proxmox_storage_startall_wait is string -%}
+      {%-   set _ = out.append('proxmox_storage_startall_wait must be a list of storage ids, not a string.') -%}
+      {%- endif -%}
+      {%- if (proxmox_storage_startall_wait_timeout | string) is not match('^[0-9]+$')
+             or proxmox_storage_startall_wait_timeout | int < 1 -%}
+      {%-   set _ = out.append('proxmox_storage_startall_wait_timeout must be a whole number of seconds above 0.') -%}
       {%- endif -%}
       {%- if _ids | select | unique | list | length != _ids | length -%}
       {%-   set _ = out.append('Storage ids must be unique across proxmox_storage_nfs and proxmox_storage_local, and none may be empty.') -%}
@@ -262,6 +271,41 @@
       (proxmox_storage_node_config.stdout | from_json).get('startall-onboot-delay', 0) | int
       != proxmox_storage_startall_delay | int
   changed_when: true
+
+# Proxmox starts each guest marked start-on-boot once, from pve-guests.service, after the node's delay above. A VM
+# whose disk is on a storage that is not active yet fails to start, and is never tried again: after a power cut, a
+# VM on the NAS stays down when the NAS boots more slowly than the delay. A drop-in holds the start, after that delay,
+# until each storage of proxmox_storage_startall_wait is active, for at most proxmox_storage_startall_wait_timeout
+# seconds, then lets it go on whatever they say. The unit has no start timeout of its own (TimeoutSec=infinity).
+# pvesm status mounts an NFS storage as it reads it, as a start would.
+- name: Make the guests' start at boot wait for their storages
+  when: proxmox_storage_startall_wait | length > 0
+  block:
+    - name: Make the directory for pve-guests.service's drop-ins
+      ansible.builtin.file:
+        path: "{{ proxmox_storage_systemd_dir }}/pve-guests.service.d"
+        state: directory
+        mode: "0755"
+
+    - name: Write the drop-in that waits for the storages
+      ansible.builtin.template:
+        src: proxmox-storage-wait.conf.j2
+        dest: "{{ proxmox_storage_systemd_dir }}/pve-guests.service.d/proxmox-storage-wait.conf"
+        mode: "0644"
+      register: proxmox_storage_wait_dropin
+
+- name: Remove the drop-in when nothing is waited for
+  ansible.builtin.file:
+    path: "{{ proxmox_storage_systemd_dir }}/pve-guests.service.d/proxmox-storage-wait.conf"
+    state: absent
+  register: proxmox_storage_wait_removed
+  when: proxmox_storage_startall_wait | length == 0
+
+- name: Reload systemd's units
+  ansible.builtin.command:
+    argv: [systemctl, daemon-reload]
+  changed_when: true
+  when: proxmox_storage_wait_dropin is changed or proxmox_storage_wait_removed is changed
 
 # The NFS storages, and the node's own storages the role was asked to check. Only for real: in check
 # mode a storage the role would add does not exist yet.

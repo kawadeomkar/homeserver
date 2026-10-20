@@ -1,8 +1,11 @@
 ---
-# Everything, in dependency order: the NAS, then the Proxmox host. Without a NAS the first play ends
-# by itself.
+# Everything, in dependency order: the NAS, then the Proxmox host, then the Kubernetes cluster. Without a NAS
+# the first play ends by itself, and without a cluster the last does nothing.
 - name: Configure the NAS
   ansible.builtin.import_playbook: truenas.yml
 
 - name: Configure the Proxmox host
   ansible.builtin.import_playbook: proxmox.yml
+
+- name: Build the Kubernetes cluster
+  ansible.builtin.import_playbook: kubernetes.yml

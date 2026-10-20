@@ -11,7 +11,8 @@ argument_specs:
         that waits for a restart is reported.
       - Refuses a VMID that belongs to another VM, a missing VM whose VMID still has disks or backups, a disk
         storage that does not exist or holds no images, and disks whose provisioned sizes would add up to more
-        than a thin LVM or ZFS storage holds. Warns when the VMs' memory would exceed the node's.
+        than a thin LVM, ZFS, directory or BTRFS storage holds, less proxmox_vm_host_headroom_gib on all but thin
+        LVM. Warns when the VMs' memory would exceed the node's.
       - The defaults change nothing.
     options:
       proxmox_vm_vms:
@@ -34,10 +35,22 @@ argument_specs:
         elements: str
         default: []
         description: Storage ids an earlier role creates on a real run; reported as pending in check mode.
+      proxmox_vm_pending_storages_hint:
+        type: str
+        default: ""
+        description: >-
+          What creates the pending storages, such as the play to run first: shown beside them in check mode, and
+          when one is missing on a real run.
       proxmox_vm_allow_overcommit:
         type: bool
         default: false
-        description: Let the disks on a thin LVM or ZFS storage add up to more than it holds.
+        description: Let the disks on a thin LVM, ZFS, directory or BTRFS storage add up to more than it holds.
+      proxmox_vm_host_headroom_gib:
+        type: int
+        default: 0
+        description: >-
+          GiB of a ZFS, directory or BTRFS storage's size kept out of the disk budget, for the host's own files
+          that share its pool or filesystem.
       proxmox_vm_ignore_existing_volumes:
         type: bool
         default: false
