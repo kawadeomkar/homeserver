@@ -75,8 +75,8 @@ and upgrades the Proxmox host, and says when an upgrade of the kernel, its firmw
 which is then done by hand.
 
 To give a playbook a variable for one run, put Ansible's own flags in `ANSIBLE_ARGS`:
-`make kubernetes ANSIBLE_ARGS='-e proxmox_vm_ignore_existing_volumes=true'`, or `ANSIBLE_ARGS='--limit homeserver'`
-for one host's play. `make kubernetes -e …` passes nothing to Ansible: make reads `-e` as its own option.
+`make kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'`, or `ANSIBLE_ARGS='--limit homeserver'` for one
+host's play. `make kubernetes -e …` passes nothing to Ansible: make reads `-e` as its own option.
 
 Alert e-mail is optional: with `truenas_mail_server` and `truenas_alert_email` in `local.yml`, and the server's
 password in the vault as `vault_truenas_mail_password` (`make vault-edit`), the NAS mails its warnings, a
@@ -118,7 +118,8 @@ already opens with `.vault_pass` is left alone, and one that does not but is not
 refused, since it may be yours with its password lost.
 
 Your vault holds whatever secrets you put in it and exists nowhere else: keep a copy of it, with `.vault_pass`,
-in your password manager, and never replace it with a new one. When the tracked vault changes upstream, `git pull`
+in your password manager, and never replace it with a new one. (A cluster's secrets bundle is never in a vault: it
+lives in `~/.talos/homeserver`, `scripts/runbooks/talos.md`.) When the tracked vault changes upstream, `git pull`
 refuses, saying your local changes to `group_vars/all/vault.yml` would be overwritten. Set your vault aside, put
 the tracked file back, pull, and put yours back:
 
@@ -181,9 +182,13 @@ checks the section and names any setting it lacks. Fill in, from `local.yml.exam
 Choose the MACs and reserve the addresses in the router before the first run: the VMs lease their address the
 moment they start. If your `inventory` predates the cluster, add `[kubernetes]` with `homeserver-k8s` to it, as in
 `inventory.example`; the cluster's playbook refuses to run without it. Then `make check-kubernetes` and
-`make kubernetes` create the VMs on the Proxmox host, start them and report each one's MAC.
+`make kubernetes` create the VMs on the Proxmox host, start them, report each one's MAC, install Talos on them,
+bootstrap the cluster and write `~/.talos/homeserver/talosconfig` and `kubeconfig` (back that directory up).
+It needs `talosctl` of the pinned minor release on this machine and the cluster's secrets bundle, made once with
+`talosctl gen secrets` into `~/.talos/homeserver/secrets.yaml` and kept in your password manager, never in a
+repository; `scripts/runbooks/talos.md` has the whole procedure.
 
-The playbook never moves, shrinks or deletes their disks, and it refuses to create a VM over the disks or backups an
+A node that stays down: `scripts/runbooks/dead-worker.md`. The playbook never moves, shrinks or deletes their disks, and it refuses to create a VM over the disks or backups an
 earlier one left under the same VMID: restore it instead (`scripts/runbooks/vm-restore.md`). On thin LVM, ZFS, a
 directory or BTRFS it also refuses disks that would add up to more than the storage holds, other VMs' included,
 and on all but thin LVM it keeps 16 GiB out of that sum for the host's own files, its root filesystem among them.
@@ -228,8 +233,9 @@ proves a backup restores without disturbing the running cluster: `scripts/runboo
 
 `scripts/runbooks/REBUILD.md` is the recovery procedure. A reinstalled NAS needs a new API user and key and an
 updated certificate pin before Ansible can reach it, and a reinstalled Proxmox host needs root SSH access. Keep a
-copy of what is not in this repo in your password manager: `group_vars/all/local.yml` and `.vault_pass`; and
-without a NAS your own vault, `group_vars/all/vault.yml`.
+copy of what is not in this repo in your password manager: `group_vars/all/local.yml` and `.vault_pass`; with a
+cluster, `~/.talos/homeserver`, whose `secrets.yaml` is every key of the cluster; and without a NAS your own vault,
+`group_vars/all/vault.yml`.
 
 ## Manifests
 

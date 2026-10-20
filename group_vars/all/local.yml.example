@@ -87,8 +87,9 @@ proxmox_address: 192.0.2.20
 
 # --------------------------------------------------------------- Kubernetes ---
 # No cluster? Delete this whole section. With no node addresses the Kubernetes
-# play creates no VM. A section that keeps other values but no address is
-# refused: that is what a misspelt address looks like.
+# play ends by itself and the Proxmox play creates no VM. A section that keeps
+# other values but no address is refused: that is what a misspelt address
+# looks like.
 #
 # Each node's address, reserved in the router's DHCP outside its dynamic range.
 # Both setups have the same two nodes: a control plane, and a worker that runs
@@ -102,6 +103,10 @@ kubernetes_node_addresses:
 kubernetes_node_macs:
   homeserver-cp-1: "<mac>"
   homeserver-worker-1: "<mac>"
+# Where this machine keeps the cluster's talosconfig, kubeconfig, record of the
+# bootstrap and etcd snapshots, outside the repository. One per cluster: a test
+# host's copy names its own (scripts/runbooks/talos.md).
+# kubernetes_talos_config_dir: ~/.talos/homeserver
 # Extra names for the Kubernetes API's certificate, set before the first build,
 # so the API can later be reached by name.
 # kubernetes_api_sans: [k8s-api.home.arpa]

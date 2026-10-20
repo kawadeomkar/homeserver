@@ -61,6 +61,7 @@ SECRET_NAME = re.compile(r"pass(?!ive)|secret|token|key", re.IGNORECASE)
 # Options whose names match it but hold nothing secret, as (module or role, option): why.
 NOT_SECRET = {
     ("truenas_resource", "key"): "the names of the fields that identify an entry",
+    ("talos", "talos_secrets_file"): "the bundle's path; the role reads the bundle under no_log, never prints it",
     ("proxmox_tailscale", "proxmox_tailscale_keyring"): "the path of Tailscale's public signing key",
 }
 
@@ -216,7 +217,7 @@ NO_BACKUP = "are not backed up, because this setup has no NAS"
 @pytest.mark.parametrize(
     ("local_yml", "extra", "validations", "present", "absent"),
     [
-        pytest.param(None, CLUSTER_ARGS, 6, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas-cluster"),
+        pytest.param(None, CLUSTER_ARGS, 7, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas-cluster"),
         pytest.param(EXAMPLE_LOCAL_YML, (), 6, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas"),
         pytest.param(
             EXAMPLE_LOCAL_YML + TAILSCALE_LOCAL_YML,
@@ -229,7 +230,7 @@ NO_BACKUP = "are not backed up, because this setup has no NAS"
         pytest.param(
             PROXMOX_ONLY_CLUSTER_LOCAL_YML,
             CLUSTER_ARGS,
-            5,
+            6,
             [*NAS_PLAY_ENDS, NO_BACKUP, TAILSCALE_CHECK],
             NAS_ROLE,
             id="proxmox-only-cluster",
@@ -855,6 +856,12 @@ def without(settings, *names):
             ["kubernetes_node_macs gives two nodes the same MAC"],
             id="one-mac-twice",
         ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"vault_talos_secrets": "certs: {}\n"},
+            ["The vault holds vault_talos_secrets", "secrets.yaml in the cluster's credentials directory"],
+            id="talos-bundle-in-the-vault",
+        ),
     ],
 )
 def test_kubernetes_settings_are_checked(tmp_path, local_yml, extra, expected):
@@ -932,6 +939,32 @@ def test_secret_options_are_no_log():
                 flagged.append(f"{owner}: {dotted}")
     assert flagged == [], "options that look like secrets but are not no_log"
     assert excepted == set(NOT_SECRET), "NOT_SECRET names an option that no longer exists or is now no_log"
+
+
+@pytest.mark.parametrize(("where", "refused"), [("homeserver/.talos", True), ("homeserver-talos", False)])
+def test_talos_config_dir_must_be_outside_the_repository(tmp_path, where, refused):
+    """talosconfig and kubeconfig never go inside the repository; a sibling directory whose name merely starts with
+    the repository's is outside it."""
+    tree = tmp_path / "homeserver"
+    tree.mkdir()
+    example_tree(tree)
+    rc, out = argspec_pass(
+        tree, "kubernetes.yml", *CLUSTER_ARGS, "-e", f"kubernetes_talos_config_dir={tmp_path / where}"
+    )
+    assert ("talos_config_dir must be outside the repository" in out) == refused, out[-3000:]
+    assert (rc != 0) == refused, out[-3000:]
+
+
+@pytest.mark.parametrize(("given", "expected"), [(None, ".talos/homeserver"), ("~/.talos/test", ".talos/test")])
+def test_talos_config_dir_follows_local_yml(tmp_path, given, expected):
+    """Where the cluster's credentials live comes from local.yml's kubernetes_talos_config_dir, with ~ expanded, and
+    is ~/.talos/homeserver otherwise. A talos_config_dir written in local.yml would lose to group_vars/kubernetes,
+    which outranks group_vars/all, hence a setting of its own: a test host must never share the home cluster's."""
+    local_yml = (ROOT / "group_vars" / "all" / "local.yml.example").read_text()
+    if given:
+        local_yml += f"kubernetes_talos_config_dir: {given}\n"
+    tree = example_tree(tmp_path, local_yml)
+    assert resolve_on(tree, "homeserver-k8s", "talos_config_dir", *CLUSTER_ARGS) == str(Path.home() / expected)
 
 
 @pytest.mark.parametrize(

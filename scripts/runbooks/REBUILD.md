@@ -1,6 +1,6 @@
 # Rebuilding after a hardware failure
 
-How to bring the NAS or the Proxmox host back after a reinstall, using this repo. Ansible restores the
+How to bring the NAS, the Proxmox host or the Kubernetes cluster back after a reinstall, using this repo. Ansible restores the
 configuration, but a few things must exist before it can run. Those prerequisites are below. Values are named
 by their variable in `group_vars/all/local.yml`; the real values live only there.
 
@@ -14,7 +14,7 @@ by their variable in `group_vars/all/local.yml`; the real values live only there
 | NAS network card | Everything on disk | Everything, once the NAS is reachable | Update the router's DHCP reservation to the new MAC |
 | Proxmox boot drive | VM disks on the NAS, and the VMs' nightly backups | The no-subscription repository, the upgrade, Tailscale with its guard, the NFS storages, the start-on-boot delay and the wait for the NAS, and the backup job | Reinstall, root SSH key; with remote access, delete the old machine in Tailscale's admin console and put a new auth key in the vault; restore the VMs from their backups ([vm-restore.md](vm-restore.md)) |
 | Proxmox boot drive, in a setup without a NAS | The backups, if `vm_backup_storage` is a USB disk or a backup server | The repository, the upgrade, Tailscale with its guard, the check that `local-lvm` can hold VM disks, and the backup job | Reinstall, root SSH key; with remote access, the old machine and a new auth key as above; re-add the backup storage before `make proxmox`; restore the VMs ([vm-restore.md](vm-restore.md)) |
-| The controller (this Mac) | The repo on GitHub, with a NAS the vault (encrypted) | — | Restore `.vault_pass` and `local.yml` from your password manager, and without a NAS your own vault too |
+| The controller (this Mac) | The repo on GitHub, with a NAS the vault (encrypted) | — | Restore `.vault_pass`, `local.yml` and `~/.talos/homeserver` from your password manager, and without a NAS your own vault too |
 
 ## 1. The controller
 
@@ -32,9 +32,14 @@ Everything runs from a checkout of this repo.
      repository. Restore it from your password manager over the tracked one, then
      `git update-index --skip-worktree group_vars/all/vault.yml` so it stays out of your commits; `make vault-init`
      then says `nothing to do`. With nothing of yours in it, `make vault-init` makes both files (see `README.md`).
-   - **`group_vars/all/local.yml`**: addresses, disk serials and the certificate pin. Keep a copy of this file in
-     your password manager. If it's lost, refill it from `local.yml.example`; the comments there say where each
-     value comes from.
+   - **`group_vars/all/local.yml`**: addresses, disk serials, the certificate pin, and the cluster's node
+     addresses and MACs. Keep a copy of this file in your password manager. If it's lost, refill it from
+     `local.yml.example`; the comments there say where each value comes from. The MACs must be the ones the
+     router's DHCP reservations name.
+   - **`~/.talos/homeserver`**, with a cluster: `secrets.yaml`, the cluster's secrets bundle (every key of the
+     cluster: without it the cluster can no longer be managed, and is rebuilt), talosconfig, kubeconfig and
+     `bootstrapped`, the record that the cluster was bootstrapped, without which the role cannot tell a first build
+     from a cluster that lost its etcd. Mode 0700 for the directory, 0600 for `secrets.yaml`.
 4. Check the toolchain works: `make lint && make test-idempotence`.
 
 Run `make` with the environment active (`pyenv activate homeserver`), or pass `VENV=<path to the env>`.
@@ -131,6 +136,26 @@ The VM definitions lived on the old boot drive (`/etc/pve`) and are gone. Restor
 backups, which `scripts/runbooks/vm-restore.md` describes, before anything creates them anew. With a NAS, the
 backups are on it; without one, the backups are wherever `vm_backup_storage` pointed.
 VMs that other projects create on the host (claude-on-proxmox's) are theirs to recreate.
+
+## 4. The Kubernetes cluster
+
+Only after the Proxmox host is back. The cluster's two VMs lived on the Proxmox host, so their definitions went with
+its boot drive. With a NAS the worker's data disk survives on it; without one, it comes back from last night's
+backup, and the worker's media disk, never backed up, is lost. The order is fixed:
+
+1. `make truenas`, then `make proxmox` (sections 2 and 3).
+2. **Restore the VMs from their backups first**: `scripts/runbooks/vm-restore.md`. `make kubernetes` refuses to
+   create a VM whose VMID still has disks or backups, and refuses to bootstrap a cluster it bootstrapped before,
+   so a restore skipped here fails safe instead of building an empty cluster over the old data.
+3. Leave the restored VMs stopped and run `make check-kubernetes`, then `make kubernetes`. Their CD-ROM names a
+   Talos ISO that was on the lost boot drive, so Proxmox would refuse to start them by hand; `make kubernetes`
+   downloads it again and starts them. It finds configured nodes and a running etcd, and installs and bootstraps
+   nothing. `kubectl get nodes` shows them Ready.
+
+Prerequisites, before `make kubernetes`: `~/.talos/homeserver` restored with its `secrets.yaml` (section 1; without
+the bundle the cluster cannot be managed and is rebuilt), the
+MACs' DHCP reservations, and the inventory's `[kubernetes]` group. `scripts/runbooks/talos.md` covers building
+and the watchdog; a worker that stays down is `scripts/runbooks/dead-worker.md`.
 
 ## Known limits
 

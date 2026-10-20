@@ -1,0 +1,426 @@
+---
+# Builds the cluster from the controller with talosctl: installs Talos on nodes in maintenance mode, keeps a
+# configured node's configuration, bootstraps etcd once, and writes talosconfig and kubeconfig to
+# talos_config_dir. Never reboots a node and never moves one to another version.
+
+- name: Check the role's inputs
+  ansible.builtin.import_tasks: validate.yml
+
+- name: Build the cluster
+  when: talos_nodes | length > 0
+  block:
+    - name: Prepare
+      ansible.builtin.import_tasks: prepare.yml
+
+    # ------------------------------------------------------------------------------------ talosconfig ---
+    - name: Look for the talosconfig
+      ansible.builtin.stat:
+        path: "{{ talos_config_dir }}/talosconfig"
+      register: talos_talosconfig_file
+
+    # Its client certificate is valid for a year; renewed this long before it ends.
+    - name: Check the talosconfig's client certificate
+      ansible.builtin.command:
+        argv: [openssl, x509, -noout, -checkend, "{{ talos_renew_before_days * 86400 }}"]
+        stdin: "{{ (_config.contexts[_config.context].crt | b64decode) if _config else '' }}"
+      register: talos_talosconfig_cert
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      no_log: true
+      when: talos_talosconfig_file.stat.exists
+      vars:
+        _config: "{{ lookup('ansible.builtin.file', talos_config_dir ~ '/talosconfig') | from_yaml }}"
+
+    - name: Make the directory that holds the cluster's credentials
+      ansible.builtin.file:
+        path: "{{ talos_config_dir }}"
+        state: directory
+        mode: "0700"
+
+    # The scratch talosconfig is signed by the cluster's CA like any other, and already names the control plane
+    # as its endpoint and node, so `talosctl` works with TALOSCONFIG set and no -e.
+    - name: Write a talosconfig, or renew one that expires soon
+      ansible.builtin.copy:
+        src: "{{ talos_workspace }}/talosconfig"
+        dest: "{{ talos_config_dir }}/talosconfig"
+        mode: "0600"
+      diff: false
+      when: not talos_talosconfig_file.stat.exists or talos_talosconfig_cert.rc != 0
+
+    # ------------------------------------------------------------------------------------------ render ---
+    # A node in maintenance mode gets the pins. A configured node gets what it runs: its own Talos release, the
+    # contract of that release, the schematic it booted, and the cluster's running Kubernetes version, so a pin
+    # bump never changes a running node here. Without the Kubernetes version (no
+    # kubeconfig yet on this workstation) a configured node is not rendered this run.
+    - name: Work out what to render for each node
+      ansible.builtin.set_fact:
+        talos_render: "{{ _render }}"
+        talos_unrendered: "{{ _unrendered }}"
+      vars:
+        _render: >-
+          {%- set out = [] -%}
+          {%- for n in talos_state.values() -%}
+          {%-   if n.state == 'configured' and n.tag and n.running_schematic and talos_running_kubernetes -%}
+          {%-     set _ = out.append(n | combine({'version': n.tag, 'contract': n.tag | talos_minor,
+                    'kubernetes_version': talos_running_kubernetes,
+                    'install_image': talos_installer | talos_installer_image(n.running_schematic, n.tag,
+                                                                             talos_installer_digests)})) -%}
+          {%-   elif n.state != 'configured' -%}
+          {%-     set _ = out.append(n | combine({'version': talos_version, 'contract': talos_contract,
+                    'kubernetes_version': talos_kubernetes_version,
+                    'install_image': talos_installer | talos_installer_image(talos_schematic_ids[n.schematic],
+                                                                             talos_version, talos_installer_digests)})) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
+        _unrendered: "{{ talos_state.values() | map(attribute='name') | reject('in', _render | map(attribute='name')) | list }}"
+
+    - name: Render the configurations
+      ansible.builtin.include_tasks: render.yml
+
+    # The rendered files hold the secrets, so they live in the scratch directory and go with it; asked for, they
+    # are kept beside talosconfig, readable by their owner alone, to compare by hand with apply-config --dry-run.
+    - name: Keep the rendered configurations, when asked
+      ansible.builtin.copy:
+        src: "{{ talos_workspace }}/{{ item.name }}.yaml"
+        dest: "{{ talos_config_dir }}/rendered/"
+        mode: "0600"
+        directory_mode: "0700"
+      diff: false
+      changed_when: false
+      check_mode: false
+      when: talos_keep_rendered | bool
+      loop: "{{ talos_render }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # Kept until the next run that does not ask: they hold every key of the cluster.
+    - name: Remove the rendered configurations an earlier run kept
+      ansible.builtin.file:
+        path: "{{ talos_config_dir }}/rendered"
+        state: absent
+      when: not talos_keep_rendered | bool
+
+    - name: Say which configured nodes were left as they are
+      ansible.builtin.debug:
+        msg: >-
+          Not checked for drift this run, since the cluster's Kubernetes version could not be read (no kubeconfig on
+          this machine yet): {{ talos_unrendered | join(', ') }}. The run fetches one; the next run checks them.
+      when: talos_unrendered | length > 0
+
+    # ----------------------------------------------------------------------------------------- install ---
+    # A node in maintenance mode takes its configuration from whoever sends it, over TLS that verifies nothing, and
+    # the configuration holds the cluster's keys: anything answering at a node's address in maintenance mode, a
+    # device spoofing it or the node's own address taken over while it reboots, would get them. Before the bootstrap
+    # that is the only way in. After it, a node in maintenance mode is a reinstall the run must name.
+    - name: Look for the record of the bootstrap
+      ansible.builtin.stat:
+        path: "{{ talos_config_dir }}/bootstrapped"
+      register: talos_bootstrap_record
+
+    - name: Refuse to send a bootstrapped cluster's keys to a node the run does not name
+      ansible.builtin.assert:
+        that: _unnamed | length == 0
+        fail_msg: >-
+          {% for n in _unnamed %}{{ n.name }} answers at {{ n.address }} in maintenance mode. {% endfor %}This cluster
+          was bootstrapped before ({{ talos_config_dir }}/bootstrapped), and installing a node sends it the cluster's
+          keys unauthenticated, to whatever answers at its address. If you are reinstalling it (its system disk wiped,
+          its VM made anew), check on its VM's console in Proxmox that it waits in maintenance mode at that address,
+          then run again naming it: make kubernetes ANSIBLE_ARGS='-e talos_reinstall={{ _unnamed | map(attribute='name') | join(',') }}'.
+          Otherwise, something else is answering at its address: find it before anything else.
+        quiet: true
+      when:
+        - talos_bootstrap_record.stat.exists
+        - not talos_allow_bootstrap | bool
+      vars:
+        _named: "{{ talos_reinstall.split(',') | map('trim') | list if talos_reinstall is string else talos_reinstall }}"
+        _unnamed: "{{ talos_state.values() | selectattr('state', 'eq', 'maintenance') | rejectattr('name', 'in', _named) | list }}"
+
+    - name: Say which nodes would be installed
+      ansible.builtin.debug:
+        msg: "Would install {{ item.name }} at {{ item.address }}{{ ' once its VM is up' if item.state == 'absent' else '' }}"
+      changed_when: true
+      when: ansible_check_mode
+      loop: "{{ talos_state.values() | rejectattr('state', 'eq', 'configured') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Install Talos on the nodes in maintenance mode
+      ansible.builtin.command:
+        argv:
+          - talosctl
+          - apply-config
+          - --insecure
+          - -e
+          - "{{ item.address }}"
+          - -n
+          - "{{ item.address }}"
+          - -f
+          - "{{ talos_workspace }}/{{ item.name }}.yaml"
+      no_log: true
+      changed_when: true
+      loop: "{{ talos_state.values() | selectattr('state', 'eq', 'maintenance') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # A node given its configuration in maintenance mode answers with the talosconfig at once, but installs in the
+    # background, still running from the ISO: pending until a disk matches the install selector (Talos 1.14.2
+    # leaves that zero value out of the YAML and gives the error "no disk matched the selector"; the
+    # talos_install_status filter reads it), installing, waiting-for-reboot, and once rebooted from its system
+    # disk, installed. So only its install status says when it is done, and a selector that matches nothing shows
+    # up as a lasting phase with that error, not as a timeout of bootstrap, which Talos refuses until then. The
+    # configuration names the installer image (talosctl gen config writes --install-image into its
+    # UnattendedInstallConfig), which is what makes Talos reboot, and within one boot it never reports
+    # waiting-for-reboot as installed: installed means running from the system disk. While it reboots it answers
+    # nothing.
+    - name: Wait for each node to install and boot from its system disk
+      ansible.builtin.command:
+        argv:
+          - talosctl
+          - --talosconfig
+          - "{{ talos_workspace }}/talosconfig"
+          - -e
+          - "{{ item.address }}"
+          - -n
+          - "{{ item.address }}"
+          - get
+          - unattendedinstallstatuses
+          - -o
+          - yaml
+      register: talos_installed
+      changed_when: false
+      failed_when: false
+      until: (talos_installed.stdout | talos_install_status).phase in ['installed', 'failed']
+      retries: "{{ talos_install_retries }}"
+      delay: "{{ talos_probe_delay }}"
+      when: not ansible_check_mode
+      loop: "{{ talos_state.values() | selectattr('state', 'eq', 'maintenance') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Refuse to go on with a node that did not install
+      ansible.builtin.fail:
+        msg: >-
+          {{ item.item.name }} did not install:
+          {%- if _status.phase == 'failed' %} the installer failed: {{ _status.error | default('no error reported', true) }}.
+          {%- elif _status.phase %} still {{ _status.phase }} after {{ _waited }}{{ ': ' ~ _status.error if _status.error else '' }}.
+          {%- else %} no answer for {{ _waited }} since its configuration was applied.
+          {%- endif %}
+          {%- if 'no disk matched' in _status.error | default('', true) or _status.phase == 'pending' %} No disk matched
+          the install selector (the UnattendedInstallConfig in talos_patches_common); talosctl -n {{ item.item.address }} get disks lists the disks and
+          their by-id links.
+          {%- endif %}
+      when: _status.phase != 'installed'
+      vars:
+        _status: "{{ item.stdout | default('') | talos_install_status }}"
+        _waited: "{{ talos_install_retries }} tries {{ talos_probe_delay }} s apart (talos_install_retries)"
+      loop: "{{ talos_installed.results | default([]) | rejectattr('skipped', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # ------------------------------------------------------------------------------------------- drift ---
+    # Shows "No changes." when the configuration is the one rendered. Its diff can hold secrets, so it is never
+    # printed: `talosctl apply-config --dry-run` by hand shows it.
+    - name: Compare each configured node's configuration
+      ansible.builtin.command:
+        argv:
+          - talosctl
+          - --talosconfig
+          - "{{ talos_workspace }}/talosconfig"
+          - -e
+          - "{{ item.address }}"
+          - -n
+          - "{{ item.address }}"
+          - apply-config
+          - -f
+          - "{{ talos_workspace }}/{{ item.name }}.yaml"
+          - --dry-run
+      register: talos_drift
+      no_log: true
+      changed_when: false
+      check_mode: false
+      loop: "{{ talos_render | selectattr('state', 'eq', 'configured') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Work out which nodes differ
+      ansible.builtin.set_fact:
+        talos_drifted: "{{ talos_drift.results | default([]) | rejectattr('skipped', 'defined') | rejectattr('stderr', 'search', 'No changes\\.')
+                           | rejectattr('stdout', 'search', 'No changes\\.') | map(attribute='item') | list }}"
+
+    - name: Show the nodes whose configuration differs
+      ansible.builtin.debug:
+        msg: >-
+          Configuration differs on {{ talos_drifted | map(attribute='name') | join(', ') }}{{ ': it would be applied' if
+          ansible_check_mode else '' }}. To see how, run again with ANSIBLE_ARGS='-e talos_keep_rendered=true', then
+          talosctl apply-config --dry-run -n <node> -f {{ talos_config_dir }}/rendered/<node>.yaml.
+      changed_when: ansible_check_mode
+      when: talos_drifted | length > 0
+
+    # Talos 1.14 applies every configuration at once in no-reboot mode, which is also what its default mode, auto,
+    # means now: nothing is refused for needing a reboot, so nothing is ever staged, and the node is never rebooted.
+    - name: Apply the configuration without a reboot
+      ansible.builtin.command:
+        argv:
+          - talosctl
+          - --talosconfig
+          - "{{ talos_workspace }}/talosconfig"
+          - -e
+          - "{{ item.address }}"
+          - -n
+          - "{{ item.address }}"
+          - apply-config
+          - -f
+          - "{{ talos_workspace }}/{{ item.name }}.yaml"
+          - --mode
+          - no-reboot
+      register: talos_applied
+      no_log: true
+      changed_when: talos_applied.rc == 0
+      failed_when: false
+      loop: "{{ talos_drifted }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # The apply is no_log, since its output could hold the configuration; its error lines are shown here.
+    - name: Refuse to go on when a configuration was not applied
+      ansible.builtin.fail:
+        msg: >-
+          {{ item.item.name }}: talosctl apply-config failed:
+          {{ (item.stderr | default('') | regex_findall('(?m)^.*(?:error|rpc|invalid).*$') | last) | default('no error text', true) }}
+      when: item.rc != 0
+      loop: "{{ talos_applied.results | default([]) | rejectattr('skipped', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # ---------------------------------------------------------------------------------------- bootstrap ---
+    - name: Bootstrap etcd, once
+      ansible.builtin.import_tasks: bootstrap.yml
+
+    # ---------------------------------------------------------------------------------- health and access ---
+    - name: Wait for the cluster to be healthy
+      ansible.builtin.command:
+        argv: >-
+          {{ ['talosctl', '--talosconfig', talos_workspace ~ '/talosconfig', '-e', talos_controlplane.address,
+              '-n', talos_controlplane.address, 'health', '--wait-timeout', talos_health_timeout,
+              '--control-plane-nodes', talos_controlplane.address]
+             + (['--worker-nodes', talos_workers | map(attribute='address') | join(',')] if talos_workers else []) }}
+      changed_when: false
+      when: not ansible_check_mode
+
+    # A user volume whose disk selector matches nothing is never mounted, and neither Talos nor its health check says
+    # so: local-path would then make the apps' directories on the system disk, which a reinstall wipes.
+    - name: Read each node's volumes
+      ansible.builtin.command:
+        argv: [talosctl, --talosconfig, "{{ talos_workspace }}/talosconfig", -e, "{{ item.address }}", -n, "{{ item.address }}", get, volumestatus, -o, yaml]
+      register: talos_volumes
+      changed_when: false
+      when: not ansible_check_mode and item.patches | default([]) | talos_user_volumes | length > 0
+      loop: "{{ talos_nodes }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Refuse a user volume that is not ready
+      ansible.builtin.fail:
+        msg: >-
+          {{ item.item.name }}'s user volumes are not ready: {{ _unready | join(', ') }}. Its disk selector (the by-id
+          link QEMU names after the disk's slot, ..._drive-scsiN, group_vars/kubernetes/talos.yml) matches no
+          disk, or the disk is smaller than the volume's minimum; talosctl -n {{ item.item.address }} get disks lists
+          what it sees.
+      when: _unready | length > 0
+      vars:
+        _phases: "{{ item.stdout | talos_volume_phases }}"
+        _unready: >-
+          {%- set out = [] -%}
+          {%- for name in item.item.patches | talos_user_volumes -%}
+          {%-   set phase = _phases.get('u-' ~ name, '') -%}
+          {%-   if phase != 'ready' -%}{%- set _ = out.append(name ~ ' (' ~ (phase or 'missing') ~ ')') -%}{%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+      loop: "{{ talos_volumes.results | default([]) | rejectattr('skipped', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Check the kubeconfig's client certificate
+      ansible.builtin.command:
+        argv: [openssl, x509, -noout, -checkend, "{{ talos_renew_before_days * 86400 }}"]
+        stdin: "{{ _config.users[0].user['client-certificate-data'] | b64decode }}"
+      register: talos_kubeconfig_cert
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      no_log: true
+      when: talos_kubeconfig_file.stat.exists
+      vars:
+        _config: "{{ lookup('ansible.builtin.file', talos_config_dir ~ '/kubeconfig') | from_yaml }}"
+
+    - name: Fetch a kubeconfig, or renew one that expires soon
+      ansible.builtin.command:
+        argv:
+          - talosctl
+          - --talosconfig
+          - "{{ talos_workspace }}/talosconfig"
+          - -e
+          - "{{ talos_controlplane.address }}"
+          - -n
+          - "{{ talos_controlplane.address }}"
+          - kubeconfig
+          - "{{ talos_config_dir }}/kubeconfig"
+          - --merge=false
+          - --force
+      changed_when: true
+      when: not talos_kubeconfig_file.stat.exists or talos_kubeconfig_cert.rc != 0
+
+    - name: Say the kubeconfig would be fetched or renewed
+      ansible.builtin.debug:
+        msg: >-
+          Would {{ 'renew' if talos_kubeconfig_file.stat.exists else 'fetch' }} the kubeconfig in {{ talos_config_dir }}.
+      changed_when: true
+      when: ansible_check_mode and (not talos_kubeconfig_file.stat.exists or talos_kubeconfig_cert.rc != 0)
+
+    - name: Keep the kubeconfig readable by its owner alone
+      ansible.builtin.file:
+        path: "{{ talos_config_dir }}/kubeconfig"
+        mode: "0600"
+      when: not ansible_check_mode
+
+    # ------------------------------------------------------------------------------------------- report ---
+    - name: Report the versions running, and any upgrade the pins wait for
+      ansible.builtin.debug:
+        msg: >-
+          {{ {'running': _running} | combine({'pinned, not yet running': _pending} if _pending else {})
+             | combine({'applied to the control plane: etcd reads its settings only when it starts, so after a change '
+                        ~ 'to cluster.etcd, restart it': 'talosctl -n ' ~ talos_controlplane.address ~ ' service etcd restart'}
+                       if _etcd else {}) }}
+      vars:
+        _running: >-
+          {%- set out = {} -%}
+          {%- for n in talos_state.values() if n.state == 'configured' -%}
+          {%-   set _ = out.update({n.name: 'Talos ' ~ n.tag ~ ', schematic ' ~ (n.running_schematic | default('?', true))[:8]}) -%}
+          {%- endfor -%}
+          {%- if talos_running_kubernetes -%}{%- set _ = out.update({'kubernetes': talos_running_kubernetes}) -%}{%- endif -%}
+          {{ out }}
+        _pending: >-
+          {%- set out = [] -%}
+          {%- for n in talos_state.values() if n.state == 'configured' -%}
+          {%-   if n.tag != talos_version -%}{%- set _ = out.append(n.name ~ ': Talos ' ~ talos_version) -%}{%- endif -%}
+          {%-   if n.running_schematic != talos_schematic_ids[n.schematic] -%}
+          {%-     set _ = out.append(n.name ~ ': schematic ' ~ talos_schematic_ids[n.schematic][:8]) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {%- if talos_running_kubernetes and talos_running_kubernetes != talos_kubernetes_version -%}
+          {%-   set _ = out.append('kubernetes: ' ~ talos_kubernetes_version) -%}
+          {%- endif -%}
+          {{ out }}
+        _etcd: >-
+          {{ talos_controlplane.name in (talos_applied.results | default([]) | rejectattr('skipped', 'defined')
+             | selectattr('rc', 'eq', 0) | map(attribute='item.name') | list) }}
+  always:
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ talos_workspace }}"
+        state: absent
+      changed_when: false
+      check_mode: false
+      when: talos_workspace is defined

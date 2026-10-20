@@ -1,8 +1,8 @@
 ---
-# Build the Kubernetes cluster: its VMs on the Proxmox host. Check first:
+# Build the Kubernetes cluster: its VMs on the Proxmox host, then Talos on them from this machine. Check first:
 #   make check-kubernetes        (or: ansible-playbook kubernetes.yml --check --diff)
-# Without a cluster (no kubernetes_node_addresses in group_vars/all/local.yml) nothing happens: no VM is created.
-# Run proxmox.yml first, so the storages the VMs' disks go on exist.
+# Without a cluster (no kubernetes_node_addresses in group_vars/all/local.yml) nothing happens: no VM is created,
+# and the second play ends by itself. Run proxmox.yml first, so the storages the VMs' disks go on exist.
 - name: Create the cluster's VMs
   hosts: proxmox
   gather_facts: false
@@ -31,3 +31,31 @@
       tags: [always]
   roles:
     - role: proxmox_vm
+
+- name: Build Talos on the cluster's VMs
+  hosts: kubernetes
+  gather_facts: false
+  pre_tasks:
+    - name: Refuse NAS settings that come without a NAS address
+      ansible.builtin.assert:
+        that: nas_section_error | length == 0
+        fail_msg: "{{ nas_section_error }}"
+        quiet: true
+      tags: [always]
+    - name: Refuse an incomplete Kubernetes section
+      ansible.builtin.assert:
+        that: kubernetes_settings_error | length == 0
+        fail_msg: "{{ kubernetes_settings_error | join(' ') }}"
+        quiet: true
+      tags: [always]
+    - name: Say why the cluster is skipped
+      ansible.builtin.debug:
+        msg: No kubernetes_node_addresses in group_vars/all/local.yml, so this setup has no cluster.
+      when: not kubernetes_present
+      tags: [always]
+    - name: Skip the cluster when local.yml names no nodes
+      ansible.builtin.meta: end_host
+      when: not kubernetes_present
+      tags: [always]
+  roles:
+    - role: talos

@@ -1,14 +1,14 @@
 ---
 # The Kubernetes cluster: its shape, and the settings more than one play reads. The Proxmox play backs up its VMs,
-# and the kubernetes play creates them. A host sees only its own groups' files, so whatever two plays read lives
-# here, in group_vars/all/. Names only: the nodes' addresses and MACs come from local.yml.
+# and the kubernetes play creates them and builds Talos on them. A host sees only its own groups' files, so whatever
+# two plays read lives here, in group_vars/all/. Names only: the nodes' addresses and MACs come from local.yml.
 #
 # This file sorts before local.yml, so a value local.yml sets wins over one set here, but a dict set there
 # replaces the whole dict, never merges into it. Never set here what local.yml is meant to set.
 
 # True when local.yml names the cluster's nodes. Worked out, never set: the addresses are the switch, like
 # nas_present. A value left blank (YAML null) or only whitespace is no address. Without one, the kubernetes play
-# creates no VM.
+# creates no VM and ends by itself.
 kubernetes_present: >-
   {{ ((kubernetes_node_addresses | default({}, true)) | dict2items | selectattr('value')
       | map(attribute='value') | map('string') | map('trim') | select | list | length > 0)
@@ -93,13 +93,16 @@ kubernetes_data_storage: "{{ vm_storage_classes.persistent.proxmox_id if nas_pre
 #     (vm_storage_persistent_quota_gib), which its snapshots share, and the settings for media without a NAS: a
 #     worker media disk, which would hold nothing, and kubernetes_media_on_data_volume;
 #   - without a NAS, a worker without every size, since the defaults fit the home host, or without a media disk
-#     (unless media goes on the data volume, when its size may be left out), or with both.
+#     (unless media goes on the data volume, when its size may be left out), or with both;
+#   - in any setup, the Talos secrets bundle in the vault (vault_talos_secrets), where this public repository
+#     would publish it: it lives in talos_config_dir.
 kubernetes_settings_error: >-
   {%- set out = [] -%}
   {%- set given = {'kubernetes_node_macs': kubernetes_node_macs | default(''),
                    'kubernetes_node_sizes': kubernetes_node_sizes | default(''),
                    'kubernetes_media_on_data_volume': kubernetes_media_on_data_volume | default(''),
-                   'kubernetes_api_sans': kubernetes_api_sans | default('')}
+                   'kubernetes_api_sans': kubernetes_api_sans | default(''),
+                   'kubernetes_talos_config_dir': kubernetes_talos_config_dir | default('')}
                   | dict2items | selectattr('value') | map(attribute='key') | list -%}
   {%- if kubernetes_present is not boolean -%}
   {%-   set _ = out.append('kubernetes_present is worked out from kubernetes_node_addresses in group_vars/all/local.yml, '
@@ -248,5 +251,13 @@ kubernetes_settings_error: >-
                                ~ 'on the NAS. Remove it from group_vars/all/local.yml.') -%}
   {%-     endif -%}
   {%-   endif -%}
+  {%- endif -%}
+  {%- if vault_talos_secrets is defined -%}
+  {%-   set _ = out.append('The vault holds vault_talos_secrets, the Talos secrets bundle: every key of the cluster, which '
+                           ~ 'a vault committed to this public repository would publish. It lives in secrets.yaml in the '
+                           ~ "cluster's credentials directory now (~/.talos/homeserver, or kubernetes_talos_config_dir). "
+                           ~ 'Move it there (ansible-vault view group_vars/all/vault.yml), mode 0600, and delete it from '
+                           ~ 'the vault with make vault-edit; scripts/runbooks/talos.md says why a bundle that was ever '
+                           ~ 'committed is better replaced.') -%}
   {%- endif -%}
   {{ out }}
