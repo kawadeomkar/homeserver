@@ -10,3 +10,8 @@ truenas
 # Configured over root SSH.
 [proxmox]
 homeserver
+
+# The Kubernetes cluster, built from this machine with talosctl and kubectl (ansible_connection: local). Keep it
+# without a cluster too: whether one exists is decided by the node addresses in group_vars/all/local.yml.
+[kubernetes]
+homeserver-k8s

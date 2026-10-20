@@ -160,6 +160,30 @@ class TestDrift:
         _, _, refused = pv.drift(vm(**({"disks": disks} if disks else {})), config(**extra))
         assert len(refused) == 1 and message in refused[0]
 
+    def test_a_disk_s_serial_and_backup_flag_are_set_on_the_same_volume(self):
+        """A disk's serial and whether backups include it are options of its volume: set again on it, keeping the
+        others, never a new disk."""
+        disks = [{"slot": "scsi0", "storage": "local-lvm", "size_gib": 32, "serial": "sys", "backup": False}]
+        options, resize, refused = pv.drift(vm(disks=disks), config())
+        assert options == ["--scsi0", "local-lvm:vm-300-disk-1,discard=on,ssd=1,serial=sys,backup=0"]
+        assert (resize, refused) == ([], [])
+        renamed = config(scsi0="local-lvm:vm-300-disk-1,backup=0,discard=on,serial=old,size=32G,ssd=1")
+        options, _, _ = pv.drift(vm(), renamed)
+        assert options == ["--scsi0", "local-lvm:vm-300-disk-1,discard=on,ssd=1,serial=sys"]
+        assert pv.drift(vm(disks=disks), config(scsi0=options[1] + ",backup=0,size=32G")) == ([], [], [])
+        assert pv.drift(vm(), config(scsi0="local-lvm:vm-300-disk-1,backup=1,serial=sys,size=32G")) == ([], [], [])
+
+    def test_an_unused_volume_holds_back_a_new_disk(self):
+        """A restore over a VM keeps the disks its backup excluded as unusedN: the slot they held is never filled
+        with a new, empty disk while they may hold its data."""
+        disks = [*vm()["disks"], {"slot": "scsi2", "storage": "local-lvm", "size_gib": 100, "backup": False}]
+        options, _, refused = pv.drift(vm(disks=disks), config(unused0="local-lvm:vm-300-disk-3"))
+        assert options == []
+        assert len(refused) == 1 and "keeps unused0 (local-lvm:vm-300-disk-3), unused" in refused[0]
+        assert "qm set 300 --scsi2 <volume>" in refused[0] and "qm disk unlink 300 --idlist <unusedN>" in refused[0]
+        options, _, refused = pv.drift(vm(disks=disks), config())
+        assert options == ["--scsi2", "local-lvm:100,discard=on,ssd=1,backup=0"] and refused == []
+
     def test_the_boot_order_is_put_back_last(self):
         """Proxmox drops a deleted drive from the boot order and never adds a disk back, so a system disk replaced by
         hand leaves the VM booting its CD-ROM; the order is corrected after the disk it names is added."""
@@ -275,6 +299,34 @@ class TestPlan:
             ),
         )
         assert allowed["errors"] == []
+
+    @pytest.mark.parametrize(("sid", "kind"), [("local-zfs", "zfspool"), ("local", "dir"), ("local-btrfs", "btrfs")])
+    def test_a_storage_the_host_shares_keeps_headroom(self, sid, kind):
+        """A ZFS storage's size shrinks as the host's own datasets on the pool grow, and a directory's or BTRFS
+        storage's is its filesystem's, which the host's own files share: the headroom stays out of the budget there,
+        and only there. Sparse disks on a directory or BTRFS would otherwise fill the host's root filesystem."""
+        storage = [s for s in STORAGE if s["storage"] != sid] + [{"storage": sid, "type": kind, "content": "images"}]
+        disks = [{"slot": "scsi0", "storage": sid, "size_gib": 32}]
+        on_it = {"qemu": [], "configs": {}, "storage_config": storage, "contents": {sid: []}}
+        fits = pv.plan([vm(disks=disks, efidisk_storage=sid)], facts(**on_it, totals={sid: 40 * GIB}))
+        assert fits["errors"] == []
+        kept = pv.plan(
+            [vm(disks=disks, efidisk_storage=sid)],
+            facts(**on_it, totals={sid: 40 * GIB}, host_headroom=16 * GIB),
+        )
+        assert kept["errors"] == [
+            f"{sid}: its disks would be provisioned at 32 GiB (0 GiB there now, 32 GiB more for proxmox_vm_vms), "
+            "more than its 40 GiB less the 16 GiB kept for the host's own files (proxmox_vm_host_headroom_gib). A "
+            "full storage gives every VM on it I/O errors: make the disks smaller, free space, or set "
+            "proxmox_vm_allow_overcommit in local.yml"
+        ]
+        thin = pv.plan(
+            [vm()],
+            facts(
+                qemu=[], configs={}, contents={"local-lvm": []}, totals={"local-lvm": 40 * GIB}, host_headroom=16 * GIB
+            ),
+        )
+        assert thin["errors"] == []
 
     def test_a_storage_not_thin_is_not_budgeted(self):
         disks = [{"slot": "scsi0", "storage": "nas", "size_gib": 900}]

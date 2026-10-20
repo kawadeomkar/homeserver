@@ -128,6 +128,36 @@ Description: Add NFS shares to Proxmox VE as qcow2 VM-disk storage, and check th
   
   
 
+  - **proxmox_storage_startall_wait**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: Storage ids the guests' start at boot waits for, after the delay, until each is active: a drop-in for pve-guests.service. Empty, there is none, and one the role wrote is removed.
+  
+  
+  
+
+  - **proxmox_storage_startall_wait_timeout**
+    - **Required**: false
+    - **Type**: int
+    - **Default**: 600
+  
+    - **Description**: The longest that wait lasts, in seconds; then the guests start whatever the storages say.
+  
+  
+  
+
+  - **proxmox_storage_systemd_dir**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: /etc/systemd/system
+  
+    - **Description**: Where the drop-in goes, in pve-guests.service.d/.
+  
+  
+  
+
 
 
 </details>
@@ -153,6 +183,9 @@ Description: Add NFS shares to Proxmox VE as qcow2 VM-disk storage, and check th
 | [proxmox_storage_enabled](defaults/main.yml#L22)   | bool | `True` |    
 | [proxmox_storage_node](defaults/main.yml#L25)   | str |  |    
 | [proxmox_storage_startall_delay](defaults/main.yml#L29)   | NoneType | `None` |    
+| [proxmox_storage_startall_wait](defaults/main.yml#L33)   | list | `[]` |    
+| [proxmox_storage_startall_wait_timeout](defaults/main.yml#L34)   | int | `600` |    
+| [proxmox_storage_systemd_dir](defaults/main.yml#L36)   | str | `/etc/systemd/system` |    
 
 
 
@@ -180,6 +213,11 @@ Description: Add NFS shares to Proxmox VE as qcow2 VM-disk storage, and check th
 | Read the node configuration | ansible.builtin.command | True |
 | Show the start-on-boot delay, current and wanted | ansible.builtin.debug | True |
 | Set the node's start-on-boot delay | ansible.builtin.command | True |
+| Make the guests' start at boot wait for their storages | block | True |
+| Make the directory for pve-guests.service's drop-ins | ansible.builtin.file | False |
+| Write the drop-in that waits for the storages | ansible.builtin.template | False |
+| Remove the drop-in when nothing is waited for | ansible.builtin.file | True |
+| Reload systemd's units | ansible.builtin.command | True |
 | Read each enabled storage's status on the node | ansible.builtin.command | True |
 | Check each enabled storage is mounted and active | ansible.builtin.assert | True |
 
@@ -217,9 +255,15 @@ classDef rescue stroke:#665352,stroke-width:2px;
   Use_the_node_s_name11-->|Task| Read_the_node_configuration12[read the node configuration<br>When: **proxmox storage startall delay is not none**]:::task
   Read_the_node_configuration12-->|Task| Show_the_start_on_boot_delay__current_and_wanted13[show the start on boot delay  current and wanted<br>When: **proxmox storage startall delay is not none**]:::task
   Show_the_start_on_boot_delay__current_and_wanted13-->|Task| Set_the_node_s_start_on_boot_delay14[set the node s start on boot delay<br>When: **proxmox storage startall delay is not none and <br>proxmox storage node config stdout   from json <br>get  startall onboot delay   0    int    proxmox<br>storage startall delay   int**]:::task
-  Set_the_node_s_start_on_boot_delay14-->|Task| Read_each_enabled_storage_s_status_on_the_node15[read each enabled storage s status on the node<br>When: **not ansible check mode and item disable    0**]:::task
-  Read_each_enabled_storage_s_status_on_the_node15-->|Task| Check_each_enabled_storage_is_mounted_and_active16[check each enabled storage is mounted and active<br>When: **not ansible check mode**]:::task
-  Check_each_enabled_storage_is_mounted_and_active16-->End
+  Set_the_node_s_start_on_boot_delay14-->|Block Start| Make_the_guests__start_at_boot_wait_for_their_storages15_block_start_0[[make the guests  start at boot wait for their<br>storages<br>When: **proxmox storage startall wait   length   0**]]:::block
+  Make_the_guests__start_at_boot_wait_for_their_storages15_block_start_0-->|Task| Make_the_directory_for_pve_guests_service_s_drop_ins0[make the directory for pve guests service s drop<br>ins]:::task
+  Make_the_directory_for_pve_guests_service_s_drop_ins0-->|Task| Write_the_drop_in_that_waits_for_the_storages1[write the drop in that waits for the storages]:::task
+  Write_the_drop_in_that_waits_for_the_storages1-.->|End of Block| Make_the_guests__start_at_boot_wait_for_their_storages15_block_start_0
+  Write_the_drop_in_that_waits_for_the_storages1-->|Task| Remove_the_drop_in_when_nothing_is_waited_for16[remove the drop in when nothing is waited for<br>When: **proxmox storage startall wait   length    0**]:::task
+  Remove_the_drop_in_when_nothing_is_waited_for16-->|Task| Reload_systemd_s_units17[reload systemd s units<br>When: **proxmox storage wait dropin is changed or proxmox<br>storage wait removed is changed**]:::task
+  Reload_systemd_s_units17-->|Task| Read_each_enabled_storage_s_status_on_the_node18[read each enabled storage s status on the node<br>When: **not ansible check mode and item disable    0**]:::task
+  Read_each_enabled_storage_s_status_on_the_node18-->|Task| Check_each_enabled_storage_is_mounted_and_active19[check each enabled storage is mounted and active<br>When: **not ansible check mode**]:::task
+  Check_each_enabled_storage_is_mounted_and_active19-->End
 ```
 
 

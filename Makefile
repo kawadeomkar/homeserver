@@ -23,6 +23,9 @@ POETRY_FOUND = @command -v $(POETRY) >/dev/null || { echo "Poetry is not on PATH
 # Narrow a run to stages, e.g. make check-truenas TAGS=truenas_pools
 TAGS    ?=
 TAG_ARGS := $(if $(TAGS),--tags $(TAGS),)
+# Anything else for ansible-playbook, such as a variable for one run:
+#   make kubernetes ANSIBLE_ARGS='-e proxmox_vm_ignore_existing_volumes=true'
+# (make's own -e is not that: it is make's --environment-overrides, and passes nothing to Ansible).
 ANSIBLE_ARGS ?=
 PLAYBOOK := $(BIN)/ansible-playbook
 # Every playbook run is also written to its own log (git-ignored: it holds addresses), named after
@@ -162,9 +165,9 @@ secrets-push: ## Secrets and identifiers in the commits being pushed (the pre-pu
 
 .PHONY: test-idempotence
 # One pytest worker per CPU: each test runs its own fakes and playbooks, so they run side by side, and in sequence
-# the suite outgrew the CI job's timeout. CI runs the tests marked cluster (the VM backup playbook) in a job of their
-# own, on one Python, and the rest on each: PYTEST_ARGS='-m cluster' or PYTEST_ARGS='-m "not cluster"'. Empty runs
-# them all.
+# the suite outgrew the CI job's timeout. CI runs the tests marked cluster (the VM and backup playbooks) in a job of
+# their own, on one Python, and the rest on each: PYTEST_ARGS='-m cluster' or PYTEST_ARGS='-m "not cluster"'. Empty
+# runs them all.
 PYTEST_ARGS ?=
 test-idempotence: ## Run each role repeatedly against local fakes (PYTEST_ARGS narrows it, e.g. -m cluster)
 	$(BIN)/pytest -q -n auto $(PYTEST_ARGS) tests/integration
@@ -201,6 +204,14 @@ check-proxmox: ## Dry-run the Proxmox host's repositories, upgrade and storage
 .PHONY: proxmox
 proxmox: ## Configure the Proxmox host: repositories and upgrade, then VM storage (the NAS's shares, or a check of its own)
 	$(RUN) proxmox.yml --diff $(ANSIBLE_ARGS)
+
+.PHONY: check-kubernetes
+check-kubernetes: ## Dry-run the Kubernetes cluster: its VMs
+	$(RUN) kubernetes.yml --check --diff $(TAG_ARGS) $(ANSIBLE_ARGS)
+
+.PHONY: kubernetes
+kubernetes: ## Create or correct the Kubernetes cluster's VMs (needs proxmox first)
+	$(RUN) kubernetes.yml --diff $(TAG_ARGS) $(ANSIBLE_ARGS)
 
 .PHONY: check
 check: ## Dry-run everything

@@ -1,9 +1,9 @@
 # Restoring a VM from its nightly backup
 
-The `vm-nightly` job (`roles/proxmox_backup`, configured in `group_vars/proxmox/backup.yml`) backs up the VMs
-named in `vm_backup_extra_vmids` every night at 02:00, with a NAS to `homeserver-backup` on the NAS's redundant
-pool, without one to the storage `local.yml` names as `vm_backup_storage`. It keeps seven daily and four weekly
-backups. A disk marked `backup=0` is never backed up.
+The `vm-nightly` job (`roles/proxmox_backup`, configured in `group_vars/proxmox/backup.yml`) backs up the
+cluster's VMs every night at 02:00, with a NAS to `homeserver-backup` on the NAS's redundant pool, without one to
+the storage `local.yml` names as `vm_backup_storage`. It keeps seven daily and four weekly backups, and also covers
+any VM named in `vm_backup_extra_vmids`. A disk marked `backup=0`, such as a node's media disk, is never backed up.
 
 Three procedures: the drill, which proves a backup restores without touching the running VM, a real restore
 after losing the Proxmox host or its boot disk, and one VM restored on a host that is still running. Commands run

@@ -36,6 +36,19 @@ RECAP = re.compile(r"^(\S+)\s+:\s+ok=(\d+)\s+changed=(\d+)\s+unreachable=(\d+)\s
 PLAYBOOK = str(Path(sys.executable).parent / "ansible-playbook")
 NAS_ADDRESS = "127.0.0.1"
 PROXMOX_ADDRESS = "127.0.0.20"
+# The cluster's nodes, with a NAS.
+NODE_ADDRESSES = {"homeserver-cp-1": "127.0.0.30", "homeserver-worker-1": "127.0.0.31"}
+# Both nodes at the least the settings check allows, for a small host without a NAS: 40 GiB of disks between them.
+SMALL_SIZES = {
+    "homeserver-cp-1": {"memory_mib": 2048, "system_disk_gib": 10},
+    "homeserver-worker-1": {
+        "cores": 2,
+        "memory_mib": 4096,
+        "system_disk_gib": 10,
+        "data_disk_gib": 10,
+        "media_disk_gib": 10,
+    },
+}
 # Sentinels that must never reach Ansible's output.
 MAIL_PASSWORD = "mail-password-sentinel-6c1f"
 ROTATED_MAIL_PASSWORD = "mail-password-sentinel-rotated-91ad"
@@ -244,6 +257,7 @@ def test_truenas_role_is_idempotent(nas):
     assert ds["ephemeral/proxmox"]["reservation"]["rawvalue"] == str(100 * 2**30)
     assert ds["persistent/proxmox/backup"]["recordsize"]["rawvalue"] == "1048576"
     assert ds["persistent/proxmox/vm"]["recordsize"]["rawvalue"] == "65536"
+    assert ds["persistent/proxmox/vm"]["quota"]["rawvalue"] == "1099511627776"
     # The project pool: a dataset of its own with the ephemeral class's properties.
     pool = ds["ephemeral/proxmox/claude-on-proxmox"]
     assert (pool["sync"]["rawvalue"], pool["recordsize"]["rawvalue"]) == ("disabled", "65536")
@@ -396,8 +410,14 @@ def pve_vars(tmp_path, settled=False, nas=True):
         "proxmox_apt_sources_dir": str(sources),
         "proxmox_apt_suite": "trixie",
         "proxmox_apt_reboot_required_file": str(tmp_path / "run" / "reboot-required"),
+        "proxmox_storage_systemd_dir": str(tmp_path / "systemd"),
     }
     return {**extra, "truenas_static_address": "127.0.0.10/24"} if nas else extra
+
+
+def wait_dropin(extra):
+    """The drop-in that holds the guests' start at boot until their storages are active."""
+    return Path(extra["proxmox_storage_systemd_dir"]) / "pve-guests.service.d" / "proxmox-storage-wait.conf"
 
 
 REQUESTED = "*** System restart required ***\n"
@@ -445,6 +465,11 @@ def test_proxmox_storage_role_is_idempotent(tmp_path):
     assert nfs["homeserver-ephemeral"]["export"] == "/mnt/ephemeral/proxmox/vm"
     assert nfs["claude-on-proxmox-ephemeral"]["export"] == "/mnt/ephemeral/proxmox/claude-on-proxmox"
     assert s["node"]["startall-onboot-delay"] == 120
+    # Then the start waits for the storages that hold VM disks, not the backups', and systemd was reloaded once.
+    dropin = wait_dropin(extra).read_text()
+    assert "for s in homeserver-persistent homeserver-ephemeral claude-on-proxmox-ephemeral; do" in dropin, dropin
+    assert "ExecStartPre=-/usr/bin/timeout 600 /bin/sh -c" in dropin and '--storage "$$s"' in dropin, dropin
+    assert s["daemon_reloads"] == 1
 
     # Drift: options, content and the enabled flag changed by hand.
     nfs["homeserver-persistent"].update(options="vers=3", content="images,rootdir", disable=1)
@@ -497,6 +522,14 @@ def test_proxmox_storage_role_without_a_nas(tmp_path):
     assert s["mutations"] == 0, "running without a NAS changed the host"
     assert [e["storage"] for e in s["storage"] if e["type"] == "nfs"] == []
     assert "startall-onboot-delay" not in s["node"], "the boot delay was set with no NAS to wait for"
+    assert not wait_dropin(extra).exists() and "daemon_reloads" not in s
+
+    # A wait left from a setup with a NAS is removed, and systemd reloaded.
+    wait_dropin(extra).parent.mkdir(parents=True)
+    wait_dropin(extra).write_text("[Service]\n")
+    expect(run("proxmox.yml", extra), "homeserver", changed=2, note="a wait left from a NAS")
+    assert not wait_dropin(extra).exists() and read(state)["daemon_reloads"] == 1
+    expect(run("proxmox.yml", extra), "homeserver", changed=0, note="a wait left from a NAS, again")
 
     # A ZFS install's name on an LVM host: refused before anything runs.
     rc, _, out = run("proxmox.yml", {**extra, "proxmox_local_vm_storage": "local-zfs"}, check=True)
@@ -701,7 +734,11 @@ def test_proxmox_apt_role_asks_for_a_reboot_only_for_what_takes_effect_at_boot(t
 def test_proxmox_storage_role_checks_existing_storage(tmp_path):
     """Told the node's own storage ids, the role checks them and changes nothing; a bad one fails at once."""
     state = tmp_path / "pve.json"
-    extra = {"fake_pve_state": str(state), "proxmox_storage_local": ["local-lvm"]}
+    extra = {
+        "fake_pve_state": str(state),
+        "proxmox_storage_local": ["local-lvm"],
+        "proxmox_storage_systemd_dir": str(tmp_path / "systemd"),
+    }
 
     result = run("proxmox_local.yml", extra, check=True)
     expect(result, "homeserver", changed=0, note="dry run")
@@ -875,13 +912,13 @@ def backup_job(state, jid="vm-nightly"):
 
 @pytest.mark.cluster
 def test_proxmox_backup_with_a_nas(tmp_path):
-    """With a NAS: one nightly job of the VMs local.yml names to the NAS's backup storage. A dry run on a fresh
+    """With a NAS and a cluster: one nightly job of both nodes to the NAS's backup storage. A dry run on a fresh
     host passes, the storage pending; a real run without the storage is refused; drift is corrected."""
     state = tmp_path / "pve.json"
     extra = {
         "fake_pve_state": str(state),
         "truenas_static_address": "127.0.0.10/24",
-        "vm_backup_extra_vmids": [300, 301],
+        "kubernetes_node_addresses": NODE_ADDRESSES,
     }
 
     result = run("proxmox_backup.yml", extra, check=True)
@@ -929,22 +966,23 @@ def test_proxmox_backup_with_a_nas(tmp_path):
     write(state, s)
     expect(run("proxmox_backup.yml", extra), "homeserver", changed=0, note="VMIDs in another order")
 
-    # Other VMs in local.yml: the same job, corrected to them.
-    other = extra | {"vm_backup_extra_vmids": [310]}
-    expect(run("proxmox_backup.yml", other), "homeserver", changed=1, note="other VMs")
+    # Without a cluster, the VMs local.yml names alone: the same job, corrected to them.
+    alone = {k: v for k, v in extra.items() if k != "kubernetes_node_addresses"} | {"vm_backup_extra_vmids": [310]}
+    expect(run("proxmox_backup.yml", alone), "homeserver", changed=1, note="extra VMs without a cluster")
     assert backup_job(state)["vmid"] == "310"
-    expect(run("proxmox_backup.yml", other), "homeserver", changed=0, note="other VMs, second run")
+    expect(run("proxmox_backup.yml", alone), "homeserver", changed=0, note="extra VMs, second run")
 
 
 @pytest.mark.cluster
 def test_proxmox_backup_without_a_nas(tmp_path):
     """Without a NAS: no job and no read without vm_backup_storage; a directory storage that is not a checked
-    mount point is refused, naming the fix; then one job, for the VMs local.yml names."""
+    mount point is refused, naming the fix; then one job, for the cluster's two nodes and the extra VMs."""
     state = tmp_path / "pve.json"
     extra = {
         "fake_pve_state": str(state),
         "truenas_static_address": "",
-        "vm_backup_extra_vmids": [300],
+        "kubernetes_node_addresses": NODE_ADDRESSES,
+        "kubernetes_node_sizes": SMALL_SIZES,
     }
     for check in (True, False):
         expect(run("proxmox_backup.yml", extra, check=check), "homeserver", changed=0, note="no backup storage")
@@ -952,7 +990,7 @@ def test_proxmox_backup_without_a_nas(tmp_path):
 
     usb = {"storage": "usb-backup", "type": "dir", "path": "/mnt/usb", "content": "backup"}
     seed_storage(state, usb)
-    with_usb = {**extra, "vm_backup_storage": "usb-backup", "vm_backup_extra_vmids": [300, 310]}
+    with_usb = {**extra, "vm_backup_storage": "usb-backup", "vm_backup_extra_vmids": [310]}
     for check in (True, False):
         rc, _, out = run("proxmox_backup.yml", with_usb, check=check)
         assert rc != 0 and "usb-backup: is a directory that is not a checked mount point" in out, out[-3000:]
@@ -976,7 +1014,7 @@ def test_proxmox_backup_without_a_nas(tmp_path):
     expect(run("proxmox_backup.yml", with_usb), "homeserver", changed=1, note="first run")
     expect(run("proxmox_backup.yml", with_usb), "homeserver", changed=0, note="second run")
     job = backup_job(state)
-    assert (job["storage"], job["vmid"], job["notes-template"]) == ("usb-backup", "300,310", "{{guestname}}")
+    assert (job["storage"], job["vmid"], job["notes-template"]) == ("usb-backup", "300,301,310", "{{guestname}}")
 
     # A storage that holds no backups, and one that does not exist, are refused.
     seed_storage(
@@ -988,3 +1026,422 @@ def test_proxmox_backup_without_a_nas(tmp_path):
     ):
         rc, _, out = run("proxmox_backup.yml", {**with_usb, "vm_backup_storage": storage}, check=True)
         assert rc != 0 and message in out, out[-3000:]
+
+
+# --------------------------------------------------------------------------------------- The cluster's VMs ---
+
+
+def mac(number):
+    """A locally administered MAC, built here because gitleaks flags a MAC written out in any tracked file."""
+    return ":".join(["02", "00", "00", "00", "00", f"{number:02x}"])
+
+
+NODE_MACS = {"homeserver-cp-1": mac(1), "homeserver-worker-1": mac(2)}
+PERSISTENT_NFS = {
+    "storage": "homeserver-persistent",
+    "type": "nfs",
+    "server": "127.0.0.10",
+    "export": "/mnt/persistent/proxmox/vm",
+    "content": "images",
+    "format": "qcow2",
+    "options": "vers=4.2",
+    "path": "/mnt/pve/homeserver-persistent",
+}
+ISO = "local:iso/talos-v1.14.2-ce4c9805-metal-amd64.iso"
+
+
+def vm_state(state, local_lvm_gib=500, **more):
+    """A fake Proxmox host as the Proxmox play leaves it, with local-lvm of the given size."""
+    s = fake_pve.fresh_state()
+    s["storage_total"] = {"local-lvm": local_lvm_gib * 2**30}
+    s.update(more)
+    write(state, s)
+
+
+def vms_of(state):
+    return read(state).get("vms", {})
+
+
+def restart_all(state):
+    """Every VM restarted by hand: what waited for a restart is applied, a None removing its setting."""
+    s = read(state)
+    for vm in s["vms"].values():
+        for key, value in vm["pending"].items():
+            if value is None:
+                vm["config"].pop(key, None)
+            else:
+                vm["config"][key] = value
+        vm["pending"] = {}
+    write(state, s)
+
+
+def fake_pve_command(state, *argv):
+    """A command run on the fake Proxmox host by hand, as the owner would: qm set 301 --delete scsi0, say."""
+    env = {**os.environ, "FAKE_PVE_STATE": str(state), "FAKE_PVE_PYTHON": sys.executable}
+    return subprocess.run([HERE / "fake_pve_bin" / argv[0], *argv[1:]], env=env, capture_output=True, text=True)
+
+
+def cluster_vars(tmp_path, nas=True, **more):
+    """The kubernetes test playbook's variables: the same two nodes in both setups; without a NAS, sized for a small
+    host, the worker with a media disk."""
+    extra = {
+        "fake_pve_state": str(tmp_path / "pve.json"),
+        "truenas_static_address": "127.0.0.10/24" if nas else "",
+        "kubernetes_node_addresses": NODE_ADDRESSES,
+        "kubernetes_node_macs": NODE_MACS,
+    }
+    if not nas:
+        extra["kubernetes_node_sizes"] = SMALL_SIZES
+    return extra | more
+
+
+@pytest.mark.cluster
+def test_proxmox_vm_with_a_nas(tmp_path):
+    """With a NAS: a dry run on a fresh host passes, the persistent storage pending; a real run without that storage
+    is refused; then both VMs are created, started and left alone; drift is corrected; a shrink is refused."""
+    extra = cluster_vars(tmp_path)
+    state = Path(extra["fake_pve_state"])
+    vm_state(state)
+
+    result = run("kubernetes.yml", extra, check=True)
+    expect(result, "homeserver", changed=True, note="dry run on a fresh host")
+    out = result[2]
+    assert re.search(r'storage pending: make proxmox adds it: run that first"?:\s*\[\s*"homeserver-persistent"', out), (
+        out[-3000:]
+    )
+    assert re.search(r'homeserver-worker-1"?:\s*"?create', out) and "Would download: talos-v1.14.2" in out, out[-3000:]
+    assert read(state)["mutations"] == 0, "the dry run changed the host"
+
+    rc, _, out = run("kubernetes.yml", extra)
+    assert rc != 0 and "homeserver-persistent: does not exist (make proxmox adds it: run that first)" in out, out[
+        -3000:
+    ]
+    assert vms_of(state) == {}
+
+    seed_storage(state, PERSISTENT_NFS)
+    expect(run("kubernetes.yml", extra), "homeserver", changed=True, note="first run")
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")
+    expect(run("kubernetes.yml", extra, check=True), "homeserver", changed=0, note="dry run after applying")
+    assert f'"homeserver-worker-1": "{mac(2).upper()}"' in result[2], "the MACs are not reported"
+
+    vms = vms_of(state)
+    assert sorted(vms) == ["300", "301"] and all(vm["status"] == "running" for vm in vms.values())
+    worker = vms["301"]["config"]
+    assert worker["scsi0"].startswith("local-lvm:vm-301-disk-1,") and "size=64G" in worker["scsi0"]
+    assert (
+        worker["scsi1"].startswith("homeserver-persistent:301/vm-301-disk-0.qcow2,") and "size=200G" in worker["scsi1"]
+    )
+    assert "serial=talos-data" in worker["scsi1"] and "backup=0" not in worker["scsi1"]
+    assert (worker["ide2"], worker["tags"], worker["boot"]) == (f"{ISO},media=cdrom", "k8s;talos", "order=scsi0;ide2")
+    assert worker["watchdog"] == "model=i6300esb,action=reset" and worker["startup"].startswith("order=2,")
+    assert worker["net0"].lower().startswith(f"virtio={mac(2)},")
+    assert vms["300"]["config"]["startup"].startswith("order=1,") and "scsi1" not in vms["300"]["config"]
+    isos = [v["volid"] for v in read(state)["content"]["local"]]
+    assert isos == [ISO], "the ISO was not downloaded once"
+    # Proxmox checks the download against the pinned SHA-256.
+    download = read(state)["downloads"][0]
+    assert download["checksum-algorithm"] == "sha256" and re.fullmatch(r"[0-9a-f]{64}", download["checksum"])
+
+    # Drift: cores changed by hand on the running control plane, tags in another order and case. The cores go back,
+    # pending until a restart, which every run reports and none makes; the tags are no change.
+    s = read(state)
+    s["vms"]["300"]["config"].update(cores="4", tags="talos;K8S")
+    write(state, s)
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=1, note="run after drift")
+    assert re.search(r'needs a restart[^"]*"?:\s*\{\s*"300":\s*\[\s*"cores"', result[2]), result[2][-3000:]
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=0, note=f"second run after drift (changed: {changed_tasks(result[2])})")
+    assert re.search(r'"300":\s*\[\s*"cores"', result[2]), "the pending restart is no longer reported"
+    assert vms_of(state)["300"]["status"] == "running", "the role restarted a VM"
+    s = read(state)
+    s["vms"]["300"]["config"] |= s["vms"]["300"]["pending"]
+    s["vms"]["300"]["pending"] = {}
+    write(state, s)
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=0, note="run after the restart")
+    assert "needs a restart" not in result[2]
+
+    # The data disk's serial changed by hand: set again on the same volume, its size and contents untouched.
+    s = read(state)
+    s["vms"]["301"]["config"]["scsi1"] = s["vms"]["301"]["config"]["scsi1"].replace("talos-data", "other")
+    write(state, s)
+    expect(run("kubernetes.yml", extra), "homeserver", changed=1, note="a disk's serial changed by hand")
+    data = vms_of(state)["301"]["config"]["scsi1"]
+    assert data.startswith("homeserver-persistent:301/vm-301-disk-0.qcow2,") and "serial=talos-data" in data, data
+    assert "size=200G" in data, data
+    expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="a disk's serial set again")
+
+    # The worker's system disk replaced by hand (scripts/runbooks/dead-worker.md): Proxmox drops the deleted drive
+    # from the boot order and never adds the new one back, so the role adds the disk and puts the order back,
+    # pending until a restart.
+    assert fake_pve_command(state, "qm", "set", "301", "--delete", "scsi0").returncode == 0
+    assert vms_of(state)["301"]["config"]["boot"] == "order=ide2"
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=1, note="a system disk replaced by hand")
+    worker = vms_of(state)["301"]
+    assert worker["pending"]["boot"] == "order=scsi0;ide2" and worker["config"]["scsi0"].startswith("local-lvm:")
+    assert re.search(r'"301":\s*\[[^\]]*"boot"', result[2]), result[2][-3000:]
+    expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="a system disk replaced, again")
+
+    restart_all(state)
+
+    # A disk configured larger is grown; one configured smaller is refused, before anything changes.
+    grown = extra | {"kubernetes_node_sizes": {"homeserver-worker-1": {"system_disk_gib": 80}}}
+    expect(run("kubernetes.yml", grown), "homeserver", changed=1, note="a larger system disk")
+    assert "size=80G" in vms_of(state)["301"]["config"]["scsi0"]
+    expect(run("kubernetes.yml", grown), "homeserver", changed=0, note="a larger system disk, again")
+    shrunk = extra | {"kubernetes_node_sizes": {"homeserver-worker-1": {"system_disk_gib": 32}}}
+    mutations = read(state)["mutations"]
+    for check in (True, False):
+        rc, _, out = run("kubernetes.yml", shrunk, check=check)
+        assert rc != 0 and "scsi0 is 80 GiB, configured as 32 GiB: a disk is never shrunk" in out, out[-3000:]
+    assert read(state)["mutations"] == mutations
+
+    # A setup without a cluster creates nothing and downloads nothing, and reads nothing.
+    without = {k: v for k, v in extra.items() if not k.startswith("kubernetes_")}
+    result = run("kubernetes.yml", without)
+    expect(result, "homeserver", changed=0, note="no cluster")
+    assert re.search(r"Read the node's VMs\] \*+\nskipping:", result[2]), result[2][-3000:]
+
+
+@pytest.mark.cluster
+def test_proxmox_vm_without_a_nas(tmp_path):
+    """Without a NAS: the same two VMs, the worker's data disk on local-lvm and its media disk never backed up; the
+    disk budget counts both VMs' disks and other guests', a container's (listed as rootdir) as much as a VM's, and
+    refuses a plan that would overfill the thin pool, until told otherwise."""
+    extra = cluster_vars(tmp_path, nas=False)
+    state = Path(extra["fake_pve_state"])
+    # A 54 GiB pool holding another VM's 40 GiB disk: the 40 GiB more the two nodes need do not fit.
+    vm_state(state, local_lvm_gib=54)
+    other = {"volid": "local-lvm:vm-200-disk-0", "content": "images", "vmid": 200, "size": 40 * 2**30, "format": "raw"}
+    s = read(state)
+    s["content"] = {"local-lvm": [other]}
+    write(state, s)
+    for check in (True, False):
+        rc, _, out = run("kubernetes.yml", extra, check=check)
+        assert (
+            rc != 0 and "local-lvm: its disks would be provisioned at 80 GiB (40 GiB there now, 40 GiB more" in out
+        ), out[-3000:]
+        assert "more than its 54 GiB" in out, out[-3000:]
+    assert vms_of(state) == {}
+    expect(
+        run("kubernetes.yml", extra | {"proxmox_vm_allow_overcommit": True}, check=True),
+        "homeserver",
+        changed=True,
+        note="overcommit allowed",
+    )
+    container = other | {"volid": "local-lvm:vm-201-disk-0", "content": "rootdir", "vmid": 201}
+    s = read(state)
+    s["content"] = {"local-lvm": [container]}
+    write(state, s)
+    rc, _, out = run("kubernetes.yml", extra, check=True)
+    assert rc != 0 and "provisioned at 80 GiB (40 GiB there now, 40 GiB more" in out, out[-3000:]
+
+    # Without the other VM's disk it fits, and still fits on the next run, its own disks counted once.
+    s = read(state)
+    s["content"] = {}
+    write(state, s)
+    expect(run("kubernetes.yml", extra), "homeserver", changed=True, note="first run")
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")
+    expect(run("kubernetes.yml", extra, check=True), "homeserver", changed=0, note="dry run after applying")
+    vms = vms_of(state)
+    assert sorted(vms) == ["300", "301"] and all(vm["config"]["tags"] == "k8s;talos" for vm in vms.values())
+    assert [k for k in sorted(vms["300"]["config"]) if re.fullmatch(r"scsi\d+", k)] == ["scsi0"]
+    config = vms["301"]["config"]
+    assert config["scsi1"].startswith("local-lvm:vm-301-disk-2,") and "serial=talos-data" in config["scsi1"]
+    assert config["scsi2"].startswith("local-lvm:vm-301-disk-3,") and "backup=0" in config["scsi2"]
+    assert "format=" not in config["scsi1"]
+
+    # Drift on the worker: its memory changed by hand is put back, pending until a restart, which the run reports and
+    # never makes.
+    s = read(state)
+    s["vms"]["301"]["config"]["memory"] = "2048"
+    write(state, s)
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=1, note="run after drift")
+    assert re.search(r'needs a restart[^"]*"?:\s*\{\s*"301":\s*\[\s*"memory"', result[2]), result[2][-3000:]
+    expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="second run after drift")
+    restart_all(state)
+
+    # Growing a disk counts against the pool as well: 40 GiB there, 15 GiB more does not fit in 54.
+    worker = SMALL_SIZES["homeserver-worker-1"] | {"data_disk_gib": 25}
+    grown = extra | {"kubernetes_node_sizes": SMALL_SIZES | {"homeserver-worker-1": worker}}
+    mutations = read(state)["mutations"]
+    for check in (True, False):
+        rc, _, out = run("kubernetes.yml", grown, check=check)
+        assert rc != 0 and "provisioned at 55 GiB (40 GiB there now, 15 GiB more" in out, out[-3000:]
+    assert read(state)["mutations"] == mutations
+
+    # The VMs' disk storage disabled: refused, naming it.
+    s = read(state)
+    next(e for e in s["storage"] if e["storage"] == "local-lvm")["disable"] = 1
+    write(state, s)
+    rc, _, out = run("kubernetes.yml", extra, check=True)
+    assert rc != 0 and "local-lvm: is disabled (proxmox_vm_vms)" in out, out[-3000:]
+
+
+@pytest.mark.cluster
+@pytest.mark.parametrize("built_with_nas", [True, False], ids=["nas-to-local", "local-to-nas"])
+def test_a_built_cluster_cannot_switch_setups(tmp_path, built_with_nas):
+    """Both setups build the same two VMs, and only the worker's disks live elsewhere. With local.yml rewritten for
+    the other setup, the cluster's play refuses before changing anything, in a dry run too, because the worker's data
+    disk is on the other storage: which is why the worker always has a data disk. The backup job keeps both VMs
+    either way. Put back, nothing changes."""
+    built, switched = cluster_vars(tmp_path, nas=built_with_nas), cluster_vars(tmp_path, nas=not built_with_nas)
+    state = Path(built["fake_pve_state"])
+    vm_state(state)
+    usb_storage = {
+        "storage": "usb-backup",
+        "type": "dir",
+        "path": "/mnt/usb",
+        "content": "backup",
+        "is_mountpoint": "1",
+    }
+    seed_storage(state, PERSISTENT_NFS, BACKUP_NFS, usb_storage)
+    usb = {"vm_backup_storage": "usb-backup"}
+    expect(run("kubernetes.yml", built), "homeserver", changed=True, note="build")
+    expect(run("proxmox_backup.yml", built | usb), "homeserver", changed=1, note="backup job")
+    mutations = read(state)["mutations"]
+    assert backup_job(state)["vmid"] == "300,301"
+
+    on, wanted = ("homeserver-persistent", "local-lvm") if built_with_nas else ("local-lvm", "homeserver-persistent")
+    for check in (True, False):
+        rc, _, out = run("kubernetes.yml", switched | usb, check=check)
+        assert rc != 0 and f"VM 301's scsi1 is on {on}, configured on {wanted}: moving it is by hand" in out, out[
+            -3000:
+        ]
+    assert read(state)["mutations"] == mutations, "the refused switch changed the host"
+    expect(run("proxmox_backup.yml", switched | usb), "homeserver", changed=1, note="backup job after the switch")
+    assert backup_job(state)["vmid"] == "300,301", "the switch dropped a VM from the backup"
+
+    expect(run("kubernetes.yml", built), "homeserver", changed=0, note="local.yml put back")
+    expect(run("proxmox_backup.yml", built | usb), "homeserver", changed=1, note="local.yml put back, backup")
+
+
+@pytest.mark.cluster
+def test_proxmox_vm_refuses_to_build_over_old_volumes(tmp_path):
+    """A missing VM whose VMID still has a disk or a backup is being rebuilt: refused, naming the way back, until told
+    to build it new, when its new disks take the next free names. A VMID another VM holds is refused."""
+    extra = cluster_vars(tmp_path)
+    state = Path(extra["fake_pve_state"])
+    vm_state(state)
+    seed_storage(state, PERSISTENT_NFS)
+    s = read(state)
+    s["content"] = {
+        "local-lvm": [{"volid": "local-lvm:vm-301-disk-0", "content": "images", "vmid": 301, "size": 2**30}],
+        "local": [
+            {"volid": "local:backup/vzdump-qemu-300-2026_10_01-02_00_00.vma.zst", "content": "backup", "vmid": 300},
+            # An upload for import belongs to no VMID, and Proxmox lists it whatever --vmid asks for.
+            {"volid": "local:import/appliance.ova", "content": "import"},
+        ],
+    }
+    write(state, s)
+    for check in (True, False):
+        rc, _, out = run("kubernetes.yml", extra, check=check)
+        assert rc != 0 and "VM 301 (homeserver-worker-1) does not exist, but its VMID still has volumes" in out, out[
+            -3000:
+        ]
+        assert "VM 300 (homeserver-cp-1) does not exist" in out and "qmrestore" in out, out[-3000:]
+        assert "scripts/runbooks/vm-restore.md" in out and "proxmox_vm_ignore_existing_volumes=true'" in out
+        assert "appliance.ova" not in out
+    assert vms_of(state) == {}
+
+    # Only an import file left: not a rebuild.
+    s = read(state)
+    s["content"] = {"local": [{"volid": "local:import/appliance.ova", "content": "import"}]}
+    write(state, s)
+    expect(run("kubernetes.yml", extra, check=True), "homeserver", changed=True, note="an import file only")
+
+    # A storage that is enabled but not active, as an unplugged USB backup disk is, cannot be ruled out.
+    seed_storage(state, {"storage": "usb-backup", "type": "dir", "path": "/mnt/usb", "content": "backup"})
+    s = read(state)
+    s["inactive"] = ["usb-backup"]
+    write(state, s)
+    rc, _, out = run("kubernetes.yml", extra, check=True)
+    assert rc != 0 and "usb-backup cannot be searched for its old disks and backups" in out, out[-3000:]
+    s = read(state)
+    s["inactive"] = []
+    s["content"] = {
+        "local-lvm": [{"volid": "local-lvm:vm-301-disk-0", "content": "images", "vmid": 301, "size": 2**30}],
+        "local": [
+            {"volid": "local:backup/vzdump-qemu-300-2026_10_01-02_00_00.vma.zst", "content": "backup", "vmid": 300}
+        ],
+    }
+    write(state, s)
+
+    rebuild = extra | {"proxmox_vm_ignore_existing_volumes": True}
+    expect(run("kubernetes.yml", rebuild), "homeserver", changed=True, note="a deliberate rebuild")
+    worker = vms_of(state)["301"]["config"]
+    assert worker["efidisk0"].startswith("local-lvm:vm-301-disk-1,") and worker["scsi0"].startswith(
+        "local-lvm:vm-301-disk-2,"
+    )
+
+    # VMID 300 now belongs to another VM, and 301 to a container.
+    s = read(state)
+    s["vms"]["300"]["config"]["name"] = "someone-else"
+    del s["vms"]["301"]
+    s["containers"] = [{"vmid": 301, "name": "pihole", "status": "running"}]
+    write(state, s)
+    rc, _, out = run("kubernetes.yml", extra, check=True)
+    assert rc != 0 and "VMID 300 belongs to 'someone-else', not 'homeserver-cp-1'" in out, out[-3000:]
+    assert "VMID 301 belongs to the container 'pihole', not to a VM named 'homeserver-worker-1'" in out, out[-3000:]
+
+
+@pytest.mark.cluster
+def test_proxmox_vm_starts_vms_restored_after_a_host_reinstall(tmp_path):
+    """After a reinstall the VMs come back from their backups, stopped, their CD-ROM naming a Talos ISO that went with
+    the boot disk, so starting them by hand fails (scripts/runbooks/vm-restore.md). make kubernetes downloads the ISO
+    again and then starts them, creating nothing."""
+    extra = cluster_vars(tmp_path)
+    state = Path(extra["fake_pve_state"])
+    vm_state(state)
+    seed_storage(state, PERSISTENT_NFS)
+    expect(run("kubernetes.yml", extra), "homeserver", changed=True, note="first run")
+    s = read(state)
+    s["content"]["local"] = []
+    for vm in s["vms"].values():
+        vm["status"] = "stopped"
+    write(state, s)
+    by_hand = fake_pve_command(state, "qm", "start", "300")
+    assert by_hand.returncode != 0 and f"volume '{ISO}' does not exist" in by_hand.stderr, by_hand.stderr
+
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=True, note="run after the restore")
+    assert [v["volid"] for v in read(state)["content"]["local"]] == [ISO]
+    assert sorted(vms_of(state)) == ["300", "301"] and all(vm["status"] == "running" for vm in vms_of(state).values())
+    expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="second run after the restore")
+
+
+@pytest.mark.cluster
+def test_proxmox_vm_recovers_from_a_failed_download_and_start(tmp_path):
+    """A download that fails is reported, though pvesh exits 0, and nothing is created; the next run downloads it. A
+    start that fails is reported; the next run starts the VM without creating it again. A node short of memory gets
+    a warning, and the run goes on."""
+    extra = cluster_vars(tmp_path)
+    state = Path(extra["fake_pve_state"])
+    vm_state(state, download_fails=True)
+    seed_storage(state, PERSISTENT_NFS)
+    rc, _, out = run("kubernetes.yml", extra)
+    assert rc != 0 and "Downloading talos-v1.14.2-ce4c9805-metal-amd64.iso" in out and "404 Not Found" in out, out[
+        -3000:
+    ]
+    assert vms_of(state) == {} and read(state).get("content", {}).get("local", []) == []
+
+    s = read(state)
+    s.update(download_fails=False, start_fails=True, node_memory={"total": 16 * 2**30, "used": 2**30})
+    write(state, s)
+    rc, _, out = run("kubernetes.yml", extra)
+    assert rc != 0 and "start failed" in out, out[-3000:]
+    assert "The VMs would need 28 GiB of memory, with 16 GiB on the node" in out, out[-3000:]
+    assert sorted(vms_of(state)) == ["300", "301"]
+    assert [vm["status"] for vm in vms_of(state).values()].count("stopped") == 1, "not just the failed start is left"
+    created = read(state)["mutations"]
+
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=True, note="run after the failed start")
+    assert all(vm["status"] == "running" for vm in vms_of(state).values())
+    assert read(state)["mutations"] - created == 1, "more than the start happened"
+    expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="second run after the failed start")
