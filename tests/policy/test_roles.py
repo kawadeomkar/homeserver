@@ -61,6 +61,7 @@ SECRET_NAME = re.compile(r"pass(?!ive)|secret|token|key", re.IGNORECASE)
 # Options whose names match it but hold nothing secret, as (module or role, option): why.
 NOT_SECRET = {
     ("truenas_resource", "key"): "the names of the fields that identify an entry",
+    ("flux_bootstrap", "flux_bootstrap_age_key_file"): "the key file's path; the role reads the key, never prints it",
     ("talos", "talos_secrets_file"): "the bundle's path; the role reads the bundle under no_log, never prints it",
     ("proxmox_tailscale", "proxmox_tailscale_keyring"): "the path of Tailscale's public signing key",
 }
@@ -217,7 +218,7 @@ NO_BACKUP = "are not backed up, because this setup has no NAS"
 @pytest.mark.parametrize(
     ("local_yml", "extra", "validations", "present", "absent"),
     [
-        pytest.param(None, CLUSTER_ARGS, 7, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas-cluster"),
+        pytest.param(None, CLUSTER_ARGS, 8, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas-cluster"),
         pytest.param(EXAMPLE_LOCAL_YML, (), 6, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas"),
         pytest.param(
             EXAMPLE_LOCAL_YML + TAILSCALE_LOCAL_YML,
@@ -230,7 +231,7 @@ NO_BACKUP = "are not backed up, because this setup has no NAS"
         pytest.param(
             PROXMOX_ONLY_CLUSTER_LOCAL_YML,
             CLUSTER_ARGS,
-            6,
+            7,
             [*NAS_PLAY_ENDS, NO_BACKUP, TAILSCALE_CHECK],
             NAS_ROLE,
             id="proxmox-only-cluster",
@@ -292,6 +293,7 @@ def test_inventory_without_the_nas_host(tmp_path):
     assert out.count("Validating arguments against arg spec 'main'") == 5, out[-3000:]
 
 
+@pytest.mark.parametrize("playbook", ["site.yml", "talos-upgrade.yml", "etcd-snapshot.yml"])
 @pytest.mark.parametrize(
     ("local_yml", "extra", "refused"),
     [
@@ -299,17 +301,35 @@ def test_inventory_without_the_nas_host(tmp_path):
         pytest.param(PROXMOX_ONLY_CLUSTER_LOCAL_YML, CLUSTER_ARGS, True, id="cluster"),
     ],
 )
-def test_inventory_without_the_kubernetes_group(tmp_path, local_yml, extra, refused):
+def test_inventory_without_the_kubernetes_group(tmp_path, playbook, local_yml, extra, refused):
     """An inventory made before the cluster has no kubernetes group. Without a cluster it still works; with one the
-    run is refused before any VM is made, rather than creating the VMs and matching no host to build Talos on."""
+    run is refused before any VM is made, rather than creating the VMs and matching no host to build Talos on, and
+    an upgrade or a snapshot is refused rather than matching no host and ending without a word."""
     tree = example_tree(tmp_path, local_yml)
     inventory = tree / "inventory.example"
     inventory.write_text(re.sub(r"(?ms)^# The Kubernetes cluster.*\Z", "", inventory.read_text()))
     assert "kubernetes" not in inventory.read_text()
-    rc, out = argspec_pass(tree, "site.yml", *extra)
+    rc, out = argspec_pass(tree, playbook, *extra)
     assert (rc != 0) == refused, out[-3000:]
     if refused:
         assert "add [kubernetes] and homeserver-k8s to" in out and "TASK [proxmox_vm" not in out, out[-3000:]
+
+
+@pytest.mark.parametrize("playbook", ["talos-upgrade.yml", "etcd-snapshot.yml"])
+@pytest.mark.parametrize(
+    ("local_yml", "extra", "skipped"),
+    [
+        pytest.param(None, CLUSTER_ARGS, False, id="nas-cluster"),
+        pytest.param(PROXMOX_ONLY_CLUSTER_LOCAL_YML, CLUSTER_ARGS, False, id="proxmox-only-cluster"),
+        pytest.param(EXAMPLE_LOCAL_YML, (), True, id="no-cluster"),
+    ],
+)
+def test_cluster_playbooks_pass_their_checks(tmp_path, playbook, local_yml, extra, skipped):
+    """The upgrade and snapshot playbooks check the same settings as kubernetes.yml, and pass them in each setup;
+    without a cluster they say so and end."""
+    rc, out = argspec_pass(example_tree(tmp_path, local_yml), playbook, *extra)
+    assert rc == 0, out[-3000:]
+    assert ("so this setup has no cluster" in out) == skipped, out[-3000:]
 
 
 @pytest.mark.parametrize("playbook", ["site.yml", "proxmox.yml"])
@@ -467,10 +487,76 @@ def test_talos_nodes_resolve_on_the_kubernetes_host(tmp_path, local_yml, nodes):
         "{'nodes': talos_nodes, 'endpoint': talos_endpoint, 'version': talos_version, "
         "'cp': talos_patches_controlplane | join('\\n'), 'patches': talos_patches_common + talos_patches_controlplane}",
         *CLUSTER_ARGS,
+        # What roles/talos learns from talosctl as it renders; a documentation range here.
+        "-e",
+        json.dumps({"talos_pod_subnets": ["198.51.100.0/24"]}),
     )
     assert {n["name"]: (n["role"], len(n["patches"])) for n in found["nodes"]} == nodes
     assert found["endpoint"] == "https://192.0.2.30:6443" and found["version"] == "v1.14.2"
     assert "$patch: delete" not in found["cp"] and "KubeNodeConfig" not in found["cp"]
+    # The firewall: the two APIs open, the rest to the nodes (and the pod network), etcd to the control plane alone.
+    docs = [yaml.safe_load(patch) for patch in found["patches"]]
+    rules = {doc["name"]: doc for doc in docs if doc.get("kind") == "NetworkRuleConfig"}
+    assert {"apiVersion": "v1alpha1", "kind": "NetworkDefaultActionConfig", "ingress": "block"} in docs
+    nodes_32 = [{"subnet": f"192.0.2.{30 + i}/32"} for i in range(len(nodes))]
+    pods = {"subnet": "198.51.100.0/24"}
+    anywhere = [{"subnet": "0.0.0.0/0"}, {"subnet": "::/0"}]
+    assert rules["talos-api"]["ingress"] == rules["kubernetes-api"]["ingress"] == anywhere
+    assert rules["kubelet"]["ingress"] == rules["node-metrics"]["ingress"] == [*nodes_32, pods]
+    assert rules["flannel-vxlan"]["ingress"] == rules["trustd"]["ingress"] == nodes_32
+    assert rules["etcd"]["ingress"] == [{"subnet": "192.0.2.30/32"}]
+
+
+MEDIA_ON_THE_DATA_VOLUME = (
+    PROXMOX_ONLY_CLUSTER_LOCAL_YML.replace(", media_disk_gib: 100", "") + "kubernetes_media_on_data_volume: true\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "path", "media"),
+    [
+        pytest.param(None, "k8s/clusters/nas", None, id="nas"),
+        pytest.param(
+            PROXMOX_ONLY_CLUSTER_LOCAL_YML,
+            "k8s/clusters/local",
+            ("/var/mnt/media/library", "/var/mnt/media/frigate"),
+            id="proxmox-only-media-disk",
+        ),
+        pytest.param(
+            MEDIA_ON_THE_DATA_VOLUME,
+            "k8s/clusters/local",
+            ("/var/mnt/local-path-provisioner/static/media", "/var/mnt/local-path-provisioner/static/frigate-media"),
+            id="proxmox-only-media-on-the-data-volume",
+        ),
+    ],
+)
+def test_flux_settings_resolve_on_the_kubernetes_host(tmp_path, local_yml, path, media):
+    """Flux's settings resolve on the kubernetes host through the real inventory layout. Each setup syncs its own
+    cluster directory, which exists and builds, and every value is a string, since Flux substitutes text. Without a
+    NAS the media paths follow the Talos volume that holds the media: the media disk's, or the data volume's."""
+    tree = example_tree(tmp_path, local_yml)
+    settings, instance, volumes = resolve_on(
+        tree,
+        "homeserver-k8s",
+        "[flux_bootstrap_settings, flux_bootstrap_instance, talos_nodes | map(attribute='patches') | flatten"
+        " | select('search', 'kind: UserVolumeConfig') | map('regex_search', 'name: (\\S+)', '\\1') | flatten]",
+        *CLUSTER_ARGS,
+    )
+    base = {"DOMAIN", "TZ", "DATA_NODE", "CONTROL_PLANE_ADDRESS"}
+    assert set(settings) == (base if media is None else base | {"MEDIA_LOCAL_PATH", "FRIGATE_LOCAL_PATH"})
+    assert settings["CONTROL_PLANE_ADDRESS"] == "192.0.2.30"
+    assert all(isinstance(value, str) and value for value in settings.values()), settings
+    assert instance["path"] == path and instance["url"] == CLUSTER_VARS["flux_sync_url"]
+    assert settings["DATA_NODE"] == "homeserver-worker-1"
+    if media:
+        assert (settings["MEDIA_LOCAL_PATH"], settings["FRIGATE_LOCAL_PATH"]) == media
+        # Each path lies on a Talos volume the node has: /var/mnt/<volume>.
+        for value in media:
+            assert value.split("/")[3] in volumes, (value, volumes)
+    # The directory Flux syncs is there, and everything its kustomization.yaml lists exists.
+    kustomization = yaml.safe_load((ROOT / path / "kustomization.yaml").read_text())
+    assert kustomization["kind"] == "Kustomization"
+    assert all((ROOT / path / resource).exists() for resource in kustomization.get("resources") or []), kustomization
 
 
 def test_nas_gets_a_dataset_and_share_per_vm_storage(tmp_path):
@@ -677,6 +763,12 @@ def without(settings, *names):
             ],
             id="mac-upper-case-or-universal",
         ),
+        pytest.param(
+            None,
+            without(CLUSTER_VARS, "flux_sync_url"),
+            ["flux_sync_url must name the Git repository this cluster syncs"],
+            id="flux-url-placeholder",
+        ),
         pytest.param(PROXMOX_ONLY_CLUSTER_LOCAL_YML, CLUSTER_VARS, [], id="proxmox-only-sized"),
         pytest.param(
             PROXMOX_ONLY_CLUSTER_LOCAL_YML.replace("kubernetes_node_sizes:", "unused_sizes:"),
@@ -716,9 +808,9 @@ def without(settings, *names):
         ),
         pytest.param(
             PROXMOX_ONLY_LOCAL_YML + "kubernetes_node_adresses: {homeserver-cp-1: 192.0.2.30}\n"
-            "kubernetes_media_on_data_volume: true\n",
+            "flux_sync_url: https://example.invalid/homeserver.git\n",
             {},
-            ["group_vars/all/local.yml sets kubernetes_media_on_data_volume but no kubernetes_node_addresses"],
+            ["group_vars/all/local.yml sets flux_sync_url but no kubernetes_node_addresses"],
             id="misspelt-addresses",
         ),
         pytest.param(
@@ -838,6 +930,12 @@ def without(settings, *names):
             id="nas-media-on-the-data-volume",
         ),
         pytest.param(
+            PROXMOX_ONLY_CLUSTER_LOCAL_YML.replace("homeserver-worker-1: 192.0.2.31}", "homeserver-worker-1: }"),
+            CLUSTER_VARS,
+            ["It gives none to homeserver-worker-1."],
+            id="worker-line-left-blank",
+        ),
+        pytest.param(
             None,
             CLUSTER_VARS | {"kubernetes_node_addresses": ["192.0.2.30", "192.0.2.31"]},
             ["kubernetes_node_addresses must map each node to its address"],
@@ -858,9 +956,33 @@ def without(settings, *names):
         ),
         pytest.param(
             None,
+            CLUSTER_VARS | {"flux_sync_ref": "small-host"},
+            ["flux_sync_ref must be a full reference, such as refs/heads/small-host"],
+            id="flux-ref-a-branch-name",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"flux_sync_ref": "refs/heads/small-host"},
+            ["flux_sync_ref names refs/heads/small-host, not refs/heads/main", "flux_sync_ref_unprotected: true"],
+            id="flux-ref-unprotected",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"flux_sync_ref": "refs/heads/small-host", "flux_sync_ref_unprotected": True},
+            [],
+            id="flux-ref-unprotected-said-so",
+        ),
+        pytest.param(
+            None,
             CLUSTER_VARS | {"vault_talos_secrets": "certs: {}\n"},
             ["The vault holds vault_talos_secrets", "secrets.yaml in the cluster's credentials directory"],
             id="talos-bundle-in-the-vault",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"flux_sync_url": "git@github.com:someone/homeserver.git"},
+            ["flux_sync_url must name the Git repository this cluster syncs, over HTTPS"],
+            id="flux-url-over-ssh",
         ),
     ],
 )
@@ -876,11 +998,11 @@ def test_kubernetes_settings_are_checked(tmp_path, local_yml, extra, expected):
 
 @pytest.mark.parametrize("playbook", ["site.yml", "truenas.yml", "proxmox.yml"])
 def test_example_left_unchanged_is_refused(tmp_path, playbook):
-    """local.yml.example copied as it is: its <mac> placeholders stop every playbook before any role runs, naming
-    the variable, and never reach a VM's configuration."""
+    """local.yml.example copied as it is: its <mac> and <you> placeholders stop every playbook before any role
+    runs, naming the variables, and never reach a VM's configuration."""
     rc, out = argspec_pass(example_tree(tmp_path), playbook)
     assert rc != 0, out[-3000:]
-    assert "kubernetes_node_macs must give each node" in out, out[-3000:]
+    assert "kubernetes_node_macs must give each node" in out and "flux_sync_url must name" in out, out[-3000:]
     assert "TASK [truenas :" not in out and "TASK [proxmox_" not in out, out[-3000:]
 
 
@@ -941,6 +1063,15 @@ def test_secret_options_are_no_log():
     assert excepted == set(NOT_SECRET), "NOT_SECRET names an option that no longer exists or is now no_log"
 
 
+def test_flux_is_new_enough_to_substitute_strictly(tmp_path):
+    """Strict substitution, which fails a manifest naming a setting that does not exist rather than giving it an empty
+    string, is kustomize-controller's default from Flux 2.9; roles/flux_bootstrap sets no feature gate for it."""
+    tree = example_tree(tmp_path)
+    version = resolve_on(tree, "homeserver-k8s", "flux_bootstrap_instance.version", *CLUSTER_ARGS)
+    major, minor = (int(part) for part in str(version).split(".")[:2])
+    assert (major, minor) >= (2, 9), version
+
+
 @pytest.mark.parametrize(("where", "refused"), [("homeserver/.talos", True), ("homeserver-talos", False)])
 def test_talos_config_dir_must_be_outside_the_repository(tmp_path, where, refused):
     """talosconfig and kubeconfig never go inside the repository; a sibling directory whose name merely starts with
@@ -965,6 +1096,9 @@ def test_talos_config_dir_follows_local_yml(tmp_path, given, expected):
         local_yml += f"kubernetes_talos_config_dir: {given}\n"
     tree = example_tree(tmp_path, local_yml)
     assert resolve_on(tree, "homeserver-k8s", "talos_config_dir", *CLUSTER_ARGS) == str(Path.home() / expected)
+    assert resolve_on(tree, "homeserver-k8s", "flux_bootstrap_kubeconfig", *CLUSTER_ARGS) == str(
+        Path.home() / expected / "kubeconfig"
+    )
 
 
 @pytest.mark.parametrize(

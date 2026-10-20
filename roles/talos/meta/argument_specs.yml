@@ -7,8 +7,8 @@ argument_specs:
         the patches, installs it on a node in maintenance mode and waits until its install status reads
         installed, and applies configuration drift to a configured node without rebooting it (Talos 1.14 applies
         any configuration that way); after a change to the control plane it says how to restart etcd.
-      - Renders a configured node with the versions it runs, never the pins, so a pin bump never changes a
-        running node; a pending upgrade is reported.
+      - Renders a configured node with the versions it runs, never the pins, so a pin bump changes nothing until
+        the upgrade entry point moves the node; a pending upgrade is reported.
       - Bootstraps etcd once, recording it in talos_config_dir. With that record and etcd not running, it refuses
         to bootstrap again, which would make a new, empty cluster, unless talos_allow_bootstrap.
       - With that record, refuses to install a node in maintenance mode that talos_reinstall does not name, since
@@ -18,7 +18,7 @@ argument_specs:
         endpoint, or another CA than the secrets bundle's).
       - Checks that every user volume the patches declare is ready once the cluster is healthy.
       - The defaults do nothing. README.md describes each variable.
-    options:
+    options: &talos_options
       talos_cluster_name:
         type: str
         default: ""
@@ -133,3 +133,13 @@ argument_specs:
           Keep each node's rendered configuration in talos_config_dir/rendered/ (mode 0600; it holds the secrets),
           to compare by hand with talosctl apply-config --dry-run, until the next run without it, which removes
           them.
+  upgrade:
+    short_description: Move the running nodes to the pinned Talos and Kubernetes versions
+    description:
+      - Takes an etcd snapshot, upgrades each node whose Talos version or schematic differs from the pins, control
+        planes first, then Kubernetes with talosctl upgrade-k8s. In check mode it shows the plan and the Kubernetes
+        upgrade's own dry run.
+    options: *talos_options
+  etcd-snapshot:
+    short_description: Take an etcd snapshot into talos_config_dir/etcd
+    options: *talos_options

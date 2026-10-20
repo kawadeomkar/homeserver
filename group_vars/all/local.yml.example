@@ -103,10 +103,27 @@ kubernetes_node_addresses:
 kubernetes_node_macs:
   homeserver-cp-1: "<mac>"
   homeserver-worker-1: "<mac>"
+# The repository the cluster syncs, which Flux applies with cluster-admin
+# rights. There is no default: name your own.
+flux_sync_url: https://github.com/<you>/homeserver.git
+# The branch, when not main, as a full reference (refs/heads/<branch>): a
+# validation branch for a test cluster, say. Only main is protected (a pull
+# request and CI required), and whoever can push to the synced branch owns the
+# cluster, so another branch is refused unless flux_sync_ref_unprotected says
+# you know; keep Flux's source suspended while you are not testing
+# (scripts/runbooks/talos.md).
+# flux_sync_ref: refs/heads/main
+# flux_sync_ref_unprotected: true
 # Where this machine keeps the cluster's talosconfig, kubeconfig, record of the
 # bootstrap and etcd snapshots, outside the repository. One per cluster: a test
 # host's copy names its own (scripts/runbooks/talos.md).
 # kubernetes_talos_config_dir: ~/.talos/homeserver
+# The age key Flux decrypts the cluster's Secrets with, a file of its own, mode
+# 0600 (k8s/README-secrets.md). A test host's copy names its own key, never the
+# home cluster's (scripts/runbooks/talos.md).
+# sops_age_key_file: ~/.config/sops/age/homeserver.agekey
+# The apps answer at <app>.<domain>.
+# kubernetes_domain: homeserver.internal
 # Extra names for the Kubernetes API's certificate, set before the first build,
 # so the API can later be reached by name.
 # kubernetes_api_sans: [k8s-api.home.arpa]

@@ -157,9 +157,10 @@ test-gitleaks-rules: ## .gitleaks.toml against generated fixtures (gitleaks from
 GITLEAKS_FOUND = @command -v gitleaks >/dev/null || { echo "gitleaks is not on PATH (brew install gitleaks)"; exit 1; }
 
 .PHONY: secrets-staged secrets-push
-secrets-staged: ## gitleaks over the staged changes (the pre-commit hook)
+secrets-staged: ## gitleaks over the staged changes, and no unencrypted *.sops.yaml (the pre-commit hook)
 	$(GITLEAKS_FOUND)
 	gitleaks git --pre-commit --staged --config .gitleaks.toml --ignore-gitleaks-allow --redact --verbose --no-banner
+	scripts/ci/check-sops-staged.sh
 
 secrets-push: ## Secrets and identifiers in the commits being pushed (the pre-push hook)
 	$(GITLEAKS_FOUND)
@@ -167,9 +168,9 @@ secrets-push: ## Secrets and identifiers in the commits being pushed (the pre-pu
 
 .PHONY: test-idempotence
 # One pytest worker per CPU: each test runs its own fakes and playbooks, so they run side by side, and in sequence
-# the suite outgrew the CI job's timeout. CI runs the tests marked cluster (the VM, backup and Talos playbooks) in a
-# job of their own, on one Python, and the rest on each: PYTEST_ARGS='-m cluster' or PYTEST_ARGS='-m "not cluster"'.
-# Empty runs them all.
+# the suite outgrew the CI job's timeout. CI runs the tests marked cluster (the VM, backup, Talos and Flux
+# playbooks) in a job of their own, on one Python, and the rest on each: PYTEST_ARGS='-m cluster' or
+# PYTEST_ARGS='-m "not cluster"'. Empty runs them all.
 PYTEST_ARGS ?=
 # Work stealing: the tests take from a second to a minute each, so a worker that runs out of tests takes some queued
 # for another, rather than idling while the others finish theirs.
@@ -178,11 +179,12 @@ test-idempotence: ## Run each role repeatedly against local fakes (PYTEST_ARGS n
 
 .PHONY: lint-kubeconform
 # kubeconform retries each schema download itself (twice, with backoff), so an invalid manifest fails
-# at once and nothing here retries.
+# at once and nothing here retries. A kustomization.yaml is kustomize's own file, not an object for the cluster,
+# and no schema describes it.
 lint-kubeconform: ## kubeconform, strict, against Talos's Kubernetes version (kubeconform from PATH)
 	@mkdir -p $(KUBE_CACHE)
 	kubeconform -strict -summary -cache $(KUBE_CACHE) -kubernetes-version $(KUBERNETES_VERSION) \
-	  -schema-location '$(KUBE_SCHEMAS)' k8s
+	  -schema-location '$(KUBE_SCHEMAS)' -ignore-filename-pattern 'kustomization\.yaml$$' k8s
 
 .PHONY: lint-kube-linter lint-k8s
 lint-kube-linter: ## kube-linter with the repo's checks, .kube-linter.yaml (kube-linter from PATH)
@@ -220,12 +222,24 @@ proxmox: ## Configure the Proxmox host: repositories and upgrade, then VM storag
 	$(RUN) proxmox.yml --diff $(ANSIBLE_ARGS)
 
 .PHONY: check-kubernetes
-check-kubernetes: ## Dry-run the Kubernetes cluster: its VMs, then Talos
+check-kubernetes: ## Dry-run the Kubernetes cluster: its VMs, then Talos and Flux
 	$(RUN) kubernetes.yml --check --diff $(TAG_ARGS) $(ANSIBLE_ARGS)
 
 .PHONY: kubernetes
-kubernetes: ## Build or correct the Kubernetes cluster: its VMs, then Talos (needs proxmox first)
+kubernetes: ## Build or correct the Kubernetes cluster: its VMs, then Talos and Flux (needs proxmox first; never upgrades)
 	$(RUN) kubernetes.yml --diff $(TAG_ARGS) $(ANSIBLE_ARGS)
+
+.PHONY: check-talos-upgrade
+check-talos-upgrade: ## Show what talos-upgrade would move, with Kubernetes's own upgrade dry run
+	$(RUN) talos-upgrade.yml --check --diff $(ANSIBLE_ARGS)
+
+.PHONY: talos-upgrade
+talos-upgrade: ## Move the running cluster to the pinned Talos and Kubernetes versions (etcd snapshot first)
+	$(RUN) talos-upgrade.yml --diff $(ANSIBLE_ARGS)
+
+.PHONY: etcd-snapshot
+etcd-snapshot: ## Snapshot etcd into ~/.talos/homeserver/etcd/
+	$(RUN) etcd-snapshot.yml $(ANSIBLE_ARGS)
 
 .PHONY: check
 check: ## Dry-run everything

@@ -1,0 +1,48 @@
+---
+# An etcd snapshot of the control plane, into ~/.talos/homeserver/etcd/ (talos_config_dir): make etcd-snapshot.
+# talos-upgrade.yml takes one before every upgrade. Restore with talosctl bootstrap --recover-from=<snapshot>.
+# An inventory made before the cluster has no kubernetes group, and the play below would match no host and end
+# without a word: refused here instead, as kubernetes.yml refuses it.
+- name: Refuse a cluster without the kubernetes inventory group
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Refuse a cluster without the kubernetes inventory group
+      ansible.builtin.assert:
+        that: not kubernetes_present or (groups['kubernetes'] | default([]) | length == 1)
+        fail_msg: >-
+          The inventory needs the kubernetes group with its one host: add [kubernetes] and homeserver-k8s to
+          inventory, as in inventory.example.
+        quiet: true
+      tags: [always]
+
+- name: Snapshot etcd
+  hosts: kubernetes
+  gather_facts: false
+  pre_tasks:
+    - name: Refuse NAS settings that come without a NAS address
+      ansible.builtin.assert:
+        that: nas_section_error | length == 0
+        fail_msg: "{{ nas_section_error }}"
+        quiet: true
+      tags: [always]
+    - name: Refuse an incomplete Kubernetes section
+      ansible.builtin.assert:
+        that: kubernetes_settings_error | length == 0
+        fail_msg: "{{ kubernetes_settings_error | join(' ') }}"
+        quiet: true
+      tags: [always]
+    - name: Say why the cluster is skipped
+      ansible.builtin.debug:
+        msg: No kubernetes_node_addresses in group_vars/all/local.yml, so this setup has no cluster.
+      when: not kubernetes_present
+      tags: [always]
+    - name: Skip the cluster when local.yml names no nodes
+      ansible.builtin.meta: end_host
+      when: not kubernetes_present
+      tags: [always]
+  tasks:
+    - name: Take the snapshot
+      ansible.builtin.include_role:
+        name: talos
+        tasks_from: etcd-snapshot

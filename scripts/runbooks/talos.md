@@ -1,14 +1,15 @@
-# Talos: building and using the cluster
+# Talos: building, using and upgrading the cluster
 
 The cluster is built by `make kubernetes` (`kubernetes.yml`): the VMs on the Proxmox host (`roles/proxmox_vm`),
-then Talos on them from this machine (`roles/talos`). It never reboots a node and never moves one to another
-version. Addresses and MACs live only in `group_vars/all/local.yml`.
+then Talos on them from this machine (`roles/talos`), then Flux (`roles/flux_bootstrap`). It never reboots a node
+and never moves one to another version; `make talos-upgrade` does that. Addresses and MACs live only in
+`group_vars/all/local.yml`.
 
 ## Before the first build
 
 1. **Workstation tools**, from Homebrew: `talosctl` of the pinned minor release (`talos_version` in
-   `group_vars/all/kubernetes.yml`; `brew install siderolabs/tap/talosctl`) and `kubectl`. The role refuses a
-   `talosctl` of another minor release, since its defaults follow its own.
+   `group_vars/all/kubernetes.yml`; `brew install siderolabs/tap/talosctl`), `kubectl`, `flux`, `sops` and
+   `age`. The role refuses a `talosctl` of another minor release, since its defaults follow its own.
 2. **The secrets bundle**, beside the cluster's credentials (`kubernetes_talos_config_dir`'s directory, when
    `local.yml` sets one) and in no repository:
 
@@ -27,6 +28,14 @@ version. Addresses and MACs live only in `group_vars/all/local.yml`.
    `kubernetes_node_addresses`. In the router (OPNsense with a NAS), reserve each address for its MAC, outside the
    DHCP range. All before the first run: a VM leases an address the moment it starts.
 4. **The inventory** has `[kubernetes]` with `homeserver-k8s`, as in `inventory.example`.
+5. **The age key** that decrypts the cluster's SOPS secrets, a file holding this cluster's key alone, which Flux
+   receives whole (`README.md`, Kubernetes secrets). age-keygen makes no directories:
+
+   ```bash
+   mkdir -p ~/.config/sops/age && chmod 700 ~/.config/sops/age
+   age-keygen -o ~/.config/sops/age/homeserver.agekey && chmod 600 ~/.config/sops/age/homeserver.agekey
+   ```
+
 ## The first build
 
 ```bash
@@ -49,10 +58,10 @@ talosctl health
 kubectl get nodes
 ```
 
-**Back up `~/.talos/homeserver`** in the password manager. Besides the secrets bundle,
+**Back up `~/.talos/homeserver`** with the age key, in the password manager. Besides the secrets bundle,
 talosconfig and kubeconfig it holds `bootstrapped`, which is how the role tells a first build from a cluster that lost its etcd: with it and no
 running etcd, a run refuses to bootstrap again, which would make a new, empty cluster. On a new workstation,
-restore that directory before the first run.
+restore that directory before the first run. `etcd/` holds the etcd snapshots.
 
 Both client certificates are valid for a year; every run renews one that expires within 30 days.
 
@@ -75,9 +84,10 @@ manager, since `roles/talos` renders from the bundle and refuses credentials of 
 
 That covers credentials copied off the machine. A lost workstation holds the bundle itself, every key of the
 cluster (etcd's encryption key and the service account key among them), which no rotation replaces: rebuild the
-cluster with a new bundle (`talosctl gen secrets`, then the first build above), and treat `.vault_pass`, the
-TrueNAS API key and the Proxmox host's SSH key as lost too: re-key the vault, make a new API key through the role,
-and remove the old SSH key from the host.
+cluster with a new bundle (`talosctl gen secrets`, then the first build above), and treat the age key, `.vault_pass`, the
+TrueNAS API key and the Proxmox host's SSH key as lost too: make a new age key and Secrets
+(`k8s/README-secrets.md`), re-key the vault, make a new API key through the role, and remove the old SSH key from
+the host.
 
 ## Configuration changes
 
@@ -93,6 +103,30 @@ run with `ANSIBLE_ARGS='-e talos_keep_rendered=true'`, which keeps each node's r
 them), then
 `talosctl apply-config -n <address> -f ~/.talos/homeserver/rendered/<node>.yaml --dry-run`.
 
+## Upgrades
+
+1. Bump the pins together in `group_vars/all/kubernetes.yml` (`talos_version`, `talos_contract`,
+   `talos_kubernetes_version`), the Makefile's `KUBERNETES_VERSION` and CI's `TALOSCTL_VERSION` and
+   `TALOSCTL_SHA256`, and upgrade the workstation's `talosctl`. Move to adjacent minor releases only, the latest
+   patch of each. With them, what the Image Factory must serve for the new version, since it publishes no checksum:
+   `kubernetes_iso_sha256` (`sha256sum` of the new ISO, downloaded from the URL `proxmox_vm_isos` names) and a
+   `talos_installer_digests` entry for each schematic at the new version (`crane digest
+   factory.talos.dev/metal-installer/<schematic id>:<version>`), keeping the old version's entries until every
+   node has moved, since a node is rendered with what it runs. The schematic ids stay, unless a schematic changed.
+2. `make kubernetes` between the bump and the upgrade changes nothing on the nodes: it renders each node with what
+   it runs, and reports the pending upgrade. It also downloads the new ISO, which nodes built later boot.
+3. `make check-talos-upgrade`: the plan per node, and Kubernetes's own upgrade dry run, deprecated APIs included.
+   Read it.
+4. `make talos-upgrade`: an etcd snapshot, each node's upgrade, control plane first (drained, then rebooted into
+   the new release), each followed by a wait for the whole cluster's health before the next node goes down, then
+   `talosctl upgrade-k8s`, which also updates kube-proxy and CoreDNS. With one node of each kind, both upgrades take
+   something down for a few minutes: the control plane's, the Kubernetes API (the apps keep running, but nothing
+   is scheduled or changed); the worker's, every app, since draining it leaves them nowhere to go. Choose a quiet
+   time.
+5. `make kubernetes`: a dry run after the upgrade shows no change.
+
+`make etcd-snapshot` takes a snapshot on its own.
+
 ## The watchdog
 
 Every VM has Proxmox's `i6300esb` watchdog, which resets a VM whose Talos stops feeding it for two minutes
@@ -106,11 +140,49 @@ talosctl -n <address> get watchdogtimerstatus                         # timeout 
 If `watchdog0` is the q35 chipset's `iTCO_wdt` instead, point `WatchdogTimerConfig.device` at the i6300ESB's
 device in `group_vars/kubernetes/talos.yml`.
 
+## Restoring etcd
+
+From a VM backup, preferably: `scripts/runbooks/vm-restore.md`. From a snapshot in `~/.talos/homeserver/etcd/`:
+`talosctl bootstrap --recover-from=<file>` on a control plane whose etcd waits to be bootstrapped (`Preparing`),
+installed and configured, as after a reinstall; on a running node, wipe etcd's partition alone first, as
+`scripts/runbooks/dead-worker.md` says, which also warns that the snapshot's age is the point every Kubernetes
+object goes back to. Snapshots come only from `make etcd-snapshot` and the start of every `make talos-upgrade`.
+
 ## The ISO
 
 `proxmox_vm` keeps every node's CD-ROM on the current Talos ISO and never ejects it: a node whose system disk is
 wiped reaches maintenance mode only from it. The boot order puts the system disk first, so an installed node
 never boots it. Old ISOs stay in `local` until removed by hand; the Proxmox play lists the ones no VM uses.
+
+## Syncing a branch other than main
+
+Flux applies the synced branch with cluster-admin rights, so whoever can push to it owns the cluster. Only `main` is
+protected (the "Protect main" ruleset: a pull request and CI required, no force-push, no deletion), so every playbook
+refuses another branch unless `local.yml` says you know, as for a test cluster validating a branch:
+
+```yaml
+flux_sync_ref: refs/heads/<branch>
+flux_sync_ref_unprotected: true
+```
+
+Keep its source suspended while you are not testing, so a push to the branch deploys nothing. The Flux Operator
+rewrites the source whenever it reconciles the FluxInstance, undoing a plain `flux suspend`, so pause the operator's
+handling of it first (its own annotation); `make kubernetes` leaves both as they are:
+
+```bash
+kubectl annotate fluxinstance -n flux-system flux fluxcd.controlplane.io/reconcile=disabled --overwrite
+flux suspend source git flux-system -n flux-system
+```
+
+Before pushing the next change to test, the reverse:
+
+```bash
+flux resume source git flux-system -n flux-system
+kubectl annotate fluxinstance -n flux-system flux fluxcd.controlplane.io/reconcile-
+```
+
+Once the branch is merged, resume as above, delete both settings and run `make kubernetes`: the cluster follows
+`main` again. While the operator is paused it acts on no change to the FluxInstance, a new Flux release included.
 
 ## Validating on a test host without a NAS
 
@@ -125,6 +197,7 @@ kubernetes_node_sizes:
   homeserver-worker-1: {cores: 2, memory_mib: 6144, system_disk_gib: 10, data_disk_gib: 10, media_disk_gib: 0}
 kubernetes_media_on_data_volume: true
 kubernetes_talos_config_dir: ~/.talos/homeserver-test
+sops_age_key_file: ~/.config/sops/age/homeserver-test.agekey
 ```
 
 That is about 8 GiB of memory and 30 GiB of disk on the installer's storage, which the disk budget counts with the
@@ -134,6 +207,13 @@ A run refuses a directory that holds another cluster's talosconfig or kubeconfig
 at the first task that would use them. Give the test cluster a secrets bundle of its own too, never the home
 cluster's: `talosctl gen secrets` into that directory, as in step 2 above, and in that clone `make vault-init` (a
 vault of its own; see `README.md`). It is thrown away with the test cluster.
+
+Give it an age key of its own as well (`age-keygen -o ~/.config/sops/age/homeserver-test.agekey`, mode 0600), named
+by `sops_age_key_file` above: left out, the setting means the home cluster's key, which Flux would copy into the test
+cluster. The repository's Secrets are encrypted for the home key alone (`.sops.yaml` has one recipient), so the test
+cluster cannot decrypt them, and an app that needs one does not start there. That is the price of keeping the home
+key out of a cluster that is thrown away. To test those apps, encrypt their Secrets anew for the test key on the
+validation branch the test cluster syncs, and never merge that branch.
 
 Never set `proxmox_vm_allow_overcommit` on a host whose thin pool other VMs share: a full pool gives them all I/O
 errors. Afterwards: `qm stop 300 301`, then `qm destroy 300 --purge` and `qm destroy 301 --purge`, delete their

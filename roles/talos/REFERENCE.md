@@ -20,12 +20,517 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
 
 **Description**: 
 - Runs on the controller with talosctl. Renders each node's machine configuration from the secrets bundle and the patches, installs it on a node in maintenance mode and waits until its install status reads installed, and applies configuration drift to a configured node without rebooting it (Talos 1.14 applies any configuration that way); after a change to the control plane it says how to restart etcd.
-- Renders a configured node with the versions it runs, never the pins, so a pin bump never changes a running node; a pending upgrade is reported.
+- Renders a configured node with the versions it runs, never the pins, so a pin bump changes nothing until the upgrade entry point moves the node; a pending upgrade is reported.
 - Bootstraps etcd once, recording it in talos_config_dir. With that record and etcd not running, it refuses to bootstrap again, which would make a new, empty cluster, unless talos_allow_bootstrap.
 - With that record, refuses to install a node in maintenance mode that talos_reinstall does not name, since the configuration it would send holds the cluster's keys and nothing proves who answers at the address.
 - Writes talosconfig and kubeconfig to talos_config_dir, outside the repository, and renews their client certificates before they expire. Refuses a talosconfig or kubeconfig there of another cluster (another endpoint, or another CA than the secrets bundle's).
 - Checks that every user volume the patches declare is ready once the cluster is healthy.
 - The defaults do nothing. README.md describes each variable.
+
+
+**Options**:
+
+
+  - **talos_cluster_name**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The cluster's name.
+  
+  
+  
+
+  - **talos_endpoint**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The Kubernetes API endpoint, https://<control plane address>:6443.
+  
+  
+  
+
+  - **talos_extra_sans**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: Extra names for the API server's certificate.
+  
+  
+  
+
+  - **talos_version**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The Talos version a node is installed with, such as v1.14.2.
+  
+  
+  
+
+  - **talos_contract**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The configuration contract talosctl renders for, such as v1.14.
+  
+  
+  
+
+  - **talos_kubernetes_version**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The Kubernetes version a cluster is built with, such as 1.37.1.
+  
+  
+  
+
+  - **talos_secrets_file**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The file holding the secrets bundle (talosctl gen secrets), mode 0600, outside the repository.
+  
+  
+  
+
+  - **talos_nodes**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: Nodes, each with name, role (controlplane or worker), address, schematic and patches.
+  
+  
+  
+    
+  
+
+  - **talos_schematics**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: Image Factory schematics by name, each a list of official system extensions.
+  
+  
+  
+
+  - **talos_image_factory_url**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: https://factory.talos.dev
+  
+    - **Description**: The Image Factory, asked for each schematic's id.
+  
+  
+  
+
+  - **talos_patches_common**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: Configuration patches for every node, as YAML documents in strings.
+  
+  
+  
+
+  - **talos_patches_controlplane**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: Configuration patches for control planes.
+  
+  
+  
+
+  - **talos_patches_worker**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: Configuration patches for workers.
+  
+  
+  
+
+  - **talos_config_dir**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: Where talosconfig, kubeconfig, the bootstrapped marker and etcd snapshots live, outside the repository; one directory per cluster.
+  
+  
+  
+
+  - **talos_renew_before_days**
+    - **Required**: false
+    - **Type**: int
+    - **Default**: 30
+  
+    - **Description**: Renew client certificates that expire within this many days.
+  
+  
+  
+
+  - **talos_health_timeout**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 10m
+  
+    - **Description**: How long talosctl health waits.
+  
+  
+  
+
+  - **talos_probe_retries**
+    - **Required**: false
+    - **Type**: int
+    - **Default**: 30
+  
+    - **Description**: How many times a real run asks a node that does not answer yet.
+  
+  
+  
+
+  - **talos_probe_delay**
+    - **Required**: false
+    - **Type**: int
+    - **Default**: 10
+  
+    - **Description**: Seconds between those questions.
+  
+  
+  
+
+  - **talos_install_retries**
+    - **Required**: false
+    - **Type**: int
+    - **Default**: 60
+  
+    - **Description**: How many times a real run reads an installing node's status before giving up.
+  
+  
+  
+
+  - **talos_allow_bootstrap**
+    - **Required**: false
+    - **Type**: bool
+    - **Default**: False
+  
+    - **Description**: Bootstrap etcd again although this cluster was bootstrapped before, making a new, empty cluster.
+  
+  
+  
+
+  - **talos_reinstall**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: The nodes, by name, that may be installed although the cluster was bootstrapped before (a list, or names joined by commas). A node in maintenance mode takes its configuration, the cluster's keys with it, from whoever sends it, unauthenticated, so once the cluster exists the role sends it only to a node named here.
+  
+  
+  
+
+  - **talos_schematic_pins**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: Each schematic's id, by its name in talos_schematics: the Image Factory's answer is refused otherwise. Empty checks nothing.
+  
+  
+  
+
+  - **talos_installer_digests**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: The digest of each installer image, by "<schematic id>:<version>", which the nodes are given beside the tag. Once set, every schematic in use at talos_version must have one.
+  
+  
+  
+
+  - **talos_keep_rendered**
+    - **Required**: false
+    - **Type**: bool
+    - **Default**: False
+  
+    - **Description**: Keep each node's rendered configuration in talos_config_dir/rendered/ (mode 0600; it holds the secrets), to compare by hand with talosctl apply-config --dry-run, until the next run without it, which removes them.
+  
+  
+  
+
+
+
+#### Key: upgrade
+
+**Description**: 
+- Takes an etcd snapshot, upgrades each node whose Talos version or schematic differs from the pins, control planes first, then Kubernetes with talosctl upgrade-k8s. In check mode it shows the plan and the Kubernetes upgrade's own dry run.
+
+
+**Options**:
+
+
+  - **talos_cluster_name**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The cluster's name.
+  
+  
+  
+
+  - **talos_endpoint**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The Kubernetes API endpoint, https://<control plane address>:6443.
+  
+  
+  
+
+  - **talos_extra_sans**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: Extra names for the API server's certificate.
+  
+  
+  
+
+  - **talos_version**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The Talos version a node is installed with, such as v1.14.2.
+  
+  
+  
+
+  - **talos_contract**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The configuration contract talosctl renders for, such as v1.14.
+  
+  
+  
+
+  - **talos_kubernetes_version**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The Kubernetes version a cluster is built with, such as 1.37.1.
+  
+  
+  
+
+  - **talos_secrets_file**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The file holding the secrets bundle (talosctl gen secrets), mode 0600, outside the repository.
+  
+  
+  
+
+  - **talos_nodes**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: Nodes, each with name, role (controlplane or worker), address, schematic and patches.
+  
+  
+  
+    
+  
+
+  - **talos_schematics**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: Image Factory schematics by name, each a list of official system extensions.
+  
+  
+  
+
+  - **talos_image_factory_url**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: https://factory.talos.dev
+  
+    - **Description**: The Image Factory, asked for each schematic's id.
+  
+  
+  
+
+  - **talos_patches_common**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: Configuration patches for every node, as YAML documents in strings.
+  
+  
+  
+
+  - **talos_patches_controlplane**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: Configuration patches for control planes.
+  
+  
+  
+
+  - **talos_patches_worker**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: Configuration patches for workers.
+  
+  
+  
+
+  - **talos_config_dir**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: Where talosconfig, kubeconfig, the bootstrapped marker and etcd snapshots live, outside the repository; one directory per cluster.
+  
+  
+  
+
+  - **talos_renew_before_days**
+    - **Required**: false
+    - **Type**: int
+    - **Default**: 30
+  
+    - **Description**: Renew client certificates that expire within this many days.
+  
+  
+  
+
+  - **talos_health_timeout**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 10m
+  
+    - **Description**: How long talosctl health waits.
+  
+  
+  
+
+  - **talos_probe_retries**
+    - **Required**: false
+    - **Type**: int
+    - **Default**: 30
+  
+    - **Description**: How many times a real run asks a node that does not answer yet.
+  
+  
+  
+
+  - **talos_probe_delay**
+    - **Required**: false
+    - **Type**: int
+    - **Default**: 10
+  
+    - **Description**: Seconds between those questions.
+  
+  
+  
+
+  - **talos_install_retries**
+    - **Required**: false
+    - **Type**: int
+    - **Default**: 60
+  
+    - **Description**: How many times a real run reads an installing node's status before giving up.
+  
+  
+  
+
+  - **talos_allow_bootstrap**
+    - **Required**: false
+    - **Type**: bool
+    - **Default**: False
+  
+    - **Description**: Bootstrap etcd again although this cluster was bootstrapped before, making a new, empty cluster.
+  
+  
+  
+
+  - **talos_reinstall**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: The nodes, by name, that may be installed although the cluster was bootstrapped before (a list, or names joined by commas). A node in maintenance mode takes its configuration, the cluster's keys with it, from whoever sends it, unauthenticated, so once the cluster exists the role sends it only to a node named here.
+  
+  
+  
+
+  - **talos_schematic_pins**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: Each schematic's id, by its name in talos_schematics: the Image Factory's answer is refused otherwise. Empty checks nothing.
+  
+  
+  
+
+  - **talos_installer_digests**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: The digest of each installer image, by "<schematic id>:<version>", which the nodes are given beside the tag. Once set, every schematic in use at talos_version must have one.
+  
+  
+  
+
+  - **talos_keep_rendered**
+    - **Required**: false
+    - **Type**: bool
+    - **Default**: False
+  
+    - **Description**: Keep each node's rendered configuration in talos_config_dir/rendered/ (mode 0600; it holds the secrets), to compare by hand with talosctl apply-config --dry-run, until the next run without it, which removes them.
+  
+  
+  
+
+
+
+#### Key: etcd-snapshot
+
+**Description**: 
 
 
 **Options**:
@@ -331,6 +836,15 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
 | bootstrap ¦ Bootstrap etcd on the control plane | ansible.builtin.command | True |
 | bootstrap ¦ Record the bootstrap | ansible.builtin.copy | True |
 
+#### File: tasks/etcd-snapshot.yml
+
+| Name | Module | Has Conditions |
+| ---- | ------ | -------------- |
+| etcd-snapshot ¦ Check the role's inputs | ansible.builtin.import_tasks | False |
+| etcd-snapshot ¦ Take a snapshot | block | True |
+| etcd-snapshot ¦ Prepare | ansible.builtin.import_tasks | False |
+| etcd-snapshot ¦ Snapshot | ansible.builtin.import_tasks | False |
+
 #### File: tasks/main.yml
 
 | Name | Module | Has Conditions |
@@ -420,6 +934,38 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
 | render ¦ Refuse a configuration without a pod network | ansible.builtin.assert | False |
 | render ¦ Render each node's configuration | ansible.builtin.command | False |
 
+#### File: tasks/snapshot.yml
+
+| Name | Module | Has Conditions |
+| ---- | ------ | -------------- |
+| snapshot ¦ Make the directory the snapshots go in | ansible.builtin.file | False |
+| snapshot ¦ Take an etcd snapshot | ansible.builtin.command | False |
+| snapshot ¦ Say a snapshot would be taken | ansible.builtin.debug | True |
+
+#### File: tasks/upgrade-node.yml
+
+| Name | Module | Has Conditions |
+| ---- | ------ | -------------- |
+| upgrade-node ¦ Upgrade Talos on the node | ansible.builtin.command | False |
+| upgrade-node ¦ Wait for the cluster to be healthy before the next node | ansible.builtin.command | True |
+
+#### File: tasks/upgrade.yml
+
+| Name | Module | Has Conditions |
+| ---- | ------ | -------------- |
+| upgrade ¦ Check the role's inputs | ansible.builtin.import_tasks | False |
+| upgrade ¦ Move the cluster to the pins | block | True |
+| upgrade ¦ Prepare | ansible.builtin.import_tasks | False |
+| upgrade ¦ Refuse to upgrade a cluster that is not all up | ansible.builtin.assert | False |
+| upgrade ¦ Work out what moves | ansible.builtin.set_fact | False |
+| upgrade ¦ Show the plan | ansible.builtin.debug | False |
+| upgrade ¦ Dry-run the Kubernetes upgrade | ansible.builtin.command | True |
+| upgrade ¦ Show the Kubernetes upgrade's dry run | ansible.builtin.debug | True |
+| upgrade ¦ Snapshot etcd first | ansible.builtin.import_tasks | True |
+| upgrade ¦ Upgrade Talos, control plane first | ansible.builtin.include_tasks | False |
+| upgrade ¦ Upgrade Kubernetes | ansible.builtin.command | True |
+| upgrade ¦ Wait for the cluster to be healthy | ansible.builtin.command | True |
+
 #### File: tasks/validate.yml
 
 | Name | Module | Has Conditions | Tags |
@@ -452,6 +998,29 @@ classDef rescue stroke:#665352,stroke-width:2px;
   bootstrap___Say_the_cluster_would_be_bootstrapped3-->|Task| bootstrap___Bootstrap_etcd_on_the_control_plane4[bootstrap   bootstrap etcd on the control plane<br>When: **not talos marker stat exists or  talos allow<br>bootstrap   bool and talos etcd stdout   default  <br>    talos service state     running**]:::task
   bootstrap___Bootstrap_etcd_on_the_control_plane4-->|Task| bootstrap___Record_the_bootstrap5[bootstrap   record the bootstrap<br>When: **talos bootstrap is not skipped**]:::task
   bootstrap___Record_the_bootstrap5-->End
+```
+
+
+### Graph for etcd-snapshot.yml
+
+```mermaid
+flowchart TD
+Start
+classDef block stroke:#3498db,stroke-width:2px;
+classDef task stroke:#4b76bb,stroke-width:2px;
+classDef includeTasks stroke:#16a085,stroke-width:2px;
+classDef importTasks stroke:#34495e,stroke-width:2px;
+classDef includeRole stroke:#2980b9,stroke-width:2px;
+classDef importRole stroke:#699ba7,stroke-width:2px;
+classDef includeVars stroke:#8e44ad,stroke-width:2px;
+classDef rescue stroke:#665352,stroke-width:2px;
+
+  Start-->|Import task| etcd_snapshot___Check_the_role_s_inputs_validate_yml_0[/etcd snapshot   check the role s inputs<br>import_task: validate yml/]:::importTasks
+  etcd_snapshot___Check_the_role_s_inputs_validate_yml_0-->|Block Start| etcd_snapshot___Take_a_snapshot1_block_start_0[[etcd snapshot   take a snapshot<br>When: **talos nodes   length   0**]]:::block
+  etcd_snapshot___Take_a_snapshot1_block_start_0-->|Import task| etcd_snapshot___Prepare_prepare_yml_0[/etcd snapshot   prepare<br>import_task: prepare yml/]:::importTasks
+  etcd_snapshot___Prepare_prepare_yml_0-->|Import task| etcd_snapshot___Snapshot_snapshot_yml_1[/etcd snapshot   snapshot<br>import_task: snapshot yml/]:::importTasks
+  etcd_snapshot___Snapshot_snapshot_yml_1-.->|End of Block| etcd_snapshot___Take_a_snapshot1_block_start_0
+  etcd_snapshot___Snapshot_snapshot_yml_1-->End
 ```
 
 
@@ -594,6 +1163,78 @@ classDef rescue stroke:#665352,stroke-width:2px;
   render___Keep_the_pod_network_it_gives1-->|Task| render___Refuse_a_configuration_without_a_pod_network2[render   refuse a configuration without a pod<br>network]:::task
   render___Refuse_a_configuration_without_a_pod_network2-->|Task| render___Render_each_node_s_configuration3[render   render each node s configuration]:::task
   render___Render_each_node_s_configuration3-->End
+```
+
+
+### Graph for snapshot.yml
+
+```mermaid
+flowchart TD
+Start
+classDef block stroke:#3498db,stroke-width:2px;
+classDef task stroke:#4b76bb,stroke-width:2px;
+classDef includeTasks stroke:#16a085,stroke-width:2px;
+classDef importTasks stroke:#34495e,stroke-width:2px;
+classDef includeRole stroke:#2980b9,stroke-width:2px;
+classDef importRole stroke:#699ba7,stroke-width:2px;
+classDef includeVars stroke:#8e44ad,stroke-width:2px;
+classDef rescue stroke:#665352,stroke-width:2px;
+
+  Start-->|Task| snapshot___Make_the_directory_the_snapshots_go_in0[snapshot   make the directory the snapshots go in]:::task
+  snapshot___Make_the_directory_the_snapshots_go_in0-->|Task| snapshot___Take_an_etcd_snapshot1[snapshot   take an etcd snapshot]:::task
+  snapshot___Take_an_etcd_snapshot1-->|Task| snapshot___Say_a_snapshot_would_be_taken2[snapshot   say a snapshot would be taken<br>When: **ansible check mode**]:::task
+  snapshot___Say_a_snapshot_would_be_taken2-->End
+```
+
+
+### Graph for upgrade-node.yml
+
+```mermaid
+flowchart TD
+Start
+classDef block stroke:#3498db,stroke-width:2px;
+classDef task stroke:#4b76bb,stroke-width:2px;
+classDef includeTasks stroke:#16a085,stroke-width:2px;
+classDef importTasks stroke:#34495e,stroke-width:2px;
+classDef includeRole stroke:#2980b9,stroke-width:2px;
+classDef importRole stroke:#699ba7,stroke-width:2px;
+classDef includeVars stroke:#8e44ad,stroke-width:2px;
+classDef rescue stroke:#665352,stroke-width:2px;
+
+  Start-->|Task| upgrade_node___Upgrade_Talos_on_the_node0[upgrade node   upgrade talos on the node]:::task
+  upgrade_node___Upgrade_Talos_on_the_node0-->|Task| upgrade_node___Wait_for_the_cluster_to_be_healthy_before_the_next_node1[upgrade node   wait for the cluster to be healthy<br>before the next node<br>When: **not ansible check mode**]:::task
+  upgrade_node___Wait_for_the_cluster_to_be_healthy_before_the_next_node1-->End
+```
+
+
+### Graph for upgrade.yml
+
+```mermaid
+flowchart TD
+Start
+classDef block stroke:#3498db,stroke-width:2px;
+classDef task stroke:#4b76bb,stroke-width:2px;
+classDef includeTasks stroke:#16a085,stroke-width:2px;
+classDef importTasks stroke:#34495e,stroke-width:2px;
+classDef includeRole stroke:#2980b9,stroke-width:2px;
+classDef importRole stroke:#699ba7,stroke-width:2px;
+classDef includeVars stroke:#8e44ad,stroke-width:2px;
+classDef rescue stroke:#665352,stroke-width:2px;
+
+  Start-->|Import task| upgrade___Check_the_role_s_inputs_validate_yml_0[/upgrade   check the role s inputs<br>import_task: validate yml/]:::importTasks
+  upgrade___Check_the_role_s_inputs_validate_yml_0-->|Block Start| upgrade___Move_the_cluster_to_the_pins1_block_start_0[[upgrade   move the cluster to the pins<br>When: **talos nodes   length   0**]]:::block
+  upgrade___Move_the_cluster_to_the_pins1_block_start_0-->|Import task| upgrade___Prepare_prepare_yml_0[/upgrade   prepare<br>import_task: prepare yml/]:::importTasks
+  upgrade___Prepare_prepare_yml_0-->|Task| upgrade___Refuse_to_upgrade_a_cluster_that_is_not_all_up1[upgrade   refuse to upgrade a cluster that is not<br>all up]:::task
+  upgrade___Refuse_to_upgrade_a_cluster_that_is_not_all_up1-->|Task| upgrade___Work_out_what_moves2[upgrade   work out what moves]:::task
+  upgrade___Work_out_what_moves2-->|Task| upgrade___Show_the_plan3[upgrade   show the plan]:::task
+  upgrade___Show_the_plan3-->|Task| upgrade___Dry_run_the_Kubernetes_upgrade4[upgrade   dry run the kubernetes upgrade<br>When: **ansible check mode and talos kubernetes upgrade**]:::task
+  upgrade___Dry_run_the_Kubernetes_upgrade4-->|Task| upgrade___Show_the_Kubernetes_upgrade_s_dry_run5[upgrade   show the kubernetes upgrade s dry run<br>When: **talos k8s dry run is not skipped**]:::task
+  upgrade___Show_the_Kubernetes_upgrade_s_dry_run5-->|Import task| upgrade___Snapshot_etcd_first_snapshot_yml_6[/upgrade   snapshot etcd first<br>When: **talos upgrades   length   0 or talos kubernetes<br>upgrade**<br>import_task: snapshot yml/]:::importTasks
+  upgrade___Snapshot_etcd_first_snapshot_yml_6-->|Include task| upgrade___Upgrade_Talos__control_plane_first_upgrade_node_yml_7[upgrade   upgrade talos  control plane first<br>include_task: upgrade node yml]:::includeTasks
+  upgrade___Upgrade_Talos__control_plane_first_upgrade_node_yml_7-->|Task| upgrade___Upgrade_Kubernetes8[upgrade   upgrade kubernetes<br>When: **talos kubernetes upgrade**]:::task
+  upgrade___Upgrade_Kubernetes8-->|Task| upgrade___Wait_for_the_cluster_to_be_healthy9[upgrade   wait for the cluster to be healthy<br>When: **not ansible check mode and  talos upgrades  <br>length   0 or talos kubernetes upgrade**]:::task
+  upgrade___Wait_for_the_cluster_to_be_healthy9-.->|End of Block| upgrade___Move_the_cluster_to_the_pins1_block_start_0
+  upgrade___Wait_for_the_cluster_to_be_healthy9-->End
 ```
 
 

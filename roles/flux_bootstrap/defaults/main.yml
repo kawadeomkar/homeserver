@@ -1,0 +1,27 @@
+---
+# Neutral defaults: with nothing else set, the role does nothing. The cluster's Flux is configuration, set in
+# inventory group_vars; see README.md.
+
+# The cluster's kubeconfig (roles/talos writes it).
+flux_bootstrap_kubeconfig: ""
+# The Flux Operator's release, such as v0.61.0, installed from its install.yaml. Empty does nothing.
+flux_bootstrap_operator_version: ""
+flux_bootstrap_operator_url: https://github.com/controlplaneio-fluxcd/flux-operator/releases/download
+# What that release must be, both required with a version: install.yaml's SHA-256 (hex), checked before anything in
+# it is applied, and the digest of the operator's image (sha256:...), which its Deployment is given beside the tag.
+flux_bootstrap_operator_sha256: ""
+flux_bootstrap_operator_digest: ""
+# The FluxInstance: {version (an exact Flux release, such as 2.9.6), artifact (the operator's manifests artifact,
+# oci://... pinned by @sha256:...), url (an https Git repository), ref, path}.
+flux_bootstrap_instance: {}
+# The keys and values of the flux-system/cluster-settings ConfigMap, which every Flux Kustomization substitutes
+# into its manifests. Strings only: Flux substitutes text.
+flux_bootstrap_settings: {}
+# The age private key that decrypts the repository's SOPS secrets: a file holding that key alone, mode 0600. It
+# becomes the Secret flux-system/sops-age. Never printed.
+flux_bootstrap_age_key_file: ""
+# How long a real run waits for the operator, the FluxInstance and Flux's Kustomizations to be ready.
+flux_bootstrap_wait_timeout: 10m
+# Let a run move the FluxInstance to another path. Flux prunes what the new path lacks, so this deletes everything
+# the old path applied; without it, a path other than the live one is refused.
+flux_bootstrap_allow_path_change: false

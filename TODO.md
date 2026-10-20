@@ -9,8 +9,8 @@ the full audit with file/line references; the finding ids below refer to it.
 - [ ] Add Renovate for the 21 container image tags, which are pinned and bumped by hand. Wait until the
       cluster exists, and split the ruleset first so an app with write access cannot merge on its own
       (REPO-3). Dependabot covers the SHA-pinned actions and the Python lock, not image tags
-- [ ] Implement the SOPS + age decision for Kubernetes Secrets, and write down where the age key lives and
-      how it is backed up. Until then nextcloud and photoprism cannot deploy (see `k8s/README-secrets.md`)
+- [ ] Write nextcloud's and photoprism's Secrets as `*.sops.yaml` files (`k8s/README-secrets.md`, which also says
+      where the age key lives and how it is backed up). Until then neither can deploy
 - [ ] Real domain instead of `*.homeserver.internal`, which public ACME cannot validate. Prerequisite for
       any TLS at all (K8S-14)
 
@@ -56,10 +56,10 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       This is the first real run of the role's pool creation, which no test exercises. Leave the `ephemeral`
       pool alone: it already has its class name and holds the media dataset.
 
-      **Do it before the first live run that creates the cluster's datasets on the pool** (Nextcloud's and
-      PhotoPrism's), while it still holds nothing worth keeping: step 2 destroys it. Once it holds their files
-      and the VM backups, never destroy it to rename it; keep `truenas_pool_persistent` in `local.yml` for good
-      instead.
+      **Do it before the cluster's first live build with a NAS**, which puts the worker's data disk on the
+      pool (`persistent/proxmox/vm`), while it still holds nothing worth keeping: step 2 destroys it. Once it
+      holds that disk and the VM backups, never destroy it to rename it; keep `truenas_pool_persistent` in
+      `local.yml` for good instead.
 - [ ] Size `vm_storage_ephemeral_reservation` (`group_vars/all/storage.yml`) to what the VMs on the ephemeral
       pool need, such as the sum of the project pools' quotas, before the media apps start writing to the media
       dataset on the same pool. Until then nothing stops the media from filling the pool under the VMs.
@@ -80,8 +80,11 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 - [ ] Give the NAS a mail server for its alerts: the `truenas_mail_*` settings and `truenas_alert_email` in
       `local.yml` (`local.yml.example` lists them), and `vault_truenas_mail_password` in the vault. Until
       then nothing is mailed, so a degraded pool shows only in the web UI
-- [ ] Decide which host, if any, mounts the `ephemeral/jellyfin` media dataset, then export it to that
-      host only. Until then it stays unexported
+- [ ] With a NAS, give the cluster its media: export the `ephemeral/jellyfin` media dataset to the worker
+      alone, install an NFS CSI driver, and pass Flux the NAS's settings (`NAS_ADDRESS`, the pools,
+      `MEDIA_DATASET`) in `flux_bootstrap_settings`, together with the manifests that mount it. Until then the
+      NAS exports only the Proxmox host's storages, to the host alone, and the cluster with a NAS has nowhere
+      for media; without a NAS the media paths already reach Flux (`MEDIA_LOCAL_PATH`, `FRIGATE_LOCAL_PATH`)
 - [ ] Before upgrading the NAS to TrueNAS 26, replace the role's hand-written WebSocket client
       (`roles/truenas/module_utils/truenas_api.py`) with iXsystems' official library,
       [`truenas/api_client`](https://github.com/truenas/api_client). Its README says TrueNAS 26 changes
@@ -176,5 +179,6 @@ Blocked on the per-server hardware inventory.
 
 ## The cluster's secrets
 
-- [ ] Keep a copy of the cluster's Talos secrets bundle (`~/.talos/homeserver/secrets.yaml`) in the password
-      manager. The repo never holds it, so a lost workstation without it means a new cluster (`README.md`)
+- [ ] Keep copies of the cluster's age key (`~/.config/sops/age/homeserver.agekey`) and its Talos secrets bundle
+      (`~/.talos/homeserver/secrets.yaml`) in the password manager. The repo holds neither, so a lost workstation
+      without them means new Secrets and a new cluster (`k8s/README-secrets.md`, `README.md`)

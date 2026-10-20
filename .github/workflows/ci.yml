@@ -100,7 +100,7 @@ jobs:
       - name: Idempotence against the TrueNAS and Proxmox fakes
         run: make test-idempotence PYTEST_ARGS='-m "not cluster"'
 
-  # The VM, backup and Talos roles against their fakes, apart from the test job's matrix: they have no Python
+  # The VM, backup, Talos and Flux roles against their fakes, apart from the test job's matrix: they have no Python
   # modules of their own, so one Python, the newest, is enough, and the matrix stays within its time limit.
   cluster:
     name: cluster (${{ matrix.shard }})

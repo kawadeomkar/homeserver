@@ -1,9 +1,17 @@
 # talos
 
 Builds a Talos Linux cluster from the controller with `talosctl` and `kubectl`, and keeps its configuration. With
-only its defaults it does nothing. Its entry point, **`main`** (`make kubernetes`), installs Talos on nodes in
-maintenance mode, keeps a configured node's configuration, bootstraps etcd once, waits for the cluster to be
-healthy, and writes talosconfig and kubeconfig. It never reboots a node and never moves one to another version.
+only its defaults it does nothing. Three entry points:
+
+- **`main`** (`make kubernetes`): installs Talos on nodes in maintenance mode, keeps a configured node's
+  configuration, bootstraps etcd once, waits for the cluster to be healthy, and writes talosconfig and kubeconfig.
+  It never reboots a node and never moves one to another version.
+- **`upgrade`** (`make talos-upgrade`; `tasks_from: upgrade`): an etcd snapshot, then each node whose Talos version
+  or schematic differs from the pins, control planes first, then Kubernetes with `talosctl upgrade-k8s`. In check
+  mode it shows the plan and Kubernetes's own dry run, without pulling images.
+- **`etcd-snapshot`** (`make etcd-snapshot`; `tasks_from: etcd-snapshot`): a snapshot of the control plane's etcd
+  into `talos_config_dir/etcd/`. It asks only the control plane, never the Image Factory or the other nodes, so it
+  works on a degraded cluster.
 
 What `main` does, in order:
 
@@ -14,7 +22,7 @@ What `main` does, in order:
   only `--insecure`), or not answering, which a real run waits for (`talos_probe_retries`, `talos_probe_delay`).
 - **Renders** each node's configuration with `talosctl gen config`, the secrets bundle and the patches. A node in
   maintenance mode gets the pins; a configured node gets what it runs (its Talos version and schematic, the
-  cluster's Kubernetes version), so a pin bump never changes a running node. It first asks talosctl
+  cluster's Kubernetes version), so a pin bump changes nothing until `upgrade` moves it. It first asks talosctl
   for the pod network it gives a cluster by default, which the patches can use as `talos_pod_subnets` (a firewall
   rule for the pod network, say) without writing the range out.
 - **Installs** a node in maintenance mode with `apply-config --insecure`, then waits on its install status until
@@ -70,7 +78,7 @@ in the temporary directory) a day old or older.
 | `talos_keep_rendered` | `false` | Keep each node's rendered configuration in `talos_config_dir/rendered/` (mode 0600), until the next run without it |
 
 A variable for one run goes through `ANSIBLE_ARGS`: `make kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'`.
-`scripts/runbooks/talos.md` covers building and restoring; this repository's configuration is
+`scripts/runbooks/talos.md` covers building, upgrading and restoring; this repository's configuration is
 `group_vars/kubernetes/talos.yml`.
 
 ## Example

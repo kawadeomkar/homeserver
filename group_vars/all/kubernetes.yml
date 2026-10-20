@@ -1,7 +1,8 @@
 ---
 # The Kubernetes cluster: its shape, and the settings more than one play reads. The Proxmox play backs up its VMs,
-# and the kubernetes play creates them and builds Talos on them. A host sees only its own groups' files, so whatever
-# two plays read lives here, in group_vars/all/. Names only: the nodes' addresses and MACs come from local.yml.
+# and the kubernetes play creates them, builds Talos on them and hands the cluster to Flux. A host sees only its own
+# groups' files, so whatever two plays read lives here, in group_vars/all/. Names only: the nodes' addresses and
+# MACs and the domain come from local.yml.
 #
 # This file sorts before local.yml, so a value local.yml sets wins over one set here, but a dict set there
 # replaces the whole dict, never merges into it. Never set here what local.yml is meant to set.
@@ -71,6 +72,10 @@ kubernetes_data_node: "{{ kubernetes_worker.name }}"
 # Whether the worker has a media disk of its own (without a NAS, unless media lives on the data volume).
 kubernetes_media_disk: "{{ (kubernetes_worker.media_disk_gib | default(0) | int) > 0 }}"
 
+# The apps answer at <app>.<domain>, unless local.yml names another domain (kubernetes_domain).
+kubernetes_domain_default: homeserver.internal
+kubernetes_timezone: America/Los_Angeles
+
 # Where the VMs' disks go. System disks on the installer's storage in both setups (vm_storage_installer:
 # local-lvm, or local.yml's proxmox_local_vm_storage, which a ZFS install needs with a NAS too); the worker's data
 # disk on the NAS's persistent storage with a NAS, under its quota, on the installer's storage without one. On thin
@@ -85,10 +90,11 @@ kubernetes_data_storage: "{{ vm_storage_classes.persistent.proxmox_id if nas_pre
 #   - kubernetes_present given with -e, where "false" is a non-empty string and counts as true;
 #   - without a cluster, the section's other settings: what a misspelt kubernetes_node_addresses looks like;
 #   - with a cluster, node addresses that are not a mapping or not the cluster's two nodes, two nodes with one
-#     address or one MAC, a node without a locally administered MAC, the API's extra names given as a string,
-#     sizes that are not whole numbers, a data or media disk under the 10 GiB its Talos volume needs, a system
-#     disk under the 10 GiB Talos installs on, a control plane with a data or media disk or under 2 GiB of memory,
-#     and a worker without a data disk, where the apps' data lives;
+#     address or one MAC, a node without a locally administered MAC, no repository for Flux to sync or one not
+#     over HTTPS, a branch other than main without flux_sync_ref_unprotected, the API's extra names given as a
+#     string, sizes that are not whole numbers, a data or media disk under the 10 GiB its Talos volume needs, a
+#     system disk under the 10 GiB Talos installs on, a control plane with a data or media disk or under 2 GiB of
+#     memory, and a worker without a data disk, where the apps' data lives;
 #   - with a NAS, a worker data disk above three quarters of the persistent VM dataset's quota
 #     (vm_storage_persistent_quota_gib), which its snapshots share, and the settings for media without a NAS: a
 #     worker media disk, which would hold nothing, and kubernetes_media_on_data_volume;
@@ -100,9 +106,14 @@ kubernetes_settings_error: >-
   {%- set out = [] -%}
   {%- set given = {'kubernetes_node_macs': kubernetes_node_macs | default(''),
                    'kubernetes_node_sizes': kubernetes_node_sizes | default(''),
+                   'kubernetes_domain': kubernetes_domain | default(''),
                    'kubernetes_media_on_data_volume': kubernetes_media_on_data_volume | default(''),
                    'kubernetes_api_sans': kubernetes_api_sans | default(''),
-                   'kubernetes_talos_config_dir': kubernetes_talos_config_dir | default('')}
+                   'kubernetes_talos_config_dir': kubernetes_talos_config_dir | default(''),
+                   'sops_age_key_file': sops_age_key_file | default(''),
+                   'flux_sync_url': flux_sync_url | default(''),
+                   'flux_sync_ref': flux_sync_ref | default(''),
+                   'flux_sync_ref_unprotected': flux_sync_ref_unprotected | default('')}
                   | dict2items | selectattr('value') | map(attribute='key') | list -%}
   {%- if kubernetes_present is not boolean -%}
   {%-   set _ = out.append('kubernetes_present is worked out from kubernetes_node_addresses in group_vars/all/local.yml, '
@@ -150,6 +161,26 @@ kubernetes_settings_error: >-
   {%-   elif macs is mapping and (names | map('extract', macs) | unique | list | length) != names | length -%}
   {%-     set _ = out.append('kubernetes_node_macs gives two nodes the same MAC: each VM needs its own, or both lease '
                              ~ 'one address.') -%}
+  {%-   endif -%}
+  {%-   if flux_sync_ref | default('', true) and (flux_sync_ref | string) is not match('refs/') -%}
+  {%-     set _ = out.append('flux_sync_ref must be a full reference, such as refs/heads/' ~ flux_sync_ref
+                             ~ ': Flux resolves nothing else, and would wait for its source until it times out.') -%}
+  {#- Flux applies what the synced branch holds with cluster-admin rights, so whoever can push to it owns the
+      cluster. Only main is protected here (a pull request and CI required, no force-push), so another branch
+      needs saying so, for a test cluster, with its source suspended whenever it is not being tested. -#}
+  {%-   elif (flux_sync_ref | default('refs/heads/main', true) | string | trim) != 'refs/heads/main'
+             and not (flux_sync_ref_unprotected | default(false) | bool) -%}
+  {%-     set _ = out.append('flux_sync_ref names ' ~ flux_sync_ref ~ ', not refs/heads/main. Flux applies that branch '
+                             ~ 'with cluster-admin rights, so anyone who can push to it owns the cluster, and only main '
+                             ~ 'is protected (a pull request and CI required, no force-push). Sync main, or for a test '
+                             ~ "cluster set flux_sync_ref_unprotected: true in group_vars/all/local.yml and keep Flux's "
+                             ~ 'source suspended while you are not testing (scripts/runbooks/talos.md).') -%}
+  {%-   endif -%}
+  {%-   set url = flux_sync_url | default('', true) | string | trim -%}
+  {%-   if not url or '<' in url or '>' in url or url is not match('https://') -%}
+  {%-     set _ = out.append('flux_sync_url must name the Git repository this cluster syncs, over HTTPS (https://...), '
+                             ~ 'such as your own copy of this one. Flux applies whatever it holds with cluster-admin '
+                             ~ 'rights, so it has no default: a fork syncs its own repository.') -%}
   {%-   endif -%}
   {%-   if kubernetes_api_sans | default([], true) is string -%}
   {%-     set _ = out.append('kubernetes_api_sans must be a list of names, not a string.') -%}

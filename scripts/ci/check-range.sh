@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Checks the commits a change adds for secrets and network identifiers, with gitleaks and the rules as they
-# are on the target, so a change cannot weaken its own scan.
+# are on the target, so a change cannot weaken its own scan, and for a *.sops.yaml that was never encrypted
+# (check-sops-staged.sh).
 # Used by CI (.github/workflows/ci.yml) and by the pre-push hook (make secrets-push).
 #   BASE               the target: a pull request's base, a push's previous tip, the remote ref a pre-push
 #                      hook updates; empty or all zeros means origin/main
@@ -49,3 +50,6 @@ scanned=$(sed -E 's/\x1b\[[0-9;]*m//g' "$log" | sed -nE 's/.* ([0-9]+) commits s
 if [ "${scanned:-0}" -ne "$expected" ]; then
   echo "::error::gitleaks scanned ${scanned:-0} commit(s), expected $expected"; exit 1
 fi
+
+# gitleaks allows every *.sops.yaml, so whether each version of one in these commits is encrypted is checked apart.
+RANGE="$base..$head" "$(dirname "$0")/check-sops-staged.sh" || { echo "::error::an unencrypted *.sops.yaml"; exit 1; }

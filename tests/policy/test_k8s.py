@@ -128,10 +128,16 @@ PRIVILEGED_LABEL = re.compile(r"""^\s*pod-security\.kubernetes\.io/enforce:\s*["
 
 @functools.cache
 def manifests():
-    """Every object under k8s/, as (path relative to the repository, object). Comment-only files hold none."""
+    """Every object under k8s/, as (path relative to the repository, object). Comment-only files hold none, and a
+    kustomization.yaml is kustomize's own file, not an object for the cluster."""
     found = []
     for path in sorted(K8S.rglob("*.y*ml")):
-        found.extend((path.relative_to(ROOT), obj) for obj in yaml.safe_load_all(path.read_text()) if obj)
+        objects = [obj for obj in yaml.safe_load_all(path.read_text()) if obj]
+        found.extend(
+            (path.relative_to(ROOT), obj)
+            for obj in objects
+            if str(obj.get("apiVersion", "")).split("/")[0] != "kustomize.config.k8s.io"
+        )
     assert len(found) > 50, "the manifests were not found"
     return tuple(found)
 

@@ -14,7 +14,7 @@ by their variable in `group_vars/all/local.yml`; the real values live only there
 | NAS network card | Everything on disk | Everything, once the NAS is reachable | Update the router's DHCP reservation to the new MAC |
 | Proxmox boot drive | VM disks on the NAS, and the VMs' nightly backups | The no-subscription repository, the upgrade, Tailscale with its guard, the NFS storages, the start-on-boot delay and the wait for the NAS, and the backup job | Reinstall, root SSH key; with remote access, delete the old machine in Tailscale's admin console and put a new auth key in the vault; restore the VMs from their backups ([vm-restore.md](vm-restore.md)) |
 | Proxmox boot drive, in a setup without a NAS | The backups, if `vm_backup_storage` is a USB disk or a backup server | The repository, the upgrade, Tailscale with its guard, the check that `local-lvm` can hold VM disks, and the backup job | Reinstall, root SSH key; with remote access, the old machine and a new auth key as above; re-add the backup storage before `make proxmox`; restore the VMs ([vm-restore.md](vm-restore.md)) |
-| The controller (this Mac) | The repo on GitHub, with a NAS the vault (encrypted) | — | Restore `.vault_pass`, `local.yml` and `~/.talos/homeserver` from your password manager, and without a NAS your own vault too |
+| The controller (this Mac) | The repo on GitHub, with a NAS the vault (encrypted) | — | Restore `.vault_pass`, `local.yml`, the age key and `~/.talos/homeserver` from your password manager, and without a NAS your own vault too |
 
 ## 1. The controller
 
@@ -40,6 +40,7 @@ Everything runs from a checkout of this repo.
      cluster: without it the cluster can no longer be managed, and is rebuilt), talosconfig, kubeconfig and
      `bootstrapped`, the record that the cluster was bootstrapped, without which the role cannot tell a first build
      from a cluster that lost its etcd. Mode 0700 for the directory, 0600 for `secrets.yaml`.
+   - **`~/.config/sops/age/homeserver.agekey`**, with a cluster: the key that decrypts the cluster's secrets.
 4. Check the toolchain works: `make lint && make test-idempotence`.
 
 Run `make` with the environment active (`pyenv activate homeserver`), or pass `VENV=<path to the env>`.
@@ -153,9 +154,9 @@ backup, and the worker's media disk, never backed up, is lost. The order is fixe
    nothing. `kubectl get nodes` shows them Ready.
 
 Prerequisites, before `make kubernetes`: `~/.talos/homeserver` restored with its `secrets.yaml` (section 1; without
-the bundle the cluster cannot be managed and is rebuilt), the
-MACs' DHCP reservations, and the inventory's `[kubernetes]` group. `scripts/runbooks/talos.md` covers building
-and the watchdog; a worker that stays down is `scripts/runbooks/dead-worker.md`.
+the bundle the cluster cannot be managed and is rebuilt), the age key, the
+MACs' DHCP reservations, and the inventory's `[kubernetes]` group. `scripts/runbooks/talos.md` covers building,
+upgrading and the watchdog; a worker that stays down is `scripts/runbooks/dead-worker.md`.
 
 ## Known limits
 

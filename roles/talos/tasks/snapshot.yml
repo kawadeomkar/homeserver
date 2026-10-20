@@ -1,0 +1,29 @@
+---
+# An etcd snapshot of the control plane, into talos_config_dir/etcd/: what talosctl bootstrap --recover-from takes
+# back. Taken by upgrade.yml before every upgrade, and by etcd-snapshot.yml on its own.
+- name: snapshot | Make the directory the snapshots go in
+  ansible.builtin.file:
+    path: "{{ talos_config_dir }}/etcd"
+    state: directory
+    mode: "0700"
+
+- name: snapshot | Take an etcd snapshot
+  ansible.builtin.command:
+    argv:
+      - talosctl
+      - --talosconfig
+      - "{{ talos_workspace }}/talosconfig"
+      - -e
+      - "{{ talos_controlplane.address }}"
+      - -n
+      - "{{ talos_controlplane.address }}"
+      - etcd
+      - snapshot
+      - "{{ talos_config_dir }}/etcd/etcd-{{ now(utc=true).strftime('%Y%m%dT%H%M%SZ') }}.db"
+  changed_when: true
+
+- name: snapshot | Say a snapshot would be taken
+  ansible.builtin.debug:
+    msg: Would take an etcd snapshot of {{ talos_controlplane.name }} into {{ talos_config_dir }}/etcd/.
+  changed_when: true
+  when: ansible_check_mode

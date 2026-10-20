@@ -1,0 +1,279 @@
+---
+# The operator, then each object: rendered, compared with a server-side diff under the role's field manager, and
+# applied server-side only when it differs. A client-side diff would rely on the annotation server-side apply never
+# writes, and would miss a key removed from the settings.
+
+# ------------------------------------------------------------------------------------------- operator ---
+# The release's install.yaml is applied only once its SHA-256 is the pinned one, with the operator's image given its
+# digest beside the tag; the running operator is the pinned release when its image is that tag and digest.
+- name: objects | Work out whether the operator is the pinned release
+  ansible.builtin.set_fact:
+    flux_bootstrap_operator_pinned: "flux-operator:{{ flux_bootstrap_operator_version }}@{{ flux_bootstrap_operator_digest }}"
+    flux_bootstrap_operator_current: >-
+      {{ ((flux_bootstrap_operator.stdout | from_json).spec.template.spec.containers | first).image.rpartition('/')[2]
+         if flux_bootstrap_operator.rc == 0 else none }}
+
+- name: objects | Install or upgrade the Flux Operator
+  when:
+    - flux_bootstrap_operator_current != flux_bootstrap_operator_pinned
+    - not ansible_check_mode
+  block:
+    - name: objects | Make a scratch directory for the release
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .flux-operator
+      register: flux_bootstrap_scratch
+
+    - name: objects | Download the release's install.yaml, checking its SHA-256
+      ansible.builtin.get_url:
+        url: "{{ flux_bootstrap_operator_url }}/{{ flux_bootstrap_operator_version }}/install.yaml"
+        dest: "{{ flux_bootstrap_scratch.path }}/install.yaml"
+        checksum: "sha256:{{ flux_bootstrap_operator_sha256 }}"
+        mode: "0600"
+
+    - name: objects | Pin the operator's image by digest
+      ansible.builtin.replace:
+        path: "{{ flux_bootstrap_scratch.path }}/install.yaml"
+        regexp: '^(\s*(?:-\s+)?image:\s*\S+/flux-operator:{{ flux_bootstrap_operator_version | regex_escape }})\s*$'
+        replace: '\1@{{ flux_bootstrap_operator_digest }}'
+
+    - name: objects | Refuse a release whose operator image was not pinned
+      ansible.builtin.assert:
+        that: (_text | regex_findall('image:\s*\S+/' ~ (flux_bootstrap_operator_pinned | regex_escape))) | length == 1
+        fail_msg: >-
+          {{ flux_bootstrap_operator_version }}'s install.yaml does not name the image flux-operator:{{
+          flux_bootstrap_operator_version }} exactly once, so its digest could not be pinned; nothing was applied.
+        quiet: true
+      vars:
+        _text: "{{ lookup('ansible.builtin.file', flux_bootstrap_scratch.path ~ '/install.yaml') }}"
+
+    - name: objects | Apply the release
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig
+          - "{{ flux_bootstrap_kubeconfig }}"
+          - apply
+          - --server-side
+          - --field-manager=homeserver-ansible
+          - -f
+          - "{{ flux_bootstrap_scratch.path }}/install.yaml"
+      changed_when: true
+  always:
+    - name: objects | Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ flux_bootstrap_scratch.path }}"
+        state: absent
+      when: flux_bootstrap_scratch.path is defined
+
+- name: objects | Say the operator would be upgraded
+  ansible.builtin.debug:
+    msg: >-
+      Would move the Flux Operator from {{ flux_bootstrap_operator_current | default('none', true) }} to
+      {{ flux_bootstrap_operator_pinned }}, once its install.yaml has the pinned SHA-256.
+  changed_when: true
+  when: ansible_check_mode and flux_bootstrap_operator_current != flux_bootstrap_operator_pinned
+
+- name: objects | Wait for the operator
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - --kubeconfig
+      - "{{ flux_bootstrap_kubeconfig }}"
+      - wait
+      - --for=condition=Available
+      - deployment/flux-operator
+      - -n
+      - flux-system
+      - --timeout={{ flux_bootstrap_wait_timeout }}
+  changed_when: false
+  when: not ansible_check_mode
+
+# ---------------------------------------------------------------------------------------------- objects ---
+# The Secret is rendered by kubectl itself from the key file; it and its diff are never printed.
+- name: objects | Render the age key as the Secret flux-system/sops-age
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - --kubeconfig
+      - "{{ flux_bootstrap_kubeconfig }}"
+      - create
+      - secret
+      - generic
+      - sops-age
+      - -n
+      - flux-system
+      - --from-file=age.agekey={{ flux_bootstrap_age_key_file }}
+      - --dry-run=client
+      - -o
+      - yaml
+  register: flux_bootstrap_secret
+  no_log: true
+  changed_when: false
+  check_mode: false
+
+- name: objects | Render the settings and the FluxInstance
+  ansible.builtin.set_fact:
+    flux_bootstrap_objects:
+      - name: cluster-settings
+        manifest: "{{ _settings | to_nice_yaml(indent=2) }}"
+      - name: flux
+        manifest: "{{ _instance | to_nice_yaml(indent=2) }}"
+  vars:
+    _settings:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata: {name: cluster-settings, namespace: flux-system}
+      data: "{{ flux_bootstrap_settings }}"
+    # Flux's strict substitution turns a manifest that names a missing setting into a failure rather than an empty
+    # string: a misspelt ${DOMIAN} would otherwise give every app the host "sonarr.". kustomize-controller turns it on
+    # by default from 1.9 (Flux 2.9), so nothing here sets it: a feature gate a later release has dropped would stop
+    # kustomize-controller from starting. A policy test keeps the version at 2.9 or later.
+    _instance:
+      apiVersion: fluxcd.controlplane.io/v1
+      kind: FluxInstance
+      metadata: {name: flux, namespace: flux-system}
+      spec:
+        distribution:
+          version: "{{ flux_bootstrap_instance.version }}"
+          registry: ghcr.io/fluxcd
+          artifact: "{{ flux_bootstrap_instance.artifact }}"
+        components: [source-controller, kustomize-controller, helm-controller, notification-controller]
+        cluster: {type: kubernetes, size: small, multitenant: false, networkPolicy: true, domain: cluster.local}
+        sync:
+          kind: GitRepository
+          url: "{{ flux_bootstrap_instance.url }}"
+          ref: "{{ flux_bootstrap_instance.ref }}"
+          path: "{{ flux_bootstrap_instance.path }}"
+          interval: 1m
+
+# Flux prunes what its path no longer holds, so a FluxInstance moved to another path deletes everything the old one
+# applied, the apps' volumes and their data with them. A path other than the live one is refused unless the run says
+# so. The operator is in place by now; a cluster not yet handed to Flux has no FluxInstance to read (NotFound).
+- name: objects | Read the FluxInstance's path
+  ansible.builtin.command:
+    argv: [kubectl, --kubeconfig, "{{ flux_bootstrap_kubeconfig }}", get, fluxinstance, flux, -n, flux-system, -o, json]
+  register: flux_bootstrap_live_instance
+  changed_when: false
+  check_mode: false
+  failed_when: flux_bootstrap_live_instance.rc != 0 and 'NotFound' not in flux_bootstrap_live_instance.stderr
+
+- name: objects | Refuse to move Flux to another path
+  ansible.builtin.assert:
+    that: not _live or _live == flux_bootstrap_instance.path or flux_bootstrap_allow_path_change | bool
+    fail_msg: >-
+      The FluxInstance syncs {{ _live }}, and this run would make it sync {{ flux_bootstrap_instance.path }}. Flux
+      prunes what the new path lacks, so everything the old one applied would be deleted, the apps' volumes and
+      their data with them. Nothing was changed. If that is what you want, run once with
+      -e flux_bootstrap_allow_path_change=true.
+    quiet: true
+  vars:
+    _live: >-
+      {{ ((flux_bootstrap_live_instance.stdout | from_json).spec.sync | default({})).path | default('')
+         if flux_bootstrap_live_instance.rc == 0 else '' }}
+
+- name: objects | Compare the age key's Secret with the cluster's
+  ansible.builtin.command:
+    argv: [kubectl, --kubeconfig, "{{ flux_bootstrap_kubeconfig }}", diff, --server-side, --field-manager=homeserver-ansible, -f, "-"]
+    stdin: "{{ flux_bootstrap_secret.stdout }}"
+  register: flux_bootstrap_secret_diff
+  no_log: true
+  changed_when: false
+  check_mode: false
+  failed_when: flux_bootstrap_secret_diff.rc > 1
+
+- name: objects | Compare the settings and the FluxInstance with the cluster's
+  ansible.builtin.command:
+    argv: [kubectl, --kubeconfig, "{{ flux_bootstrap_kubeconfig }}", diff, --server-side, --field-manager=homeserver-ansible, -f, "-"]
+    stdin: "{{ item.manifest }}"
+  register: flux_bootstrap_diffs
+  changed_when: false
+  check_mode: false
+  failed_when: flux_bootstrap_diffs.rc > 1
+  loop: "{{ flux_bootstrap_objects }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: objects | Show what differs
+  ansible.builtin.debug:
+    msg: >-
+      {{ ((['sops-age (its content is never shown)'] if flux_bootstrap_secret_diff.rc == 1 else [])
+          + (flux_bootstrap_diffs.results | selectattr('rc', 'eq', 1) | map(attribute='item.name') | list)) }}
+  changed_when: ansible_check_mode
+  when: flux_bootstrap_secret_diff.rc == 1 or flux_bootstrap_diffs.results | selectattr('rc', 'eq', 1) | list | length > 0
+
+- name: objects | Apply the age key's Secret
+  ansible.builtin.command:
+    argv: [kubectl, --kubeconfig, "{{ flux_bootstrap_kubeconfig }}", apply, --server-side, --field-manager=homeserver-ansible, -f, "-"]
+    stdin: "{{ flux_bootstrap_secret.stdout }}"
+  no_log: true
+  changed_when: true
+  when: flux_bootstrap_secret_diff.rc == 1
+
+- name: objects | Apply the settings and the FluxInstance
+  ansible.builtin.command:
+    argv: [kubectl, --kubeconfig, "{{ flux_bootstrap_kubeconfig }}", apply, --server-side, --field-manager=homeserver-ansible, -f, "-"]
+    stdin: "{{ item.item.manifest }}"
+  changed_when: true
+  loop: "{{ flux_bootstrap_diffs.results | selectattr('rc', 'eq', 1) | list }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+# ------------------------------------------------------------------------------------------------ wait ---
+- name: objects | Wait for the FluxInstance to be ready
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - --kubeconfig
+      - "{{ flux_bootstrap_kubeconfig }}"
+      - wait
+      - --for=condition=Ready
+      - fluxinstance/flux
+      - -n
+      - flux-system
+      - --timeout={{ flux_bootstrap_wait_timeout }}
+  changed_when: false
+  when: not ansible_check_mode
+
+# The FluxInstance is ready once its own sync has applied, which leaves the Kustomizations that sync creates, the ones
+# that apply the apps, still reconciling, or failing: a manifest that breaks in one setup's tree only, say. Each must
+# be ready too, or the run would end green over a cluster that is not.
+- name: objects | Wait for Flux's Kustomizations to be ready
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - --kubeconfig
+      - "{{ flux_bootstrap_kubeconfig }}"
+      - wait
+      - --for=condition=Ready
+      - kustomizations
+      - --all
+      - -A
+      - --timeout={{ flux_bootstrap_wait_timeout }}
+  register: flux_bootstrap_kustomizations_ready
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: objects | Read Flux's Kustomizations
+  ansible.builtin.command:
+    argv: [kubectl, --kubeconfig, "{{ flux_bootstrap_kubeconfig }}", get, kustomizations, -A]
+  register: flux_bootstrap_kustomizations
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: objects | Show Flux's Kustomizations
+  ansible.builtin.debug:
+    msg: "{{ flux_bootstrap_kustomizations.stdout_lines }}"
+  when: flux_bootstrap_kustomizations is not skipped
+
+- name: objects | Refuse Kustomizations that are not ready
+  ansible.builtin.assert:
+    that: flux_bootstrap_kustomizations_ready.rc == 0
+    fail_msg: >-
+      Flux's Kustomizations are not all ready after {{ flux_bootstrap_wait_timeout }}:
+      {{ flux_bootstrap_kustomizations_ready.stderr | default('') | trim }}. The table above shows each one's
+      status; kubectl describe kustomization <name> -n <namespace> says why.
+    quiet: true
+  when: flux_bootstrap_kustomizations_ready is not skipped
