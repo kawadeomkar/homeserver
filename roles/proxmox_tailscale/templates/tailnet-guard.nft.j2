@@ -1,7 +1,8 @@
 #!/usr/sbin/nft -f
 # Written by roles/proxmox_tailscale. What tailnet clients may reach through this subnet router, whatever the
 # tailnet's policy says. Loaded by tailnet-guard.service, which tailscaled requires: reload it, never restart it.
-# The file replaces the whole table at once, and touches no other table.
+# The file replaces the whole table at once, and touches no other table. The tailnet is matched by tailscaled's
+# interface, tailscale0, which the role checks tailscaled has.
 destroy table inet tailnet_guard
 
 table inet tailnet_guard {

@@ -1,14 +1,18 @@
 ---
 # IPv4 forwarding, which a subnet router needs and a Proxmox node has off. Written to sysctl.d, the only place
 # Debian 13 reads at boot, and turned on now, after the guard is loaded. IPv6 forwarding stays off: it would stop the
-# node accepting router advertisements on its bridge, and no IPv6 route is advertised.
+# node accepting router advertisements on its bridge, and no IPv6 route is advertised. Forwarding is the whole node's:
+# with a second interface that has an address, such as a VLAN or a storage network, the node also routes between it
+# and the LAN, which the guard does not filter, since it sees only what comes from or goes to the tailnet. Bridged VM
+# traffic is switched, not routed, and needs no forwarding.
 
 - name: forwarding | Write the forwarding setting
   ansible.builtin.copy:
     dest: "{{ proxmox_tailscale_sysctl_file }}"
     content: |
-      # Written by roles/proxmox_tailscale. The node forwards between the tailnet and the LAN it advertises, behind
-      # the tailnet guard (tailnet-guard.service). IPv6 forwarding stays off.
+      # Written by roles/proxmox_tailscale. The node forwards IPv4 between all of its interfaces, as the tailnet's
+      # subnet router; the tailnet guard (tailnet-guard.service) filters what comes from or goes to the tailnet.
+      # IPv6 forwarding stays off.
       net.ipv4.ip_forward = 1
     mode: "0644"
   register: proxmox_tailscale_sysctl_written

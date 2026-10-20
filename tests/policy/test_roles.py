@@ -1418,13 +1418,19 @@ def test_talos_config_dir_follows_local_yml(tmp_path, given, expected):
 @pytest.mark.parametrize(
     ("local_yml", "guarded"),
     [
-        pytest.param(EXAMPLE_LOCAL_YML + TAILSCALE_LOCAL_YML, ["192.0.2.10"], id="nas"),
+        pytest.param(EXAMPLE_LOCAL_YML + TAILSCALE_LOCAL_YML, ["192.0.2.10", "192.0.2.50"], id="nas"),
+        pytest.param(
+            re.sub(r"^truenas_static_address:.*\n", "", EXAMPLE_LOCAL_YML, flags=re.MULTILINE) + TAILSCALE_LOCAL_YML,
+            ["192.0.2.50"],
+            id="nas-bootstrap-only",
+        ),
         pytest.param(PROXMOX_ONLY_LOCAL_YML + TAILSCALE_LOCAL_YML, [], id="proxmox-only"),
     ],
 )
 def test_tailscale_guard_follows_the_setup(tmp_path, local_yml, guarded):
-    """The guard protects the NFS servers the Proxmox host mounts, which trust its address: with a NAS, the NAS's
-    static address from local.yml.example; without one, nothing. The routes come from local.yml."""
+    """The guard protects the hosts that trust the Proxmox host's address: with a NAS, every address local.yml gives
+    it, since NFS answers on each, including a NAS known only by its bootstrap address, whose shares are exported though
+    no storage mounts them; without one, nothing. The routes come from local.yml."""
     tree = example_tree(tmp_path, local_yml)
     assert resolve_on(tree, "homeserver", "proxmox_tailscale_guard_hosts") == guarded
     assert resolve_on(tree, "homeserver", "proxmox_tailscale_advertise_routes") == ["192.0.2.0/24"]
