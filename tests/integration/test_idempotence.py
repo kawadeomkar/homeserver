@@ -2219,7 +2219,6 @@ def test_flux_bootstrap(tmp_path, operator_releases, nas):
     settings = objects["ConfigMap/flux-system/cluster-settings"]["data"]
     media = {"MEDIA_LOCAL_PATH": "/var/mnt/media/library", "FRIGATE_LOCAL_PATH": "/var/mnt/media/frigate"}
     assert settings["DOMAIN"] == "homeserver.internal" and settings["DATA_NODE"] == "homeserver-worker-1"
-    assert settings["CONTROL_PLANE_ADDRESS"] == NODE_ADDRESSES["homeserver-cp-1"]
     assert all(isinstance(v, str) for v in settings.values())
     if nas:
         assert settings["NAS_ADDRESS"] == "127.0.0.10" and settings["MEDIA_DATASET"] == "/mnt/ephemeral/jellyfin"

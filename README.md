@@ -23,7 +23,7 @@ addresses and serial numbers), so it is absent from a fresh clone.
 
 ```
 k8s/clusters/            what Flux syncs per setup (nas, local): Flux Kustomizations, one per path below
-k8s/infrastructure/      the platform: controllers (MetalLB, Traefik, cert-manager, local-path, csi-driver-nfs), configs, static volumes
+k8s/infrastructure/      the platform: controllers (MetalLB, Traefik, cert-manager, local-path, csi-driver-nfs), configs, static volumes, monitoring
 roles/truenas/           configures the NAS through its API: address, pools, datasets, NFS
 roles/proxmox_apt/       sets Proxmox's package repositories (no subscription), upgrades it on every run, and says when it needs a reboot
 roles/proxmox_storage/   adds the NAS's shares to Proxmox as qcow2 VM-disk storage, or checks its own storage
@@ -291,9 +291,9 @@ Flux applies them. `roles/flux_bootstrap` points the cluster at `k8s/clusters/na
 1. `k8s/infrastructure/controllers/`: MetalLB, Traefik, cert-manager, local-path-provisioner, and csi-driver-nfs
    with a NAS;
 2. `k8s/infrastructure/configs/` (MetalLB's address pool, Traefik's allowlist and HSTS),
-   `k8s/infrastructure/tls/` (the cluster's CA and the wildcard certificate it signs, which nothing waits for) and
+   `k8s/infrastructure/tls/` (the cluster's CA and the wildcard certificate it signs, which nothing waits for),
    `k8s/infrastructure/storage/` (the static volumes: the media library, Nextcloud's files, PhotoPrism's photos,
-   Frigate's recordings).
+   Frigate's recordings) and `k8s/infrastructure/monitoring/` (kube-prometheus-stack).
 
 The apps come with a later change. Traefik answers at `https://<name>.<domain>`, once the router has a wildcard DNS
 record for `*.<domain>` pointing at `kubernetes_lb_traefik_ip` and `kubernetes_ingress_allowed_range` lets your
@@ -301,6 +301,9 @@ address in; until then it answers everyone with 403. The certificate comes from 
 domain: trust it once on each device (`scripts/runbooks/tls.md`). Flux reconciles `main` every minute:
 a merged change reaches the cluster without anyone running anything. To see what Flux sees:
 `flux get kustomizations` (KUBECONFIG as in `scripts/runbooks/talos.md`).
+
+Monitoring is kube-prometheus-stack: Grafana answers at `https://grafana.<domain>`, with the admin password the
+chart generated (CLAUDE.md, Monitoring, says how to read it).
 
 ### Linting
 

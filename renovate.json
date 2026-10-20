@@ -17,7 +17,7 @@
     },
     {
       "description": "A chart and the images its release pins by digest move in one pull request",
-      "matchFileNames": ["k8s/infrastructure/controllers/*/*/**"],
+      "matchFileNames": ["k8s/infrastructure/controllers/*/*/**", "k8s/infrastructure/monitoring/**"],
       "groupName": "{{parentDir}}"
     },
     {

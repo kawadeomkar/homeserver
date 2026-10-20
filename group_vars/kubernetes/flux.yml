@@ -26,8 +26,8 @@ flux_bootstrap_age_key_file: "{{ sops_age_key_file | default('~/.config/sops/age
 # The settings every Flux Kustomization substitutes (${NAME}): strings only. Addresses come from local.yml and never
 # appear in a manifest. With a NAS, its address, pools and the media dataset; without one, where the media and
 # camera recordings live on the worker: its media disk (Talos's media volume, /var/mnt/media), or its data volume when
-# local.yml keeps them there (kubernetes_media_on_data_volume), so one set of manifests serves both. The control
-# plane's address is never tracked either.
+# local.yml keeps them there (kubernetes_media_on_data_volume), so one set of manifests serves both. Prometheus
+# keeps less history without a NAS, whose host is usually the smaller.
 # INGRESS_ALLOWED_RANGE is who Traefik serves: local.yml's kubernetes_ingress_allowed_range, set once every app's
 # first-run setup is done, and until then the loopback address, which no client has.
 flux_bootstrap_settings: >-
@@ -44,5 +44,6 @@ flux_bootstrap_settings: >-
                                     else '/var/mnt/local-path-provisioner/static/media',
                 'FRIGATE_LOCAL_PATH': '/var/mnt/media/frigate' if kubernetes_media_disk
                                       else '/var/mnt/local-path-provisioner/static/frigate-media'})
-     | combine({'CONTROL_PLANE_ADDRESS': kubernetes_node_addresses[kubernetes_controlplane.name] | trim,
+     | combine({'PROMETHEUS_RETENTION': '15d' if nas_present else '7d',
+                'PROMETHEUS_RETENTION_SIZE': '15GB' if nas_present else '5GB',
                 'INGRESS_ALLOWED_RANGE': kubernetes_ingress_allowed_range | default('127.0.0.1/32', true) | string | trim}) }}

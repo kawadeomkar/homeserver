@@ -18,7 +18,7 @@ only if you choose to, and the media library (`ephemeral/jellyfin`) predates the
 Without a NAS all of it is on the worker's disks, and step 2 destroys it with the rest: the files and photos on the
 data volume, the library and the recordings on the media disk, never backed up (or on the data volume, with
 `kubernetes_media_on_data_volume`). Export anything worth keeping first: Nextcloud's and PhotoPrism's files through
-their apps or from the NAS datasets, the library, and so on.
+their apps or from the NAS datasets, Grafana's dashboards, the library, and so on.
 
 ## 2. The VMs
 
