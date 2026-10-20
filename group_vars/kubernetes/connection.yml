@@ -1,0 +1,5 @@
+---
+# The kubernetes play runs talosctl and kubectl on this machine, against the cluster's nodes: nothing goes over
+# SSH, since Talos has none.
+ansible_connection: local
+ansible_python_interpreter: "{{ ansible_playbook_python }}"

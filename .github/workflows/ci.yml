@@ -31,6 +31,10 @@ env:
   KUBECONFORM_SHA256: "9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883"
   KUBE_LINTER_VERSION: "0.8.3"
   KUBE_LINTER_SHA256: "1a6d8419b11971372971fdbc22682b684ebfb7cf1c39591662d1b6ca736c41df"
+  # talosctl validates the rendered Talos configurations (make lint-talos). Bumped with talos_version in
+  # group_vars/all/kubernetes.yml, whose minor release it must share.
+  TALOSCTL_VERSION: "1.14.2"
+  TALOSCTL_SHA256: "c6c9552b0e5f767352c595fa1c0af4f186f697488646872955057d23990a66c4"
   GITLEAKS_VERSION: "8.30.1"
   GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
   # Poetry, pinned by version as its CI recommendations advise, and bumped by hand like the tools above.
@@ -120,14 +124,22 @@ jobs:
   kubernetes:
     name: kubernetes
     runs-on: ubuntu-26.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install kubeconform and kube-linter (checksums verified)
+      # make lint-talos runs the talos role's render tasks through ansible-playbook.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Install Poetry
+        run: pipx install "poetry==${POETRY_VERSION}"
+      - name: Install the locked tooling
+        run: make venv PYTHON=python
+      - name: Install kubeconform, kube-linter and talosctl (checksums verified)
         run: |
           cd "$RUNNER_TEMP"
           curl -fsSLo kubeconform.tgz \
@@ -138,9 +150,13 @@ jobs:
             "https://github.com/stackrox/kube-linter/releases/download/v${KUBE_LINTER_VERSION}/kube-linter-linux.tar.gz"
           echo "${KUBE_LINTER_SHA256}  kube-linter.tgz" | sha256sum -c -
           tar -xzf kube-linter.tgz kube-linter
+          curl -fsSLo talosctl \
+            "https://github.com/siderolabs/talos/releases/download/v${TALOSCTL_VERSION}/talosctl-linux-amd64"
+          echo "${TALOSCTL_SHA256}  talosctl" | sha256sum -c -
+          chmod +x talosctl
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-      # -k: report both tools' findings, not only the first's.
-      - name: kubeconform, strict, against Talos's Kubernetes version; kube-linter
+      # -k: report every tool's findings, not only the first's.
+      - name: kubeconform, kube-linter and the Talos configurations
         run: make -k lint-k8s
 
   leaks:
