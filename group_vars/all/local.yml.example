@@ -102,6 +102,9 @@ kubernetes_node_addresses:
 kubernetes_node_macs:
   homeserver-cp-1: "<mac>"
   homeserver-worker-1: "<mac>"
+# Extra names for the Kubernetes API's certificate, set before the first build,
+# so the API can later be reached by name.
+# kubernetes_api_sans: [k8s-api.home.arpa]
 # The nodes' sizes fit the home host. Without a NAS, size the worker to what
 # the host can spare (required), and on a small host the control plane too
 # (2 GiB of memory and a 10 GiB system disk at least; it takes no data disk):

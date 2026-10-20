@@ -1,0 +1,15 @@
+---
+# Neutral defaults: with nothing else set, the role does nothing. The cluster is configuration, set in inventory
+# group_vars; see README.md.
+
+# The cluster's name, and its Kubernetes API endpoint (https://<control plane address>:6443).
+talos_cluster_name: ""
+talos_endpoint: ""
+# Extra names for the API server's certificate (talosctl gen config --additional-sans).
+talos_extra_sans: []
+# The configuration contract talosctl renders for (v1.14).
+talos_contract: ""
+# Configuration patches, as YAML documents in strings: for every node, for control planes, for workers.
+talos_patches_common: []
+talos_patches_controlplane: []
+talos_patches_worker: []

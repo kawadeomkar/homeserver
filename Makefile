@@ -188,7 +188,17 @@ lint-kubeconform: ## kubeconform, strict, against Talos's Kubernetes version (ku
 lint-kube-linter: ## kube-linter with the repo's checks, .kube-linter.yaml (kube-linter from PATH)
 	kube-linter lint --config .kube-linter.yaml --fail-if-no-objects-found k8s
 
-lint-k8s: lint-kubeconform lint-kube-linter ## Both manifest checks
+# The Talos machine configurations of every setup, rendered by roles/talos's own render tasks and validated by
+# talosctl, which catches what rendering lets through (a misspelt field). Needs no cluster and no vault. talosctl
+# comes from PATH, pinned in CI with talos_version; without it the check is skipped locally, saying so, and fails
+# in CI (CI set), as the gitleaks tests do.
+.PHONY: lint-talos
+lint-talos: ## Render every node's Talos configuration and validate it (talosctl from PATH)
+	@command -v talosctl >/dev/null || { if [ -n "$$CI" ]; then echo "talosctl is not on PATH: the CI job must install it"; exit 1; fi; \
+	  echo "talosctl is not on PATH: lint-talos skipped (CI runs it)"; exit 0; }; \
+	  ANSIBLE_CONFIG=tests/integration/ansible.cfg ANSIBLE_NOCOLOR=1 $(PLAYBOOK) tests/talos_validate.yml </dev/null
+
+lint-k8s: lint-kubeconform lint-kube-linter lint-talos ## Both manifest checks, and the Talos configurations
 
 .PHONY: ci
 ci: lint test-idempotence lint-k8s ## Everything the CI gate runs, apart from linting the workflows

@@ -245,6 +245,7 @@ still go first: it owns the namespaces that more than one service directory shar
 ### Linting
 
 ```bash
+make lint-k8s           # all of the below, and the Talos configurations
 make lint-kubeconform   # kubeconform -strict against Kubernetes 1.37.1, the version Talos ships
 ```
 

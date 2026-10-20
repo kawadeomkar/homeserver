@@ -1,0 +1,40 @@
+---
+# make lint-talos: renders the nodes of each setup through roles/talos's own render tasks (render.yml, which
+# make kubernetes runs) from this repo's configuration, and validates every configuration with
+# `talosctl validate --mode metal --strict`, which catches a misspelt field a render alone lets through.
+# Placeholder addresses and a throwaway secrets bundle; nothing connects anywhere. talosctl comes from PATH.
+- name: Render and validate the Talos configurations
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../group_vars/all/storage.yml
+    - ../group_vars/all/kubernetes.yml
+    - ../group_vars/kubernetes/talos.yml
+  vars:
+    # Each setup's local.yml, as the policy tests' placeholders give it: with a NAS, and without one (the worker sized
+    # for a small host, with a media disk; extra names for the API). Both have the same two nodes.
+    talos_validate_setups:
+      - name: nas
+        settings:
+          truenas_static_address: 192.0.2.10/24
+          kubernetes_node_addresses: {homeserver-cp-1: 192.0.2.30, homeserver-worker-1: 192.0.2.31}
+      - name: local
+        settings:
+          truenas_static_address: ""
+          kubernetes_node_addresses: {homeserver-cp-1: 192.0.2.30, homeserver-worker-1: 192.0.2.31}
+          kubernetes_node_sizes:
+            homeserver-worker-1: {cores: 4, memory_mib: 12288, system_disk_gib: 32, data_disk_gib: 20, media_disk_gib: 100}
+          kubernetes_api_sans: [k8s-api.home.arpa]
+  tasks:
+    - name: Render and validate each setup
+      ansible.builtin.include_tasks: talos_validate_setup.yml
+      vars:
+        truenas_static_address: "{{ setup.settings.truenas_static_address }}"
+        kubernetes_node_addresses: "{{ setup.settings.kubernetes_node_addresses }}"
+        kubernetes_node_sizes: "{{ setup.settings.kubernetes_node_sizes | default({}) }}"
+        kubernetes_api_sans: "{{ setup.settings.kubernetes_api_sans | default([]) }}"
+      loop: "{{ talos_validate_setups }}"
+      loop_control:
+        loop_var: setup
+        label: "{{ setup.name }}"
