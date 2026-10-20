@@ -23,8 +23,9 @@ the full audit with file/line references; the finding ids below refer to it.
       `ansible` and `tooling` groups, that it re-locks `poetry.lock` with a Poetry inside
       `requires-poetry` (2.5.1 in dependabot-core since 2026-09-29; production may lag), and whether the
       ruleset's undocumented `require_extra_approval_for_unattributed_changes` holds them back
-- [ ] Drop the Python 3.12 leg when ansible-core stops supporting 3.12 on the controller, and raise
-      `requires-python` in `pyproject.toml` with it (likewise its upper bound when a 3.15 leg is added)
+- [ ] Raise `requires-python` in `pyproject.toml` (and ruff's target, and the "3.12+" in the setup docs) to 3.13:
+      CI dropped its 3.12 leg, so 3.12 is allowed but untested. Likewise raise the upper bound when a 3.15 leg
+      is added
 - [ ] Check the first Scorecard run on `main`: that the OpenSSF API accepted the result, and which low
       scores are worth acting on. Code-Review (every change is the maintainer's own), Fuzzing,
       CII-Best-Practices and Packaging are expected to score low. Add its badge to `README.md` if wanted
