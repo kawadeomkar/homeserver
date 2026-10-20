@@ -15,6 +15,8 @@ audit of the tree before the cluster was built.
 
 - [ ] Reserve every node's address in the router's DHCP, for its MAC (`kubernetes_node_macs`): the NAS's exports
       trust the worker's address, so a device that leases it reads the cluster's shares as root
+- [ ] Reserve Home Assistant's address for its MAC (`haos_mac`), with the hostname `homeassistant`, and point
+      `haos_url` at that name (`scripts/runbooks/haos.md`)
 - [ ] A servers VLAN for the NAS, the Proxmox host and the nodes, which the IoT and Wi-Fi devices cannot reach: NFS
       with sec=sys trusts addresses, and the nightly VM backups on the NAS hold the cluster's keys and etcd
       (CLAUDE.md, Landmines). Then narrow `kubernetes_ingress_allowed_range` to the clients' VLAN

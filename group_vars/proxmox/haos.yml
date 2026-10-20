@@ -1,0 +1,54 @@
+---
+# The Home Assistant OS VM on this Proxmox host: what homeassistant.yml passes to roles/proxmox_vm, which creates it
+# from the pinned OVA and keeps its settings, and to roles/haos_onboard, which gives a new Home Assistant its owner
+# account. Its switch, VMID, size and owner are in group_vars/all/haos.yml; its MAC and USB devices in local.yml.
+# Without haos_mac there, nothing: no VM and no download.
+
+# The image a new VM's disk is imported from: Home Assistant OS's OVA, its disk read straight out of it by Proxmox,
+# checked against its sha256 (GitHub's digest of the release asset) before Proxmox stores it. Home Assistant updates
+# itself once it runs, so this pin only ever makes a new VM, which then updates: bump it with its checksum when
+# convenient, never to update a running one. The OVF of every release names its disk home-assistant.vmdk.
+haos_version: "18.3"
+haos_ova_sha256: 938408c5bd0f5fe3a8f10ca0a985d611f5d4e74f9ace12bda33d950a9617ca12
+haos_ova_filename: "haos_ova-{{ haos_version }}.ova"
+haos_ova_disk: home-assistant.vmdk
+# The OVA goes to haos_import_storage (group_vars/all/haos.yml), the installer's directory storage. Proxmox extracts
+# the OVA's disk onto a file-based storage that holds images before converting it: the disk's own with a NAS (NFS);
+# without one the import storage, whose images content must be enabled by hand once on an LVM or ZFS install
+# (scripts/runbooks/haos.md), since the role never changes the installer's storages.
+haos_imports: >-
+  {{ [{'storage': haos_import_storage, 'filename': haos_ova_filename, 'sha256': haos_ova_sha256,
+       'url': 'https://github.com/home-assistant/operating-system/releases/download/' ~ haos_version ~ '/' ~ haos_ova_filename}]
+     if haos_present else [] }}
+
+# Its disks on the NAS's persistent storage with a NAS (qcow2, under the hourly and daily snapshots of
+# persistent/proxmox/vm), on the installer's storage without one. The EFI disk goes with the system disk, without
+# which the VM cannot boot anyway: so it never adds to the installer's thin pool with a NAS, whose disk budget other
+# projects' VMs share (roles/proxmox_vm refuses a pool provisioned beyond its size).
+haos_disk_storage: "{{ vm_storage_classes.persistent.proxmox_id if nas_present else vm_storage_installer }}"
+haos_efidisk_storage: "{{ haos_disk_storage }}"
+# The bridge the installer creates.
+haos_bridge: vmbr0
+
+# UEFI without pre-enrolled keys (Home Assistant OS is not signed for Secure Boot), the system disk imported from the
+# OVA and grown to haos_vm_size.disk_gib, the i6300esb watchdog (Home Assistant OS's kernel has its driver and
+# systemd arms it, RuntimeWatchdogSec=300, so a hung VM is reset), started on boot after the cluster's nodes, and
+# the USB devices local.yml names (a Zigbee or Z-Wave stick), which reach a running VM at once.
+haos_vms: >-
+  {{ [{'vmid': haos_vm_vmid | int, 'name': 'homeassistant', 'cores': haos_vm_size.cores,
+       'memory_mib': haos_vm_size.memory_mib, 'machine': 'q35', 'bios': 'ovmf', 'efidisk_storage': haos_efidisk_storage,
+       'cpu': 'host', 'scsihw': 'virtio-scsi-pci',
+       'disks': [{'slot': 'scsi0', 'storage': haos_disk_storage, 'size_gib': haos_vm_size.disk_gib,
+                  'import_from': haos_import_storage ~ ':import/' ~ haos_ova_filename ~ '/' ~ haos_ova_disk}
+                 | combine({'format': 'qcow2'} if nas_present else {})],
+       'import_working_storage': haos_disk_storage if nas_present else haos_import_storage,
+       'net': {'bridge': haos_bridge, 'mac': haos_mac | string | trim}, 'boot': 'order=scsi0',
+       'watchdog': {'model': 'i6300esb', 'action': 'reset'}, 'onboot': true, 'startup': 'order=3,up=60,down=120',
+       'tags': ['haos'], 'usb': haos_usb | default([], true), 'start': true}]
+     if haos_present else [] }}
+# The persistent NAS storage is added by proxmox_storage in the Proxmox play, so a dry run on a fresh host reports
+# it as pending.
+haos_pending_storages: "{{ proxmox_storage_nfs | map(attribute='id') | list }}"
+
+# The owner account roles/haos_onboard creates while a new Home Assistant's onboarding is open.
+haos_owner_password: "{{ vault_haos_owner_password | default('') }}"

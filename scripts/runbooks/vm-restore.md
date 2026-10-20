@@ -1,10 +1,11 @@
 # Restoring a VM from its nightly backup
 
 The `vm-nightly` job (`roles/proxmox_backup`, configured in `group_vars/proxmox/backup.yml`) backs up the
-cluster's VMs every night at 02:00, with a NAS to `homeserver-backup` on the NAS's redundant pool, without one
-to the storage `local.yml` names as `vm_backup_storage`. It keeps seven daily and four weekly backups, and also
-covers any VM named in `vm_backup_extra_vmids`, such as Home Assistant's. A node's media disk carries
-`backup=0` and is never backed up.
+cluster's VMs and Home Assistant's (VM 310) every night at 02:00, with a NAS to `homeserver-backup` on the NAS's
+redundant pool, without one to the storage `local.yml` names as `vm_backup_storage`. It keeps seven daily and four
+weekly backups, and also covers any VM named in `vm_backup_extra_vmids`. After a restore, `make homeassistant`
+starts Home Assistant's VM as `make kubernetes` does the cluster's, and leaves Home Assistant itself alone. A
+node's media disk carries `backup=0` and is never backed up.
 
 Three procedures: the drill, which proves a backup restores without touching the running cluster, a real restore
 after losing the Proxmox host or its boot disk, and one VM restored on a host that is still running. Commands run

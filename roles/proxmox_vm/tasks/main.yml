@@ -2,7 +2,7 @@
 # Creates the VMs and corrects the settings it manages, with qm and pvesh over root SSH. The tasks read the node;
 # the proxmox_vm_plan filter (filter_plugins/proxmox_vm.py) works out what to do from what they read, and the
 # tasks run the commands it returns. A disk is never moved, shrunk or detached, a VM is never deleted or
-# restarted, and an ISO is never deleted.
+# restarted, and an ISO or image is never deleted.
 
 # Needs no connection, so it runs under every tag, and a dry run of the configuration alone catches it.
 - name: Check the role's inputs
@@ -12,10 +12,10 @@
     quiet: true
   tags: [always]
   vars:
-    _errors: "{{ proxmox_vm_vms | proxmox_vm_input_errors(proxmox_vm_isos) }}"
+    _errors: "{{ proxmox_vm_vms | proxmox_vm_input_errors(proxmox_vm_isos, proxmox_vm_imports) }}"
 
 - name: Create and correct the VMs
-  when: proxmox_vm_vms | length > 0 or proxmox_vm_isos | length > 0
+  when: proxmox_vm_vms | length > 0 or proxmox_vm_isos | length > 0 or proxmox_vm_imports | length > 0
   block:
     # Proxmox names a node after its short hostname.
     - name: Find the node's name
@@ -37,69 +37,76 @@
       changed_when: false
       check_mode: false
 
-    # ------------------------------------------------------------------------------------------- ISOs ---
-    - name: Refuse an ISO storage that cannot hold ISOs
+    # ---------------------------------------------------------------------------------- ISOs and images ---
+    # Both are downloaded by Proxmox itself: ISOs as iso content, images a VM's disk is imported from as import
+    # content (an OVA, say, whose disk Proxmox reads straight out of it).
+    - name: List the ISOs and images
+      ansible.builtin.set_fact:
+        proxmox_vm_files: >-
+          {{ proxmox_vm_isos | map('combine', {'content': 'iso'}) | list
+             + proxmox_vm_imports | map('combine', {'content': 'import'}) | list }}
+
+    - name: Refuse a storage that cannot hold them
       ansible.builtin.assert:
         that: _problems | length == 0
-        fail_msg: "These storages in proxmox_vm_isos cannot hold ISOs: {{ _problems | join('; ') }}."
+        fail_msg: "These storages in proxmox_vm_isos or proxmox_vm_imports cannot hold them: {{ _problems | join('; ') }}."
         quiet: true
       vars:
         _problems: >-
           {%- set out = [] -%}
-          {%- for st in proxmox_vm_isos | map(attribute='storage') | unique -%}
-          {%-   set p = st | proxmox_vm_storage_problem(proxmox_vm_storage_config.stdout | from_json, 'iso', false, []) -%}
-          {%-   if p -%}{%- set _ = out.append(p) -%}{%- endif -%}
+          {%- for f in proxmox_vm_files | unique(attribute='storage') -%}
+          {%-   for content in proxmox_vm_files | selectattr('storage', 'eq', f.storage) | map(attribute='content') | unique -%}
+          {%-     set p = f.storage | proxmox_vm_storage_problem(proxmox_vm_storage_config.stdout | from_json, content, false, []) -%}
+          {%-     if p -%}{%- set _ = out.append(p) -%}{%- endif -%}
+          {%-   endfor -%}
           {%- endfor -%}
           {{ out }}
 
-    - name: Read the ISO storages' content
-      ansible.builtin.command:
-        argv: [pvesh, get, "/nodes/{{ proxmox_vm_node_name }}/storage/{{ item }}/content", --content, iso, --output-format, json]
-      register: proxmox_vm_iso_content
-      changed_when: false
-      check_mode: false
-      loop: "{{ proxmox_vm_isos | map(attribute='storage') | unique }}"
-
-    # The version and schematic are in the file name, so a new version is a new file. The Image Factory publishes
-    # no checksum to anyone without a subscription, so the pin is the configuration's own (sha256): Proxmox checks
-    # each download against it and keeps no file that differs.
-    - name: Work out the ISOs to download
-      ansible.builtin.set_fact:
-        proxmox_vm_iso_volumes: "{{ _volumes }}"
-        proxmox_vm_iso_missing: >-
-          {%- set have = _volumes | map(attribute='volid') | list -%}
-          {%- set out = [] -%}
-          {%- for iso in proxmox_vm_isos if iso.storage ~ ':iso/' ~ iso.filename not in have -%}
-          {%-   set _ = out.append(iso) -%}
-          {%- endfor -%}
-          {{ out }}
-      vars:
-        _volumes: "{{ proxmox_vm_iso_content.results | map(attribute='stdout') | map('from_json') | flatten }}"
-
-    - name: Show the ISOs to download
-      ansible.builtin.debug:
-        msg: "Would download: {{ proxmox_vm_iso_missing | map(attribute='filename') | join(', ') }}"
-      when: proxmox_vm_iso_missing | length > 0
-      changed_when: ansible_check_mode
-
-    - name: Download the missing ISOs
+    - name: Read their storages' content
       ansible.builtin.command:
         argv:
           - pvesh
-          - create
-          - "/nodes/{{ proxmox_vm_node_name }}/storage/{{ item.storage }}/download-url"
+          - get
+          - "/nodes/{{ proxmox_vm_node_name }}/storage/{{ item.0 }}/content"
           - --content
-          - iso
-          - --filename
-          - "{{ item.filename }}"
-          - --url
-          - "{{ item.url }}"
-          - --checksum
-          - "{{ item.sha256 }}"
-          - --checksum-algorithm
-          - sha256
+          - "{{ item.1 }}"
+          - --output-format
+          - json
+      register: proxmox_vm_file_content
+      changed_when: false
+      check_mode: false
+      loop: "{{ proxmox_vm_files | map(attribute='storage') | zip(proxmox_vm_files | map(attribute='content')) | unique | list }}"
+
+    # A version is in each file's name, so a new version is a new file. Each file's pin is its sha256: an image's is
+    # its release's, and an ISO's the configuration's own, since the Image Factory publishes no checksum to anyone
+    # without a subscription. Proxmox checks each download against it and keeps no file that differs.
+    - name: Work out the ISOs and images to download
+      ansible.builtin.set_fact:
+        proxmox_vm_file_volumes: "{{ _volumes }}"
+        proxmox_vm_file_missing: >-
+          {%- set have = _volumes | map(attribute='volid') | list -%}
+          {%- set out = [] -%}
+          {%- for f in proxmox_vm_files if f.storage ~ ':' ~ f.content ~ '/' ~ f.filename not in have -%}
+          {%-   set _ = out.append(f) -%}
+          {%- endfor -%}
+          {{ out }}
+      vars:
+        _volumes: "{{ proxmox_vm_file_content.results | map(attribute='stdout') | map('from_json') | flatten }}"
+
+    - name: Show the ISOs and images to download
+      ansible.builtin.debug:
+        msg: "Would download: {{ proxmox_vm_file_missing | map(attribute='filename') | join(', ') }}"
+      when: proxmox_vm_file_missing | length > 0
+      changed_when: ansible_check_mode
+
+    - name: Download the missing ISOs and images
+      ansible.builtin.command:
+        argv: >-
+          {{ ['pvesh', 'create', '/nodes/' ~ proxmox_vm_node_name ~ '/storage/' ~ item.storage ~ '/download-url',
+              '--content', item.content, '--filename', item.filename, '--url', item.url,
+              '--checksum', item.sha256, '--checksum-algorithm', 'sha256'] }}
       register: proxmox_vm_downloads
-      loop: "{{ proxmox_vm_iso_missing }}"
+      loop: "{{ proxmox_vm_file_missing }}"
       loop_control:
         label: "{{ item.filename }}"
       changed_when: true
@@ -122,6 +129,8 @@
         fail_msg: >-
           Downloading {{ item.item.item.filename }} from {{ item.item.item.url }} failed:
           {{ (item.stdout | from_json).exitstatus | default('unknown') }}. Nothing was stored; the next run tries again.
+          A checksum mismatch means the file is not the one pinned: check its sha256 against the release before
+          changing the pin.
         quiet: true
       loop: "{{ proxmox_vm_download_status.results | default([]) }}"
       loop_control:
@@ -254,6 +263,7 @@
           pending_hint: "{{ proxmox_vm_pending_storages_hint }}"
           allow_overcommit: "{{ proxmox_vm_allow_overcommit | bool }}"
           ignore_existing_volumes: "{{ proxmox_vm_ignore_existing_volumes | bool }}"
+          rebuild_command: "{{ proxmox_vm_rebuild_command }}"
           storage_config: "{{ proxmox_vm_storage_config.stdout | from_json }}"
           qemu: "{{ proxmox_vm_qemu.stdout | from_json }}"
           lxc: "{{ proxmox_vm_lxc.stdout | from_json }}"
@@ -302,6 +312,27 @@
       loop_control:
         label: "{{ item.vmid }} {{ item.name }}"
       changed_when: true
+
+    # An imported disk comes at its image's size: read what was created, and grow what is smaller than configured.
+    - name: Read the created VMs' configuration
+      ansible.builtin.command:
+        argv: [pvesh, get, "/nodes/{{ proxmox_vm_node_name }}/qemu/{{ item.vmid }}/config", --output-format, json]
+      register: proxmox_vm_created
+      changed_when: false
+      loop: "{{ proxmox_vm_plan.create }}"
+      loop_control:
+        label: "{{ item.vmid }} {{ item.name }}"
+
+    - name: Grow the created VMs' imported disks to their size
+      ansible.builtin.command:
+        argv: [qm, disk, resize, "{{ item.vmid }}", "{{ item.slot }}", "{{ item.size }}"]
+      loop: "{{ proxmox_vm_vms | proxmox_vm_growth(_configs) }}"
+      loop_control:
+        label: "{{ item.vmid }} {{ item.slot }} {{ item.size }}"
+      changed_when: true
+      vars:
+        _read: "{{ proxmox_vm_created.results | default([]) | rejectattr('skipped', 'defined') | list }}"
+        _configs: "{{ dict(_read | map(attribute='item.vmid') | zip(_read | map(attribute='stdout') | map('from_json'))) }}"
 
     - name: Correct the VMs' settings
       ansible.builtin.command:
@@ -359,7 +390,7 @@
           {%- endfor -%}
           {{ out if _after else proxmox_vm_plan.restart }}
 
-    - name: Show the old ISOs no VM uses
+    - name: Show the old ISOs and images no VM uses
       ansible.builtin.debug:
         msg: "Not used by any VM here, remove them by hand when no longer wanted: {{ _unused | join(', ') }}"
       when: _unused | length > 0
@@ -373,4 +404,4 @@
           {%-   endfor -%}
           {%- endfor -%}
           {{ out }}
-        _unused: "{{ proxmox_vm_iso_volumes | proxmox_vm_unused_isos(proxmox_vm_isos, _cdroms) }}"
+        _unused: "{{ proxmox_vm_file_volumes | proxmox_vm_unused_isos(proxmox_vm_files, _cdroms) }}"
