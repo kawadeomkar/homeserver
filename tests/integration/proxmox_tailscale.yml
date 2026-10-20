@@ -2,7 +2,7 @@
 # roles/proxmox_tailscale with this repo's own configuration, run against the fake apt-get, nft, sysctl, systemctl
 # and tailscale in fake_tailscale_bin/. Every path the role writes is a scratch path the test passes, and the
 # repository is a file:// URL serving a fake signing key, so nothing here reaches the network or the system.
-- name: Make the fake Proxmox host the LAN's Tailscale subnet router
+- name: Run Tailscale on the fake Proxmox host, as a tailnet device or the LAN's subnet router
   hosts: proxmox
   gather_facts: false
   vars_files:

@@ -1,29 +1,33 @@
 ---
 argument_specs:
   main:
-    short_description: Make a Proxmox VE node its LAN's Tailscale subnet router, behind a forwarding guard
+    short_description: Join a Proxmox VE node to a tailnet, and with routes make it the LAN's subnet router, behind a guard
     description:
       - Installs Tailscale from its own Debian repository, and with proxmox_tailscale_upgrade upgrades it on every run.
         Tailscale's own updater is meant to be turned off in proxmox_tailscale_settings.
       - Loads a fail-closed nftables guard, its own table in its own unit, which tailscaled requires. Tailnet clients
-        reach the guarded hosts only on the allowed ports, nothing outside the advertised prefixes, and the LAN starts
-        no connection into the tailnet, whatever the tailnet's policy says.
-      - Turns on IPv4 forwarding, logs the node in once with a tagged one-off auth key, advertises the LAN's prefixes,
-        and keeps the given preferences with tailscale set.
+        reach the guarded hosts only on the allowed ports, and nothing else outside the advertised prefixes, of which a
+        node without routes has none; the LAN starts no connection into the tailnet, whatever the tailnet's policy says.
+      - Logs the node in once with a tagged one-off auth key and keeps the given preferences with tailscale set. With
+        routes, it also turns on IPv4 forwarding and advertises them; without, the node is a tailnet device of its own.
       - Reports what only the tailnet's admin console can fix, such as a route not yet approved. It never logs the node
         out, changes its tags or restarts tailscaled itself.
       - The defaults change nothing.
     options:
+      proxmox_tailscale_enabled:
+        type: bool
+        default: false
+        description: Run Tailscale on the node. False, the role does nothing; true without routes, the node joins the tailnet alone.
       proxmox_tailscale_advertise_routes:
         type: list
         elements: str
         default: []
-        description: The LAN prefixes to advertise, IPv4, in CIDR form. Empty, the role does nothing.
+        description: The LAN prefixes to advertise, IPv4, in CIDR form, which need proxmox_tailscale_enabled. Empty, the node advertises none.
       proxmox_tailscale_tags:
         type: list
         elements: str
         default: []
-        description: The tags the node joins with, each tag:<name>. At least one is required with routes.
+        description: The tags the node joins with, each tag:<name>. At least one is required once the role is enabled.
       proxmox_tailscale_auth_key:
         type: str
         default: ""

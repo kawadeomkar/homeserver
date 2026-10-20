@@ -7,8 +7,10 @@ without a key, a stopped tailscaled is started again after the guard, a logged-o
 the key never reaches an argument list or Ansible's output, an upgrade is installed only when asked for (this repo
 leaves it to proxmox_apt), the guard protects every address the NAS is given with a NAS and nothing without one, is
 reloaded and never restarted, conflicts with Debian's nftables service and refuses it enabled or running, and a
-tailscaled without the interface the guard filters is refused before it logs in. The role runs with this repo's own
-configuration (group_vars/proxmox/tailscale.yml) and RFC 5737 addresses.
+tailscaled without the interface the guard filters is refused before it logs in. With tailscale_enabled and no
+routes, the node joins the tailnet alone, its guard loaded with no routes and forwarding left as it is; routes taken
+out are withdrawn. The role runs with this repo's own configuration (group_vars/proxmox/tailscale.yml) and RFC 5737
+addresses.
 
 Run: make test-idempotence
 """
@@ -82,6 +84,11 @@ def change(path, edit):
 def position(calls, prefix):
     """Where the first call starting with `prefix` is."""
     return next(i for i, call in enumerate(calls) if call[: len(prefix)] == prefix)
+
+
+def routes_set(table):
+    """The body of the guard's set of advertised routes."""
+    return table.split("set routes {", 1)[1].split("}", 1)[0]
 
 
 def test_tailscale_role_is_idempotent(tmp_path):
@@ -239,13 +246,55 @@ def test_tailscale_role_needs_an_auth_key(tmp_path):
     assert not any(call[:2] == ["tailscale", "up"] for call in read(Path(extra["fake_tailscale_state"]))["calls"])
 
 
-def test_tailscale_role_without_routes_does_nothing(tmp_path):
-    """Without tailscale_advertise_routes in local.yml, the role runs no command, dry or real."""
+def test_tailscale_role_without_the_flag_or_routes_does_nothing(tmp_path):
+    """Without tailscale_enabled or tailscale_advertise_routes in local.yml, the role runs no command, dry or real."""
     extra = tailscale_vars(tmp_path, tailscale_advertise_routes=[])
     for check in (True, False):
         expect(run(PLAYBOOK, extra, check=check), "homeserver", changed=0, note="run without routes")
     assert read(Path(extra["fake_tailscale_state"]))["calls"] == []
     assert list((tmp_path / "sources").iterdir()) == []
+
+
+def test_tailscale_role_without_routes_joins_the_node_alone(tmp_path):
+    """tailscale_enabled without routes: the dry run says what it would do and changes nothing; the run installs
+    Tailscale, loads the guard with an empty routes set, and logs the node in advertising none, leaving forwarding
+    off and its file unwritten; the runs after it change nothing."""
+    extra = tailscale_vars(tmp_path, tailscale_advertise_routes=[], tailscale_enabled=True)
+    path = Path(extra["fake_tailscale_state"])
+
+    result = run(PLAYBOOK, extra, check=True)
+    expect(result, "homeserver", changed=True, note="dry run on a fresh host")
+    assert read(path)["mutations"] == 0, "the dry run changed the fake host"
+    assert "Would log the node in with the auth key" in result[2], result[2][-3000:]
+    assert "IPv4 forwarding is off" not in result[2], result[2][-3000:]
+
+    result = run(PLAYBOOK, extra)
+    expect(result, "homeserver", changed=True, note="first run")
+    s = read(path)
+    assert s["node"]["backend"] == "Running" and s["node"]["tags"] == ["tag:homeserver"]
+    assert s["node"]["prefs"]["advertise-routes"] == ""
+    assert s["units"]["tailnet-guard.service"] == {"enabled": True, "active": True}
+    assert "elements" not in routes_set(s["table"]) and "ip daddr != @routes" in s["table"]
+    assert s["sysctl"]["net.ipv4.ip_forward"] == "0" and not Path(extra["proxmox_tailscale_sysctl_file"]).exists()
+    assert not any(call[:2] == ["sysctl", "-p"] for call in s["calls"]), "forwarding was turned on without routes"
+    assert "Nothing for the admin console to fix." in result[2], result[2][-3000:]
+
+    for check in (False, True):
+        result = run(PLAYBOOK, extra, check=check)
+        expect(result, "homeserver", changed=0, note=f"{'dry run' if check else 'run'} once applied")
+
+
+def test_tailscale_role_withdraws_routes_taken_out(tmp_path):
+    """A subnet router whose routes local.yml takes out, keeping tailscale_enabled: one run withdraws them and reloads
+    the guard with none, leaving forwarding as it was; the next run changes nothing."""
+    extra, path = settled(tmp_path)
+    alone = extra | {"tailscale_advertise_routes": [], "tailscale_enabled": True}
+    expect(run(PLAYBOOK, alone), "homeserver", changed=True, note="run without the routes")
+    s = read(path)
+    assert s["node"]["prefs"]["advertise-routes"] == ""
+    assert "elements" not in routes_set(s["table"]) and s["loads"][-1] == "reload tailnet-guard.service"
+    assert s["sysctl"]["net.ipv4.ip_forward"] == "1" and Path(extra["proxmox_tailscale_sysctl_file"]).exists()
+    expect(run(PLAYBOOK, alone), "homeserver", changed=0, note="run after withdrawing them")
 
 
 def test_tailscale_role_reports_what_the_console_must_fix(tmp_path):

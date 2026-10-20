@@ -3,7 +3,7 @@ galaxy_info:
   author: homeserver contributors
   namespace: homeserver
   role_name: proxmox_tailscale
-  description: Make a Proxmox VE node its LAN's Tailscale subnet router, behind a forwarding guard
+  description: Join a Proxmox VE node to a tailnet, and with routes make it the LAN's subnet router, behind a guard
   # The repo has no licence file; the role is not published.
   license: none
   min_ansible_version: "2.21"

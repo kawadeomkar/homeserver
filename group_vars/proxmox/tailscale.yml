@@ -1,11 +1,15 @@
 ---
 # Remote access: Tailscale on the Proxmox host, applied by roles/proxmox_tailscale on every run of proxmox.yml once
-# group_vars/all/local.yml lists the LAN's prefix in tailscale_advertise_routes. The host becomes the LAN's subnet
-# router: every VM on its bridge, the NAS and the router answer from the tailnet without Tailscale of their own. The
-# tailnet's policy, the route's approval and split DNS are set by hand in Tailscale's admin console:
-# scripts/runbooks/tailscale.md. Unset, nothing is installed.
+# group_vars/all/local.yml sets tailscale_enabled or lists the LAN's prefix in tailscale_advertise_routes. With
+# tailscale_enabled alone, the host joins the tailnet as a device of its own, reachable at its tailnet address. With
+# routes, it is also the LAN's subnet router: every VM on its bridge, the NAS and the router answer from the tailnet
+# without Tailscale of their own. The tailnet's policy, the route's approval and split DNS are set by hand in
+# Tailscale's admin console: scripts/runbooks/tailscale.md. With neither, nothing is installed.
 
-# The LAN's prefixes, IPv4 in CIDR form.
+# On with tailscale_enabled, or, without it, whenever local.yml lists routes. tailscale_enabled: false with routes is
+# refused, as a contradiction.
+proxmox_tailscale_enabled: "{{ tailscale_enabled | default(tailscale_advertise_routes | default([], true) | length > 0) }}"
+# The LAN's prefixes, IPv4 in CIDR form. None, the host joins the tailnet alone and forwards nothing from it.
 proxmox_tailscale_advertise_routes: "{{ tailscale_advertise_routes | default([], true) }}"
 # The tag the host joins with. A tagged node's key never expires, and the tailnet's policy grants by tag.
 proxmox_tailscale_tags: [tag:homeserver]

@@ -78,11 +78,14 @@ proxmox_address: 192.0.2.20
 # Other VMs to back up with the cluster's, such as Home Assistant's.
 # vm_backup_extra_vmids: [310]
 
-# Remote access through Tailscale (scripts/runbooks/tailscale.md): the Proxmox
-# host becomes the LAN's subnet router, so every VM, the NAS and the router
-# answer from your tailnet at their LAN addresses. List the LAN's IPv4 prefix
-# in CIDR form. Write the tailnet's policy first, and put a one-off auth key in
-# the vault as vault_tailscale_auth_key. Unset, Tailscale is not installed.
+# Remote access through Tailscale (scripts/runbooks/tailscale.md). Write the
+# tailnet's policy first, and put a one-off auth key in the vault as
+# vault_tailscale_auth_key. tailscale_enabled joins the Proxmox host to your
+# tailnet, reachable at its tailnet address. Listing the LAN's IPv4 prefix in
+# CIDR form as well makes it the LAN's subnet router, so every VM, the NAS and
+# the router answer from your tailnet at their LAN addresses (routes alone turn
+# Tailscale on too). With neither, Tailscale is not installed.
+# tailscale_enabled: true
 # tailscale_advertise_routes: [192.0.2.0/24]
 
 # --------------------------------------------------------------- Kubernetes ---
