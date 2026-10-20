@@ -24,6 +24,8 @@ metadata:
   namespace: photoprism
   labels:
     app.kubernetes.io/name: photoprism-db
+    # make down stops it after photoprism, and make up starts it first (roles/app_scale).
+    app.kubernetes.io/component: database
 spec:
   replicas: 1
   strategy:

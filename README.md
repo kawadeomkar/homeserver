@@ -220,6 +220,16 @@ age-keygen -o ~/.config/sops/age/homeserver.agekey && chmod 600 ~/.config/sops/a
 export SOPS_AGE_KEY_FILE=~/.config/sops/age/homeserver.agekey    # in your shell profile: sops on macOS reads no ~/.config by default
 ```
 
+To stop the apps without losing anything, before maintenance or to free the host for a while, `make down` scales
+every app to zero and tells Flux to leave it there, then shuts Home Assistant's VM down, and `make up` brings back
+what it stopped; `make check-down` and `make check-up` say what each would do. `ONLY` narrows either to apps, groups
+or `homeassistant`, such as `make down ONLY=jellyfin,nextcloud` (a group is a directory under `k8s/apps/`). Data,
+Flux and the platform stay, and a stopped app stays down across reboots until `make up`; databases stop after their
+apps and start before them. Home Assistant's VM starts again with the host, or with `make homeassistant`.
+`make down ALL=1` stops everything: after the apps and Home Assistant, it shuts the cluster's VMs down too, the
+worker first and the control plane last, each through its own orderly shutdown. `make up ALL=1` starts them, the
+control plane first, waits until every node is Ready, then brings everything else back. `ALL` takes no `ONLY`.
+
 A node that stays down: `scripts/runbooks/dead-worker.md`. The playbook never moves, shrinks or deletes their disks, and it refuses to create a VM over the disks or backups an
 earlier one left under the same VMID: restore it instead (`scripts/runbooks/vm-restore.md`). On thin LVM, ZFS, a
 directory or BTRFS it also refuses disks that would add up to more than the storage holds, other VMs' included,

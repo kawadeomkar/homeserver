@@ -134,6 +134,96 @@ Description: Create Proxmox VE VMs and keep the settings it manages as configure
   
   
 
+  - **proxmox_vm_power**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: For the power entry point, stopped or running; empty does nothing.
+  
+      - **Choices**:
+    
+          - 
+    
+          - stopped
+    
+          - running
+    
+  
+  
+  
+
+  - **proxmox_vm_power_vmids**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: For the power entry point, the VMs to shut down or start.
+  
+  
+  
+
+  - **proxmox_vm_power_timeout**
+    - **Required**: false
+    - **Type**: int
+    - **Default**: 180
+  
+    - **Description**: For the power entry point, how many seconds a VM's own shutdown may take before the run fails.
+  
+  
+  
+
+
+
+#### Key: power
+
+**Description**: 
+- Shuts each VM of proxmox_vm_power_vmids down with qm shutdown (the guest's own shutdown, never a forced stop), or starts it with qm start; a VM already as asked is left alone. Refuses a VMID that does not exist.
+- Changes nothing else. The main entry point starts a stopped VM marked start, and the host one marked onboot.
+
+
+**Options**:
+
+
+  - **proxmox_vm_power**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: For the power entry point, stopped or running; empty does nothing.
+  
+      - **Choices**:
+    
+          - 
+    
+          - stopped
+    
+          - running
+    
+  
+  
+  
+
+  - **proxmox_vm_power_vmids**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: For the power entry point, the VMs to shut down or start.
+  
+  
+  
+
+  - **proxmox_vm_power_timeout**
+    - **Required**: false
+    - **Type**: int
+    - **Default**: 180
+  
+    - **Description**: For the power entry point, how many seconds a VM's own shutdown may take before the run fails.
+  
+  
+  
+
 
 
 </details>
@@ -159,6 +249,9 @@ Description: Create Proxmox VE VMs and keep the settings it manages as configure
 | [proxmox_vm_ignore_existing_volumes](defaults/main.yml#L32)   | bool | `False` |    
 | [proxmox_vm_rebuild_command](defaults/main.yml#L35)   | str |  |    
 | [proxmox_vm_node](defaults/main.yml#L37)   | str |  |    
+| [proxmox_vm_power](defaults/main.yml#L40)   | str |  |    
+| [proxmox_vm_power_vmids](defaults/main.yml#L41)   | list | `[]` |    
+| [proxmox_vm_power_timeout](defaults/main.yml#L42)   | int | `180` |    
 
 
 
@@ -209,6 +302,19 @@ Description: Create Proxmox VE VMs and keep the settings it manages as configure
 | Read the VMs' configuration and pending changes again | ansible.builtin.command | True |  |
 | Show each VM's MAC, and what waits for a restart | ansible.builtin.debug | False |  |
 | Show the old ISOs and images no VM uses | ansible.builtin.debug | True |  |
+
+#### File: tasks/power.yml
+
+| Name | Module | Has Conditions | Tags |
+| ---- | ------ | -------------- | -----|
+| power ¦ Check the role's inputs | ansible.builtin.assert | True |  |
+| power ¦ Bring the VMs to their state | block | True |  |
+| power ¦ Read each VM's state | ansible.builtin.command | False |  |
+| power ¦ Refuse a VM that does not exist | ansible.builtin.assert | False |  |
+| power ¦ Work out which VMs to change | ansible.builtin.set_fact | False |  |
+| power ¦ Shut each VM down | ansible.builtin.command | True |  |
+| power ¦ Start each VM | ansible.builtin.command | True |  |
+| power ¦ Say what was done | ansible.builtin.debug | False |  |
 
 
 ## Task Flow Graphs
@@ -269,6 +375,33 @@ classDef rescue stroke:#665352,stroke-width:2px;
   Show_each_VM_s_MAC__and_what_waits_for_a_restart34-->|Task| Show_the_old_ISOs_and_images_no_VM_uses35[show the old isos and images no vm uses<br>When: **unused   length   0**]:::task
   Show_the_old_ISOs_and_images_no_VM_uses35-.->|End of Block| Create_and_correct_the_VMs1_block_start_0
   Show_the_old_ISOs_and_images_no_VM_uses35-->End
+```
+
+
+### Graph for power.yml
+
+```mermaid
+flowchart TD
+Start
+classDef block stroke:#3498db,stroke-width:2px;
+classDef task stroke:#4b76bb,stroke-width:2px;
+classDef includeTasks stroke:#16a085,stroke-width:2px;
+classDef importTasks stroke:#34495e,stroke-width:2px;
+classDef includeRole stroke:#2980b9,stroke-width:2px;
+classDef importRole stroke:#699ba7,stroke-width:2px;
+classDef includeVars stroke:#8e44ad,stroke-width:2px;
+classDef rescue stroke:#665352,stroke-width:2px;
+
+  Start-->|Task| power___Check_the_role_s_inputs0[power   check the role s inputs<br>When: **proxmox vm power   length   0**]:::task
+  power___Check_the_role_s_inputs0-->|Block Start| power___Bring_the_VMs_to_their_state1_block_start_0[[power   bring the vms to their state<br>When: **proxmox vm power   length   0 and proxmox vm power<br>vmids   length   0**]]:::block
+  power___Bring_the_VMs_to_their_state1_block_start_0-->|Task| power___Read_each_VM_s_state0[power   read each vm s state]:::task
+  power___Read_each_VM_s_state0-->|Task| power___Refuse_a_VM_that_does_not_exist1[power   refuse a vm that does not exist]:::task
+  power___Refuse_a_VM_that_does_not_exist1-->|Task| power___Work_out_which_VMs_to_change2[power   work out which vms to change]:::task
+  power___Work_out_which_VMs_to_change2-->|Task| power___Shut_each_VM_down3[power   shut each vm down<br>When: **proxmox vm power     stopped  and not ansible<br>check mode**]:::task
+  power___Shut_each_VM_down3-->|Task| power___Start_each_VM4[power   start each vm<br>When: **proxmox vm power     running  and not ansible<br>check mode**]:::task
+  power___Start_each_VM4-->|Task| power___Say_what_was_done5[power   say what was done]:::task
+  power___Say_what_was_done5-.->|End of Block| power___Bring_the_VMs_to_their_state1_block_start_0
+  power___Say_what_was_done5-->End
 ```
 
 

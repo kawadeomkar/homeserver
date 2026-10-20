@@ -1,0 +1,12 @@
+---
+# make down and make up (down.yml, up.yml): roles/app_scale scales the apps Flux applies from k8s/apps/ to zero and
+# back, an app being a Deployment and a group its namespace (media, nextcloud, ...). down.yml and up.yml set the
+# state and the names (make's ONLY); the platform under k8s/infrastructure/ is never touched.
+app_scale_kubeconfig: "{{ talos_config_dir }}/kubeconfig"
+app_scale_server: "{{ talos_endpoint }}"
+app_scale_path: k8s/apps
+# The databases (nextcloud-db, photoprism-db) stop after their apps and start before them.
+app_scale_late_label: app.kubernetes.io/component=database
+app_scale_annotation: homeserver.internal/replicas
+# Nextcloud's and PhotoPrism's first start after an upgrade migrates for up to ten minutes (their startup probes).
+app_scale_timeout: 10m

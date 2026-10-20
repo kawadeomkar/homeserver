@@ -35,3 +35,8 @@ proxmox_vm_ignore_existing_volumes: false
 proxmox_vm_rebuild_command: ""
 # The Proxmox node's name. Empty means the host's short hostname, which is what Proxmox uses.
 proxmox_vm_node: ""
+# The power entry point (tasks_from: power): stopped shuts the VMs of proxmox_vm_power_vmids down, running starts
+# them; empty does nothing. A shutdown that takes longer than proxmox_vm_power_timeout seconds fails.
+proxmox_vm_power: ""
+proxmox_vm_power_vmids: []
+proxmox_vm_power_timeout: 180

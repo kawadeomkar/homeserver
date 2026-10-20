@@ -73,3 +73,27 @@ argument_specs:
         type: str
         default: ""
         description: The node's name in Proxmox. Empty means the host's short hostname.
+      proxmox_vm_power: &proxmox_vm_power
+        type: str
+        choices: ["", stopped, running]
+        default: ""
+        description: For the power entry point, stopped or running; empty does nothing.
+      proxmox_vm_power_vmids: &proxmox_vm_power_vmids
+        type: list
+        elements: int
+        default: []
+        description: For the power entry point, the VMs to shut down or start.
+      proxmox_vm_power_timeout: &proxmox_vm_power_timeout
+        type: int
+        default: 180
+        description: For the power entry point, how many seconds a VM's own shutdown may take before the run fails.
+  power:
+    short_description: Shut Proxmox VE VMs down or start them
+    description:
+      - Shuts each VM of proxmox_vm_power_vmids down with qm shutdown (the guest's own shutdown, never a forced
+        stop), or starts it with qm start; a VM already as asked is left alone. Refuses a VMID that does not exist.
+      - Changes nothing else. The main entry point starts a stopped VM marked start, and the host one marked onboot.
+    options:
+      proxmox_vm_power: *proxmox_vm_power
+      proxmox_vm_power_vmids: *proxmox_vm_power_vmids
+      proxmox_vm_power_timeout: *proxmox_vm_power_timeout

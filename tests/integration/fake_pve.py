@@ -36,10 +36,12 @@ watchdog, the agent, the boot order, PCI devices) pending until the next `qm sta
 returns shows pending values applied, as Proxmox's does by default. Deleting a drive drops it from the boot order,
 and adding it back does not restore it. `qm disk resize` grows only. A download that fails (the state's
 `download_fails`) leaves no file and still exits 0, as pvesh may; only the task's status says it failed.
-`start_fails` makes the next `qm start` fail once, and `qm start` refuses a VM one of whose drives, the CD-ROM
-included, names a volume that is not there, as Proxmox does when it activates them. A backup job's VMIDs start at
-100. The state's `content` holds each storage's volumes, which tests seed with other guests' disks and old backups;
-`node_memory` the node's memory; `pci_mappings` and `usb_mappings` the resource mappings that exist.
+`start_fails` makes the next `qm start` fail once and `shutdown_hangs` every `qm shutdown` time out (the guest
+never powers off); both refuse a VM already as asked, as qm does, and `qm start` also refuses a VM one of whose
+drives, the CD-ROM included, names a volume that is not there, as Proxmox does when it activates them. A backup
+job's VMIDs start at 100. The state's `content` holds each storage's volumes, which tests seed with other guests'
+disks and old backups; `node_memory` the node's memory; `pci_mappings` and `usb_mappings` the resource
+mappings that exist.
 
 Images (as on Proxmox VE 9.2, read from its API code): `download-url --content import` takes an .ova, .qcow2, .raw or
 .vmdk; with `--checksum` it needs `--checksum-algorithm`, and the state's `checksum_fails` makes the task fail as a
@@ -568,7 +570,14 @@ def qm(state, args):
         vm["pending"] = {}
         vm["status"] = "running"
     elif verb == "shutdown":
-        vm_of(state, args[1])["status"] = "stopped"
+        vm = vm_of(state, args[1])
+        if args[2:] not in ([], ["--timeout", args[-1]]):
+            fail(f"400 unable to parse option {args[2]}")
+        if vm["status"] != "running":
+            fail(f"VM {args[1]} not running")
+        if state.get("shutdown_hangs"):
+            fail(f"VM quit/powerdown failed - got timeout (VM {args[1]})")
+        vm["status"] = "stopped"
     elif verb == "disk" and args[1:2] == ["resize"]:
         vmid, slot, size = args[2], args[3], args[4]
         vm = vm_of(state, vmid)
