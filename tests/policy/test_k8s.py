@@ -62,11 +62,11 @@ UNDECLARED_NAMESPACES = {"kube-system", "flux-system"}
 
 # The namespaces labelled pod-security.kubernetes.io/enforce: privileged. Changing the set needs a reason in
 # the pull request, and the label a comment saying why.
-PRIVILEGED_NAMESPACES = {"local-path-storage", "metallb-system"}
-# Of those, the ones whose privileged pods only a chart renders (MetalLB's speaker): checked against what make
-# lint-helm renders. The other's need shows in the repository's own manifests (the Job that makes the
+PRIVILEGED_NAMESPACES = {"local-path-storage", "metallb-system", "monitoring"}
+# Of those, the ones whose privileged pods only a chart renders (MetalLB's speaker, node-exporter): checked against
+# what make lint-helm renders. The other's need shows in the repository's own manifests (the Job that makes the
 # static volumes' directories in local-path-storage).
-CHART_PRIVILEGED = {"metallb-system"}
+CHART_PRIVILEGED = {"metallb-system", "monitoring"}
 
 # Every hostPath volume, as (object, path): the one Job that makes the local static volumes' directories without a
 # NAS. Pod Security Admission's baseline level rejects one in a pod spec, but does not look inside a PersistentVolume,
@@ -77,12 +77,15 @@ HOST_PATHS = {
 
 # The hostPath volumes in what the charts render (make lint-helm): a chart bump that adds one fails here before it
 # merges. csi-driver-nfs mounts the kubelet's directories, in kube-system, which Talos exempts from Pod Security;
-# MetalLB's speaker needs none.
+# node-exporter reads the host's root, /proc and /sys, in monitoring; MetalLB's speaker needs none.
 CHART_HOST_PATHS = {
     ("DaemonSet kube-system/csi-nfs-node", "/var/lib/kubelet/plugins/csi-nfsplugin"),
     ("DaemonSet kube-system/csi-nfs-node", "/var/lib/kubelet/plugins_registry"),
     ("DaemonSet kube-system/csi-nfs-node", "/var/lib/kubelet/pods"),
     ("Deployment kube-system/csi-nfs-controller", "/var/lib/kubelet/pods"),
+    ("DaemonSet monitoring/kube-prometheus-stack-prometheus-node-exporter", "/"),
+    ("DaemonSet monitoring/kube-prometheus-stack-prometheus-node-exporter", "/proc"),
+    ("DaemonSet monitoring/kube-prometheus-stack-prometheus-node-exporter", "/sys"),
 }
 
 # The SELinux types baseline allows (Kubernetes Pod Security Standards); none set is fine too.
@@ -759,6 +762,22 @@ def test_chart_privileged_pods_only_in_privileged_namespaces():
     assert wrong == {}, "a chart's pod needs more than baseline: label its namespace, saying why"
 
 
+@pytest.mark.skipif(not RENDERED.is_dir(), reason="make lint-helm renders the charts first")
+def test_chart_scrapes_send_no_token_over_plain_http():
+    """kube-prometheus-stack gives its scrapes of the cluster's components Prometheus's service account token, the
+    plain-HTTP ones too (etcd, kube-proxy, CoreDNS), where it would cross the LAN or the pod network in clear. None of
+    those asks for one, so the release's values take it off them."""
+    wrong = [
+        f"{label(obj)}: {endpoint.get('port') or endpoint.get('targetPort')}"
+        for _, obj in rendered()
+        if obj["kind"] in ("ServiceMonitor", "PodMonitor")
+        for endpoint in obj["spec"].get("endpoints") or obj["spec"].get("podMetricsEndpoints") or []
+        if endpoint.get("scheme", "http") != "https"
+        and any(endpoint.get(key) for key in ("authorization", "bearerTokenFile", "bearerTokenSecret", "basicAuth"))
+    ]
+    assert wrong == [], "set the chart's serviceMonitor.authorization to null for these"
+
+
 def test_chart_fixtures_match_the_settings(settings):
     """make lint-helm renders the charts with tests/fixtures/cluster-settings.yaml's placeholders; each setup there has
     exactly the keys roles/flux_bootstrap puts in that setup's cluster-settings."""
@@ -774,6 +793,9 @@ CLUSTER_SECRET_READERS = {
     # Reads the TLS Secrets its routes name. Its chart grants every Secret, and namespaced RBAC, the chart's one way to
     # narrow that, cannot serve the IngressClass. It answers the LAN: the one to narrow next.
     "traefik/traefik",
+    # Writes Prometheus's and Alertmanager's configuration as Secrets and reads those a ServiceMonitor names. It
+    # answers nothing.
+    "monitoring/kube-prometheus-stack-operator",
     # cert-manager writes each certificate into a Secret in its Certificate's namespace, and its cainjector copies CA
     # data out of Secrets into webhook configurations. Neither answers the LAN; their chart has no namespaced RBAC.
     "cert-manager/cert-manager",

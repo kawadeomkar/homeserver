@@ -545,15 +545,18 @@ def test_flux_settings_resolve_on_the_kubernetes_host(tmp_path, local_yml, path,
         " | select('search', 'kind: UserVolumeConfig') | map('regex_search', 'name: (\\S+)', '\\1') | flatten]",
         *CLUSTER_ARGS,
     )
-    common = {"DOMAIN", "TZ", "LB_RANGE", "LB_TRAEFIK_IP", "LB_FRIGATE_IP", "DATA_NODE", "CONTROL_PLANE_ADDRESS"}
+    common = {"DOMAIN", "TZ", "LB_RANGE", "LB_TRAEFIK_IP", "LB_FRIGATE_IP", "DATA_NODE"}
     common |= {"INGRESS_ALLOWED_RANGE"}
+    common |= {"PROMETHEUS_RETENTION", "PROMETHEUS_RETENTION_SIZE"}
     storage = {"NAS_ADDRESS", "NAS_POOL_PERSISTENT", "NAS_POOL_EPHEMERAL", "MEDIA_DATASET"}
     assert set(settings) == common | (storage if media is None else {"MEDIA_LOCAL_PATH", "FRIGATE_LOCAL_PATH"})
-    assert settings["CONTROL_PLANE_ADDRESS"] == "192.0.2.30"
     # Nobody until local.yml names the range: a new cluster's apps are set up through port forwards first.
     assert settings["INGRESS_ALLOWED_RANGE"] == "127.0.0.1/32"
     if media is None:
         assert settings["NAS_ADDRESS"] == "192.0.2.10" and settings["MEDIA_DATASET"] == "/mnt/ephemeral/jellyfin"
+        assert (settings["PROMETHEUS_RETENTION"], settings["PROMETHEUS_RETENTION_SIZE"]) == ("15d", "15GB")
+    else:
+        assert (settings["PROMETHEUS_RETENTION"], settings["PROMETHEUS_RETENTION_SIZE"]) == ("7d", "5GB")
     assert all(isinstance(value, str) and value for value in settings.values()), settings
     assert instance["path"] == path and instance["url"] == CLUSTER_VARS["flux_sync_url"]
     assert settings["DATA_NODE"] == "homeserver-worker-1"
