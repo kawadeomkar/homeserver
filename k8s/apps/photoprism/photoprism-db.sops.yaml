@@ -1,27 +1,27 @@
 apiVersion: v1
-data:
-    MYSQL_DATABASE: ENC[AES256_GCM,data:0wU7d/xlSAbpWuSucLJpCw==,iv:TKZx0LnbbvO0/RyTIGfZpksFNhNtRJXDLR3hauDSp44=,tag:DM9aYeDlIDnogkGlHht7QQ==,type:str]
-    MYSQL_PASSWORD: ENC[AES256_GCM,data:brjTTdXYodr3DMcsQ1pMhqNNXJWd2HARLmojcgvQW2fFCe9GNU29Jue0uPg=,iv:9dVeIK4wzorDmBBMZ+rPjWfGioxuIz5T+6QOZIl/zU8=,tag:IempxxoVtLxTyiJS9JvgQw==,type:str]
-    MYSQL_ROOT_PASSWORD: ENC[AES256_GCM,data:x6/u47zKzcYMwqZaHQ8FdwRw/MWpKVY9JNh3ow6TpgMUQOuy4st9Iv8zK9Q=,iv:tTX85AUIAtWPohY36CZ1Z+HKwmSo0tkkSOm1w7y0ojg=,tag:95iJxblZeYHu60yzv6CBvA==,type:str]
-    MYSQL_USER: ENC[AES256_GCM,data:gkoCo7dFlvcQtRydilQyYA==,iv:a+8jUpmAPfaZ3JcaN6pUDx/QZuTpGxOx5OuT5+/CrWY=,tag:igq8lcBoA/9voR1nCehdQQ==,type:str]
 kind: Secret
 metadata:
-    labels:
-        app.kubernetes.io/name: photoprism-db
     name: photoprism-db
     namespace: photoprism
+    labels:
+        app.kubernetes.io/name: photoprism-db
+data:
+    MYSQL_ROOT_PASSWORD: ENC[AES256_GCM,data:J1Lav8Nt54yfFE2Npr5A6eXIJ+XCPd9V9Zf7hc19DBnsEBL9N7abcANnWlA=,iv:JBk+BQXhq1fOTjy3ipzboN4lGxbO8YukR3EghrCswrY=,tag:r8lTRc5RhtyQNPFie4yYfQ==,type:str]
+    MYSQL_DATABASE: ENC[AES256_GCM,data:xWT+Vy6l2Q37Yx3A8lqRBA==,iv:LF26r2q1u4j8SoDIOmxiNqIkSIy494caSuWp+h/4TNc=,tag:hQ8Gd5Ww2xi5h7Ls0A/x7A==,type:str]
+    MYSQL_USER: ENC[AES256_GCM,data:g+UiOuSk/RvWXde1z9k6VA==,iv:5HguPScu3/WP8RUKgryircWMKhe/XkHWIMwaAGowO1k=,tag:S68cph0j8WWExZuC9kPAgA==,type:str]
+    MYSQL_PASSWORD: ENC[AES256_GCM,data:GzDkO/BZ83bf2v78HLHTe5Rbd+Rn4A4VgeiwLV/DH40i7762070gtAm2UXw=,iv:/l/oxL+9REc81eev/On18i0mjGdkbJThpgsmFOkoV1w=,tag:XIaoksWstXdXC74U/vrHQQ==,type:str]
 sops:
     age:
         - enc: |
             -----BEGIN AGE ENCRYPTED FILE-----
-            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSA4SmQxQjY1TSs2NUs3WmJL
-            b0pQR0QwUFRZMWZURmZmQTZNWnA4OFRiWmlRCnZaS2NWUm5WTGd1UHFBVkg0bVEy
-            UkJjOTVmY0hlOVRVNW5zUjRUbDVCNkkKLS0tIGgrYnNacStHa1JGVkM2OENSWXVs
-            TFlRczQ3VUF2K0dNVUtLNklKcmM4dTAKLrK4t5zhSnL/kMc2j9GQz45zuhvsgHnm
-            XllzRTLoAh1bN3wRWijHMLhNcL65qGNB2h4jrbkujz424Dkxpj3QZQ==
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBobjVEK0ZWdW5kNzhPZXZq
+            cVVtM2RMTnpQbXJTY2VKWCtwRnBORnpaUUhNCkFXM21vRndPdEdPdE0xcUR3YXhX
+            OVd0NGlBK1pUWmFnRkZFZWwrZmsrMEEKLS0tIEY3STRzcGtod1cyOTJ1SlNaekFH
+            ekRLcnlrVUI0MHFiL3hJTTNWTnByWnMKBtcsv+98wmwbkajuWI0/UJD4pG3Z0U9k
+            idZiAiRXsnRiG9q1Y47NDfhWqAFNr62RwqW2VkK5p+KrhirkLx8kpw==
             -----END AGE ENCRYPTED FILE-----
-          recipient: age19jhwvwxawyjzj7yc0ud700dtj5gws77t9pgm8f3zv9kqgssqgpgs5zq4qw
+          recipient: age1k50g5gxv979d6dvtjptpex44lt6azt2nz82tgdfhamdkz5l6f93q2mfdvf
     encrypted_regex: ^(data|stringData)$
-    lastmodified: "2026-10-17T18:00:54Z"
-    mac: ENC[AES256_GCM,data:ZnSv0xi77+FPOBE4nZng+b4rTLs9DwfdV7/mq+M1u2FLIc/MORgX16FgkMDdJkcfQBUZMGK9WJu+Xql6b5kmPw0axASThqJz9j51FtQlK02AeL5tE6ezHjx+OM0ei9ceQNiaLBCD6DSj/i4D6M7gaAeHl+jeBTj0HJuE2RqJZ3w=,iv:MKsxvRBK45HMY/5PCtOXXz2Ee5TlT5/ten1AOgZD624=,tag:oTYtPfHv6PBb7Hwy322zhA==,type:str]
+    lastmodified: "2026-10-20T18:19:14Z"
+    mac: ENC[AES256_GCM,data:UOEEx5hFtoPX66opCiCeSG3cyapzVlHAyobXmW62tie/waQ64UbzT8J5l3mjtQx0PLQl+F1tNmw1PdNh3WkRmNP8KGJ/9M7lTn3TTrCUnZi0lLEADT93MSjj4LF3/9l/dW8wnFSNM4E0ah3CJq+ey+wFCc8KSQcGXjmBTAJ6KJo=,iv:oN9/eLlKtvfO5cyU9dK49/tEdyF34wH8QwmQRynMY1c=,tag:VFnzcauZy547HEouc1Nylg==,type:str]
     version: 3.13.3
