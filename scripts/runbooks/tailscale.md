@@ -115,15 +115,15 @@ left there does nothing.
    - "Would enable the guard at boot and load the guard";
    - "IPv4 forwarding is off";
    - "Would log the node in with the auth key".
-3. Run `make proxmox`, **from home**. `make proxmox` upgrades Tailscale on every run, which restarts it. Run from away,
-   that drops the connection the run itself uses. An OpenSSH session usually rides it out, but if dpkg is
-   interrupted, `dpkg --configure -a` over a new session repairs it, and if Tailscale does not come back, remote
-   access waits until you are home.
+3. Run `make proxmox`, **from home**. `make proxmox` upgrades Tailscale with the rest of the host whenever a new
+   release is out, which restarts it. Run from away, that drops the connection the run itself uses. An OpenSSH
+   session usually rides it out, but if dpkg is interrupted, `dpkg --configure -a` over a new session repairs it, and
+   if Tailscale does not come back, remote access waits until you are home.
 4. Run `make proxmox` again. The Tailscale tasks report no change, and the last one says "Nothing for the admin
    console to fix." It may also print Tailscale's own warning that UDP GRO forwarding is suboptimal on `vmbr0`; that
    concerns throughput only.
 5. On the host, check the guard:
-   - `nft list table inet tailnet_guard` shows the NAS in `guarded`;
+   - `nft list table inet tailnet_guard` shows every address `local.yml` gives the NAS in `guarded`;
    - `systemctl show -p Requires,After tailscaled` names `tailnet-guard.service`.
 
 ## 6. The machine in the console
@@ -206,7 +206,7 @@ The auto-approver approves the route again.
    ```bash
    tailscale logout
    apt purge tailscale tailscale-archive-keyring
-   systemctl disable tailnet-guard
+   systemctl disable --now tailnet-guard
    rm /etc/systemd/system/tailnet-guard.service /etc/systemd/system/tailscaled.service.d/10-tailnet-guard.conf
    systemctl daemon-reload
    nft destroy table inet tailnet_guard

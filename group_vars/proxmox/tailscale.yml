@@ -14,20 +14,25 @@ proxmox_tailscale_auth_key: "{{ vault_tailscale_auth_key | default('', true) }}"
 # Kept on every run with `tailscale set`, by its flag names. A subnet router must not route its own LAN back through
 # the tunnel (accept-routes). Proxmox writes /etc/resolv.conf, which Tailscale would otherwise take over
 # (accept-dns). OpenSSH with per-host keys stays the only root login (ssh). Tailscale's own updater would run apt on
-# its own schedule and needs a tailscale.list file; the role upgrades Tailscale instead (auto-update).
+# its own schedule and needs a tailscale.list file; proxmox_apt's upgrade upgrades Tailscale instead (auto-update).
 proxmox_tailscale_settings:
   accept-routes: false
   accept-dns: false
   ssh: false
   auto-update: false
-# Every run upgrades Tailscale to the repository's latest release, so `make proxmox` is the one moment anything on
-# the host is upgraded.
-proxmox_tailscale_upgrade: true
+# The role only installs Tailscale. proxmox_apt's upgrade (group_vars/proxmox/apt.yml), earlier in the same run,
+# upgrades it with every other package, so `make proxmox` stays the one moment anything on the host is upgraded, and
+# that role's switch is the only one.
+proxmox_tailscale_upgrade: false
 # The guard: hosts that trust this host by its address, which tailnet clients may reach only on the listed ports,
-# whatever the tailnet's policy says. Those are the NFS servers it mounts: with a NAS, the NAS, whose VM disk and
-# backup shares are exported to this host's address alone with root kept as root. The subnet router masquerades
-# every tailnet client to that address, so only its web UI and API stay reachable from the tailnet. Without a NAS,
-# none.
+# whatever the tailnet's policy says. With a NAS, the NAS, whose VM disk and backup shares are exported to this
+# host's address alone with root kept as root. The subnet router masquerades every tailnet client to that address,
+# so only its web UI and API stay reachable from the tailnet. Every address local.yml gives the NAS is guarded, not
+# only the one the storages mount: NFS answers on all of them, and with only the bootstrap address the shares are
+# exported while proxmox_storage, later in the run, refuses to mount them. Any other NFS server the storages mount is
+# guarded too. Without a NAS, none.
 proxmox_tailscale_guard_hosts: >-
-  {{ proxmox_storage_nfs | map(attribute='server', default=proxmox_storage_nfs_server) | map('trim') | select | unique | list }}
+  {{ (proxmox_storage_nfs | map(attribute='server', default=proxmox_storage_nfs_server) | list
+      + [truenas_static_address | default('', true), truenas_bootstrap_address | default('', true)])
+     | map('string') | map('trim') | map('split', '/') | map('first') | select | unique | list }}
 proxmox_tailscale_guard_allow: [tcp/443]

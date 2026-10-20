@@ -11,8 +11,9 @@ proxmox_apt_sources:
 # The enterprise Proxmox and Ceph repositories the installer leaves enabled. There is no Ceph here, so
 # no no-subscription Ceph repository replaces the second.
 proxmox_apt_disabled: [pve-enterprise, ceph]
-# Every run refreshes the package lists and upgrades the host. One command for everything is easier than a
-# separate one, and an upgrade that has nothing to do is quick.
+# Every run refreshes the package lists and upgrades the host, Tailscale included (roles/proxmox_tailscale only
+# installs it). One command for everything is easier than a separate one, and an upgrade that has nothing to do is
+# quick.
 proxmox_apt_upgrade: true
 # Every run also says when the host needs a reboot for an upgrade to take effect: a kernel; CPU microcode, which
 # the kernel loads only at boot, Intel's or AMD's, so other hardware needs no change; the kernel's device firmware

@@ -128,7 +128,12 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       - the checks from outside, each control alone.
 
       Then compare `tailscale status --json` and `tailscale get --json` on the host with `fake_tailscale.py`, which
-      was written from a 1.102 client, and fix the fake where they differ
+      was written from a 1.102 client, and fix the fake where they differ. Check too that `ip -o link show dev
+      tailscale0` succeeds as soon as `tailscale status` answers, before the login, which the role's interface check
+      assumes from tailscaled's source. And at the console, while no one needs remote access, check the guard's
+      `Conflicts=`, which only systemd's documentation vouches for: `systemctl start nftables` must stop tailscaled
+      before the flush (`journalctl -u tailscaled -u nftables -n 20` shows tailscaled stopping first); then
+      `systemctl stop nftables`, and `make proxmox` brings the guard and tailscaled back
 
 ## Manifest defects found in review
 
