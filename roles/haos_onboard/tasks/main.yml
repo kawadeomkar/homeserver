@@ -1,0 +1,175 @@
+---
+# Gives a new Home Assistant its owner account, from the Proxmox host, which reaches the VM over its own bridge. Until
+# the account exists, whoever first reaches port 8123 can create it, or upload and restore a backup without logging in
+# (the onboarding API's backup views refuse only once a step is done); both close once it exists. A dry run asks once
+# and never waits; a real run waits through the first boot, while Home Assistant OS downloads Home Assistant.
+
+- name: Check the role's inputs
+  ansible.builtin.assert:
+    that: _errors | length == 0
+    fail_msg: "{{ _errors | join(' ') }}"
+    quiet: true
+  tags: [always]
+  vars:
+    _errors: >-
+      {%- set out = [] -%}
+      {%- if haos_onboard_vmid | int > 0 -%}
+      {%-   if not (haos_onboard_mac or haos_onboard_address) -%}
+      {%-     set _ = out.append('haos_onboard_mac or haos_onboard_address must be set: the role reaches the VM by its address.') -%}
+      {%-   endif -%}
+      {%-   if not haos_onboard_name | trim -%}
+      {%-     set _ = out.append('haos_onboard_name must be set: the owner account\'s display name.') -%}
+      {%-   endif -%}
+      {%-   if haos_onboard_username is not match('^[a-z0-9][a-z0-9_.-]*$') -%}
+      {%-     set _ = out.append('haos_onboard_username must be lower case letters, digits, dots, dashes and underscores.') -%}
+      {%-   endif -%}
+      {%-   if haos_onboard_password | length < 12 -%}
+      {%-     set _ = out.append('haos_onboard_password must be at least 12 characters.') -%}
+      {%-   endif -%}
+      {%- endif -%}
+      {{ out }}
+
+- name: Give Home Assistant its owner account
+  when: haos_onboard_vmid | int > 0
+  block:
+    - name: Read the VM's state
+      ansible.builtin.command:
+        argv: [qm, status, "{{ haos_onboard_vmid }}"]
+      register: haos_onboard_vm
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Use what the run can ask
+      ansible.builtin.set_fact:
+        haos_onboard_running: "{{ 'status: running' in haos_onboard_vm.stdout }}"
+
+    # The role that creates the VM starts it, so a real run that finds none, or finds it stopped, stops here.
+    - name: Refuse a VM that is not running
+      ansible.builtin.assert:
+        that: haos_onboard_running
+        fail_msg: >-
+          VM {{ haos_onboard_vmid }} is {{ 'not running' if haos_onboard_vm.rc == 0 else 'missing' }}
+          ({{ (haos_onboard_vm.stdout ~ ' ' ~ haos_onboard_vm.stderr) | trim }}), so its Home Assistant cannot be
+          given its owner account. Start it, or let the run that creates it start it.
+        quiet: true
+      when: not ansible_check_mode
+
+    # The agent answers once Home Assistant OS has booted, a minute or so after the VM starts.
+    - name: Ask the guest agent for the VM's address
+      ansible.builtin.command:
+        argv: [qm, guest, cmd, "{{ haos_onboard_vmid }}", network-get-interfaces]
+      register: haos_onboard_agent
+      changed_when: false
+      check_mode: false
+      until: ansible_check_mode or (haos_onboard_agent.rc == 0 and _address | length > 0)
+      retries: "{{ haos_onboard_agent_retries }}"
+      delay: "{{ haos_onboard_delay }}"
+      failed_when: not ansible_check_mode and (haos_onboard_agent.rc != 0 or _address | length == 0)
+      when: not haos_onboard_address and haos_onboard_running
+      vars:
+        _address: "{{ haos_onboard_agent.stdout | default('') | haos_guest_address(haos_onboard_mac) }}"
+
+    - name: Use the VM's address
+      ansible.builtin.set_fact:
+        haos_onboard_host: >-
+          {{ haos_onboard_address
+             or (haos_onboard_agent.stdout | default('') | haos_guest_address(haos_onboard_mac)) }}
+
+    # While Home Assistant OS prepares, its landing page refuses every /api/ request: a 200 with the list of
+    # onboarding steps is Home Assistant itself. A GET follows redirects: Home Assistant OS 18 serves Home Assistant on
+    # port 80, and redirects 8123 there.
+    - name: Wait for Home Assistant's onboarding API
+      ansible.builtin.uri:
+        url: "http://{{ haos_onboard_host }}:{{ haos_onboard_port }}/api/onboarding"
+        method: GET
+        return_content: true
+        status_code: [200]
+        timeout: 10
+      register: haos_onboard_steps
+      check_mode: false
+      until: ansible_check_mode or haos_onboard_steps.status | default(0) == 200
+      retries: "{{ haos_onboard_retries }}"
+      delay: "{{ haos_onboard_delay }}"
+      failed_when: not ansible_check_mode and haos_onboard_steps.status | default(0) != 200
+      when: haos_onboard_host | length > 0
+
+    # Where the answer came from, after any redirect: a POST is never redirected, so it goes there directly.
+    - name: Work out whether onboarding is still open
+      ansible.builtin.set_fact:
+        haos_onboard_answered: "{{ _answered }}"
+        haos_onboard_open: "{{ _answered and not (haos_onboard_steps.json | haos_onboarding_user_done) }}"
+        haos_onboard_url: >-
+          {{ haos_onboard_steps.url | default('') | regex_replace('/api/onboarding$', '')
+             if _answered else 'http://' ~ haos_onboard_host ~ ':' ~ haos_onboard_port }}
+      vars:
+        _answered: "{{ haos_onboard_steps is not skipped and haos_onboard_steps.status | default(0) == 200 }}"
+
+    - name: Say what a dry run would do
+      ansible.builtin.debug:
+        msg: >-
+          {{ ('Would create the owner account ' ~ haos_onboard_username ~ ' on Home Assistant at '
+              ~ haos_onboard_url ~ '/, whose onboarding is open.')
+             if haos_onboard_open else
+             ('Would wait for Home Assistant on VM ' ~ haos_onboard_vmid ~ ' and create the owner account '
+              ~ haos_onboard_username ~ ' if its onboarding is still open: a dry run cannot ask it now.') }}
+      changed_when: true
+      when: ansible_check_mode and (haos_onboard_open or not haos_onboard_answered)
+
+    # The response holds an authorization code, and the request the password, so neither is shown; a refusal's
+    # status and message are, below.
+    - name: Create the owner account
+      ansible.builtin.uri:
+        url: "{{ haos_onboard_url }}/api/onboarding/users"
+        method: POST
+        body_format: json
+        body:
+          client_id: "{{ haos_onboard_url }}/"
+          name: "{{ haos_onboard_name }}"
+          username: "{{ haos_onboard_username }}"
+          password: "{{ haos_onboard_password }}"
+          language: "{{ haos_onboard_language }}"
+        status_code: [200]
+        timeout: 30
+      register: haos_onboard_created
+      no_log: true
+      failed_when: false
+      changed_when: haos_onboard_created.status | default(0) == 200
+      when: haos_onboard_open and not ansible_check_mode
+
+    - name: Refuse an account Home Assistant did not create
+      ansible.builtin.assert:
+        that: haos_onboard_created.status | default(0) == 200
+        fail_msg: >-
+          Home Assistant refused the owner account: {{ haos_onboard_created.status | default('no answer') }}
+          {{ (haos_onboard_created.json | default({})).message | default(haos_onboard_created.msg | default('')) }}.
+          Its onboarding may still be open: finish it at {{ haos_onboard_url }}/ at once, or run again.
+        quiet: true
+      when: haos_onboard_created is not skipped
+
+    - name: Check that onboarding is closed
+      ansible.builtin.uri:
+        url: "{{ haos_onboard_url }}/api/onboarding"
+        method: GET
+        return_content: true
+        status_code: [200]
+        timeout: 10
+      register: haos_onboard_after
+      when: haos_onboard_created is not skipped
+
+    - name: Refuse an onboarding still open
+      ansible.builtin.assert:
+        that: haos_onboard_after.json | haos_onboarding_user_done
+        fail_msg: >-
+          Home Assistant says its owner account still does not exist: finish its onboarding at
+          {{ haos_onboard_url }}/ at once.
+        quiet: true
+      when: haos_onboard_created is not skipped
+
+    - name: Say where to log in
+      ansible.builtin.debug:
+        msg: >-
+          Home Assistant answers at {{ haos_onboard_url }}/ with its owner account
+          {{ haos_onboard_username }} (the password is in the vault). Log in, then restore a backup (Settings, System,
+          Backups) or finish setting it up.
+      when: haos_onboard_created is not skipped

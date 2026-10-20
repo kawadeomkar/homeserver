@@ -39,7 +39,18 @@ and adding it back does not restore it. `qm disk resize` grows only. A download 
 `start_fails` makes the next `qm start` fail once, and `qm start` refuses a VM one of whose drives, the CD-ROM
 included, names a volume that is not there, as Proxmox does when it activates them. A backup job's VMIDs start at
 100. The state's `content` holds each storage's volumes, which tests seed with other guests' disks and old backups;
-`node_memory` the node's memory; `pci_mappings` the PCI resource mappings that exist.
+`node_memory` the node's memory; `pci_mappings` and `usb_mappings` the resource mappings that exist.
+
+Images (as on Proxmox VE 9.2, read from its API code): `download-url --content import` takes an .ova, .qcow2, .raw or
+.vmdk; with `--checksum` it needs `--checksum-algorithm`, and the state's `checksum_fails` makes the task fail as a
+mismatch does, storing nothing. A disk given as `<storage>:0,import-from=<volume>` is imported from that volume, or
+from a disk inside an OVA there (`<storage>:import/<name>.ova/<disk>`, its disk `ova_disk_size` bytes, 32 GiB
+otherwise), at the source's size; any other size with import-from is refused, as Proxmox's special syntax requires.
+A disk inside an OVA is extracted first onto the storage `qm create --import-working-storage` names, or the OVA's own,
+which must hold images and have a path, or the creation is refused: the installer's `local` holds no images.
+USB devices (usb0 to usb14) reach a running VM at once (hotplug). `qm guest cmd <id> network-get-interfaces` answers
+for a running VM as the QEMU guest agent does, its NIC with the VM's MAC and the state's `guest_ip` (127.0.0.1
+otherwise), beside the loopback and a Docker bridge; `agent_down` counts calls that fail first, as while it boots.
 
 apt-get reads the deb822 .sources files in $FAKE_PVE_SOURCES_DIR, the directory the role is given. `update`
 fails with 401 Unauthorized, as the real one does, when an enterprise.proxmox.com repository is still
@@ -324,7 +335,7 @@ BLOCK_TYPES = ("lvmthin", "lvm", "zfspool")
 
 
 def vm_option(name):
-    return name in VM_OPTIONS or re.fullmatch(r"scsi([0-9]|[12][0-9]|30)|hostpci([0-9]|1[0-5])", name)
+    return name in VM_OPTIONS or re.fullmatch(r"scsi([0-9]|[12][0-9]|30)|hostpci([0-9]|1[0-5])|usb([0-9]|1[0-4])", name)
 
 
 def size_text(size):
@@ -357,6 +368,23 @@ def new_disk(state, vmid, slot, value):
     if "images" not in entry["content"].split(","):
         fail(f"storage '{sid}' does not support vm images")
     opts = dict(item.split("=", 1) for item in rest.split(",") if item)
+    source = opts.pop("import-from", None)
+    working = state.get("import_working_storage")
+    if source is not None and ".ova/" in source:
+        # A disk inside an OVA is extracted first, onto a storage that holds images and has a path.
+        extraction = storage_entry(state, working or source.split(":", 1)[0])
+        if "images" not in extraction["content"].split(",") or not extraction.get("path"):
+            fail(
+                f"400 Parameter verification failed.\n{'import-working-storage' if working else slot}: import working "
+                f"storage '{extraction['storage']}' does not support 'images' content type or is not file based."
+            )
+    if source is not None:
+        if size != "0":
+            fail(
+                f"400 Parameter verification failed.\n{slot}: 'import-from' requires special syntax - "
+                "use <storage ID>:0,import-from=<source>"
+            )
+        size = str(import_size(state, source) // 2**30)
     content = state.setdefault("content", {}).setdefault(sid, [])
     taken = {v["volid"] for v in content}
     number = 0
@@ -371,6 +399,16 @@ def new_disk(state, vmid, slot, value):
     nbytes = 4 * 2**20 if slot == "efidisk0" else parse_size(f"{size}G")
     content.append({"volid": volid, "content": "images", "vmid": int(vmid), "size": nbytes, "format": fmt})
     return ",".join([volid, *(f"{k}={v}" for k, v in sorted(opts.items())), f"size={size_text(nbytes)}"])
+
+
+def import_size(state, source):
+    """The size of what a disk is imported from: a volume, or a disk inside an OVA (<storage>:import/<x>.ova/<disk>)."""
+    found = re.fullmatch(r"([^:]+):import/([^/]+\.ova)/([^/]+\.(qcow2|raw|vmdk))", source)
+    volid = f"{found.group(1)}:import/{found.group(2)}" if found else source
+    entry = next((v for vols in state.get("content", {}).values() for v in vols if v["volid"] == volid), None)
+    if entry is None:
+        fail(f"volume '{volid}' does not exist")
+    return state.get("ova_disk_size", 32 * 2**30) if found else entry["size"]
 
 
 def tags_text(value):
@@ -417,6 +455,14 @@ def checked_value(state, vmid, key, value):
         mapping = dict(item.split("=", 1) for item in value.split(",") if "=" in item).get("mapping")
         if mapping and mapping not in state.get("pci_mappings", []):
             fail(f"no such resource mapping '{mapping}'")
+    if key.startswith("usb"):
+        device = dict(item.split("=", 1) for item in value.split(",") if "=" in item)
+        if not re.fullmatch(
+            r"[0-9a-fA-F]{4}:[0-9a-fA-F]{4}|\d+-\d+(\.\d+)*", device.get("host", "")
+        ) and not device.get("mapping"):
+            fail(f"400 Parameter verification failed.\n{key}: invalid format - {value}")
+        if device.get("mapping") and device["mapping"] not in state.get("usb_mappings", []):
+            fail(f"no such resource mapping '{device['mapping']}'")
     return value
 
 
@@ -424,6 +470,8 @@ def qm(state, args):
     verb = args[0]
     if verb == "create":
         vmid, opts = args[1], options(args[2:])
+        # A parameter of the command, not a VM option: where every disk the command imports from an OVA is extracted.
+        state["import_working_storage"] = opts.pop("import-working-storage", None)
         if vmid in state.setdefault("vms", {}):
             fail(f"unable to create VM {vmid} - VM {vmid} already exists on node '{NODE}'")
         unknown = [name for name in opts if not vm_option(name) and name != "start"]
@@ -431,6 +479,7 @@ def qm(state, args):
             fail(f"400 Parameter verification failed.\n{unknown[0]}: property is not defined in schema")
         opts.pop("start", None)
         config = {key: checked_value(state, vmid, key, value) for key, value in opts.items()}
+        state.pop("import_working_storage", None)
         state["vms"][vmid] = {"config": config, "pending": {}, "status": "stopped"}
     elif verb == "set":
         vmid, opts = args[1], options(args[2:])
@@ -462,6 +511,44 @@ def qm(state, args):
         return
     elif verb == "status":
         print(f"status: {vm_of(state, args[1])['status']}")
+        return
+    elif verb == "guest" and args[1:2] == ["cmd"] and args[3:] == ["network-get-interfaces"]:
+        vm = vm_of(state, args[2])
+        if vm["status"] != "running":
+            fail(f"VM {args[2]} is not running")
+        if state.get("agent_down", 0) > 0:
+            state["agent_down"] -= 1
+            save(state)
+            fail("QEMU guest agent is not running")
+        # The loopback's and Docker's MACs and addresses are built here: gitleaks flags them written out.
+        mac = configured_mac(applied(vm)).lower()
+        print(
+            json.dumps(
+                [
+                    {
+                        "name": "lo",
+                        "hardware-address": ":".join(["00"] * 6),
+                        "ip-addresses": [{"ip-address-type": "ipv4", "ip-address": "127.0.0.1", "prefix": 8}],
+                    },
+                    {
+                        "name": "enp0s18",
+                        "hardware-address": mac,
+                        "ip-addresses": [
+                            {"ip-address-type": "ipv4", "ip-address": state.get("guest_ip", "127.0.0.1"), "prefix": 24},
+                            {"ip-address-type": "ipv6", "ip-address": "fe80" + "::1", "prefix": 64},
+                        ],
+                    },
+                    {
+                        "name": "hassio",
+                        "hardware-address": ":".join(["02", "42", "ac", "1e", "20", "01"]),
+                        "ip-addresses": [
+                            {"ip-address-type": "ipv4", "ip-address": ".".join(["172", "30", "32", "1"]), "prefix": 23}
+                        ],
+                    },
+                ],
+                indent=2,
+            )
+        )
         return
     elif verb == "start":
         vm = vm_of(state, args[1])
@@ -501,6 +588,11 @@ def qm(state, args):
     else:
         fail(f"fake qm: unsupported {args}")
     state["mutations"] += 1
+
+
+def configured_mac(config):
+    model, _, _ = config.get("net0", "").partition(",")
+    return model.partition("=")[2]
 
 
 def applied(vm):
@@ -612,8 +704,12 @@ def download_url(state, node, sid, opts):
         "url",
     } <= set(opts):
         fail(f"400 Parameter verification failed: {sorted(opts)}")
+    if ("checksum" in opts) != ("checksum-algorithm" in opts):
+        fail("400 Parameter verification failed.\nchecksum: requires option(s): checksum-algorithm")
     if opts["content"] not in entry["content"].split(","):
         fail(f"storage '{sid}' does not support content type '{opts['content']}'")
+    if opts["content"] == "import" and not re.fullmatch(r"[a-zA-Z0-9\-.+=_]+\.(ova|qcow2|raw|vmdk)", opts["filename"]):
+        fail(f"invalid filename or wrong extension: {opts['filename']}")
     volid = f"{sid}:{opts['content']}/{opts['filename']}"
     content = state.setdefault("content", {}).setdefault(sid, [])
     if any(v["volid"] == volid for v in content):
@@ -622,12 +718,16 @@ def download_url(state, node, sid, opts):
     # What was asked, the checksum among it: the fake has no file to check it against.
     state.setdefault("downloads", []).append(dict(opts))
     failed = state.get("download_fails")
-    state.setdefault("tasks", {})[upid] = {
-        "status": "stopped",
-        "exitstatus": "download failed: 404 Not Found" if failed else "OK",
-    }
-    if not failed:
-        content.append({"volid": volid, "content": opts["content"], "size": 100 * 2**20, "format": "iso"})
+    mismatch = "checksum" in opts and state.get("checksum_fails")
+    exitstatus = "download failed: 404 Not Found" if failed else "OK"
+    if mismatch and not failed:
+        exitstatus = f"checksum mismatch: got '{'0' * 64}' != expect '{opts['checksum']}'"
+    state.setdefault("tasks", {})[upid] = {"status": "stopped", "exitstatus": exitstatus}
+    # Kept for the tests, which check what the role asked Proxmox to verify; Proxmox keeps no such record.
+    state.setdefault("checksums", {})[opts["filename"]] = [opts.get("checksum-algorithm"), opts.get("checksum")]
+    if exitstatus == "OK":
+        fmt = opts["filename"].rsplit(".", 1)[-1]
+        content.append({"volid": volid, "content": opts["content"], "size": 100 * 2**20, "format": fmt})
     state["mutations"] += 1
     # pvesh prints a worker's UPID once it has finished, and exits 0 whatever the worker's own result.
     print(upid)

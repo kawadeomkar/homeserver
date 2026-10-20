@@ -1020,6 +1020,13 @@ def test_proxmox_backup_with_a_nas(tmp_path):
     # Proxmox's own placeholder, untouched by Ansible's templating.
     assert job["notes-template"] == "{{guestname}}"
 
+    # Home Assistant's VM joins the job once local.yml gives its MAC, once even when also listed as an extra VM.
+    haos = extra | {"haos_mac": mac(9), "vm_backup_extra_vmids": [310]}
+    expect(run("proxmox_backup.yml", haos), "homeserver", changed=1, note="Home Assistant's VM added")
+    assert backup_job(state)["vmid"] == "300,301,310"
+    expect(run("proxmox_backup.yml", haos), "homeserver", changed=0, note="Home Assistant's VM added, again")
+    expect(run("proxmox_backup.yml", extra), "homeserver", changed=1, note="Home Assistant's VM taken away")
+
     # Drift: the schedule and the VMIDs changed by hand, the job disabled. VMIDs in another order are no change.
     s = read(state)
     s["backup_jobs"]["vm-nightly"].update(schedule="03:30", vmid="301,300,999", enabled="0")
@@ -2326,3 +2333,242 @@ def test_flux_bootstrap_refuses_a_shared_key_and_reports_a_stuck_operator(tmp_pa
     rc, _, out = run("flux.yml", extra, env=env)
     assert rc != 0 and "Flux's Kustomizations are not all ready after 0s: error: timed out waiting" in out, out[-3000:]
     assert "flux-system   flux-system" in out, out[-3000:]
+
+
+# ------------------------------------------------------------------------------------------ Home Assistant ---
+
+HAOS_PASSWORD = "HAOS-TEST-OWNER-PASSWORD"
+HAOS_OVA = "local:import/haos_ova-18.3.ova"
+
+
+@pytest.fixture
+def home_assistant():
+    """A Home Assistant's onboarding API, from its source (homeassistant/components/onboarding/views.py): GET
+    /api/onboarding lists the steps, POST /api/onboarding/users creates the owner account while the user step is
+    not done, and refuses it once done. `not_ready` counts requests answered 401 first, as Home Assistant OS's
+    landing page answers every /api/ request while it prepares. Every request to the port's /api/ is redirected
+    (307) to /ha/api/, as Home Assistant OS 18 redirects port 8123 to Home Assistant on port 80, which its first live
+    run showed."""
+    state = {"not_ready": 0, "users": [], "posted": 0}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def reply(self, status, body):
+            data = json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def redirected(self):
+            if self.path.startswith("/api/"):
+                self.send_response(307)
+                self.send_header("Location", "/ha" + self.path)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return True
+            self.path = self.path.removeprefix("/ha")
+            return False
+
+        def do_GET(self):
+            if self.redirected():
+                return
+            if state["not_ready"] > 0:
+                state["not_ready"] -= 1
+                self.reply(401, {"message": "Unauthorized"})
+            elif self.path == "/api/onboarding":
+                steps = ["user", "core_config", "analytics", "integration"]
+                self.reply(200, [{"step": s, "done": s == "user" and bool(state["users"])} for s in steps])
+            else:
+                self.reply(404, {"message": "Not found"})
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            if self.redirected():
+                return
+            if self.path != "/api/onboarding/users" or state["not_ready"] > 0:
+                self.reply(401 if state["not_ready"] else 404, {"message": "Unauthorized"})
+                return
+            state["posted"] += 1
+            if state["users"]:
+                self.reply(403, {"message": "User step already done"})
+            elif set(body) != {"name", "username", "password", "client_id", "language"}:
+                self.reply(400, {"message": f"Message format incorrect: {sorted(body)}"})
+            else:
+                state["users"].append(body)
+                self.reply(200, {"auth_code": "HAOS-TEST-AUTH-CODE"})
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    state["port"] = server.server_address[1]
+    yield state
+    server.shutdown()
+
+
+def haos_vars(tmp_path, ha, nas=True, **more):
+    """The homeassistant test playbook's variables: the VM's MAC, the owner's password, the fake's port, short waits."""
+    extra = {
+        "fake_pve_state": str(tmp_path / "pve.json"),
+        "truenas_static_address": "127.0.0.10/24" if nas else "",
+        "haos_mac": mac(9),
+        "vault_haos_owner_password": HAOS_PASSWORD,
+        "haos_onboard_port": ha["port"],
+        "haos_onboard_delay": 0,
+        "haos_onboard_retries": 5,
+        "haos_onboard_agent_retries": 5,
+    }
+    return extra | more
+
+
+def no_haos_secret(outputs):
+    for out in outputs:
+        assert HAOS_PASSWORD not in out and "HAOS-TEST-AUTH-CODE" not in out, "a secret reached Ansible's output"
+
+
+@pytest.mark.cluster
+def test_haos_with_a_nas(tmp_path, home_assistant):
+    """With a NAS: a dry run on a fresh host says what it would download, create and onboard, changing nothing; the
+    persistent storage must exist; then the OVA is downloaded with its checksum, the VM created from its disk, started,
+    and Home Assistant, once past its landing page, given its owner account, once; later runs change nothing; USB
+    devices come and go on the running VM; a larger disk is grown."""
+    ha = home_assistant
+    extra = haos_vars(tmp_path, ha)
+    state = Path(extra["fake_pve_state"])
+    vm_state(state)
+    outputs = []
+
+    result = run("homeassistant.yml", extra, check=True)
+    expect(result, "homeserver", changed=True, note="dry run on a fresh host")
+    outputs.append(result[2])
+    assert "Would download: haos_ova-18.3.ova" in result[2] and re.search(r'homeassistant"?:\s*"?create', result[2])
+    assert "Would wait for Home Assistant on VM 310 and create the owner account owner" in result[2], result[2][-3000:]
+    assert read(state)["mutations"] == 0 and ha["posted"] == 0, "the dry run changed something"
+
+    rc, _, out = run("homeassistant.yml", extra)
+    assert rc != 0 and "homeserver-persistent: does not exist" in out and vms_of(state) == {}, out[-3000:]
+
+    seed_storage(state, PERSISTENT_NFS)
+    ha["not_ready"] = 3
+    result = run("homeassistant.yml", extra)
+    expect(result, "homeserver", changed=True, note="first run")
+    outputs.append(result[2])
+    vm = vms_of(state)["310"]
+    assert vm["status"] == "running" and vm["config"]["name"] == "homeassistant"
+    assert (
+        vm["config"]["scsi0"].startswith("homeserver-persistent:310/vm-310-disk-1.qcow2,")
+        and "size=32G" in (vm["config"]["scsi0"])
+    )
+    efi = vm["config"]["efidisk0"]
+    assert efi.startswith("homeserver-persistent:310/vm-310-disk-0.") and "pre-enrolled-keys=0" in efi, efi
+    assert (vm["config"]["boot"], vm["config"]["tags"], vm["config"]["bios"]) == ("order=scsi0", "haos", "ovmf")
+    assert vm["config"]["watchdog"] == "model=i6300esb,action=reset" and vm["config"]["startup"].startswith("order=3,")
+    assert vm["config"]["net0"].lower().startswith(f"virtio={mac(9)},") and "ide2" not in vm["config"]
+    assert [v["volid"] for v in read(state)["content"]["local"]] == [HAOS_OVA], "the OVA was not downloaded once"
+    pinned = yaml.safe_load((HERE.parents[1] / "group_vars" / "proxmox" / "haos.yml").read_text())["haos_ova_sha256"]
+    assert read(state)["checksums"] == {"haos_ova-18.3.ova": ["sha256", pinned]}, "the OVA was not checked"
+    assert ha["users"] == [
+        {
+            "name": "Owner",
+            "username": "owner",
+            "password": HAOS_PASSWORD,
+            "client_id": f"http://127.0.0.1:{ha['port']}/ha/",
+            "language": "en",
+        }
+    ]
+    assert f"answers at http://127.0.0.1:{ha['port']}/ha/ with its owner account owner" in result[2], result[2][-3000:]
+
+    result = run("homeassistant.yml", extra)
+    expect(result, "homeserver", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")
+    outputs.append(result[2])
+    result = run("homeassistant.yml", extra, check=True)
+    expect(result, "homeserver", changed=0, note=f"dry run after applying (changed: {changed_tasks(result[2])})")
+    assert ha["posted"] == 1, "the owner account was asked for again"
+
+    # A Zigbee stick passed through: it reaches the running VM at once, and goes again.
+    stick = extra | {"haos_usb": [{"host": "10c4:ea60"}]}
+    expect(run("homeassistant.yml", stick), "homeserver", changed=1, note="a USB stick added")
+    assert vms_of(state)["310"]["config"]["usb0"] == "host=10c4:ea60"
+    expect(run("homeassistant.yml", stick), "homeserver", changed=0, note="a USB stick added, again")
+    expect(run("homeassistant.yml", extra), "homeserver", changed=1, note="the USB stick taken away")
+    assert "usb0" not in vms_of(state)["310"]["config"]
+
+    # A larger disk is grown; the image's own size is the least local.yml may give.
+    grown = extra | {"haos_size": {"disk_gib": 64}}
+    expect(run("homeassistant.yml", grown), "homeserver", changed=1, note="a larger disk")
+    assert "size=64G" in vms_of(state)["310"]["config"]["scsi0"]
+    rc, _, out = run("homeassistant.yml", extra | {"haos_size": {"disk_gib": 16}}, check=True)
+    assert rc != 0 and "disk_gib must be at least 32" in out, out[-3000:]
+    no_haos_secret(outputs)
+
+
+@pytest.mark.cluster
+def test_haos_without_a_nas(tmp_path, home_assistant):
+    """Without a NAS: the disk on local-lvm, grown to its size in the run that creates it; the guest agent answers
+    only once the VM has booted; a Home Assistant already set up (restored from a backup, say) is left alone."""
+    ha = home_assistant
+    ha["users"].append({"username": "someone"})
+    extra = haos_vars(tmp_path, ha, nas=False, haos_size={"disk_gib": 40, "memory_mib": 3072})
+    state = Path(extra["fake_pve_state"])
+    vm_state(state, agent_down=2)
+
+    # The installer's local holds no images, so Proxmox could not extract the OVA's disk there: refused, naming the
+    # command that enables them, before anything is made.
+    for check in (True, False):
+        rc, _, out = run("homeassistant.yml", extra, check=check)
+        assert rc != 0 and "pvesm set local --content backup,import,iso,vztmpl,images" in out, out[-3000:]
+    assert vms_of(state) == {}
+    s = read(state)
+    next(e for e in s["storage"] if e["storage"] == "local")["content"] += ",images"
+    write(state, s)
+
+    result = run("homeassistant.yml", extra)
+    expect(result, "homeserver", changed=True, note="first run")
+    vm = vms_of(state)["310"]["config"]
+    assert vm["scsi0"].startswith("local-lvm:vm-310-disk-1,") and "size=40G" in vm["scsi0"] and vm["memory"] == "3072"
+    assert ha["posted"] == 0, "an onboarded Home Assistant was asked to onboard"
+    result = run("homeassistant.yml", extra)
+    expect(result, "homeserver", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")
+
+    # Without Home Assistant, nothing is read, created or downloaded.
+    without = {k: v for k, v in extra.items() if not k.startswith("haos_")}
+    result = run("homeassistant.yml", without)
+    expect(result, "homeserver", changed=0, note="no Home Assistant")
+    assert "this setup has no Home Assistant VM" in result[2] and "Read the node's VMs" not in result[2]
+
+
+@pytest.mark.cluster
+def test_haos_refusals(tmp_path, home_assistant):
+    """A Home Assistant is never started without its owner's password; an OVA whose checksum does not match is never
+    stored, and no VM is made without it; a Home Assistant that refuses the account stops the run, saying so."""
+    ha = home_assistant
+    extra = haos_vars(tmp_path, ha, nas=False)
+    state = Path(extra["fake_pve_state"])
+    vm_state(state)
+    s = read(state)
+    next(e for e in s["storage"] if e["storage"] == "local")["content"] += ",images"
+    write(state, s)
+
+    for check in (True, False):
+        rc, _, out = run("homeassistant.yml", extra | {"vault_haos_owner_password": "short"}, check=check)
+        assert rc != 0 and "no vault_haos_owner_password of at least 12 characters" in out, out[-3000:]
+    assert read(state)["mutations"] == 0
+
+    s = read(state)
+    s["checksum_fails"] = True
+    write(state, s)
+    rc, _, out = run("homeassistant.yml", extra)
+    assert rc != 0 and "checksum mismatch" in out and "938408c5" in out, out[-3000:]
+    assert "local" not in read(state).get("content", {}) or not read(state)["content"]["local"]
+    assert vms_of(state) == {}, "a VM was made without its image"
+
+    s = read(state)
+    s["checksum_fails"] = False
+    write(state, s)
+    ha["not_ready"] = 99
+    rc, _, out = run("homeassistant.yml", extra)
+    assert rc != 0 and "Wait for Home Assistant's onboarding API" in out, out[-3000:]
+    assert ha["users"] == [], "an account was made on the landing page"
+    no_haos_secret([out])

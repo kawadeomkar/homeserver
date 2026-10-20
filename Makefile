@@ -256,6 +256,14 @@ check-proxmox: ## Dry-run the Proxmox host's repositories, upgrade and storage
 proxmox: ## Configure the Proxmox host: repositories and upgrade, then VM storage (the NAS's shares, or a check of its own)
 	$(RUN) proxmox.yml --diff $(ANSIBLE_ARGS)
 
+.PHONY: check-homeassistant
+check-homeassistant: ## Dry-run Home Assistant's VM: what it would download, create and correct
+	$(RUN) homeassistant.yml --check --diff $(TAG_ARGS) $(ANSIBLE_ARGS)
+
+.PHONY: homeassistant
+homeassistant: ## Create or correct Home Assistant's VM, and give a new one its owner account (needs proxmox first)
+	$(RUN) homeassistant.yml --diff $(TAG_ARGS) $(ANSIBLE_ARGS)
+
 .PHONY: check-kubernetes
 check-kubernetes: ## Dry-run the Kubernetes cluster: its VMs, then Talos and Flux
 	$(RUN) kubernetes.yml --check --diff $(TAG_ARGS) $(ANSIBLE_ARGS)

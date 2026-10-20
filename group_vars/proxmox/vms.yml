@@ -64,3 +64,6 @@ proxmox_vm_vms: >-
 # host reports it as pending, and both that and a real run without it say to run make proxmox first.
 proxmox_vm_pending_storages: "{{ proxmox_storage_nfs | map(attribute='id') | list }}"
 proxmox_vm_pending_storages_hint: "make proxmox adds it: run that first"
+# What a VM refused over its VMID's old disks or backups is built new with, on purpose (scripts/runbooks/vm-restore.md
+# restores it instead).
+proxmox_vm_rebuild_command: "make kubernetes ANSIBLE_ARGS='-e proxmox_vm_ignore_existing_volumes=true'"
