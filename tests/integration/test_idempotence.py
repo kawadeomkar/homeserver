@@ -2572,3 +2572,254 @@ def test_haos_refusals(tmp_path, home_assistant):
     assert rc != 0 and "Wait for Home Assistant's onboarding API" in out, out[-3000:]
     assert ha["users"] == [], "an account was made on the landing page"
     no_haos_secret([out])
+
+
+# -------------------------------------------------------------------------------------- app_scale ---
+
+FLUX_LABELS = "kustomize.toolkit.fluxcd.io"
+RECONCILE = "kustomize.toolkit.fluxcd.io/reconcile"
+RECORDED = "homeserver.internal/replicas"
+
+
+def kustomization(name, path):
+    return {
+        "apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+        "kind": "Kustomization",
+        "metadata": {"name": name, "namespace": "flux-system"},
+        "spec": {"path": path},
+    }
+
+
+def deployment(namespace, name, owner, replicas=1, **labels):
+    """A Deployment as Flux leaves it: labelled with the Kustomization that applied it (`owner`)."""
+    return {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "labels": {
+                "app.kubernetes.io/name": name,
+                f"{FLUX_LABELS}/name": owner,
+                f"{FLUX_LABELS}/namespace": "flux-system",
+                **labels,
+            },
+        },
+        "spec": {"replicas": replicas, "selector": {"matchLabels": {"app.kubernetes.io/name": name}}},
+    }
+
+
+DATABASE = {"app.kubernetes.io/component": "database"}
+APP_OBJECTS = [
+    {
+        "apiVersion": "apiextensions.k8s.io/v1",
+        "kind": "CustomResourceDefinition",
+        "metadata": {"name": "kustomizations.kustomize.toolkit.fluxcd.io"},
+        "spec": {"names": {"kind": "Kustomization"}, "scope": "Namespaced"},
+    },
+    kustomization("apps-media", "./k8s/apps/media"),
+    kustomization("apps-nextcloud", "./k8s/apps/nextcloud"),
+    kustomization("apps-homepage", "./k8s/apps/homepage"),
+    kustomization("infra-controllers", "./k8s/infrastructure/controllers/nas"),
+    deployment("media", "sonarr", "apps-media"),
+    deployment("media", "jellyfin", "apps-media"),
+    deployment("nextcloud", "nextcloud", "apps-nextcloud"),
+    deployment("nextcloud", "nextcloud-db", "apps-nextcloud", **DATABASE),
+    deployment("homepage", "homepage", "apps-homepage", replicas=2),
+    # The platform's: one a Flux Kustomization outside k8s/apps applies, one a HelmRelease.
+    deployment("local-path-storage", "local-path-provisioner", "infra-controllers"),
+    {
+        **deployment("traefik", "traefik", "-"),
+        "metadata": {"name": "traefik", "namespace": "traefik", "labels": {"helm.toolkit.fluxcd.io/name": "traefik"}},
+    },
+]
+
+
+def apps_vars(tmp_path, **more):
+    """The apps test playbook's variables: the flux test's cluster, its kubeconfig naming the control plane."""
+    # The apps' play never downloads the Flux Operator, so its release server is never asked.
+    extra = flux_vars(tmp_path, "https://example.invalid/flux-operator")
+    kubeconfig = Path(extra["talos_config_dir"]) / "kubeconfig"
+    kubeconfig.write_text(yaml.safe_dump({"clusters": [{"cluster": {"server": "https://127.0.0.30:6443"}}]}))
+    return extra | more
+
+
+def apps_state(path, **more):
+    objects = {f"{o['kind']}/{o['metadata'].get('namespace', '')}/{o['metadata']['name']}": o for o in APP_OBJECTS}
+    write(path, {"nodes": {}, "mutations": 0, "bootstrapped": True, "objects": objects, **more})
+
+
+def deployments_of(state):
+    return {
+        k.removeprefix("Deployment/"): (o["spec"]["replicas"], (o["metadata"].get("annotations") or {}))
+        for k, o in read(state)["objects"].items()
+        if k.startswith("Deployment/")
+    }
+
+
+UP = {
+    "media/sonarr": (1, {}),
+    "media/jellyfin": (1, {}),
+    "nextcloud/nextcloud": (1, {}),
+    "nextcloud/nextcloud-db": (1, {}),
+    "homepage/homepage": (2, {}),
+    "local-path-storage/local-path-provisioner": (1, {}),
+    "traefik/traefik": (1, {}),
+}
+
+
+def held(replicas):
+    return (0, {RECONCILE: "disabled", RECORDED: str(replicas)})
+
+
+@pytest.mark.cluster
+def test_app_scale_down_and_up(tmp_path):
+    """Down stops every app, apps before their databases, and holds each against Flux, leaving the platform alone;
+    up brings back what down stopped, databases first. Both change nothing a second time, and a dry run nothing
+    at all. ONLY narrows either to apps or groups, and a name that is neither is refused before anything changes."""
+    extra, env = apps_vars(tmp_path), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    apps_state(state)
+    down, up = extra | {"apps_state": "down"}, extra | {"apps_state": "up"}
+
+    result = run("apps.yml", down, check=True, env=env)
+    expect(result, "homeserver-k8s", changed=1, note="dry run of down")
+    assert (
+        "Would stop, in this order: homepage/homepage, media/jellyfin, media/sonarr, nextcloud/nextcloud, "
+        "then nextcloud/nextcloud-db." in result[2]
+    ), result[2][-3000:]
+    assert read(state)["mutations"] == 0
+
+    expect(run("apps.yml", down, env=env), "homeserver-k8s", changed=True, note="down")
+    assert deployments_of(state) == UP | {
+        "media/sonarr": held(1),
+        "media/jellyfin": held(1),
+        "nextcloud/nextcloud": held(1),
+        "nextcloud/nextcloud-db": held(1),
+        "homepage/homepage": held(2),
+    }
+    events = read(state)["events"]
+    # Nextcloud's pods are gone before its database is touched.
+    assert events.index("wait nextcloud app.kubernetes.io/name=nextcloud") < events.index(
+        "patch nextcloud/nextcloud-db 0"
+    ), events
+    for check in (False, True):
+        result = run("apps.yml", down, check=check, env=env)
+        expect(result, "homeserver-k8s", changed=0, note=f"{'dry run of' if check else 'second'} down")
+        assert "Already down: homepage/homepage, media/jellyfin" in result[2], result[2][-3000:]
+
+    result = run("apps.yml", up, check=True, env=env)
+    expect(result, "homeserver-k8s", changed=1, note="dry run of up")
+    assert "Would start, in this order: nextcloud/nextcloud-db, then homepage/homepage" in result[2], result[2][-3000:]
+    write(state, read(state) | {"events": []})
+    expect(run("apps.yml", up, env=env), "homeserver-k8s", changed=True, note="up")
+    assert deployments_of(state) == UP
+    events = read(state)["events"]
+    assert events.index("rollout nextcloud/nextcloud-db") < events.index("patch nextcloud/nextcloud 1"), events
+    for check in (False, True):
+        result = run("apps.yml", up, check=check, env=env)
+        expect(result, "homeserver-k8s", changed=0, note=f"{'dry run of' if check else 'second'} up")
+        assert "No app is down." in result[2], result[2][-3000:]
+
+    # An app and a group; up for one of them; then the rest.
+    expect(run("apps.yml", down | {"only": "jellyfin, nextcloud"}, env=env), "homeserver-k8s", changed=True)
+    assert deployments_of(state) == UP | {
+        "media/jellyfin": held(1),
+        "nextcloud/nextcloud": held(1),
+        "nextcloud/nextcloud-db": held(1),
+    }
+    expect(run("apps.yml", up | {"only": "jellyfin"}, env=env), "homeserver-k8s", changed=True)
+    assert deployments_of(state) == UP | {"nextcloud/nextcloud": held(1), "nextcloud/nextcloud-db": held(1)}
+    expect(run("apps.yml", up, env=env), "homeserver-k8s", changed=True)
+    assert deployments_of(state) == UP
+
+    # Started by hand while held: down stops it again and keeps the replicas it recorded first.
+    expect(run("apps.yml", down | {"only": "homepage"}, env=env), "homeserver-k8s", changed=True)
+    s = read(state)
+    s["objects"]["Deployment/homepage/homepage"]["spec"]["replicas"] = 1
+    write(state, s)
+    expect(run("apps.yml", down | {"only": "homepage"}, env=env), "homeserver-k8s", changed=True)
+    assert deployments_of(state)["homepage/homepage"] == held(2)
+    expect(run("apps.yml", up, env=env), "homeserver-k8s", changed=True)
+    assert deployments_of(state)["homepage/homepage"] == (2, {})
+
+    mutations = read(state)["mutations"]
+    for check in (True, False):
+        rc, _, out = run("apps.yml", down | {"only": "jellyfin,plex,traefik"}, check=check, env=env)
+        assert rc != 0 and "No app or group is called plex, traefik. The apps: homepage, jellyfin," in out, out[-3000:]
+    assert read(state)["mutations"] == mutations
+
+
+@pytest.mark.cluster
+def test_app_scale_refusals_and_timeouts(tmp_path):
+    """No kubeconfig, or another cluster's, is refused before the cluster is read. Pods that never stop, or an app
+    that never becomes available, fail the run, and the next run picks up where it stopped."""
+    extra, env = apps_vars(tmp_path), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    apps_state(state)
+    down, up = extra | {"apps_state": "down"}, extra | {"apps_state": "up"}
+    kubeconfig = Path(extra["talos_config_dir"]) / "kubeconfig"
+
+    kubeconfig.write_text(yaml.safe_dump({"clusters": [{"cluster": {"server": "https://127.0.0.99:6443"}}]}))
+    rc, _, out = run("apps.yml", down, check=True, env=env)
+    assert rc != 0 and "names the server https://127.0.0.99:6443, not https://127.0.0.30:6443" in out, out[-3000:]
+    kubeconfig.unlink()
+    rc, _, out = run("apps.yml", down, env=env)
+    assert rc != 0 and "No kubeconfig at" in out, out[-3000:]
+    assert read(state)["mutations"] == 0
+    apps_vars(tmp_path)
+
+    write(state, read(state) | {"pods_linger": ["nextcloud"]})
+    rc, _, out = run("apps.yml", down | {"only": "nextcloud"}, env=env)
+    assert rc != 0 and "timed out waiting for the condition on pods/nextcloud-" in out, out[-3000:]
+    # Its database was never touched: the wave after it did not start.
+    assert deployments_of(state)["nextcloud/nextcloud-db"] == (1, {})
+    write(state, read(state) | {"pods_linger": []})
+    expect(run("apps.yml", down | {"only": "nextcloud"}, env=env), "homeserver-k8s", changed=True)
+    assert deployments_of(state)["nextcloud/nextcloud-db"] == held(1)
+
+    write(state, read(state) | {"never_available": ["nextcloud-db"]})
+    rc, _, out = run("apps.yml", up, env=env)
+    assert rc != 0 and "timed out waiting for the condition" in out, out[-3000:]
+    assert deployments_of(state)["nextcloud/nextcloud"] == held(1), "nextcloud waits for its database"
+
+
+@pytest.mark.cluster
+def test_haos_power(tmp_path):
+    """make down shuts Home Assistant's VM down through its own shutdown, never a forced stop, and make up starts
+    it again; each leaves a VM already as asked alone, a dry run changes nothing, a VMID that does not exist is
+    refused, and a shutdown that never finishes fails the run with the VM still running."""
+    extra = {"fake_pve_state": str(tmp_path / "pve.json"), "haos_mac": mac(9)}
+    state = Path(extra["fake_pve_state"])
+    vm_state(state, vms={"310": {"config": {"name": "homeassistant"}, "pending": {}, "status": "running"}})
+    down, up = extra | {"haos_power": "stopped"}, extra | {"haos_power": "running"}
+
+    def status():
+        return read(state)["vms"]["310"]["status"]
+
+    result = run("haos_power.yml", down, check=True)
+    expect(result, "homeserver", changed=1, note="dry run of down")
+    assert "Would shut down VM 310." in result[2] and status() == "running", result[2][-3000:]
+    expect(run("haos_power.yml", down), "homeserver", changed=True, note="down")
+    assert status() == "stopped"
+    for check in (False, True):
+        result = run("haos_power.yml", down, check=check)
+        expect(result, "homeserver", changed=0, note=f"{'dry run of' if check else 'second'} down")
+        assert "VM 310 already stopped." in result[2], result[2][-3000:]
+
+    result = run("haos_power.yml", up, check=True)
+    expect(result, "homeserver", changed=1, note="dry run of up")
+    assert "Would start VM 310." in result[2] and status() == "stopped", result[2][-3000:]
+    expect(run("haos_power.yml", up), "homeserver", changed=True, note="up")
+    assert status() == "running"
+    expect(run("haos_power.yml", up), "homeserver", changed=0, note="second up")
+
+    rc, _, out = run("haos_power.yml", down | {"haos_vm_vmid": 311}, check=True)
+    assert rc != 0 and "VM 311 does not exist on this host" in out, out[-3000:]
+
+    s = read(state)
+    s["shutdown_hangs"] = True
+    write(state, s)
+    rc, _, out = run("haos_power.yml", down)
+    assert rc != 0 and "VM quit/powerdown failed - got timeout" in out, out[-3000:]
+    assert status() == "running"

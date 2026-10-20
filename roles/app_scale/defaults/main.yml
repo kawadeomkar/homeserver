@@ -1,0 +1,21 @@
+---
+# Neutral defaults: with nothing else set, the role does nothing. What it scales is configuration, set in inventory
+# group_vars; see README.md.
+
+# down or up; empty does nothing.
+app_scale_state: ""
+# The apps (Deployments' names) and groups (their namespaces) to act on; empty means every app.
+app_scale_only: []
+# Names another play acts on, such as a VM's, which are accepted in app_scale_only and left to it.
+app_scale_other_names: []
+# The cluster's kubeconfig, and the API server it must name: another cluster's kubeconfig is refused.
+app_scale_kubeconfig: ""
+app_scale_server: ""
+# The apps are the Deployments that the Flux Kustomizations whose path lies under this one apply.
+app_scale_path: ""
+# One label, key=value, of the apps that stop after the others and start before them (their databases).
+app_scale_late_label: ""
+# The annotation that records a stopped app's replicas.
+app_scale_annotation: ""
+# How long a real run waits for an app's pods to stop, or for it to be available again.
+app_scale_timeout: 10m

@@ -1,6 +1,6 @@
 ---
 # The apps, one Flux Kustomization per group, each once MetalLB's pool and the static volumes are in place. Both setups
-# run the same apps; on a small test host, suspend the heavy ones (scripts/runbooks/talos.md).
+# run the same apps; on a small test host, stop the heavy ones with make down (scripts/runbooks/talos.md).
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
