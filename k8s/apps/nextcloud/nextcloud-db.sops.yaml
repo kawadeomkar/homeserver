@@ -1,27 +1,27 @@
 apiVersion: v1
-data:
-    MYSQL_DATABASE: ENC[AES256_GCM,data:RsIlKbWCshd14TPV,iv:53UIJL4ALJQepn3iW4zESMmVm/qY6IVicdOMNhOsz5w=,tag:4B33jBw+ypq4AacnQn3slw==,type:str]
-    MYSQL_PASSWORD: ENC[AES256_GCM,data:wM87nQa71PsKCSMQ4VNs51oZHT2imDc6wYpd8DmJQqYEFJBXUn2iokFvK74=,iv:vvt6t4v2cB9SQVj4FHtM6Vp+9w3K0rEVWBHvGZKgZQU=,tag:Knv/wkFaXA+ip2K0UCyCPQ==,type:str]
-    MYSQL_ROOT_PASSWORD: ENC[AES256_GCM,data:KYhS28B+/utCS+HeOVopGIdB2scs/nDqXx26JScEJD4rK1c7cy/rU224cJo=,iv:KH6YiK6TnrjPWSUuYLii2tPoiVWem6hyJFPSPZj0gYs=,tag:5yiZ2Kplxc2KhOlkdZ/ncA==,type:str]
-    MYSQL_USER: ENC[AES256_GCM,data:7D3KBBwGDRRIoM8i,iv:uiyrGtofM8etuOK7/C34374Tu5Yff0EmgcC+b8CIyV8=,tag:2fBJa/v8Siaqg7DdyrGabQ==,type:str]
 kind: Secret
 metadata:
-    labels:
-        app.kubernetes.io/name: nextcloud-db
     name: nextcloud-db
     namespace: nextcloud
+    labels:
+        app.kubernetes.io/name: nextcloud-db
+data:
+    MYSQL_ROOT_PASSWORD: ENC[AES256_GCM,data:b+VWWcbr6Q1uQKYz/wbBSdopyu/VIdDpl5isalp2YfL5Z9m+L09Zx0Vj5+A=,iv:OrixMqn0I43Vbx7M26wt1nFeLWDOwKrVij8E2Jgrc9Q=,tag:8UWn38RqZ5K9H9vr8kDAjA==,type:str]
+    MYSQL_DATABASE: ENC[AES256_GCM,data:QK7KKBtdWEe1dVuW,iv:niqsjgKJpNAmMXRVj5oKBudzQmcHs1pqywDDGEgG9T0=,tag:u7eR+Gxn2RnKuhLoXZgsjg==,type:str]
+    MYSQL_USER: ENC[AES256_GCM,data:IL2M2jnMFChGWZMB,iv:Hey9PnOicFLj4lBPpLecYsRluTA1jxnDCwwU0eUbfoY=,tag:B3HQy4wQIYWbkVzhCaeQbA==,type:str]
+    MYSQL_PASSWORD: ENC[AES256_GCM,data:z22wdcEd6YM4IjCMlDBlZVCywyAT2uvHhJG0vFN6kPbI3Ax5zV37EZy8au4=,iv:LM+zKT+c73LS7wRt4svgPdAofDkyjGGJ5CJ2QXXLFqM=,tag:NcLWiC4STrmcoRklGNVeHQ==,type:str]
 sops:
     age:
         - enc: |
             -----BEGIN AGE ENCRYPTED FILE-----
-            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSB2clNtdUNzTTI0NEI5VEhO
-            V2lRcUd5dXNXYkNTY0ZqaTk5bzYySEo3R0ZFCkFERnBwRjNteDE0di9Rbm91eFgv
-            OXJQa005Rld1UUFaR3ZyYnBrT1ZmbGMKLS0tIHBERGxmM2cvRHlaNGxRbHBiMGN3
-            NUdITGNLOXpIZFFGSXVXck0ySkJneXMKgXSn3auONsDC+lZo2fZ95xXpgfwiq+Ww
-            xr0tsn/oUiL8LXatFI4hD/qIrHSJejxFNETWs+HWDP1TsS+pG7Eh8A==
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSB0WmlGV2RMRk82TnZzWkxS
+            aXowU0lSQk52Y29rT3RuekdIdWhqU2ZVTm1JCnl6Qk02bVN4a0xrTkJzOUQ2VWdl
+            Yms4TlhYb1ZCYUJ3eXVsRWFnTnlMdXMKLS0tIFNpOG9qblN2ZGxaeFcvZDRBZDZF
+            ZU5aTWhOL1BxbFZseUkzRjhpd0VreEEKscG6cE+f4oTtHPTj631GybczhQ+ODvEy
+            gAiYCML2gOdNG0InyzAgjr2bPq09FJ0aSkfdHAFA0HSorA/6lDkeTQ==
             -----END AGE ENCRYPTED FILE-----
-          recipient: age19jhwvwxawyjzj7yc0ud700dtj5gws77t9pgm8f3zv9kqgssqgpgs5zq4qw
+          recipient: age1k50g5gxv979d6dvtjptpex44lt6azt2nz82tgdfhamdkz5l6f93q2mfdvf
     encrypted_regex: ^(data|stringData)$
-    lastmodified: "2026-10-17T18:00:54Z"
-    mac: ENC[AES256_GCM,data:wDcQJ/G+i9wY3sn2GQF65rLO1S8i0eLk0c+f7VhsOsasorth+dA2xmBbpNckBmior2nnjSHvSwqOv35A7yeycSBtU+hXmcPpKLMTV9qfrUWp4iRoe/fLAGXB0E73SZ7xZSYnaCva4knft6zUJzfCsvxLVKasSVwdTgvWJ5LPzTo=,iv:S+PuHvrrmnVXVu02ivRNuVvtK7Fo3hWnSiHue6Dq0gM=,tag:nW2n9lT5kbBqPriRJ4CzSg==,type:str]
+    lastmodified: "2026-10-20T18:19:14Z"
+    mac: ENC[AES256_GCM,data:aZhml3q6srtkLtsfFDrW4J5C1VtdPaTCPY83uxP2tbOCoMFynrh5gFZxBK+8EUI1MIJ5PH2cW3/VeQPQFI2Z4jxyhnOIVE1it695mCZPMzO9By+1aESRws0LNMkiJ95PDNjcR51wKCS5iF6yvXeR0gkdYq2u7r/pScuRNQhI8Jg=,iv:hqozfmUMVWozuZOmd7zpGbDLvG3CuZ3ot/vkds3E8Uw=,tag:7nLWtA4FXc0shgtpgurBrA==,type:str]
     version: 3.13.3

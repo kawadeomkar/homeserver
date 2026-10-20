@@ -1,25 +1,25 @@
 apiVersion: v1
-data:
-    PHOTOPRISM_ADMIN_PASSWORD: ENC[AES256_GCM,data:Ee/EpSI+fGG3Nu9/Yk5+V9nWiWkPVAdmIzEiq2I3eyDXJqFzZAgoxuxrsA4=,iv:r4SGNOw06nycxgbE7qacreA8/ej2B0xPxNdfQq3ExvY=,tag:JCiSBMF2nOOOZ3jZl9fEKQ==,type:str]
-    PHOTOPRISM_DATABASE_PASSWORD: ENC[AES256_GCM,data:jyFCoc7o1OFwdw9Eskgwp5BWMFLFZcEBCMSQLe74NAdcGB47T2nburIOYEM=,iv:o/Oh7hicez/hGleLNYkPKlNmA356N0YECWLd9fzYgjU=,tag:BIfL/Dz3b9NICbHMM0nnwQ==,type:str]
 kind: Secret
 metadata:
-    labels:
-        app.kubernetes.io/name: photoprism
     name: photoprism
     namespace: photoprism
+    labels:
+        app.kubernetes.io/name: photoprism
+data:
+    PHOTOPRISM_ADMIN_PASSWORD: ENC[AES256_GCM,data:SA9IwSHlSSijjogZo7v4HJ4O77vrcPFboODxAW20ZVDLviqp6d6kgYTYklQ=,iv:MGqTqAfi47wHTK8yViVPfqirEVkWvCIogQZyMbmINBU=,tag:Yg86u42lzitrM9LjJH3NQg==,type:str]
+    PHOTOPRISM_DATABASE_PASSWORD: ENC[AES256_GCM,data:gboW18/O+bGc6zVwK+iHux6MzTRY3U3CHkmYuvCDkjwYybC8Ya91AXtOS9M=,iv:/uAIDTIcB+nK7Q6DomcVgnPbr6+2j63Jfe22uaccslc=,tag:SyJgRv+kifshCf5cguLC1g==,type:str]
 sops:
     age:
         - enc: |
             -----BEGIN AGE ENCRYPTED FILE-----
-            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBxakR4NzB4WDBncVZXOFNz
-            R3B0ZURndElDRWhrTnlsbzhVS3BCcEhDRkM0CndaK0ZPMXMrRVZLWWhrM0lHUGpa
-            aUNFTGI5MllvOUZXcVRERG1rNURQKzgKLS0tIHFGY3dxeGtVMmdwS3AzckxSMWoz
-            VXdmNnNPVldoOTdLTHoxd1kydHdjSGsKov1wkkwNvoWQ2H6ZKZL6T4aTzgVav2uD
-            s1mq8js/LLE5+yg3Q4VcEAraHU5WgDDt71NRohYZH9PteJFWRhmDLQ==
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBSTDNRZklQSW4rR2JuRlNC
+            T0xtb2kzMkw4SDI0Y2p2THZHRllSOTgvNFNRCnJmU1Nyc1FuMWlHeXB4aXQvRGZD
+            cHFQZVlBR1hJYmd4TjJRRnJLMkRpK2sKLS0tIDhoaFlESmd1V0IxRGxDV1Vyb1pl
+            V0d3Y1ZvTUVZVUlEOEQ0N3ZIbUJqUkUKRN6Md4r+KlEtXbGe+L61IjEzbGXZScf2
+            GAosNQQvRD2BT+qMfypgXyNKp9wkyhnyTQKMNqDN3y+TcGlW48hLEQ==
             -----END AGE ENCRYPTED FILE-----
-          recipient: age19jhwvwxawyjzj7yc0ud700dtj5gws77t9pgm8f3zv9kqgssqgpgs5zq4qw
+          recipient: age1k50g5gxv979d6dvtjptpex44lt6azt2nz82tgdfhamdkz5l6f93q2mfdvf
     encrypted_regex: ^(data|stringData)$
-    lastmodified: "2026-10-17T18:00:54Z"
-    mac: ENC[AES256_GCM,data:hyiliC7nyQBtEqDXAUU+ZhT469wf3bAhdwf3lGPWo/kIq+WB2kEeZpxFB0HfWqe+cGjyUFiSwdkwMFs8PImR8pVq7tu+sygJSGPLf+HpnbH3aucto+EAP5M8D8NXHoKovWmRAx/sn+u1E7wy4Nqzkw20x7GgrunVwPCv23RSSEI=,iv:aOTeTucUyjYp+MJlYqjYJBxNRB5u0HSgAdXy004H5es=,tag:ft3lrXGCTSalF/bfDlFLZw==,type:str]
+    lastmodified: "2026-10-20T18:19:14Z"
+    mac: ENC[AES256_GCM,data:f7sPBArYcguJ/0CtpHe61jiEgiiegsMDeRd3NUxdWacboyeNDkmv1OBMdKauofCDBZwmTe/thHTIPa4NesJV4wFEZdzLR6Io/x5YLMFdq5++jUjm5ACR8wUy/eEqcNwKdkfFwb33fI8ldAApOaiOlxsfiR9SPDdfBW4OGOxvcDo=,iv:H55Skx36Z+cqqEw0ajGQJnt0IxOmOTHYhV+9niittC4=,tag:TxkeWdfIvi3m+j9YvvBXgA==,type:str]
     version: 3.13.3
