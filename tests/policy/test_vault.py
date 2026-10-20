@@ -1,4 +1,4 @@
-"""Every tracked vault file is encrypted, and `make vault-init` makes a private vault of a user's own.
+"""Every tracked vault file is encrypted, and `make vault TYPE=new` makes a private vault of a user's own.
 
 CI cannot decrypt the vault, so its linters skip what is inside. The first test is what stops a decrypted
 vault.yml, an `ansible-vault decrypt` committed by mistake, from reaching this public repo.
@@ -44,7 +44,7 @@ def run_in(tree, *command):
 
 
 def vault_init(tree, venv=sys.prefix):
-    return run_in(tree, "make", "--no-print-directory", "vault-init", f"VENV={venv}")
+    return run_in(tree, "make", "--no-print-directory", "vault", "TYPE=new", f"VENV={venv}")
 
 
 def test_vault_init_makes_a_private_vault(tmp_path):

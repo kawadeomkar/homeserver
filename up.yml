@@ -1,7 +1,7 @@
 ---
 # Brings back what make down stopped, every app or those ONLY names, handing each back to Flux, and starts Home
 # Assistant's VM:
-#   make check-up
+#   make check TYPE=up
 #   make up ONLY=jellyfin,homeassistant
 # ALL=1 starts the cluster's VMs first, the control plane before the worker, and the apps wait for every node.
 # Without a cluster, or without Home Assistant, its play ends by itself.

@@ -59,5 +59,5 @@ play takes (Home Assistant's VM); the rest is in `group_vars/kubernetes/apps.yml
 
 ## Reference
 
-[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make docs` from the role itself:
+[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make fix TYPE=docs` from the role itself:
 its argument specs, defaults and vars, and each tasks file as a table and a flow graph. Never edit it by hand.

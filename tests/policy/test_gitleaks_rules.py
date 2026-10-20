@@ -5,7 +5,7 @@ identifier and the repository's own scans stay clean. They sit under the paths t
 expect (roles/, k8s/, tests/, ...) and are scanned from that root, as a directory and as a git commit:
 the range scan in CI and the pre-push hook use git mode.
 
-Marked `gitleaks`: `make test-gitleaks-rules` runs these with gitleaks from PATH, `make test` does not.
+Marked `gitleaks`: `make test TYPE=gitleaks` runs these with gitleaks from PATH, `make test TYPE=policy` does not.
 Without gitleaks they are skipped locally and fail in CI.
 """
 

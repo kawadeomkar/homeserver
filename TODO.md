@@ -41,7 +41,7 @@ audit of the tree before the cluster was built.
       page leaves its eight stage tags blank. Both are reported upstream (docsible#137, docsible#138) and still
       on its main branch, which fixes multi-line comments in tables (docsible#135) and `!unsafe` tags
       (docsible#134), unreleased. With a release that has them, bump the pin, think again about `--comments`,
-      check whether #137 and #138 are fixed too, and run `make docs`
+      check whether #137 and #138 are fixed too, and run `make fix TYPE=docs`
 
 ## TrueNAS
 
@@ -57,7 +57,7 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       2. Destroy the pool in the TrueNAS UI. The role never destroys a pool.
       3. In `local.yml`, remove `truenas_pool_persistent`, key the five disk serials under `persistent`, and
          set `truenas_pool_allow_create: true`.
-      4. Run `make check-truenas`, then `make truenas`.
+      4. Run `make check TYPE=truenas`, then `make apply TYPE=truenas`.
       5. Remove `truenas_pool_allow_create`.
 
       This is the first real run of the role's pool creation, which no test exercises. Leave the `ephemeral`
@@ -110,12 +110,12 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 
 ## Proxmox
 
-- [ ] `make proxmox` says when the host needs a reboot and leaves it to a person. Once the Talos VMs exist,
+- [ ] `make apply TYPE=proxmox` says when the host needs a reboot and leaves it to a person. Once the Talos VMs exist,
       decide how that reboot is done: drain the cluster first, or let Proxmox stop the VMs and start them
       again after the boot delay
 - [ ] Move the home host to the owner-and-class storage ids, once, by hand: check with `pvesm list` that
       `truenas-persistent` and `truenas-ephemeral` hold no volume, `pvesm remove` both (until they are gone
-      every run refuses, naming them), then `make check`, `make site` twice, and grant `claude-on-proxmox`'s
+      every run refuses, naming them), then `make check`, `make apply` twice, and grant `claude-on-proxmox`'s
       token its pool
       (`pveum aclmod /storage/claude-on-proxmox-ephemeral …`, the line from that project's README). Nothing
       in `claude-on-proxmox` changes: its `local.yml` for this host sets `proxmox_storage` to the id
@@ -126,7 +126,7 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       - split DNS;
       - two-factor for `root@pam`;
       - a one-off tagged key in the vault, and `tailscale_advertise_routes` in `local.yml`;
-      - `make check-proxmox` and `make proxmox` from home;
+      - `make check TYPE=proxmox` and `make apply TYPE=proxmox` from home;
       - the checks from outside, each control alone.
 
       Then compare `tailscale status --json` and `tailscale get --json` on the host with `fake_tailscale.py`, which

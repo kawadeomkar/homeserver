@@ -209,7 +209,7 @@ kubernetes_settings_error: >-
   {%-   if nas_present and not nas_address -%}
   {%-     set _ = out.append('With a NAS, the cluster mounts its shares at its static address and keeps the apps from '
                              ~ 'reaching it, but group_vars/all/local.yml gives only truenas_bootstrap_address, a DHCP '
-                             ~ 'lease the NAS play replaces: set truenas_static_address, which make proxmox needs too.') -%}
+                             ~ 'lease the NAS play replaces: set truenas_static_address, which make apply TYPE=proxmox needs too.') -%}
   {%-   endif -%}
   {#-   Every app's NetworkPolicy keeps the pods off the Proxmox host, in both setups, as a /32 of proxmox_address
         (PROXMOX_ADDRESS, group_vars/kubernetes/flux.yml): a host name or an IPv6 address there makes a policy
@@ -398,7 +398,7 @@ kubernetes_settings_error: >-
                            ~ 'a vault committed to this public repository would publish. It lives in secrets.yaml in the '
                            ~ "cluster's credentials directory now (~/.talos/homeserver, or kubernetes_talos_config_dir). "
                            ~ 'Move it there (ansible-vault view group_vars/all/vault.yml), mode 0600, and delete it from '
-                           ~ 'the vault with make vault-edit; scripts/runbooks/talos.md says why a bundle that was ever '
+                           ~ 'the vault with make vault; scripts/runbooks/talos.md says why a bundle that was ever '
                            ~ 'committed is better replaced.') -%}
   {%- endif -%}
   {{ out }}

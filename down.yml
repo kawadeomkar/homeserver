@@ -2,7 +2,7 @@
 # Spins the deployments down until make up: every app scaled to zero, with Flux told to leave it there, then Home
 # Assistant's VM shut down. Check first, and narrow it with ONLY (comma-separated: an app such as jellyfin, a group
 # such as media, or homeassistant):
-#   make check-down
+#   make check TYPE=down
 #   make down ONLY=jellyfin,nextcloud
 # The data stays, and so do the platform (Flux, Traefik, monitoring) and the cluster's VMs, unless ALL=1 shuts those
 # VMs down too, after everything else: the worker, then the control plane, so the whole cluster with them. Without a
@@ -130,8 +130,8 @@
 
 # ALL=1 alone: the cluster's VMs, once the apps are down and Home Assistant's VM with them. Each shutdown is the
 # guest's own, which Talos takes as an orderly one, never a forced stop; the worker goes first and the control plane
-# last, each in turn (kubernetes_power_order). A VM is started again only by make up ALL=1, make kubernetes, or the
-# host's own boot, for one marked onboot.
+# last, each in turn (kubernetes_power_order). A VM is started again only by make up ALL=1, make apply TYPE=kubernetes,
+# or the host's own boot, for one marked onboot.
 - name: Shut the cluster's VMs down
   hosts: proxmox
   gather_facts: false

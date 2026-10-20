@@ -39,7 +39,7 @@
         that: app_scale_kubeconfig_file.stat.exists
         fail_msg: >-
           No kubeconfig at {{ app_scale_kubeconfig }}: roles/talos writes it there once the cluster is bootstrapped
-          (make kubernetes).
+          (make apply TYPE=kubernetes).
         quiet: true
 
     # The kubeconfig holds the cluster's admin key: it is read under no_log, and only its server kept. Another

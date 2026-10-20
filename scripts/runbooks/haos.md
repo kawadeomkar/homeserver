@@ -1,9 +1,9 @@
 # Home Assistant OS on Proxmox
 
 Home Assistant runs as a VM of its own, Home Assistant OS (HAOS), not in the cluster: home automation must keep
-working while the cluster is down, and HAOS manages its own updates, add-ons and backups. `make homeassistant`
-(`homeassistant.yml`) creates it and keeps its settings, with or without a cluster or a NAS; `roles/proxmox_vm`
-builds the VM and `roles/haos_onboard` gives a new Home Assistant its owner account.
+working while the cluster is down, and HAOS manages its own updates, add-ons and backups.
+`make apply TYPE=homeassistant` (`homeassistant.yml`) creates it and keeps its settings, with or without a cluster or a
+NAS; `roles/proxmox_vm` builds the VM and `roles/haos_onboard` gives a new Home Assistant its owner account.
 
 ## Before the first run
 
@@ -14,7 +14,7 @@ builds the VM and `roles/haos_onboard` gives a new Home Assistant its owner acco
    Home Assistant serves on its own ports, never through the cluster: Home Assistant OS 18 serves it on 80 and
    redirects the classic 8123 there.
 2. **The owner's password**, at least 12 characters, a long random one kept in your password manager:
-   `make vault-edit`, then add `vault_haos_owner_password: <password>`. The run refuses to start a Home Assistant
+   `make vault`, then add `vault_haos_owner_password: <password>`. The run refuses to start a Home Assistant
    without it (below says why).
 3. **A Zigbee or Z-Wave stick**, if there is one: plug it into the Proxmox host, read its id with `lsusb`
    (`ID 10c4:ea60 ...`), and name it in `local.yml`: `haos_usb: [{host: "10c4:ea60"}]`. The vendor and product id
@@ -30,13 +30,13 @@ builds the VM and `roles/haos_onboard` gives a new Home Assistant its owner acco
    role changes the installer's storages. A BTRFS install disables `local`: name `local-btrfs` in `local.yml` as
    `haos_import_storage`. It holds images already; the run refuses, naming it, if it lacks `import` content.
 
-`make proxmox` must have run, so the storage the disk goes on exists.
+`make apply TYPE=proxmox` must have run, so the storage the disk goes on exists.
 
 ## The run
 
 ```bash
-make check-homeassistant     # what it would download, create and correct
-make homeassistant
+make check TYPE=homeassistant     # what it would download, create and correct
+make apply TYPE=homeassistant
 ```
 
 It downloads Home Assistant OS's OVA of the pinned version (`haos_version` in `group_vars/proxmox/haos.yml`) into
@@ -64,14 +64,14 @@ Assistant itself alone: a Home Assistant that has its owner, set up by hand or r
 `make down ONLY=homeassistant` shuts the VM down through Home Assistant OS's own shutdown, never a forced stop (one
 that takes more than three minutes fails the run and leaves it running), and `make up ONLY=homeassistant` starts it;
 a bare `make down` stops it with the cluster's apps. It stays down until then, or until the host boots or
-`make homeassistant` runs, both of which start it.
+`make apply TYPE=homeassistant` runs, both of which start it.
 
 ## Backups
 
-The nightly VM backup (`vm-nightly`, `make proxmox`) covers VM 310 whenever `haos_mac` is set, in both setups and
-whether or not a cluster exists. Home Assistant's own backups land on its disk, so they are inside that backup too.
+The nightly VM backup (`vm-nightly`, `make apply TYPE=proxmox`) covers VM 310 whenever `haos_mac` is set, in both setups
+and whether or not a cluster exists. Home Assistant's own backups land on its disk, so they are inside that backup too.
 Restoring: `scripts/runbooks/vm-restore.md`. A VMID whose VM is gone but whose backups remain is refused by
-`make homeassistant`: restore it rather than build a new, empty one over its history.
+`make apply TYPE=homeassistant`: restore it rather than build a new, empty one over its history.
 
 ## Homepage
 

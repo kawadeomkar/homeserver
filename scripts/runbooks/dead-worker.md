@@ -21,13 +21,13 @@ differently, so they have a section each; where the setups differ, the section s
 
   ```bash
   talosctl reset -n <worker address> --graceful=false --wipe-mode system-disk --reboot
-  make kubernetes ANSIBLE_ARGS='-e talos_reinstall=homeserver-worker-1'
+  make apply TYPE=kubernetes ANSIBLE_ARGS='-e talos_reinstall=homeserver-worker-1'
   ```
 
-  The VM boots the Talos ISO, which stays attached for this, into maintenance mode, and `make kubernetes`
+  The VM boots the Talos ISO, which stays attached for this, into maintenance mode, and `make apply TYPE=kubernetes`
   installs it again, since `talos_reinstall` names it: a bootstrapped cluster's keys go to no node in maintenance
   mode otherwise, so check first on the VM's console in Proxmox that it waits there at its address. The data
-  volume, on its own disk, is untouched, and so is the media disk without a NAS. Without `--reboot` the reset powers the VM off, and `make kubernetes`
+  volume, on its own disk, is untouched, and so is the media disk without a NAS. Without `--reboot` the reset powers the VM off, and `make apply TYPE=kubernetes`
   starts it. **Never `--wipe-mode all`**: that wipes the user volumes, the apps' data.
   The node keeps its name, which the local volumes are pinned to.
 - **The node does not answer at all**: `talosctl reset` needs the Talos API, so wipe the system disk from Proxmox
@@ -44,9 +44,9 @@ differently, so they have a section each; where the setups differ, the section s
      qm set 301 --scsi0 local-lvm:64,discard=on,ssd=1,serial=talos-system --boot 'order=scsi0;ide2'
      ```
 
-     `make kubernetes` corrects the boot order too, but on a running VM only from its next restart: Talos's own
-     reboot after installing is not one.
-  4. `qm start 301`. The new disk is blank, so it boots the ISO into maintenance mode; `make kubernetes
+     `make apply TYPE=kubernetes` corrects the boot order too, but on a running VM only from its next restart: Talos's
+     own reboot after installing is not one.
+  4. `qm start 301`. The new disk is blank, so it boots the ISO into maintenance mode; `make apply TYPE=kubernetes
      ANSIBLE_ARGS='-e talos_reinstall=homeserver-worker-1'` installs it. The data disk is untouched.
   5. Once the node is back: `qm disk unlink 301 --idlist unused0 --force 1`.
 

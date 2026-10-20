@@ -20,8 +20,8 @@ proxmox_tailscale_settings:
   accept-dns: false
   ssh: false
   auto-update: false
-# Every run upgrades Tailscale to the repository's latest release, so `make proxmox` is the one moment anything on
-# the host is upgraded.
+# Every run upgrades Tailscale to the repository's latest release, so `make apply TYPE=proxmox` is the one moment
+# anything on the host is upgraded.
 proxmox_tailscale_upgrade: true
 # The guard: hosts that trust this host by its address, which tailnet clients may reach only on the listed ports,
 # whatever the tailnet's policy says. Those are the NFS servers it mounts: with a NAS, the NAS, whose VM disk and

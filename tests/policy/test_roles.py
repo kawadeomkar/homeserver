@@ -1584,7 +1584,7 @@ def test_haos_placeholder_stops_the_plays_that_read_it(tmp_path):
 
 def test_haos_test_playbook_runs_the_real_plays_roles():
     """tests/integration/homeassistant.yml runs homeassistant.yml's roles with homeassistant.yml's own vars, and its
-    pre-tasks are homeassistant.yml's, so the idempotence tests run what make homeassistant does."""
+    pre-tasks are homeassistant.yml's, so the idempotence tests run what make apply TYPE=homeassistant does."""
     (real,) = yaml.safe_load((ROOT / "homeassistant.yml").read_text())
     (test,) = yaml.safe_load((ROOT / "tests" / "integration" / "homeassistant.yml").read_text())
     assert test["vars"] == real["vars"] and test["roles"] == real["roles"]
