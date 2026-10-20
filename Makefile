@@ -144,8 +144,10 @@ docs: ## Write every role's REFERENCE.md with docsible, from the role as it is (
 	@$(call DOCSIBLE_RUN,.); \
 	[ $$rc = 0 ] && printf 'Wrote %s\n' $(addsuffix /$(DOCSIBLE_PAGE),$(ROLES)); exit $$rc
 
+# One pytest worker per CPU, as for test-idempotence: the tests share nothing they write, and pytest-cov combines the
+# workers' coverage into the one report.
 test: ## The unit tests, and the policy tests that check the repo's own rules, with a coverage report
-	$(BIN)/pytest -q -m "not gitleaks" --cov --cov-report=term tests/unit tests/policy
+	$(BIN)/pytest -q -n auto -m "not gitleaks" --cov --cov-report=term tests/unit tests/policy
 
 .PHONY: test-gitleaks-rules
 test-gitleaks-rules: ## .gitleaks.toml against generated fixtures (gitleaks from PATH)
@@ -169,8 +171,10 @@ secrets-push: ## Secrets and identifiers in the commits being pushed (the pre-pu
 # their own, on one Python, and the rest on each: PYTEST_ARGS='-m cluster' or PYTEST_ARGS='-m "not cluster"'. Empty
 # runs them all.
 PYTEST_ARGS ?=
+# Work stealing: the tests take from a second to a minute each, so a worker that runs out of tests takes some queued
+# for another, rather than idling while the others finish theirs.
 test-idempotence: ## Run each role repeatedly against local fakes (PYTEST_ARGS narrows it, e.g. -m cluster)
-	$(BIN)/pytest -q -n auto $(PYTEST_ARGS) tests/integration
+	$(BIN)/pytest -q -n auto --dist worksteal $(PYTEST_ARGS) tests/integration
 
 .PHONY: lint-kubeconform
 # kubeconform retries each schema download itself (twice, with backoff), so an invalid manifest fails
