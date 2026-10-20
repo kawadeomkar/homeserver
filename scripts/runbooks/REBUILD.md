@@ -24,7 +24,9 @@ Everything runs from a checkout of this repo.
    https://python-poetry.org/docs/#installation), then clone the repo and create the Python environment:
    `pyenv virtualenv 3.14.6 homeserver && pyenv activate homeserver && make venv`
    (or any Python 3.12+: `make venv PYTHON=/path/to/python3`).
-2. `make init`, which creates `inventory` and `group_vars/all/local.yml` from their examples.
+2. `make init`, which creates `inventory` and `group_vars/all/local.yml` from their examples, asks for each setting
+   and secret, and ends with what is still missing. With the files below restored first, it only shows each value
+   for Enter to keep; run it again after restoring any of them.
 3. Restore the two files only you have:
    - **`.vault_pass`**: the vault password, from your password manager, readable by you alone
      (`chmod 600 .vault_pass`).

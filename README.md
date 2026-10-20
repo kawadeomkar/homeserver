@@ -57,8 +57,10 @@ tests/integration/       idempotence tests against fake TrueNAS, Proxmox, talosc
 SECURITY.md              how to report a vulnerability privately
 ```
 
-`inventory`, `group_vars/all/local.yml` and `./.vault_pass` are gitignored and must be created locally
-(`make init` copies the first two from their examples).
+`inventory`, `group_vars/all/local.yml` and `./.vault_pass` are gitignored and must be created locally:
+`make init` copies the first two from their examples, then asks for every setting a deployment needs, one by one,
+and ends with what is still missing. Run it again whenever a setting changes: each shows its value, and Enter keeps
+it. A plain run asks for the required and the popular optional settings; `make init TYPE=full` for every one.
 No address is ever written in a tracked file: tasks and role defaults read them from variables whose real
 values live only in `local.yml`. Kubernetes Secrets are **not**
 kept in the vault — see `k8s/README-secrets.md`.
@@ -71,7 +73,7 @@ With vim, open it without them: `EDITOR="vim -n -i NONE --cmd 'set noundofile no
 
 ```bash
 make venv PYTHON=<python 3.12+>   # the tooling in .venv, synced from poetry.lock (needs Poetry: pipx install poetry)
-make init                         # git hooks, plus inventory and local.yml from their examples
+make init                         # git hooks, then each setting asked for, and what is still missing (TYPE=full: all)
 make lint                         # the lock, yamllint, ansible-lint, ruff, module docs, GitHub config schemas, tests
 make lock                         # update poetry.lock after editing pyproject.toml
 make test-idempotence             # each role run repeatedly against local fakes
