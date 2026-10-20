@@ -43,17 +43,18 @@ RECAP = re.compile(r"^(\S+)\s+:\s+ok=(\d+)\s+changed=(\d+)\s+unreachable=(\d+)\s
 PLAYBOOK = str(Path(sys.executable).parent / "ansible-playbook")
 NAS_ADDRESS = "127.0.0.1"
 PROXMOX_ADDRESS = "127.0.0.20"
-# The cluster's nodes, with a NAS.
+# The cluster's nodes: the worker alone mounts the NAS's datasets.
 NODE_ADDRESSES = {"homeserver-cp-1": "127.0.0.30", "homeserver-worker-1": "127.0.0.31"}
-# Both nodes at the least the settings check allows, for a small host without a NAS: 40 GiB of disks between them.
+WORKER_ADDRESS = NODE_ADDRESSES["homeserver-worker-1"]
+# Both nodes at the least the settings check allows, for a small host without a NAS: 64 GiB of disks between them.
 SMALL_SIZES = {
     "homeserver-cp-1": {"memory_mib": 2048, "system_disk_gib": 10},
     "homeserver-worker-1": {
         "cores": 2,
         "memory_mib": 4096,
-        "system_disk_gib": 10,
-        "data_disk_gib": 10,
-        "media_disk_gib": 10,
+        "system_disk_gib": 32,
+        "data_disk_gib": 11,
+        "media_disk_gib": 11,
     },
 }
 # Sentinels that must never reach Ansible's output.
@@ -206,6 +207,7 @@ def nas_vars(nas):
         "proxmox_address": PROXMOX_ADDRESS,
         "truenas_ui_restart_wait": 0,
         "truenas_api_connect_wait": 5,
+        "kubernetes_node_addresses": NODE_ADDRESSES,
         "vm_storage_ephemeral_reservation": "100G",
         "truenas_mail_server": "smtp.example.org",
         "truenas_mail_user": "nas@example.org",
@@ -225,6 +227,20 @@ def write(path, state):
 def semantic(state):
     """The state without job bookkeeping, which read-only jobs (pool.import_find) also touch."""
     return {k: v for k, v in state.items() if k not in ("jobs", "next_id")}
+
+
+# Every share the NAS ends up with, and the hosts it is exported to: the VM shares to the Proxmox host, the
+# cluster's to its worker.
+EXPECTED_SHARES = {
+    "/mnt/persistent/proxmox/vm": [PROXMOX_ADDRESS],
+    "/mnt/ephemeral/proxmox/vm": [PROXMOX_ADDRESS],
+    "/mnt/ephemeral/proxmox/claude-on-proxmox": [PROXMOX_ADDRESS],
+    "/mnt/persistent/proxmox/backup": [PROXMOX_ADDRESS],
+    "/mnt/persistent/nextcloud": [WORKER_ADDRESS],
+    "/mnt/persistent/photoprism": [WORKER_ADDRESS],
+    "/mnt/ephemeral/frigate": [WORKER_ADDRESS],
+    "/mnt/ephemeral/jellyfin": [WORKER_ADDRESS],
+}
 
 
 def test_truenas_role_is_idempotent(nas):
@@ -270,21 +286,35 @@ def test_truenas_role_is_idempotent(nas):
     pool = ds["ephemeral/proxmox/claude-on-proxmox"]
     assert (pool["sync"]["rawvalue"], pool["recordsize"]["rawvalue"]) == ("disabled", "65536")
     assert ds["ephemeral/proxmox"]["acltype"]["rawvalue"] == "posix"
-    assert ds["ephemeral/jellyfin"]["acltype"]["rawvalue"] == "nfsv4", "an undeclared dataset was touched"
-    assert sorted(sh["path"] for sh in s["shares"]) == [
-        "/mnt/ephemeral/proxmox/claude-on-proxmox",
-        "/mnt/ephemeral/proxmox/vm",
-        "/mnt/persistent/proxmox/backup",
-        "/mnt/persistent/proxmox/vm",
-    ]
-    assert all(sh["hosts"] == [PROXMOX_ADDRESS] and sh["maproot_user"] == "root" for sh in s["shares"])
-    # Snapshot tasks: the persistent VMs' disks hourly and daily, nothing on the ephemeral pool.
+    assert ds["ephemeral/jellyfin"]["acltype"]["rawvalue"] == "nfsv4", "the media dataset's ACLs were changed"
+    # The cluster's datasets: 1M records, the media dataset left as it was and only exported.
+    for name, sync in (("persistent/nextcloud", "standard"), ("persistent/photoprism", "standard")):
+        assert (ds[name]["sync"]["rawvalue"], ds[name]["recordsize"]["rawvalue"]) == (sync, "1048576")
+    assert ds["ephemeral/frigate"]["quota"]["rawvalue"] == str(500 * 2**30)
+    assert ds["ephemeral/frigate"]["sync"]["rawvalue"] == "disabled"
+    assert sorted(sh["path"] for sh in s["shares"]) == sorted(EXPECTED_SHARES)
+    assert {sh["path"]: sh["hosts"] for sh in s["shares"]} == EXPECTED_SHARES
+    assert all(sh["maproot_user"] == "root" for sh in s["shares"])
+    # Snapshot tasks: the persistent VMs' disks hourly and daily, the cluster's irreplaceable datasets hourly, daily
+    # and weekly, nothing on the ephemeral pool.
     tasks = {(t["dataset"], t["naming_schema"].split("-")[0]): t for t in s["snapshot_tasks"]}
-    assert sorted(tasks) == sorted([("persistent/proxmox/vm", "hourly"), ("persistent/proxmox/vm", "daily")])
+    assert sorted(tasks) == sorted(
+        [("persistent/proxmox/vm", "hourly"), ("persistent/proxmox/vm", "daily")]
+        + [
+            (d, kind)
+            for d in ("persistent/nextcloud", "persistent/photoprism")
+            for kind in ("hourly", "daily", "weekly")
+        ]
+    )
     assert (
         tasks[("persistent/proxmox/vm", "daily")]["lifetime_value"],
         tasks[("persistent/proxmox/vm", "daily")]["lifetime_unit"],
     ) == (7, "DAY")
+    assert (
+        tasks[("persistent/nextcloud", "daily")]["lifetime_value"],
+        tasks[("persistent/nextcloud", "daily")]["lifetime_unit"],
+    ) == (30, "DAY")
+    assert tasks[("persistent/photoprism", "weekly")]["schedule"]["dow"] == "7"
     assert {key: t["allow_empty"] for key, t in tasks.items()} == {key: key[1] != "hourly" for key in tasks}
     # Alert mail, with the password from the vault.
     assert (s["mail"]["outgoingserver"], s["mail"]["smtp"], s["mail"]["pass"]) == (
@@ -323,7 +353,7 @@ def test_truenas_role_is_idempotent(nas):
     s = read(nas["state"])
     assert s["datasets"]["ephemeral/proxmox/vm"]["sync"]["rawvalue"] == "disabled"
     assert s["datasets"]["ephemeral/proxmox"]["quota"]["rawvalue"] == "1099511627776"
-    assert all(sh["hosts"] == [PROXMOX_ADDRESS] for sh in s["shares"])
+    assert {sh["path"]: sh["hosts"] for sh in s["shares"]} == EXPECTED_SHARES
     assert next(sv for sv in s["services"] if sv["service"] == "ssh")["state"] == "STOPPED"
     assert sorted(s["nfs"]["protocols"]) == ["NFSV3", "NFSV4"]
     assert s["general"]["ui_httpsredirect"] is True
@@ -338,6 +368,18 @@ def test_truenas_role_is_idempotent(nas):
     expect(run("truenas.yml", moved), "truenas", changed=1, note="a new alert address")
     assert [a["attributes"]["email"] for a in read(nas["state"])["alert_services"]] == ["alerts@example.org"]
     expect(run("truenas.yml", extra), "truenas", changed=1, note="the alert address back")
+
+    # The single disk of the ephemeral pool lost and the pool made anew: the media dataset, which the role otherwise
+    # leaves alone, is created again so that its share can be.
+    s = read(nas["state"])
+    del s["datasets"]["ephemeral/jellyfin"]
+    s["shares"] = [sh for sh in s["shares"] if sh["path"] != "/mnt/ephemeral/jellyfin"]
+    write(nas["state"], s)
+    expect(run("truenas.yml", extra), "truenas", changed=True, note="the media dataset lost")
+    s = read(nas["state"])
+    assert s["datasets"]["ephemeral/jellyfin"]["recordsize"]["rawvalue"] == "1048576"
+    assert {sh["path"]: sh["hosts"] for sh in s["shares"]} == EXPECTED_SHARES
+    expect(run("truenas.yml", extra), "truenas", changed=0, note="the media dataset made again, second run")
 
     # A reservation removed from the configuration is removed on the NAS too: it is sent as 0, none.
     unreserved = {**extra, "vm_storage_ephemeral_reservation": None}
@@ -362,6 +404,26 @@ def test_truenas_role_is_idempotent(nas):
         assert fake_truenas.PRIVATE_KEY not in out, "the UI certificate's private key reached Ansible output"
         assert fake_truenas.API_KEY not in out, "the API key reached Ansible output"
         assert MAIL_PASSWORD not in out and ROTATED_MAIL_PASSWORD not in out, "the mail password reached Ansible output"
+
+
+def test_truenas_role_without_a_cluster(nas):
+    """A NAS without a cluster (no kubernetes_node_addresses in local.yml): the VM storage's datasets and shares as
+    with one, and none of the cluster's datasets, snapshot tasks or shares."""
+    extra = {k: v for k, v in nas_vars(nas).items() if k != "kubernetes_node_addresses"}
+    # A fresh NAS: the module's fake is shared, and the tests before this one built a cluster's datasets on it.
+    shared = read(nas["state"])
+    write(nas["state"], fake_truenas.initial_state(NAS_ADDRESS))
+    try:
+        expect(run("truenas.yml", extra), "truenas", changed=True, note="first run without a cluster")
+        expect(run("truenas.yml", extra), "truenas", changed=0, note="second run without a cluster")
+        s = read(nas["state"])
+    finally:
+        write(nas["state"], shared)
+    cluster = {"persistent/nextcloud", "persistent/photoprism", "ephemeral/frigate"}
+    assert not cluster & set(s["datasets"]), sorted(cluster & set(s["datasets"]))
+    assert not cluster & {t["dataset"] for t in s["snapshot_tasks"]}
+    vm_shares = {path: hosts for path, hosts in EXPECTED_SHARES.items() if hosts == [PROXMOX_ADDRESS]}
+    assert {sh["path"]: sh["hosts"] for sh in s["shares"]} == vm_shares
 
 
 def test_truenas_role_with_defaults_changes_nothing(nas):
@@ -1221,8 +1283,8 @@ def test_proxmox_vm_without_a_nas(tmp_path):
     refuses a plan that would overfill the thin pool, until told otherwise."""
     extra = cluster_vars(tmp_path, nas=False)
     state = Path(extra["fake_pve_state"])
-    # A 54 GiB pool holding another VM's 40 GiB disk: the 40 GiB more the two nodes need do not fit.
-    vm_state(state, local_lvm_gib=54)
+    # An 80 GiB pool holding another VM's 40 GiB disk: the 64 GiB more the two nodes need do not fit.
+    vm_state(state, local_lvm_gib=80)
     other = {"volid": "local-lvm:vm-200-disk-0", "content": "images", "vmid": 200, "size": 40 * 2**30, "format": "raw"}
     s = read(state)
     s["content"] = {"local-lvm": [other]}
@@ -1230,9 +1292,9 @@ def test_proxmox_vm_without_a_nas(tmp_path):
     for check in (True, False):
         rc, _, out = run("kubernetes.yml", extra, check=check)
         assert (
-            rc != 0 and "local-lvm: its disks would be provisioned at 80 GiB (40 GiB there now, 40 GiB more" in out
+            rc != 0 and "local-lvm: its disks would be provisioned at 104 GiB (40 GiB there now, 64 GiB more" in out
         ), out[-3000:]
-        assert "more than its 54 GiB" in out, out[-3000:]
+        assert "more than its 80 GiB" in out, out[-3000:]
     assert vms_of(state) == {}
     expect(
         run("kubernetes.yml", extra | {"proxmox_vm_allow_overcommit": True}, check=True),
@@ -1245,7 +1307,7 @@ def test_proxmox_vm_without_a_nas(tmp_path):
     s["content"] = {"local-lvm": [container]}
     write(state, s)
     rc, _, out = run("kubernetes.yml", extra, check=True)
-    assert rc != 0 and "provisioned at 80 GiB (40 GiB there now, 40 GiB more" in out, out[-3000:]
+    assert rc != 0 and "provisioned at 104 GiB (40 GiB there now, 64 GiB more" in out, out[-3000:]
 
     # Without the other VM's disk it fits, and still fits on the next run, its own disks counted once.
     s = read(state)
@@ -1274,13 +1336,13 @@ def test_proxmox_vm_without_a_nas(tmp_path):
     expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="second run after drift")
     restart_all(state)
 
-    # Growing a disk counts against the pool as well: 40 GiB there, 15 GiB more does not fit in 54.
-    worker = SMALL_SIZES["homeserver-worker-1"] | {"data_disk_gib": 25}
+    # Growing a disk counts against the pool as well: 64 GiB there, 19 GiB more does not fit in 80.
+    worker = SMALL_SIZES["homeserver-worker-1"] | {"data_disk_gib": 30}
     grown = extra | {"kubernetes_node_sizes": SMALL_SIZES | {"homeserver-worker-1": worker}}
     mutations = read(state)["mutations"]
     for check in (True, False):
         rc, _, out = run("kubernetes.yml", grown, check=check)
-        assert rc != 0 and "provisioned at 55 GiB (40 GiB there now, 15 GiB more" in out, out[-3000:]
+        assert rc != 0 and "provisioned at 83 GiB (64 GiB there now, 19 GiB more" in out, out[-3000:]
     assert read(state)["mutations"] == mutations
 
     # The VMs' disk storage disabled: refused, naming it.
@@ -1648,6 +1710,7 @@ def test_talos_with_a_nas(tmp_path, factory):
     expect(result, "homeserver-k8s", changed=1, note="run after drift on the control plane")
     assert read(state)["nodes"]["127.0.0.30"]["config"] == cp, "applied without a reboot"
     assert "talosctl -n 127.0.0.30 service etcd restart" in result[2], result[2][-3000:]
+    assert "talosctl -n 127.0.0.30 upgrade-k8s --to " in result[2], result[2][-3000:]
     result = run("talos.yml", extra, env=env)
     expect(result, "homeserver-k8s", changed=0, note="second run after drift on the control plane")
     assert "service etcd restart" not in result[2]
@@ -2155,12 +2218,14 @@ def test_flux_bootstrap(tmp_path, operator_releases, nas):
     assert "kustomize" not in instance, "no feature gate is set: strict substitution is Flux 2.9's default"
     settings = objects["ConfigMap/flux-system/cluster-settings"]["data"]
     media = {"MEDIA_LOCAL_PATH": "/var/mnt/media/library", "FRIGATE_LOCAL_PATH": "/var/mnt/media/frigate"}
-    assert settings == {
-        "DOMAIN": "homeserver.internal",
-        "TZ": "America/Los_Angeles",
-        "DATA_NODE": "homeserver-worker-1",
-        "CONTROL_PLANE_ADDRESS": NODE_ADDRESSES["homeserver-cp-1"],
-    } | ({} if nas else media)
+    assert settings["DOMAIN"] == "homeserver.internal" and settings["DATA_NODE"] == "homeserver-worker-1"
+    assert settings["CONTROL_PLANE_ADDRESS"] == NODE_ADDRESSES["homeserver-cp-1"]
+    assert all(isinstance(v, str) for v in settings.values())
+    if nas:
+        assert settings["NAS_ADDRESS"] == "127.0.0.10" and settings["MEDIA_DATASET"] == "/mnt/ephemeral/jellyfin"
+        assert not set(media) & set(settings)
+    else:
+        assert {k: settings[k] for k in media} == media and "NAS_ADDRESS" not in settings
     secret = objects["Secret/flux-system/sops-age"]["data"]["age.agekey"]
     assert AGE_KEY in base64.b64decode(secret).decode()
 

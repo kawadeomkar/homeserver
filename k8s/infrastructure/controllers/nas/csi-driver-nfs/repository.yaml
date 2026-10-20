@@ -1,0 +1,20 @@
+---
+# The chart from upstream's repository at the commit tagged v4.13.5, which keeps it unpacked under charts/v4.13.5/.
+# Its Helm repository cannot be pinned: its index lives on the default branch and points each version at a file on a
+# release branch, both of which move. A commit cannot, so a bump changes the path in release.yaml and the commit here
+# together (git ls-remote https://github.com/kubernetes-csi/csi-driver-nfs refs/tags/<tag>), on the branch the tag
+# is on. Flux fetches that branch alone; the artifact holds the chart alone.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: csi-driver-nfs
+  namespace: kube-system
+spec:
+  interval: 24h
+  url: https://github.com/kubernetes-csi/csi-driver-nfs
+  ref:
+    branch: release-4.13
+    commit: 66f8c2a2a1e115b4a81126865dacfd23c9b2e9c4
+  ignore: |
+    /*
+    !/charts/v4.13.5/csi-driver-nfs/

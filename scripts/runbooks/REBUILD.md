@@ -151,7 +151,8 @@ backup, and the worker's media disk, never backed up, is lost. The order is fixe
 3. Leave the restored VMs stopped and run `make check-kubernetes`, then `make kubernetes`. Their CD-ROM names a
    Talos ISO that was on the lost boot drive, so Proxmox would refuse to start them by hand; `make kubernetes`
    downloads it again and starts them. It finds configured nodes and a running etcd, and installs and bootstraps
-   nothing. `kubectl get nodes` shows them Ready.
+   nothing. `kubectl get nodes` shows them Ready. Without a NAS, the media disk came back empty: run
+   `kubectl -n local-path-storage delete job static-volume-directories`, and Flux makes its directories again.
 
 Prerequisites, before `make kubernetes`: `~/.talos/homeserver` restored with its `secrets.yaml` (section 1; without
 the bundle the cluster cannot be managed and is rebuilt), the age key, the

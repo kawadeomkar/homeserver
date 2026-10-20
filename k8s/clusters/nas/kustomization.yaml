@@ -1,7 +1,6 @@
 ---
-# What Flux syncs for the cluster with a NAS: group_vars/kubernetes/flux.yml points the FluxInstance
-# here. Nothing yet: the manifests come in a later change, with the Flux Kustomizations that apply them. Until then
-# the build is empty, Flux applies nothing, and the sync is ready, so make kubernetes completes.
+# What Flux syncs for this setup: the Flux Kustomizations below, each applying one path of k8s/.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-resources: []
+resources:
+  - infrastructure.yaml

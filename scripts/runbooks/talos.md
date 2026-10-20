@@ -8,8 +8,9 @@ and never moves one to another version; `make talos-upgrade` does that. Addresse
 ## Before the first build
 
 1. **Workstation tools**, from Homebrew: `talosctl` of the pinned minor release (`talos_version` in
-   `group_vars/all/kubernetes.yml`; `brew install siderolabs/tap/talosctl`), `kubectl`, `flux`, `sops` and
-   `age`. The role refuses a `talosctl` of another minor release, since its defaults follow its own.
+   `group_vars/all/kubernetes.yml`; `brew install siderolabs/tap/talosctl`), `kubectl`, `flux`, `sops`, `age`,
+   `helm` and `kustomize`. The role refuses a `talosctl` of another minor release, since its defaults follow its
+   own.
 2. **The secrets bundle**, beside the cluster's credentials (`kubernetes_talos_config_dir`'s directory, when
    `local.yml` sets one) and in no repository:
 
@@ -26,7 +27,8 @@ and never moves one to another version; `make talos-upgrade` does that. Addresse
 3. **MACs and addresses.** Choose a locally administered MAC per node (lower case, the second hex digit 2, 6, a or
    e) and put it in `local.yml` as `kubernetes_node_macs`, with each node's address in
    `kubernetes_node_addresses`. In the router (OPNsense with a NAS), reserve each address for its MAC, outside the
-   DHCP range. All before the first run: a VM leases an address the moment it starts.
+   DHCP range, and keep MetalLB's range (`kubernetes_lb_range`) free. All before the first run: a VM leases an
+   address the moment it starts.
 4. **The inventory** has `[kubernetes]` with `homeserver-k8s`, as in `inventory.example`.
 5. **The age key** that decrypts the cluster's SOPS secrets, a file holding this cluster's key alone, which Flux
    receives whole (`README.md`, Kubernetes secrets). age-keygen makes no directories:
@@ -96,7 +98,10 @@ Talos 1.14 applies any configuration at once in that mode (its default mode, `au
 the role never reboots a node. A running service picks up its new settings as Talos reconciles it, except etcd,
 which reads its settings only when it starts: after a change to the control plane the run says so, and a change
 to `cluster.etcd` takes effect after `talosctl -n <address> service etcd restart` (a moment without the API on a
-single control plane). A setting read only at boot, such as a kernel argument, takes
+single control plane). Flannel, kube-proxy and CoreDNS run from manifests Talos applies only at bootstrap, so a
+change to their settings (`KubeFlannelCNIConfig`, say) reaches the cluster through
+`talosctl -n <control plane> upgrade-k8s --to <running Kubernetes version>`, which re-applies them (`--dry-run` shows
+the diff first; the run's note gives the command). A setting read only at boot, such as a kernel argument, takes
 effect at the node's next reboot, by hand. A dry run says which nodes differ, never how, since the difference can hold secrets; to see it,
 run with `ANSIBLE_ARGS='-e talos_keep_rendered=true'`, which keeps each node's rendered configuration in
 `~/.talos/homeserver/rendered/` (mode 0600, holding the cluster's keys, until the next run without it removes
@@ -194,13 +199,13 @@ of its own for the cluster's credentials, so the home cluster's are never touche
 ```yaml
 kubernetes_node_sizes:
   homeserver-cp-1: {cores: 2, memory_mib: 2048, system_disk_gib: 10}
-  homeserver-worker-1: {cores: 2, memory_mib: 6144, system_disk_gib: 10, data_disk_gib: 10, media_disk_gib: 0}
+  homeserver-worker-1: {cores: 2, memory_mib: 6144, system_disk_gib: 32, data_disk_gib: 11, media_disk_gib: 0}
 kubernetes_media_on_data_volume: true
 kubernetes_talos_config_dir: ~/.talos/homeserver-test
 sops_age_key_file: ~/.config/sops/age/homeserver-test.agekey
 ```
 
-That is about 8 GiB of memory and 30 GiB of disk on the installer's storage, which the disk budget counts with the
+That is about 8 GiB of memory and 53 GiB of disk on the installer's storage, which the disk budget counts with the
 host's other VMs' disks.
 
 A run refuses a directory that holds another cluster's talosconfig or kubeconfig, so leaving the setting out stops
@@ -211,9 +216,13 @@ vault of its own; see `README.md`). It is thrown away with the test cluster.
 Give it an age key of its own as well (`age-keygen -o ~/.config/sops/age/homeserver-test.agekey`, mode 0600), named
 by `sops_age_key_file` above: left out, the setting means the home cluster's key, which Flux would copy into the test
 cluster. The repository's Secrets are encrypted for the home key alone (`.sops.yaml` has one recipient), so the test
-cluster cannot decrypt them, and an app that needs one does not start there. That is the price of keeping the home
-key out of a cluster that is thrown away. To test those apps, encrypt their Secrets anew for the test key on the
-validation branch the test cluster syncs, and never merge that branch.
+cluster cannot decrypt them, and a Flux Kustomization that holds one applies nothing there: `infra-tls`, the cluster's
+CA, so Traefik serves its own certificate, which browsers warn about, and every group of apps with a Secret. Nothing
+else waits for them, but `make kubernetes` waits for every Flux Kustomization as its last step, so there it ends in
+failure every time, after 10 minutes, naming one that cannot decrypt: the cluster is built and the rest runs. That is
+the price of keeping the home key out of a cluster that is thrown away. To test them, and for a run that passes,
+encrypt their Secrets anew for the test key on the validation branch the test cluster syncs (`.sops.yaml` naming the
+test key there too), and never merge that branch.
 
 Never set `proxmox_vm_allow_overcommit` on a host whose thin pool other VMs share: a full pool gives them all I/O
 errors. Afterwards: `qm stop 300 301`, then `qm destroy 300 --purge` and `qm destroy 301 --purge`, delete their

@@ -1,0 +1,11 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: metallb-system
+  labels:
+    # MetalLB's speaker runs on the host's network with NET_RAW, to answer ARP for the addresses it hands out:
+    # beyond baseline, which Talos enforces.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged

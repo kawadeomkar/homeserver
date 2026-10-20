@@ -392,7 +392,11 @@
           {{ {'running': _running} | combine({'pinned, not yet running (make talos-upgrade moves them)': _pending}
                                              if _pending else {})
              | combine({'applied to the control plane: etcd reads its settings only when it starts, so after a change '
-                        ~ 'to cluster.etcd, restart it': 'talosctl -n ' ~ talos_controlplane.address ~ ' service etcd restart'}
+                        ~ 'to cluster.etcd, restart it': 'talosctl -n ' ~ talos_controlplane.address ~ ' service etcd restart',
+                        'applied to the control plane: Talos applies the Flannel, kube-proxy and CoreDNS manifests only '
+                        ~ 'at bootstrap, so after a change to their settings (KubeFlannelCNIConfig, say), sync them':
+                        'talosctl -n ' ~ talos_controlplane.address ~ ' upgrade-k8s --to '
+                        ~ (talos_running_kubernetes or talos_kubernetes_version)}
                        if _etcd else {}) }}
       vars:
         _running: >-

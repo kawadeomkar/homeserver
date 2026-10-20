@@ -57,8 +57,8 @@ nas_section_error: >-
      ~ 'truenas_bootstrap_address, which usually means one of them is misspelt. Correct it, or delete the '
      ~ 'whole TrueNAS section to run without a NAS.' }}
 
-# The NAS's address, for whatever mounts its shares, such as Proxmox's NFS storages. Its static address, never
-# the bootstrap one, which is a DHCP lease the NAS play replaces. Empty without a NAS.
+# The NAS's address, for whatever mounts its shares: Proxmox's NFS storages and the cluster's volumes. Its static
+# address, never the bootstrap one, which is a DHCP lease the NAS play replaces. Empty without a NAS.
 nas_address: "{{ truenas_static_address | default('', true) | trim | split('/') | first }}"
 
 # Where TrueNAS mounts its pools.

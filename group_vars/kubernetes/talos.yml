@@ -147,9 +147,17 @@ talos_patches_firewall_controlplane:
     ingress: {{ talos_firewall_nodes_and_pods | to_json }}
 # The control plane's components serve their metrics beyond localhost, for kube-prometheus-stack. Set before the
 # first build: etcd reads its settings only when it starts, so a later change waits for a restart of etcd by hand.
-# The control plane keeps Talos's taint and the label that keeps load balancers off it in both setups: the worker
-# runs the apps.
-talos_patches_controlplane: "{{ talos_patches_controlplane_metrics + talos_patches_firewall_controlplane }}"
+# Flannel runs with its network policy agent. The control plane keeps Talos's taint and the label that keeps load
+# balancers off it in both setups: the worker runs the apps.
+talos_patches_controlplane: >-
+  {{ talos_patches_controlplane_metrics + [talos_patch_network_policies] + talos_patches_firewall_controlplane }}
+# Flannel with kube-network-policies, which enforces NetworkPolicy objects: without it Kubernetes accepts them and
+# nothing applies them, so every pod reaches every other pod's ports and, through the node's address, the NAS
+# (k8s/apps/*/network-policy.yaml). The control plane renders the cluster's CNI manifests, so it alone needs it.
+talos_patch_network_policies: |
+  apiVersion: v1alpha1
+  kind: KubeFlannelCNIConfig
+  kubeNetworkPoliciesEnabled: true
 talos_patches_controlplane_metrics:
   - |
     apiVersion: v1alpha1

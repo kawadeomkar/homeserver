@@ -175,12 +175,13 @@ FIXTURES = [
         "truenas_api_cert_sha256: " + colons(*(["AA", "BB", "CC", "DD"] * 8)) + "\n",
         set(),
     ),
-    # Must not match: the files each rule allows
+    # A token stub at the old homepage path matches too: no plain Secret under k8s/ is allowed any more.
     (
         "k8s/homepage/secret.yaml",
         "apiVersion: v1\n" + SECRET_KIND + "\ntype: kubernetes.io/service-account-token\n",
-        set(),
+        {"k8s-plaintext-secret"},
     ),
+    # Must not match: the files each rule allows
     ("k8s/demo/creds.sops.yaml", SECRET_KIND + "\n", set()),
     # Must match: no SealedSecrets here, so a name with "sealed" in it is allowed nothing, and JSON is read too.
     ("k8s/demo/unsealed-creds.yaml", SECRET_KIND + "\n", {"k8s-plaintext-secret"}),

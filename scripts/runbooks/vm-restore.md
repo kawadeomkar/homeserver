@@ -66,7 +66,9 @@ before, rather than building an empty cluster over the old data.
    ```
 
 3. **Restore the worker** the same way, as VMID 301. Without a NAS its data disk comes back from the backup, as of
-   02:00, and its media disk, never backed up, is lost: `make kubernetes` adds it again, empty. With a NAS its data
+   02:00, and its media disk, never backed up, is lost: `make kubernetes` adds it again, empty, and once the cluster
+   is up, `kubectl -n local-path-storage delete job static-volume-directories` has Flux make the library's and the
+   recordings' directories on it again (the restored Job ran before, on the old disk). With a NAS its data
    disk lives on `homeserver-persistent`, on the NAS, so it survived the host and is newer than the backup: after
    the restore, point `scsi1` back at the surviving volume, and delete the restored copy only once the apps check
    out:
