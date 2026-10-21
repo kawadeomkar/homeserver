@@ -220,9 +220,9 @@ Description: Hand a Kubernetes cluster to Flux, through the Flux Operator
 | objects ¦ Wait for the Kustomizations left out to be deleted | ansible.builtin.command | True |
 | objects ¦ Wait for the Kustomizations kept to leave out what their selector matches | ansible.builtin.command | True |
 | objects ¦ Refuse Kustomizations that have not left out what their selector matches | ansible.builtin.assert | True |
-| objects ¦ Find the Deployments make down held among those left out | ansible.builtin.command | False |
+| objects ¦ Find the Deployments make suspend held among those left out | ansible.builtin.command | False |
 | objects ¦ Say which held Deployments would be deleted | ansible.builtin.debug | True |
-| objects ¦ Delete the Deployments make down held among those left out | ansible.builtin.command | True |
+| objects ¦ Delete the Deployments make suspend held among those left out | ansible.builtin.command | True |
 | objects ¦ Wait for Flux's Kustomizations to be ready | ansible.builtin.command | True |
 | objects ¦ Read Flux's Kustomizations | ansible.builtin.command | True |
 | objects ¦ Show Flux's Kustomizations | ansible.builtin.debug | True |
@@ -303,10 +303,10 @@ classDef rescue stroke:#665352,stroke-width:2px;
   objects___Read_Flux_s_Kustomizations17-->|Task| objects___Wait_for_the_Kustomizations_left_out_to_be_deleted18[objects   wait for the kustomizations left out to<br>be deleted<br>When: **not ansible check mode and  gone   length   0**]:::task
   objects___Wait_for_the_Kustomizations_left_out_to_be_deleted18-->|Task| objects___Wait_for_the_Kustomizations_kept_to_leave_out_what_their_selector_matches19[objects   wait for the kustomizations kept to<br>leave out what their selector matches<br>When: **not ansible check mode and flux bootstrap<br>exclusions   selectattr  selector     list  <br>length   0**]:::task
   objects___Wait_for_the_Kustomizations_kept_to_leave_out_what_their_selector_matches19-->|Task| objects___Refuse_Kustomizations_that_have_not_left_out_what_their_selector_matches20[objects   refuse kustomizations that have not left<br>out what their selector matches<br>When: **flux bootstrap kept is not skipped**]:::task
-  objects___Refuse_Kustomizations_that_have_not_left_out_what_their_selector_matches20-->|Task| objects___Find_the_Deployments_make_down_held_among_those_left_out21[objects   find the deployments make down held<br>among those left out]:::task
-  objects___Find_the_Deployments_make_down_held_among_those_left_out21-->|Task| objects___Say_which_held_Deployments_would_be_deleted22[objects   say which held deployments would be<br>deleted<br>When: **ansible check mode and  held   length   0**]:::task
-  objects___Say_which_held_Deployments_would_be_deleted22-->|Task| objects___Delete_the_Deployments_make_down_held_among_those_left_out23[objects   delete the deployments make down held<br>among those left out<br>When: **not ansible check mode**]:::task
-  objects___Delete_the_Deployments_make_down_held_among_those_left_out23-->|Task| objects___Wait_for_Flux_s_Kustomizations_to_be_ready24[objects   wait for flux s kustomizations to be<br>ready<br>When: **not ansible check mode**]:::task
+  objects___Refuse_Kustomizations_that_have_not_left_out_what_their_selector_matches20-->|Task| objects___Find_the_Deployments_make_suspend_held_among_those_left_out21[objects   find the deployments make suspend held<br>among those left out]:::task
+  objects___Find_the_Deployments_make_suspend_held_among_those_left_out21-->|Task| objects___Say_which_held_Deployments_would_be_deleted22[objects   say which held deployments would be<br>deleted<br>When: **ansible check mode and  held   length   0**]:::task
+  objects___Say_which_held_Deployments_would_be_deleted22-->|Task| objects___Delete_the_Deployments_make_suspend_held_among_those_left_out23[objects   delete the deployments make suspend held<br>among those left out<br>When: **not ansible check mode**]:::task
+  objects___Delete_the_Deployments_make_suspend_held_among_those_left_out23-->|Task| objects___Wait_for_Flux_s_Kustomizations_to_be_ready24[objects   wait for flux s kustomizations to be<br>ready<br>When: **not ansible check mode**]:::task
   objects___Wait_for_Flux_s_Kustomizations_to_be_ready24-->|Task| objects___Read_Flux_s_Kustomizations25[objects   read flux s kustomizations<br>When: **not ansible check mode**]:::task
   objects___Read_Flux_s_Kustomizations25-->|Task| objects___Show_Flux_s_Kustomizations26[objects   show flux s kustomizations<br>When: **flux bootstrap kustomizations is not skipped**]:::task
   objects___Show_Flux_s_Kustomizations26-->|Task| objects___Refuse_Kustomizations_that_are_not_ready27[objects   refuse kustomizations that are not ready<br>When: **flux bootstrap kustomizations ready is not skipped**]:::task

@@ -2308,7 +2308,8 @@ GROUPS = ["apps-media", "apps-nextcloud", "apps-photoprism", "apps-frigate", "ap
 
 
 def app_deployment(namespace, name, kustomization, held=False):
-    """A Deployment as Flux applies it, labelled with its Kustomization and its app; `held` as make down leaves it."""
+    """A Deployment as Flux applies it, labelled with its Kustomization and its app; `held` as make suspend leaves
+    it."""
     meta = {
         "name": name,
         "namespace": namespace,
@@ -2332,7 +2333,7 @@ def app_deployment(namespace, name, kustomization, held=False):
 def test_flux_bootstrap_leaves_apps_out(tmp_path, operator_releases):
     """local.yml's kubernetes_apps reaches Flux through the FluxInstance alone: a group none of whose apps run is
     dropped from the sync, which prunes it, and a group some of whose apps run keeps its Kustomization, whose own build
-    drops the others by their label. The run waits until Flux has done both, then deletes the Deployments make down
+    drops the others by their label. The run waits until Flux has done both, then deletes the Deployments make suspend
     held there, which Flux's prune skips; a dry run names them and changes nothing. Running every app again takes
     the patch away, and the groups come back."""
     extra, env = flux_vars(tmp_path, operator_releases), talos_env(tmp_path)
@@ -2345,7 +2346,7 @@ def test_flux_bootstrap_leaves_apps_out(tmp_path, operator_releases):
     assert "patches" not in objects["Kustomization/flux-system/flux-system"]["spec"]
     assert {k.rpartition("/")[2] for k in objects if k.startswith("Kustomization/")} == {"flux-system", *GROUPS}
 
-    # The apps as Flux applied them: Seerr and PhotoPrism held by make down, the others running.
+    # The apps as Flux applied them: Seerr and PhotoPrism held by make suspend, the others running.
     s = read(state)
     for namespace, name, group, held in [
         ("media", "jellyfin", "apps-media", False),
@@ -2362,7 +2363,7 @@ def test_flux_bootstrap_leaves_apps_out(tmp_path, operator_releases):
     mutations = read(state)["mutations"]
     result = run("flux.yml", chosen, check=True, env=env)
     expect(result, "homeserver-k8s", changed=True, note="dry run leaving apps out")
-    held = "Would delete, as make down left them, once Flux has left them out: media/seerr, photoprism/photoprism."
+    held = "Would delete, as make suspend left them, once Flux has left them out: media/seerr, photoprism/photoprism."
     assert held in result[2], result[2][-3000:]
     assert read(state)["mutations"] == mutations
 
@@ -2385,7 +2386,7 @@ def test_flux_bootstrap_leaves_apps_out(tmp_path, operator_releases):
     ]
     kustomizations = {k.rpartition("/")[2] for k in objects if k.startswith("Kustomization/")}
     assert kustomizations == {"flux-system", "apps-media", "apps-nextcloud", "apps-homepage"}
-    # Flux pruned Radarr and PhotoPrism's database; the role deleted the two make down held, which Flux skipped.
+    # Flux pruned Radarr and PhotoPrism's database; the role deleted the two make suspend held, which Flux skipped.
     deployments = {k.partition("/")[2] for k in objects if k.startswith("Deployment/") and "flux-operator" not in k}
     assert deployments == {"media/jellyfin", "nextcloud/nextcloud"}
     assert [e for e in read(state)["events"] if e.startswith("delete")] == [

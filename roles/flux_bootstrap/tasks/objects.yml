@@ -405,12 +405,12 @@
     quiet: true
   when: flux_bootstrap_kept is not skipped
 
-# Flux skips any object marked kustomize.toolkit.fluxcd.io/reconcile: disabled when it prunes, which is how make down
-# holds an app at zero: left out, such a Deployment would stay, owned by nobody, where make up could no longer find
+# Flux skips any object marked kustomize.toolkit.fluxcd.io/reconcile: disabled when it prunes, which is how make suspend
+# holds an app at zero: left out, such a Deployment would stay, owned by nobody, where make resume could no longer find
 # it. Once Flux has acted, the role deletes the Deployments it skipped: those still labelled with a Kustomization
 # dropped whole, or with one kept and matching its selector, that carry the mark. A dry run names them. Their data
 # is in claims, which stay.
-- name: objects | Find the Deployments make down held among those left out
+- name: objects | Find the Deployments make suspend held among those left out
   ansible.builtin.command:
     argv: >-
       {{ ['kubectl', '--kubeconfig', flux_bootstrap_kubeconfig, 'get', 'deployments', '-A', '-l',
@@ -426,7 +426,7 @@
 
 - name: objects | Say which held Deployments would be deleted
   ansible.builtin.debug:
-    msg: "Would delete, as make down left them, once Flux has left them out: {{ _held | join(', ') }}."
+    msg: "Would delete, as make suspend left them, once Flux has left them out: {{ _held | join(', ') }}."
   changed_when: true
   when: ansible_check_mode and _held | length > 0
   vars:
@@ -440,7 +440,7 @@
       {%- endfor -%}
       {{ out }}
 
-- name: objects | Delete the Deployments make down held among those left out
+- name: objects | Delete the Deployments make suspend held among those left out
   ansible.builtin.command:
     argv: [kubectl, --kubeconfig, "{{ flux_bootstrap_kubeconfig }}", delete, deployment, "{{ item.name }}", -n, "{{ item.namespace }}"]
   changed_when: true

@@ -128,8 +128,8 @@ kubernetes_apps_enabled: >-
   {%-   endif -%}
   {%- endfor -%}
   {{ every if chosen is none else every | select('in', on) | list }}
-# What make down and make up are told this host leaves out, so they can say so: the groups none of whose apps run,
-# and the apps that don't, their databases included.
+# What make suspend and make resume are told this host leaves out, so they can say so: the groups none of whose apps
+# run, and the apps that don't, their databases included.
 kubernetes_apps_disabled_names: >-
   {%- set out = [] -%}
   {%- for group, apps in kubernetes_app_catalogue.items() -%}
@@ -414,7 +414,8 @@ kubernetes_settings_error: >-
   {%-     set _ = out.append('kubernetes_node_sizes: ' ~ badsizes | join('; ') ~ '.') -%}
   {%-   endif -%}
   {#-   What the apps this host runs and the platform request, which Kubernetes places pods by: the worker must give
-        pods that much, or they stay Pending and make kubernetes fails at its last wait, after changing the cluster. -#}
+        pods that much, or they stay Pending and make deploy TYPE=kubernetes fails at its last wait, after changing
+        the cluster. -#}
   {%-   set req = namespace(mem=kubernetes_platform_requests.memory_mib, cpu=kubernetes_platform_requests.cpu_m) -%}
   {%-   for apps in kubernetes_app_catalogue.values() -%}
   {%-     for app, r in apps.items() if app in kubernetes_apps_enabled -%}

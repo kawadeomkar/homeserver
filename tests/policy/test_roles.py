@@ -1387,8 +1387,8 @@ EVERY_TILE = (
 def test_apps_this_host_runs(tmp_path, apps, excluded, tiles, left_out):
     """local.yml's kubernetes_apps, group=<group> and app=<app> entries, becomes what Flux's sync leaves out: a group
     none of whose apps run whole, and the others' objects in a group some of whose apps run, a database with its app;
-    Homepage's tiles, a section per group that runs anything; and what make down and make up say a host leaves out.
-    Unset, every app runs and nothing is left out."""
+    Homepage's tiles, a section per group that runs anything; and what make suspend and make resume say a host leaves
+    out. Unset, every app runs and nothing is left out."""
     given = CLUSTER_VARS | ({"kubernetes_apps": apps} if apps is not None else {})
     tree = example_tree(tmp_path)
     got = resolve_on(
