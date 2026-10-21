@@ -379,6 +379,24 @@ def test_secrets_go_to_the_vault_and_never_to_the_screen(repo):
     assert "vault_truenas_api_key" in console.out[-1].split("STILL REQUIRED")[1]
 
 
+def test_remote_access_requires_the_auth_key_for_the_hosts_first_login(repo):
+    # make proxmox refuses a host that is not logged in without the key, after changing it, and a dry run cannot tell.
+    make_vault(repo, {})
+    answers = {
+        "switch:nas": "n",
+        "switch:remote": "y",
+        "switch:cluster": "n",
+        "switch:homeassistant": "n",
+        "proxmox_address": lan(10),
+        "tailscale_advertise_routes": f"{lan(0)}/24",
+    }
+    console = Scripted(answers)
+    init_run(repo, console)
+    assert local(repo)["tailscale_advertise_routes"] == [f"{lan(0)}/24"]
+    required = console.out[-1].split("STILL REQUIRED")[1].split("RECOMMENDED")[0]
+    assert "vault_tailscale_auth_key" in required
+
+
 def test_a_vault_password_that_does_not_open_the_vault_is_not_kept(repo):
     make_vault(repo, {"vault_other": "x"})
     (repo / ".vault_pass").unlink()
