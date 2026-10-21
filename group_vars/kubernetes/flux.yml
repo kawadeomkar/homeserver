@@ -32,6 +32,7 @@ flux_bootstrap_age_key_file: "{{ sops_age_key_file | default('~/.config/sops/age
 # (GPU_I915 1) and Frigate detects on it; without, they ask for none (a limit of 0 schedules anywhere) and use the CPU.
 # INGRESS_ALLOWED_RANGE is who Traefik serves: local.yml's kubernetes_ingress_allowed_range, set once every app's
 # first-run setup is done, and until then the loopback address, which no client has.
+# PROXMOX_ADDRESS is the host Prometheus scrapes for the host's own metrics (roles/proxmox_node_exporter).
 flux_bootstrap_settings: >-
   {{ {'DOMAIN': kubernetes_domain | default(kubernetes_domain_default, true),
       'TZ': kubernetes_timezone,
@@ -50,4 +51,5 @@ flux_bootstrap_settings: >-
                 'FRIGATE_DETECTOR_DEVICE': 'GPU' if kubernetes_gpu_mapping | default('', true) else 'CPU'})
      | combine({'PROMETHEUS_RETENTION': '15d' if nas_present else '7d',
                 'PROMETHEUS_RETENTION_SIZE': '15GB' if nas_present else '5GB',
-                'INGRESS_ALLOWED_RANGE': kubernetes_ingress_allowed_range | default('127.0.0.1/32', true) | string | trim}) }}
+                'INGRESS_ALLOWED_RANGE': kubernetes_ingress_allowed_range | default('127.0.0.1/32', true) | string | trim,
+                'PROXMOX_ADDRESS': proxmox_address | string | trim}) }}

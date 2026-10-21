@@ -249,11 +249,11 @@ truenas: ## Configure the NAS
 	$(RUN) truenas.yml --diff $(TAG_ARGS) $(ANSIBLE_ARGS)
 
 .PHONY: check-proxmox
-check-proxmox: ## Dry-run the Proxmox host's repositories, upgrade and storage
+check-proxmox: ## Dry-run the Proxmox host's repositories, upgrade, storage, backup and node exporter
 	$(RUN) proxmox.yml --check --diff $(ANSIBLE_ARGS)
 
 .PHONY: proxmox
-proxmox: ## Configure the Proxmox host: repositories and upgrade, then VM storage (the NAS's shares, or a check of its own)
+proxmox: ## Configure the Proxmox host: repositories and upgrade, then VM storage (the NAS's shares, or a check of its own), backup and, with a cluster, its node exporter
 	$(RUN) proxmox.yml --diff $(ANSIBLE_ARGS)
 
 .PHONY: check-kubernetes

@@ -28,6 +28,7 @@ roles/truenas/           configures the NAS through its API: address, pools, dat
 roles/proxmox_apt/       sets Proxmox's package repositories (no subscription), upgrades it on every run, and says when it needs a reboot
 roles/proxmox_storage/   adds the NAS's shares to Proxmox as qcow2 VM-disk storage, or checks its own storage
 roles/proxmox_backup/    keeps the nightly vzdump job of the VMs
+roles/proxmox_node_exporter/ puts Prometheus's node exporter on the Proxmox host, for the cluster's Prometheus alone
 roles/proxmox_vm/        creates the cluster's VMs and keeps the settings it manages
 roles/talos/             installs Talos on the VMs, keeps their configuration, bootstraps etcd once, upgrades on request
 roles/flux_bootstrap/    installs the Flux Operator and hands the cluster to Flux, which syncs k8s/clusters/<setup>
@@ -312,7 +313,9 @@ a merged change reaches the cluster without anyone running anything. To see what
 `flux get kustomizations` (KUBECONFIG as in `scripts/runbooks/talos.md`).
 
 Monitoring is kube-prometheus-stack: Grafana answers at `https://grafana.<domain>`, with the admin password the
-chart generated (CLAUDE.md, Monitoring, says how to read it).
+chart generated (CLAUDE.md, Monitoring, says how to read it). The Proxmox host is on the Node Exporter dashboards
+beside the nodes, by its address, once `make proxmox` has run with the cluster in `local.yml`: its CPU and memory
+across every guest, its disks, temperatures and systemd units.
 
 ### Linting
 

@@ -1,0 +1,11 @@
+---
+# The host's own metrics, for the cluster's Prometheus: applied by roles/proxmox_node_exporter on every run of
+# proxmox.yml once there is a cluster, and scraped by k8s/infrastructure/monitoring/release.yaml. They are what the
+# nodes' exporters cannot see from inside their VMs: the host's CPU and memory across every guest, its disks,
+# filesystems, temperatures and systemd units. Without a cluster, nothing is installed.
+
+# Who may scrape it: the cluster's nodes. Prometheus runs on one of them, and a pod's traffic leaves its node with the
+# node's address.
+proxmox_node_exporter_scrapers: >-
+  {{ kubernetes_nodes | map(attribute='name') | map('extract', kubernetes_node_addresses) | map('string')
+     | map('trim') | list if kubernetes_present else [] }}

@@ -218,12 +218,12 @@ NO_BACKUP = "are not backed up, because this setup has no NAS"
 @pytest.mark.parametrize(
     ("local_yml", "extra", "validations", "present", "absent"),
     [
-        pytest.param(None, CLUSTER_ARGS, 8, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas-cluster"),
-        pytest.param(EXAMPLE_LOCAL_YML, (), 6, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas"),
+        pytest.param(None, CLUSTER_ARGS, 9, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas-cluster"),
+        pytest.param(EXAMPLE_LOCAL_YML, (), 7, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas"),
         pytest.param(
             EXAMPLE_LOCAL_YML + TAILSCALE_LOCAL_YML,
             (),
-            6,
+            7,
             [NAS_PLAY_RUNS[0], TAILSCALE_CHECK],
             [NO_BACKUP],
             id="nas-tailscale",
@@ -231,24 +231,24 @@ NO_BACKUP = "are not backed up, because this setup has no NAS"
         pytest.param(
             PROXMOX_ONLY_CLUSTER_LOCAL_YML,
             CLUSTER_ARGS,
-            7,
+            8,
             [*NAS_PLAY_ENDS, NO_BACKUP, TAILSCALE_CHECK],
             NAS_ROLE,
             id="proxmox-only-cluster",
         ),
         pytest.param(
-            PROXMOX_ONLY_LOCAL_YML, (), 5, [*NAS_PLAY_ENDS, TAILSCALE_CHECK], [*NAS_ROLE, NO_BACKUP], id="proxmox-only"
+            PROXMOX_ONLY_LOCAL_YML, (), 6, [*NAS_PLAY_ENDS, TAILSCALE_CHECK], [*NAS_ROLE, NO_BACKUP], id="proxmox-only"
         ),
         pytest.param(
             PROXMOX_ONLY_LOCAL_YML + TAILSCALE_LOCAL_YML,
             (),
-            5,
+            6,
             [NAS_PLAY_ENDS[0], TAILSCALE_CHECK],
             ["TASK [truenas :", NO_BACKUP],
             id="proxmox-only-tailscale",
         ),
         pytest.param(
-            blank_nas_local_yml(), (), 5, NAS_PLAY_ENDS, [*NAS_ROLE, NO_BACKUP], id="proxmox-only-blank-values"
+            blank_nas_local_yml(), (), 6, NAS_PLAY_ENDS, [*NAS_ROLE, NO_BACKUP], id="proxmox-only-blank-values"
         ),
     ],
 )
@@ -290,7 +290,7 @@ def test_inventory_without_the_nas_host(tmp_path):
     rc, out = argspec_pass(tree)
     assert rc == 0, out[-3000:]
     assert "skipping: no hosts matched" in out, out[-3000:]
-    assert out.count("Validating arguments against arg spec 'main'") == 5, out[-3000:]
+    assert out.count("Validating arguments against arg spec 'main'") == 6, out[-3000:]
 
 
 @pytest.mark.parametrize("playbook", ["site.yml", "talos-upgrade.yml", "etcd-snapshot.yml"])
@@ -546,12 +546,14 @@ def test_flux_settings_resolve_on_the_kubernetes_host(tmp_path, local_yml, path,
         *CLUSTER_ARGS,
     )
     common = {"DOMAIN", "TZ", "LB_RANGE", "LB_TRAEFIK_IP", "LB_FRIGATE_IP", "DATA_NODE"}
-    common |= {"GPU_I915", "FRIGATE_DETECTOR_DEVICE", "INGRESS_ALLOWED_RANGE"}
+    common |= {"GPU_I915", "FRIGATE_DETECTOR_DEVICE", "INGRESS_ALLOWED_RANGE", "PROXMOX_ADDRESS"}
     common |= {"PROMETHEUS_RETENTION", "PROMETHEUS_RETENTION_SIZE"}
     storage = {"NAS_ADDRESS", "NAS_POOL_PERSISTENT", "NAS_POOL_EPHEMERAL", "MEDIA_DATASET"}
     assert set(settings) == common | (storage if media is None else {"MEDIA_LOCAL_PATH", "FRIGATE_LOCAL_PATH"})
     # Nobody until local.yml names the range: a new cluster's apps are set up through port forwards first.
     assert settings["INGRESS_ALLOWED_RANGE"] == "127.0.0.1/32"
+    # The host Prometheus scrapes for its own metrics: local.yml.example's proxmox_address.
+    assert settings["PROXMOX_ADDRESS"] == "192.0.2.20"
     if media is None:
         assert settings["NAS_ADDRESS"] == "192.0.2.10" and settings["MEDIA_DATASET"] == "/mnt/ephemeral/jellyfin"
         assert (settings["PROMETHEUS_RETENTION"], settings["PROMETHEUS_RETENTION_SIZE"]) == ("15d", "15GB")
@@ -1274,6 +1276,42 @@ def test_talos_config_dir_follows_local_yml(tmp_path, given, expected):
     assert resolve_on(tree, "homeserver-k8s", "flux_bootstrap_kubeconfig", *CLUSTER_ARGS) == str(
         Path.home() / expected / "kubeconfig"
     )
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "extra", "scrapers"),
+    [
+        pytest.param(None, CLUSTER_ARGS, ["192.0.2.30", "192.0.2.31"], id="nas-cluster"),
+        pytest.param(EXAMPLE_LOCAL_YML, (), [], id="nas"),
+        pytest.param(
+            PROXMOX_ONLY_CLUSTER_LOCAL_YML, CLUSTER_ARGS, ["192.0.2.30", "192.0.2.31"], id="proxmox-only-cluster"
+        ),
+        pytest.param(PROXMOX_ONLY_LOCAL_YML, (), [], id="proxmox-only"),
+    ],
+)
+def test_node_exporter_follows_the_cluster(tmp_path, local_yml, extra, scrapers):
+    """The Proxmox host's exporter answers the cluster's nodes, where Prometheus runs, in both setups; without a
+    cluster there is no Prometheus, and the role installs nothing."""
+    tree = example_tree(tmp_path, local_yml)
+    assert resolve_on(tree, "homeserver", "proxmox_node_exporter_scrapers", *extra) == scrapers
+
+
+@pytest.mark.parametrize(
+    ("given", "refusal"),
+    [
+        pytest.param("192.0.2.31", "proxmox_node_exporter_scrapers must be a list, not a string.", id="string"),
+        pytest.param(
+            ["homeserver-worker-1", "192.0.2.0/24"],
+            "proxmox_node_exporter_scrapers takes IPv4 addresses; these are not: homeserver-worker-1, 192.0.2.0/24.",
+            id="not-ipv4",
+        ),
+    ],
+)
+def test_node_exporter_inputs_are_checked(tmp_path, given, refusal):
+    """Each refusal names the variable, before anything runs."""
+    tree = example_tree(tmp_path, EXAMPLE_LOCAL_YML)
+    rc, out = argspec_pass(tree, "proxmox.yml", "-e", json.dumps({"proxmox_node_exporter_scrapers": given}))
+    assert rc != 0 and refusal in out, out[-3000:]
 
 
 @pytest.mark.parametrize(
