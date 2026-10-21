@@ -1,0 +1,28 @@
+---
+# make status (status.yml, roles/status): what this setup has, and the VMs it reports on, which every play that
+# reports reads. These are the VMs this repo makes, the same ones the nightly backup covers (vm_backup_vmids,
+# group_vars/proxmox/backup.yml): the cluster's nodes, Home Assistant's, and local.yml's vm_backup_extra_vmids. Any
+# other VM on the Proxmox host, another project's, is only counted, never named as a problem.
+status_setup:
+  nas: "{{ nas_present }}"
+  cluster: "{{ kubernetes_present }}"
+  home_assistant: "{{ haos_present }}"
+# Each with what makes it and what starts it, which the report suggests while it is missing or stopped, and whether
+# its guest agent reports its filesystems: Home Assistant's does; Talos's lists none, so the nodes' disks come from
+# the cluster instead.
+status_vms: >-
+  {%- set out = [] -%}
+  {%- for n in kubernetes_nodes if kubernetes_present -%}
+  {%-   set _ = out.append({'vmid': n.vmid | int, 'name': n.name, 'made_by': 'make kubernetes',
+                            'start': 'make up ALL=1', 'guest_agent': false}) -%}
+  {%- endfor -%}
+  {%- if haos_present -%}
+  {%-   set _ = out.append({'vmid': haos_vm_vmid | int, 'name': 'homeassistant', 'made_by': 'make homeassistant',
+                            'start': 'make up ONLY=homeassistant', 'guest_agent': true}) -%}
+  {%- endif -%}
+  {%- for vmid in vm_backup_extra_vmids | default([], true) | map('int')
+        if vmid not in out | map(attribute='vmid') | list -%}
+  {%-   set _ = out.append({'vmid': vmid, 'name': '', 'made_by': '', 'start': 'qm start ' ~ vmid,
+                            'guest_agent': true}) -%}
+  {%- endfor -%}
+  {{ out }}

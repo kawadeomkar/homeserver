@@ -94,6 +94,7 @@ make check TYPE=truenas && make deploy TYPE=truenas
 make check TYPE=proxmox && make deploy TYPE=proxmox
 make check TYPE=homeassistant && make deploy TYPE=homeassistant
 make check && make deploy         # every machine, the NAS first
+make status                       # what runs and what needs doing, read without changing anything
 ```
 
 `make lint test` is what CI runs, apart from the workflow linters and the scan of a change's commits; `make -k`
@@ -104,6 +105,14 @@ Each TrueNAS stage can be run on its own with `TAGS=truenas_network`, `truenas_p
 fakes, which cannot prove the real machines behave the same. Every `make deploy TYPE=proxmox` also refreshes the package
 lists and upgrades the Proxmox host, and says when an upgrade of the kernel, its firmware, the CPU's microcode or dbus
 waits for a reboot, which is then done by hand.
+
+`make status` reads the Proxmox host and changes nothing. It shows what needs doing first, each with the command
+that deals with it (a reboot an upgrade asked for, upgrades waiting, a VM stopped or waiting for a restart, a storage
+filling up or provisioned beyond its size), then each of this setup's VMs (CPU over the last day, memory, disks where
+its guest agent reports them) and each storage's use. `TYPE=vms` or `TYPE=storage` shows one section, and `JSON=1`
+prints the report as JSON. It exits 0 when nothing is wrong, and otherwise 2, as make does for any failed recipe; the
+report's own code (1 for a problem, 2 when the host could not be read, 3 when the run failed) ends its last line and
+is the `exit` field of `JSON=1`. Another project's VMs on the host are counted, never named.
 
 To give a playbook a variable for one run, put Ansible's own flags in `ANSIBLE_ARGS`:
 `make deploy TYPE=kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'`, or `ANSIBLE_ARGS='--limit homeserver'` for

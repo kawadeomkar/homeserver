@@ -1,0 +1,129 @@
+---
+argument_specs:
+  main:
+    short_description: Read a host for make status, without changing anything
+    description:
+      - Reads the host the play runs on, as status_source names it, and leaves what it found in the fact
+        status_found for the report entry point. Every command goes through the role's module status_read, which
+        runs them at once and refuses any that is not on its read list.
+      - On the Proxmox host (proxmox) it reads the host, its storages and the VMs of status_vms; every other VM is
+        only counted.
+      - A host that does not answer is recorded as such, not a failure, so the report can say so.
+      - Refuses a section name that is not one of the report's.
+      - The defaults read nothing.
+    options:
+      status_source:
+        type: str
+        choices: ["", proxmox]
+        default: ""
+        description: What the host is; empty reads nothing.
+      status_types:
+        type: list
+        elements: str
+        default: []
+        description: The report's sections to read and show; empty means every one.
+      status_vms:
+        type: list
+        elements: dict
+        default: []
+        description: The VMs this setup makes; every other VM on the host is only counted.
+        options:
+          vmid:
+            type: int
+            required: true
+            description: The VM's VMID.
+          name:
+            type: str
+            default: ""
+            description: Its name, for a VM that does not exist yet.
+          made_by:
+            type: str
+            default: ""
+            description: The command that makes it, which the report suggests while it is missing.
+          start:
+            type: str
+            default: ""
+            description: The command that starts it, which the report suggests while it is stopped.
+          guest_agent:
+            type: bool
+            default: false
+            description: Whether its guest agent reports its filesystems (Talos's reports none).
+      status_setup:
+        type: dict
+        default: {}
+        description: What this setup has, as {nas, cluster, home_assistant}, for the report's first line.
+      status_proxmox_node:
+        type: str
+        default: ""
+        description: The Proxmox node's name; empty takes the host's short hostname.
+      status_budget_storages:
+        type: list
+        elements: str
+        default: []
+        description: Storages whose disk budget the report shows.
+      status_storage_headroom_gib:
+        type: int
+        default: 0
+        description: GiB of a ZFS, directory or BTRFS storage kept out of its budget for the host's own files.
+      status_reboot_required_file:
+        type: str
+        default: ""
+        description: The file that says the host waits for a reboot; empty does not look.
+      status_parallel:
+        type: int
+        default: 8
+        description: How many reads run at once on a host.
+      status_timeout:
+        type: int
+        default: 30
+        description: Seconds each read may take.
+      status_hosts:
+        type: list
+        elements: str
+        default: []
+        description: The report entry point's hosts, whose findings it puts together.
+      status_report_file:
+        type: str
+        default: ""
+        description: Where the report entry point writes the report, as JSON; empty writes none.
+      status_color:
+        type: bool
+        default: false
+        description: Whether the report entry point shows the report in colour.
+      status_quiet:
+        type: bool
+        default: false
+        description: Whether the report entry point shows no report.
+  report:
+    short_description: Put make status's findings together, write the report and show it
+    description:
+      - Puts together what each host of status_hosts found (its status_found), ranks what needs attention, writes
+        the report to status_report_file as JSON, mode 0600, and shows it as text, unless status_quiet.
+      - Writes the report in a dry run too, since make status runs as one and takes its exit code from the file.
+    options:
+      status_types:
+        type: list
+        elements: str
+        default: []
+        description: The report's sections to show; empty means every one.
+      status_setup:
+        type: dict
+        default: {}
+        description: What this setup has, as {nas, cluster, home_assistant}, for the report's first line.
+      status_hosts:
+        type: list
+        elements: str
+        default: []
+        description: The hosts whose findings the report puts together.
+      status_report_file:
+        type: str
+        default: ""
+        description: Where the report is written, as JSON; empty writes none.
+      status_color:
+        type: bool
+        default: false
+        description: Whether the report is shown in colour.
+      status_quiet:
+        type: bool
+        default: false
+        description: Whether no report is shown.

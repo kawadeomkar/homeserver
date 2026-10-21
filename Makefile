@@ -54,7 +54,7 @@ comma   := ,
 empty   :=
 space   := $(empty) $(empty)
 TYPES   := $(strip $(subst $(comma), ,$(TYPE)))
-TYPED   := init vault lint test fix check deploy
+TYPED   := init vault lint test fix check deploy status
 init_TYPES  := full
 vault_TYPES := new
 lint_TYPES  := lock yaml ansible python docs github manifests charts talos
@@ -65,6 +65,8 @@ test_TYPES  := unit policy gitleaks idempotence
 fix_TYPES   := python docs
 deploy_TYPES := truenas proxmox homeassistant kubernetes
 check_TYPES := $(deploy_TYPES) talos-upgrade suspend resume
+# make status's sections, in the order the report shows them.
+status_TYPES := vms storage
 list     = $(subst $(space),$(comma),$(strip $(1)))
 define check_types
 $(if $(filter $(1),$(TYPED)),,$(error make $(1) takes no TYPE))
@@ -160,7 +162,8 @@ help: ## Show this help
 	  test "$(test_TYPES)" \
 	  fix "$(fix_TYPES)" \
 	  check "$(check_TYPES)" \
-	  deploy "$(deploy_TYPES)"
+	  deploy "$(deploy_TYPES)" \
+	  status "$(status_TYPES)"
 	@printf '\nOther parameters:\n'
 	@printf '  \033[36m%-20s\033[0m %s\n' \
 	  'UPDATE=<packages>' 'lock: move these to their newest allowed versions too' \
@@ -168,6 +171,7 @@ help: ## Show this help
 	  'TAGS=<tags>' 'check, deploy: those stages only, e.g. TYPE=truenas TAGS=truenas_pools' \
 	  'ONLY=<names>' 'suspend, resume, check TYPE=suspend|resume: some apps, groups or homeassistant' \
 	  'ALL=1' "suspend, resume, check TYPE=suspend|resume: the cluster's VMs too" \
+	  'JSON=1' 'status: the report as JSON, alone' \
 	  'ANSIBLE_ARGS=<args>' "every playbook: more for ansible-playbook, e.g. '-e talos_allow_bootstrap=true'" \
 	  'VENV=<path>' "every target: the project's virtualenv (default: the active one, else python3's here)"
 
@@ -396,3 +400,21 @@ talos-upgrade: ## Move the running cluster to the pinned Talos and Kubernetes ve
 .PHONY: etcd-snapshot
 etcd-snapshot: ## Snapshot etcd into ~/.talos/homeserver/etcd/
 	$(RUN) etcd-snapshot.yml $(ANSIBLE_ARGS)
+
+# make status reads the machines and changes nothing (status.yml), as a dry run with the repo's stdout callback, and
+# keeps no log. The recipe exits with the report's code, read from the file the run writes: 0 when nothing is wrong,
+# 1 for a problem, 2 when a machine could not be read, 3 when the run itself failed. make itself exits 2 for any of
+# the last three, as for every failed recipe, and names the code in its "Error N". Colour only on a terminal, and
+# never with NO_COLOR set.
+STATUS_REPORT := .cache/status/report.json
+STATUS_ARGS    = $(if $(TYPES),-e '{"types": "$(call list,$(TYPES))"}',)
+
+.PHONY: status
+status: ## What runs and what needs doing, read without changing anything (JSON=1 prints it as JSON)
+	@test -x $(PLAYBOOK) || { echo "$(PLAYBOOK) not found: run make install in the project's virtualenv, or point make at it (pyenv local <env>, or VENV=<its path>)" >&2; exit 3; }
+	@rm -f $(STATUS_REPORT); color=; if [ -t 1 ] && [ -z "$${NO_COLOR:-}" ]; then color=1; fi; \
+	  ANSIBLE_STDOUT_CALLBACK=homeserver_status STATUS_COLOR=$$color STATUS_QUIET=$(JSON) \
+	    $(PLAYBOOK) status.yml --check $(STATUS_ARGS) $(ANSIBLE_ARGS) </dev/null; rc=$$?; \
+	  if [ $$rc -ne 0 ] || [ ! -s $(STATUS_REPORT) ]; then echo "make status: the run failed (ansible-playbook exited $$rc)" >&2; exit 3; fi; \
+	  if [ -n "$(JSON)" ]; then cat $(STATUS_REPORT); fi; \
+	  exit $$($(BIN)/python -c 'import json, sys; print(json.load(open(sys.argv[1]))["exit"])' $(STATUS_REPORT))

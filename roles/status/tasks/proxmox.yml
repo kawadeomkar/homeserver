@@ -1,0 +1,77 @@
+---
+# The Proxmox host, in two reads: the node's name, which the API's paths need, then everything else at once. Each
+# pvesh or qm command starts Proxmox's Perl API afresh, a second of CPU, so they run in parallel; on a four-core host
+# the whole set takes about eight seconds. A host that does not answer is recorded, not a failure: the report says so.
+
+- name: proxmox | Read the node's name
+  status_read:
+    commands:
+      node: [hostname, -s]
+    timeout: "{{ status_timeout }}"
+  register: status_proxmox_name
+  ignore_unreachable: true
+  when: status_proxmox_node | length == 0
+
+- name: proxmox | Use the node's name
+  ansible.builtin.set_fact:
+    status_proxmox_node_name: >-
+      {{ status_proxmox_node if status_proxmox_node | length > 0
+         else status_proxmox_name.results.node.stdout | default('') | trim }}
+
+# The day's history and the pending changes of each of this setup's VMs; the guest agent's filesystems and OS of those
+# whose agent reports them (Home Assistant's; Talos's lists no filesystem); the disks on each budgeted storage; the
+# upgrades apt would make, from the lists as last refreshed (a simulation, which is quick, where the API's own list
+# takes four seconds); and whether an upgrade asked for a reboot.
+- name: proxmox | Read the host, its storages and its VMs, at once
+  status_read:
+    commands: "{{ _commands }}"
+    parallel: "{{ status_parallel }}"
+    timeout: "{{ status_timeout }}"
+  register: status_proxmox_reads
+  ignore_unreachable: true
+  when: not (status_proxmox_name.unreachable | default(false))
+  vars:
+    _node: "/nodes/{{ status_proxmox_node_name }}"
+    _json: [--output-format, json]
+    _day: [--timeframe, day, --cf, AVERAGE]
+    _types: "{{ status_types | status_types_shown }}"
+    _commands: >-
+      {%- set c = {'resources': ['pvesh', 'get', '/cluster/resources'] + _json} -%}
+      {%- if 'vms' in _types -%}
+      {%-   set _ = c.update({'node': ['pvesh', 'get', _node ~ '/status'] + _json,
+                              'rrd-node': ['pvesh', 'get', _node ~ '/rrddata'] + _day + _json,
+                              'updates': ['apt-get', '-q', '-s', 'dist-upgrade']}) -%}
+      {%-   if status_reboot_required_file | length > 0 -%}
+      {%-     set _ = c.update({'reboot': ['test', '-e', status_reboot_required_file]}) -%}
+      {%-   endif -%}
+      {%-   for vm in status_vms -%}
+      {%-     set vmid = vm.vmid | string -%}
+      {%-     set _ = c.update({'rrd-' ~ vmid: ['pvesh', 'get', _node ~ '/qemu/' ~ vmid ~ '/rrddata'] + _day + _json,
+                                'pending-' ~ vmid: ['pvesh', 'get', _node ~ '/qemu/' ~ vmid ~ '/pending'] + _json}) -%}
+      {%-     if vm.guest_agent | default(false) -%}
+      {%-       set _ = c.update({'fsinfo-' ~ vmid: ['qm', 'guest', 'cmd', vmid, 'get-fsinfo'],
+                                  'osinfo-' ~ vmid: ['qm', 'guest', 'cmd', vmid, 'get-osinfo']}) -%}
+      {%-     endif -%}
+      {%-   endfor -%}
+      {%- endif -%}
+      {%- if 'storage' in _types -%}
+      {%-   for storage in status_budget_storages -%}
+      {%-     set _ = c.update({'content-' ~ storage: ['pvesh', 'get', _node ~ '/storage/' ~ storage ~ '/content'] + _json}) -%}
+      {%-   endfor -%}
+      {%- endif -%}
+      {{ c }}
+
+- name: proxmox | Work out what the host says
+  ansible.builtin.set_fact:
+    status_found:
+      proxmox: >-
+        {{ {'unread': _unread, 'node': status_proxmox_node_name, 'results': status_proxmox_reads.results | default({})}
+           | status_proxmox(status_vms, status_budget_storages, status_storage_headroom_gib,
+                            status_reboot_required_file) }}
+  vars:
+    _missed: >-
+      {{ [status_proxmox_name, status_proxmox_reads] | selectattr('unreachable', 'defined')
+         | selectattr('unreachable') | list }}
+    _unread: >-
+      {{ (_missed | first).msg | default('it did not answer') if _missed
+         else ('' if status_proxmox_node_name | length > 0 else 'hostname -s named no node') }}

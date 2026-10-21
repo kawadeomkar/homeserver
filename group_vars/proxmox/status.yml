@@ -1,0 +1,9 @@
+---
+# make status on the Proxmox host (roles/status's main entry point): read as the Proxmox host, its installer's
+# storage shown against the disk budget roles/proxmox_vm keeps (vm_storage_installer, group_vars/all/storage.yml, and
+# the same headroom, group_vars/proxmox/vms.yml), and Debian's flag for a pending reboot, which roles/proxmox_apt
+# writes when an upgrade asks for one.
+status_source: proxmox
+status_budget_storages: ["{{ vm_storage_installer }}"]
+status_storage_headroom_gib: "{{ proxmox_vm_host_headroom_gib }}"
+status_reboot_required_file: /run/reboot-required

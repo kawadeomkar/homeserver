@@ -1,0 +1,38 @@
+---
+# tasks_from: report. Puts together what each host of status_hosts found (status_found, from the main entry point),
+# ranks what needs attention, writes the report to status_report_file and shows it as text. make status runs as a
+# dry run and takes its exit code from that file, so the file is written in a dry run too; it holds addresses, so
+# only its owner may read it.
+
+- name: report | Put the findings together
+  ansible.builtin.set_fact:
+    status_report: "{{ _found | status_report(status_setup, status_types, now().strftime('%Y-%m-%d %H:%M %Z') | trim) }}"
+  vars:
+    _found: >-
+      {%- set out = {} -%}
+      {%- for host in status_hosts -%}
+      {%-   set _ = out.update(hostvars[host].status_found | default({})) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: report | Write the report
+  when: status_report_file | length > 0
+  block:
+    - name: report | Make the report's directory
+      ansible.builtin.file:
+        path: "{{ status_report_file | dirname }}"
+        state: directory
+        mode: "0700"
+      check_mode: false
+
+    - name: report | Write the report as JSON
+      ansible.builtin.copy:
+        content: "{{ status_report | to_nice_json }}\n"
+        dest: "{{ status_report_file }}"
+        mode: "0600"
+      check_mode: false
+
+- name: report | Show the report
+  ansible.builtin.debug:
+    msg: "{{ status_report | status_text(status_color) }}"
+  when: not status_quiet

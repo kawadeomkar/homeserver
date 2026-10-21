@@ -54,6 +54,17 @@ USB devices (usb0 to usb14) reach a running VM at once (hotplug). `qm guest cmd 
 for a running VM as the QEMU guest agent does, its NIC with the VM's MAC and the state's `guest_ip` (127.0.0.1
 otherwise), beside the loopback and a Docker bridge; `agent_down` counts calls that fail first, as while it boots.
 
+make status's reads (roles/status), in the shapes captured from a Proxmox VE 9.2 host on 2026-10-21:
+`pvesh get /cluster/resources`, the node, every VM (a template among them, with `template: 1`) and every storage in
+one list, a VM's use from the state's `usage` (cpu, mem and uptime by VMID; a running VM otherwise uses a tenth of
+its CPU and half its memory, and a stopped one nothing); `/nodes/<node>/rrddata` and `.../qemu/<id>/rrddata` with
+`--timeframe day --cf AVERAGE`, a point every ten minutes over the last day (a real host has one a minute), the
+first one carrying only its time, as for a VM started since; `/nodes/<node>/status` with the version, the running
+kernel, the uptime and the root filesystem besides the memory; and `qm guest cmd <id> get-fsinfo` and `get-osinfo`
+for a running VM, from the state's `guest_fsinfo` and `guest_osinfo` by VMID, which answer as Talos's agent does
+otherwise: no filesystem, and no OS name. The state file is replaced whole on every save, so that commands run at
+the same time, as make status runs them, never read one half written.
+
 apt-get reads the deb822 .sources files in $FAKE_PVE_SOURCES_DIR, the directory the role is given. `update`
 fails with 401 Unauthorized, as the real one does, when an enterprise.proxmox.com repository is still
 enabled, and otherwise fills the package lists from the no-subscription repository if one is enabled, or with
@@ -127,7 +138,11 @@ def load():
 
 
 def save(state):
-    state_path().write_text(json.dumps(state, indent=1, sort_keys=True))
+    # Written aside and renamed over the state, so that a command reading it meanwhile sees it whole.
+    path = state_path()
+    scratch = path.with_name(f".{path.name}.{os.getpid()}")
+    scratch.write_text(json.dumps(state, indent=1, sort_keys=True))
+    os.replace(scratch, path)
 
 
 def fail(message):
@@ -514,7 +529,16 @@ def qm(state, args):
     elif verb == "status":
         print(f"status: {vm_of(state, args[1])['status']}")
         return
-    elif verb == "guest" and args[1:2] == ["cmd"] and args[3:] == ["network-get-interfaces"]:
+    elif (
+        verb == "guest"
+        and args[1:2] == ["cmd"]
+        and args[3:]
+        in (
+            ["network-get-interfaces"],
+            ["get-fsinfo"],
+            ["get-osinfo"],
+        )
+    ):
         vm = vm_of(state, args[2])
         if vm["status"] != "running":
             fail(f"VM {args[2]} is not running")
@@ -522,6 +546,12 @@ def qm(state, args):
             state["agent_down"] -= 1
             save(state)
             fail("QEMU guest agent is not running")
+        if args[3] == "get-fsinfo":
+            print(json.dumps(state.get("guest_fsinfo", {}).get(args[2], []), indent=3))
+            return
+        if args[3] == "get-osinfo":
+            print(json.dumps(state.get("guest_osinfo", {}).get(args[2], TALOS_OSINFO), indent=3))
+            return
         # The loopback's and Docker's MACs and addresses are built here: gitleaks flags them written out.
         mac = configured_mac(applied(vm)).lower()
         print(
@@ -676,7 +706,116 @@ def get_node_status(state, node, opts):
     check_node(node)
     no_options(opts)
     memory = state.get("node_memory", {"total": 64 * 2**30, "used": 4 * 2**30})
-    return {"memory": {**memory, "free": memory["total"] - memory["used"]}, "cpuinfo": {"cpus": 8}}
+    root = {"total": 96 * 2**30, "used": 12 * 2**30}
+    return {
+        "memory": {**memory, "free": memory["total"] - memory["used"]},
+        "cpuinfo": {"cpus": 8},
+        "cpu": 0.12,
+        "uptime": NODE_UPTIME,
+        "pveversion": f"pve-manager/{state.get('packages', PACKAGES)['installed']['pve-manager']}/4f6e0ac86f9e8c7f",
+        "current-kernel": {"machine": "x86_64", "release": KERNEL, "sysname": "Linux"},
+        "rootfs": {**root, "avail": root["total"] - root["used"], "free": root["total"] - root["used"]},
+        "loadavg": ["0.67", "0.53", "0.62"],
+    }
+
+
+# What /cluster/resources and the history say of the host and its VMs, besides what the state holds.
+NODE_UPTIME = 1141465
+KERNEL = "7.0.2-6-pve"
+TALOS_OSINFO = {"kernel-release": "6.18.54-talos", "kernel-version": "#1 SMP PREEMPT_DYNAMIC", "machine": "x86_64"}
+NOW = 1792570320
+
+
+def vm_usage(state, vmid, vm):
+    """A VM's CPU and memory use and uptime: the state's `usage`, or a tenth of its CPU and half its memory."""
+    memory = int(str(applied(vm).get("memory", "512")).split("=")[-1]) * 2**20
+    if vm["status"] != "running":
+        return {"cpu": 0, "mem": 0, "uptime": 0, "maxmem": memory}
+    usage = {"cpu": 0.1, "mem": memory // 2, "uptime": 3600, **state.get("usage", {}).get(str(vmid), {})}
+    return {**usage, "maxmem": memory}
+
+
+def get_cluster_resources(state, opts):
+    no_options(opts)
+    memory = state.get("node_memory", {"total": 64 * 2**30, "used": 4 * 2**30})
+    out = [
+        {
+            "id": f"node/{NODE}",
+            "type": "node",
+            "node": NODE,
+            "status": "online",
+            "cpu": 0.12,
+            "maxcpu": 8,
+            "mem": memory["used"],
+            "maxmem": memory["total"],
+            "disk": 12 * 2**30,
+            "maxdisk": 96 * 2**30,
+            "uptime": NODE_UPTIME,
+        }
+    ]
+    for vmid, vm in sorted(state.get("vms", {}).items(), key=lambda item: int(item[0])):
+        config = applied(vm)
+        usage = vm_usage(state, vmid, vm)
+        entry = {
+            "id": f"qemu/{vmid}",
+            "type": "qemu",
+            "vmid": int(vmid),
+            "node": NODE,
+            "name": config.get("name", f"VM {vmid}"),
+            "status": vm["status"],
+            "template": int(config.get("template", 0)),
+            "maxcpu": int(config.get("cores", 1)),
+            "cpu": usage["cpu"],
+            "mem": usage["mem"],
+            "maxmem": usage["maxmem"],
+            "disk": 0,
+            "maxdisk": 0,
+            "uptime": usage["uptime"],
+        }
+        if config.get("tags"):
+            entry["tags"] = config["tags"]
+        out.append(entry)
+    for entry in state["storage"]:
+        status = get_storage_status(state, NODE, entry["storage"], {})
+        out.append(
+            {
+                "id": f"storage/{NODE}/{entry['storage']}",
+                "type": "storage",
+                "node": NODE,
+                "storage": entry["storage"],
+                "status": "available" if status["active"] else "unknown",
+                "plugintype": entry["type"],
+                "content": status["content"],
+                "shared": status["shared"],
+                "disk": status["used"],
+                "maxdisk": status["total"],
+            }
+        )
+    return out
+
+
+def day_history(opts, cpu, memory, maxmem):
+    """A day's history as --timeframe day --cf AVERAGE gives it, a point every ten minutes, the first with only its
+    time."""
+    if opts != {"timeframe": "day", "cf": "AVERAGE"}:
+        fail(f"400 Parameter verification failed: {sorted(opts)}")
+    points = [{"time": NOW - 86400}]
+    for t in range(NOW - 86400 + 600, NOW + 1, 600):
+        points.append({"time": t, "cpu": cpu, "maxcpu": 8, "mem": memory, "maxmem": maxmem, "netin": 1000.0})
+    return points
+
+
+def get_node_rrddata(state, node, opts):
+    check_node(node)
+    memory = state.get("node_memory", {"total": 64 * 2**30, "used": 4 * 2**30})
+    return day_history(opts, 0.12, memory["used"], memory["total"])
+
+
+def get_vm_rrddata(state, node, vmid, opts):
+    check_node(node)
+    vm = vm_of(state, vmid)
+    usage = vm_usage(state, vmid, vm)
+    return day_history(opts, usage["cpu"], usage["mem"], usage["maxmem"])
 
 
 def get_node_storage(state, node, opts):
@@ -753,6 +892,9 @@ def get_task_status(state, node, upid, opts):
 
 ROUTES = [
     (re.compile(r"/storage"), {"get": get_storage}),
+    (re.compile(r"/cluster/resources"), {"get": get_cluster_resources}),
+    (re.compile(r"/nodes/([^/]+)/rrddata"), {"get": get_node_rrddata}),
+    (re.compile(r"/nodes/([^/]+)/qemu/(\d+)/rrddata"), {"get": get_vm_rrddata}),
     (re.compile(r"/nodes/([^/]+)/config"), {"get": get_node_config}),
     (re.compile(r"/nodes/([^/]+)/status"), {"get": get_node_status}),
     (re.compile(r"/nodes/([^/]+)/qemu"), {"get": get_qemu}),

@@ -1629,3 +1629,96 @@ def test_haos_test_playbook_runs_the_real_plays_roles():
     assert test["vars"] == real["vars"] and test["roles"] == real["roles"]
     by_name = {task["name"]: task for task in real["pre_tasks"]}
     assert all(by_name.get(task["name"]) == task for task in test["pre_tasks"]), "a pre-task differs"
+
+
+# make status, in each setup the two switches make, with and without Home Assistant.
+STATUS_SETUPS = [
+    pytest.param(None, CLUSTER_ARGS, id="nas-cluster"),
+    pytest.param(example_without_kubernetes(), HAOS_ONLY_ARGS, id="nas"),
+    pytest.param(PROXMOX_ONLY_CLUSTER_LOCAL_YML, CLUSTER_ARGS, id="proxmox-only-cluster"),
+    pytest.param(PROXMOX_ONLY_LOCAL_YML, (), id="proxmox-only"),
+]
+
+
+@pytest.mark.parametrize(("local_yml", "extra"), STATUS_SETUPS)
+def test_status_passes_the_argument_specs(tmp_path, local_yml, extra):
+    """make status passes roles/status's checks with the tracked configuration and make's TYPE, in each setup: the
+    main entry point's on the Proxmox host, the report's on the controller."""
+    types = ("-e", json.dumps({"types": " vms,, storage "}))
+    rc, out = argspec_pass(example_tree(tmp_path, local_yml), "status.yml", *extra, *types)
+    assert rc == 0, out[-3000:]
+    assert out.count("Validating arguments against arg spec 'main'") == 1, out[-3000:]
+    assert out.count("Validating arguments against arg spec 'report'") == 1, out[-3000:]
+
+
+def test_status_refuses_a_section_it_does_not_have(tmp_path):
+    rc, out = argspec_pass(example_tree(tmp_path), "status.yml", *CLUSTER_ARGS, "-e", json.dumps({"types": "vms,apps"}))
+    assert rc != 0, out[-3000:]
+    assert "make status has no section apps: TYPE takes vms, storage, comma-separated." in out, out[-3000:]
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "extra"),
+    [
+        pytest.param(None, CLUSTER_ARGS, id="cluster-and-home-assistant"),
+        pytest.param(
+            None, ("-e", json.dumps({**CLUSTER_VARS, "vm_backup_extra_vmids": [320, 301]})), id="with-extra-vms"
+        ),
+        pytest.param(PROXMOX_ONLY_LOCAL_YML, ("-e", json.dumps({"vm_backup_extra_vmids": [320]})), id="extra-alone"),
+        pytest.param(PROXMOX_ONLY_LOCAL_YML, (), id="none"),
+    ],
+)
+def test_status_reports_on_the_vms_the_backup_covers(tmp_path, local_yml, extra):
+    """The VMs make status names are this repo's own, the same the nightly backup covers; any other VM on the host is
+    only counted."""
+    tree = example_tree(tmp_path, local_yml)
+    reported = resolve_on(tree, "homeserver", "status_vms | map(attribute='vmid') | list", *extra)
+    assert reported == resolve_on(tree, "homeserver", "vm_backup_vmids", *extra)
+
+
+# What a task may name besides its module.
+TASK_KEYWORDS = {
+    "name",
+    "when",
+    "vars",
+    "register",
+    "tags",
+    "block",
+    "rescue",
+    "always",
+    "loop",
+    "loop_control",
+    "check_mode",
+    "changed_when",
+    "failed_when",
+    "ignore_errors",
+    "ignore_unreachable",
+    "no_log",
+    "until",
+    "retries",
+    "delay",
+}
+
+
+def test_status_reads_only_through_status_read():
+    """No task of roles/status runs a command, or anything that could change a host, but through status_read, whose
+    read list refuses everything else; it writes only its own report, on the controller."""
+    allowed = {
+        "status_read",
+        "ansible.builtin.assert",
+        "ansible.builtin.set_fact",
+        "ansible.builtin.include_tasks",
+        "ansible.builtin.debug",
+        # The report entry point's own directory and file.
+        "ansible.builtin.file",
+        "ansible.builtin.copy",
+    }
+    used = {}
+    for tasks_file in sorted((ROOT / "roles" / "status" / "tasks").glob("*.yml")):
+        for task in tasks_in(yaml.safe_load(tasks_file.read_text())):
+            for module in set(task) - TASK_KEYWORDS:
+                used.setdefault(module, []).append(f"{tasks_file.name}: {task.get('name')}")
+    assert {module: where for module, where in used.items() if module not in allowed} == {}
+    report = yaml.safe_load((ROOT / "roles" / "status" / "tasks" / "report.yml").read_text())
+    writes = [t for t in tasks_in(report) if {"ansible.builtin.file", "ansible.builtin.copy"} & set(t)]
+    assert all("status_report_file" in json.dumps(t) for t in writes), "the report entry point writes elsewhere"
