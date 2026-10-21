@@ -101,9 +101,10 @@ FIXTURES = [
     ("group_vars/all/local.yml.bak", "x: 1\n", {"sensitive-file"}),
     ("group_vars/all/local.vault.yml", "$ANSIBLE_VAULT;1.1;AES256\n6162\n", {"sensitive-file"}),
     ("group_vars/all/vault.yml", "$ANSIBLE_VAULT;1.1;AES256\n6162\n", {"sensitive-file"}),
-    # make init's copies of the two, left by a run killed while writing (scripts/init/init.py, temp_copy)
+    # make init's copies of the three, left by a run killed while writing (scripts/init/init.py, temp_copy)
     (".vault_pass.init-tmp", "x\n", {"sensitive-file"}),
     ("group_vars/all/local.yml.init-tmp", "x: 1\n", {"sensitive-file"}),
+    ("group_vars/all/local.vault.yml.init-tmp", "$ANSIBLE_VAULT;1.1;AES256\n6162\n", {"sensitive-file"}),
     ("inventory", "[nas]\n", {"sensitive-file"}),
     ("inventory.ini", "[nas]\n", {"sensitive-file"}),
     ("notes/MACHINES.md", "machines\n", {"sensitive-file"}),
