@@ -83,8 +83,11 @@
         fail_msg: >-
           No app or group is called {{ app_scale_plan.unknown | join(', ') }}. The apps:
           {{ app_scale_plan.apps | join(', ') or 'none' }}; the groups: {{ app_scale_plan.groups | join(', ') or 'none' }}{{
-          ('; besides them, ' ~ app_scale_other_names | join(', ')) if app_scale_other_names else '' }}.
+          ('; besides them, ' ~ app_scale_other_names | join(', ')) if app_scale_other_names else '' }}.{{
+          (' This cluster leaves out ' ~ _left_out | join(', ') ~ ' on purpose.') if _left_out else '' }}
         quiet: true
+      vars:
+        _left_out: "{{ app_scale_plan.unknown | select('in', app_scale_disabled_names) | list }}"
 
     - name: Stop or start the apps, a wave at a time
       ansible.builtin.include_tasks: wave.yml

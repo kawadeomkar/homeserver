@@ -4,6 +4,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: frigate-config
   namespace: frigate
+  labels:
+    app.kubernetes.io/name: frigate
   annotations:
     kustomize.toolkit.fluxcd.io/prune: disabled
 spec:
@@ -21,6 +23,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: frigate-media
   namespace: frigate
+  labels:
+    app.kubernetes.io/name: frigate
   annotations:
     kustomize.toolkit.fluxcd.io/prune: disabled
 spec:

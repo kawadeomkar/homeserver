@@ -1,18 +1,26 @@
 """The kubectl verbs roles/flux_bootstrap and roles/app_scale use, for fake_talos.py's kubectl (its docstring has
 the state).
 
-`apply --server-side --field-manager M -f -|<file>`, `diff --server-side --field-manager M -f -`, `get <kind> <name>
--n <namespace> -o json`, `get kustomizations -A`, `get <kustomizations|deployments> -A -o json`, `create secret
-generic ... --dry-run=client -o yaml`, `wait --for=condition=<Available|Ready> <kind>/<name> -n <namespace>
---timeout=<d>`, `wait --for=condition=Ready kustomizations --all -A --timeout=<d>`, which times out on the state's
-`kustomizations_not_ready`, `patch deployment <name> -n <namespace> --type=merge --field-manager=M -p <json>`, `wait
---for=delete pod -l <selector> -n <namespace> --timeout=<d>` and `rollout status deployment/<name> -n <namespace>
---timeout=<d>`. Objects live in the state's `objects`, keyed "<kind>/<namespace>/<name>". As on a real cluster, every
-verb but the client-side render needs a reachable cluster, and apply and diff fail for a namespace that does not exist
-or a kind no CRD defines. A diff prints the whole new object, values included, as kubectl diff prints them, so a test
-proves the role never shows a Secret's. `apply -f <file>` takes a Flux Operator release, which its Deployment
-flux-system/flux-operator marks (operator_objects, as the tests' release server serves it): applied in order, as
-kubectl applies a file, its operator's image recorded in `operator_installs`.
+`apply --server-side --field-manager M -f -|<file>`, `diff --server-side --field-manager M -f -`, `get <kind> <name> -n
+<namespace> -o json`, `get kustomizations -A`, `get <kustomizations|deployments> -A -o json`, `create secret generic ...
+--dry-run=client -o yaml`, `wait --for=condition=<Available|Ready> <kind>/<name> -n <namespace> --timeout=<d>`, `wait
+--for=condition=Ready kustomizations --all -A --timeout=<d>`, which times out on the state's `kustomizations_not_ready`,
+`patch deployment <name> -n <namespace> --type=merge --field-manager=M -p <json>`, `wait --for=delete pod -l <selector>
+-n <namespace> --timeout=<d>`, `wait --for=delete kustomization/<name>... -n <namespace> --timeout=<d>`, `get
+deployments -A -l <selector> -o json`, `delete deployment <name> -n <namespace>` and `rollout status deployment/<name>
+-n <namespace> --timeout=<d>`. Objects live in the state's `objects`, keyed "<kind>/<namespace>/<name>". As on a real
+cluster, every verb but the client-side render needs a reachable cluster, and apply and diff fail for a namespace that
+does not exist or a kind no CRD defines. A diff prints the whole new object, values included, as kubectl diff prints
+them, so a test proves the role never shows a Secret's. `apply -f <file>` takes a Flux Operator release, which its
+Deployment flux-system/flux-operator marks (operator_objects, as the tests' release server serves it): applied in order,
+as kubectl applies a file, its operator's image recorded in `operator_installs`.
+
+Applying the FluxInstance stands in for the Flux Operator and Flux: the sync Kustomization flux-system/flux-system
+carries the patches the FluxInstance's spec.kustomize.patches add to it, and each Flux Kustomization the state's
+`synced` names exists, ready, unless one of those patches deletes it, with the patches a sync patch adds to it.
+Dropping one also drops the Deployments it applied (labelled with its name), but those marked
+kustomize.toolkit.fluxcd.io/reconcile: disabled, as Flux's prune skips them; a selector a kept one gains drops those of
+its Deployments it matches, the same way.
 
 A Deployment has pods while its replicas are above zero: they go the moment it is scaled to zero, unless the state's
 `pods_linger` names it, and it is available once scaled up, unless `never_available` names it; either makes the
@@ -21,6 +29,7 @@ wait time out. Every patch and wait is appended to the state's `events`, so a te
 
 import base64
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -142,6 +151,103 @@ def selects(deployment, selector):
     return bool(wanted) and all(labels.get(k) == v for k, v in wanted.items())
 
 
+def label_selector(selector):
+    """-l <selector> as (key, values) pairs: k=v, k==v and k in (a,b), joined by commas."""
+    out = []
+    for part in re.findall(r"[^,(]+(?:\([^)]*\))?", selector):
+        part = part.strip()
+        if not part:
+            continue
+        match = re.fullmatch(r"(\S+)\s+in\s+\(([^)]*)\)", part)
+        if match:
+            out.append((match[1], {v.strip() for v in match[2].split(",") if v.strip()}))
+        else:
+            name, _, value = part.replace("==", "=").partition("=")
+            out.append((name.strip(), {value.strip()}))
+    return out
+
+
+def labelled(obj, selector):
+    labels = obj["metadata"].get("labels") or {}
+    return all(labels.get(k) in values for k, values in label_selector(selector))
+
+
+HELD = "kustomize.toolkit.fluxcd.io/reconcile"
+FLUX_NAME = "kustomize.toolkit.fluxcd.io/name"
+
+
+def prune(objects, kustomization, selector=""):
+    """What Flux's prune does to the Deployments `kustomization` applied (those `selector` matches): deletes them,
+    bar those marked reconcile: disabled."""
+    for k in [k for k, obj in objects.items() if k.startswith("Deployment/")]:
+        obj = objects[k]
+        if (obj["metadata"].get("labels") or {}).get(FLUX_NAME) != kustomization:
+            continue
+        if selector and not labelled(obj, selector):
+            continue
+        if (obj["metadata"].get("annotations") or {}).get(HELD) != "disabled":
+            del objects[k]
+
+
+def reconcile_flux(state):
+    """The Flux Operator rendering the sync from the FluxInstance, and the sync applying and pruning."""
+    objects = state["objects"]
+    instance = objects.get("FluxInstance/flux-system/flux")
+    if instance is None:
+        return
+    sync_patches = []
+    for patch in ((instance.get("spec") or {}).get("kustomize") or {}).get("patches") or []:
+        target = patch.get("target") or {}
+        if target.get("kind") == "Kustomization" and target.get("name") == "flux-system":
+            for op in yaml.safe_load(patch["patch"]):
+                if op["op"] == "add" and op["path"] == "/spec/patches":
+                    sync_patches = op["value"]
+    sync = {
+        "apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+        "kind": "Kustomization",
+        "metadata": {"name": "flux-system", "namespace": "flux-system", "generation": 1},
+        "spec": {"path": instance["spec"]["sync"]["path"], "prune": True, "interval": "10m0s"},
+        "status": {"observedGeneration": 1, "conditions": [{"type": "Ready", "status": "True"}]},
+    }
+    if sync_patches:
+        sync["spec"]["patches"] = sync_patches
+    objects["Kustomization/flux-system/flux-system"] = sync
+    for name in state.get("synced", []):
+        k = f"Kustomization/flux-system/{name}"
+        dropped, child_patches = False, []
+        for patch in sync_patches:
+            target = patch.get("target") or {}
+            if target.get("kind") != "Kustomization" or not re.fullmatch(target.get("name", ""), name):
+                continue
+            if "$patch: delete" in patch["patch"]:
+                dropped = True
+            else:
+                for op in yaml.safe_load(patch["patch"]):
+                    if op["op"] == "add" and op["path"] == "/spec/patches":
+                        child_patches = op["value"]
+        if dropped:
+            if k in objects:
+                del objects[k]
+                prune(objects, name)
+            continue
+        old = objects.get(k)
+        generation = (old or {}).get("metadata", {}).get("generation", 0)
+        if old is None or (old["spec"].get("patches") or []) != child_patches:
+            generation += 1
+        child = {
+            "apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+            "kind": "Kustomization",
+            "metadata": {"name": name, "namespace": "flux-system", "generation": generation},
+            "spec": {"path": f"./k8s/apps/{name.removeprefix('apps-')}", "prune": True},
+            "status": {"observedGeneration": generation, "conditions": [{"type": "Ready", "status": "True"}]},
+        }
+        if child_patches:
+            child["spec"]["patches"] = child_patches
+        objects[k] = child
+        for patch in child_patches:
+            prune(objects, name, (patch.get("target") or {}).get("labelSelector", ""))
+
+
 def documents(source, fail):
     if source == "-":
         return [doc for doc in yaml.safe_load_all(sys.stdin.read()) if doc]
@@ -201,15 +307,21 @@ def run(state, kubeconfig, args, reach, fail):
             objects[key(doc)] = compared(doc)
             print(f"{doc['kind'].lower()}/{doc['metadata']['name']} serverside-applied")
         state["mutations"] = state.get("mutations", 0) + 1
+        if any(doc["kind"] == "FluxInstance" for doc in docs):
+            reconcile_flux(state)
         return
     if verb == "get":
-        flags, positional = flags_of(rest, {"-n", "-o"}, {"-A"}, fail)
+        flags, positional = flags_of(rest, {"-n", "-o", "-l"}, {"-A"}, fail)
         listed = {"kustomizations": "Kustomization", "deployments": "Deployment"}
         if len(positional) == 1 and positional[0] in listed and flags.get("-A") and flags.get("-o") == "json":
             kind = listed[positional[0]]
             if kind not in kinds(state):
                 fail(f'error: the server doesn\'t have a resource type "{positional[0]}"')
-            items = [obj for k, obj in sorted(objects.items()) if k.startswith(kind + "/")]
+            items = [
+                obj
+                for k, obj in sorted(objects.items())
+                if k.startswith(kind + "/") and (not flags.get("-l") or labelled(obj, flags["-l"]))
+            ]
             print(json.dumps({"apiVersion": "v1", "kind": "List", "items": items}))
             return
         if positional == ["kustomizations"] and flags.get("-A"):
@@ -217,7 +329,12 @@ def run(state, kubeconfig, args, reach, fail):
                 fail('error: the server doesn\'t have a resource type "kustomizations"')
             print("NAMESPACE     NAME          AGE   READY   STATUS\nflux-system   flux-system   1m    True    Applied")
             return
-        kind = {"deployment": "Deployment", "fluxinstance": "FluxInstance", "configmap": "ConfigMap"}[positional[0]]
+        kind = {
+            "deployment": "Deployment",
+            "fluxinstance": "FluxInstance",
+            "configmap": "ConfigMap",
+            "kustomization": "Kustomization",
+        }[positional[0]]
         obj = objects.get(f"{kind}/{flags.get('-n', '')}/{positional[1]}")
         if obj is None:
             fail(f'Error from server (NotFound): {positional[0]}s "{positional[1]}" not found')
@@ -250,6 +367,25 @@ def run(state, kubeconfig, args, reach, fail):
         if name in state.get("never_available", []):
             fail("error: timed out waiting for the condition")
         print(f'deployment "{name}" successfully rolled out')
+        return
+    if verb == "delete":
+        flags, positional = flags_of(rest, {"-n"}, set(), fail)
+        if positional[:1] != ["deployment"] or len(positional) != 2:
+            fail("the fake deletes one deployment by name only")
+        name, namespace = positional[1], flags.get("-n", "")
+        if objects.pop(f"Deployment/{namespace}/{name}", None) is None:
+            fail(f'Error from server (NotFound): deployments.apps "{name}" not found')
+        state.setdefault("events", []).append(f"delete {namespace}/{name}")
+        state["mutations"] = state.get("mutations", 0) + 1
+        print(f'deployment.apps "{name}" deleted')
+        return
+    if verb == "wait" and "--for=delete" in rest and any(a.startswith("kustomization/") for a in rest):
+        flags, positional = flags_of(rest, {"--for", "-n", "--timeout"}, set(), fail)
+        namespace = flags.get("-n", "")
+        state.setdefault("events", []).append("wait deleted " + " ".join(positional))
+        left = [p for p in positional if f"Kustomization/{namespace}/{p.partition('/')[2]}" in objects]
+        if left:
+            fail(f"error: timed out waiting for the condition on {left[0]}")
         return
     if verb == "wait" and "--for=delete" in rest:
         flags, positional = flags_of(rest, {"--for", "-n", "--timeout", "-l"}, set(), fail)

@@ -7,10 +7,10 @@ resources:
   - network-policy.yaml
   - homepage.yaml
 # Homepage's configuration, copied into its emptyDir at every start (homepage.yaml). Generated, so its name carries a
-# hash of its content and a change rolls the pods; a plain ConfigMap would be read only at their next start. Each
-# tile links to its app's ingress and checks its Service from inside the cluster. Flux fills in ${DOMAIN} and the
-# optional ${HAOS_URL} after kustomize has taken that hash, so homepage.yaml's pod template carries both too. The
-# empty files are ones Homepage would otherwise write a skeleton of into the emptyDir.
+# hash of its content and a change rolls the pods; a plain ConfigMap would be read only at their next start. Flux
+# fills in ${DOMAIN} and the optional ${HAOS_URL} after kustomize has taken that hash, so homepage.yaml's pod template
+# carries both too. The empty files are ones Homepage would otherwise write a skeleton of into the emptyDir.
+# services.yaml is not here: the init container joins it from homepage-tiles, below.
 # kubernetes.yaml turns its Kubernetes integration off: no tile reads the cluster, so it holds no token and no role,
 # and a page anyone on the LAN can open lists no pod or node.
 configMapGenerator:
@@ -21,11 +21,36 @@ configMapGenerator:
       - settings.yaml=config/settings.yaml.tmpl
       - bookmarks.yaml=config/bookmarks.yaml.tmpl
       - widgets.yaml=config/widgets.yaml.tmpl
-      - services.yaml=config/services.yaml.tmpl
     literals:
       - custom.css=
       - custom.js=
       - docker.yaml=
+    options:
+      labels:
+        app.kubernetes.io/name: homepage
+  # Homepage's tiles: a header per group (section-<group>) and a tile per app (tile-<app>), each a fragment of
+  # services.yaml, which the init container joins in the order the cluster setting HOMEPAGE_SERVICES gives, so the
+  # page shows only the apps this host runs (group_vars/kubernetes/flux.yml). Each tile links to its app's ingress and
+  # checks its Service from inside the cluster.
+  - name: homepage-tiles
+    namespace: homepage
+    files:
+      - section-frigate.yaml=tiles/section-frigate.yaml.tmpl
+      - section-home.yaml=tiles/section-home.yaml.tmpl
+      - section-media.yaml=tiles/section-media.yaml.tmpl
+      - section-nextcloud.yaml=tiles/section-nextcloud.yaml.tmpl
+      - section-photoprism.yaml=tiles/section-photoprism.yaml.tmpl
+      - tile-filebrowser.yaml=tiles/tile-filebrowser.yaml.tmpl
+      - tile-frigate.yaml=tiles/tile-frigate.yaml.tmpl
+      - tile-homeassistant.yaml=tiles/tile-homeassistant.yaml.tmpl
+      - tile-jellyfin.yaml=tiles/tile-jellyfin.yaml.tmpl
+      - tile-nextcloud.yaml=tiles/tile-nextcloud.yaml.tmpl
+      - tile-photoprism.yaml=tiles/tile-photoprism.yaml.tmpl
+      - tile-prowlarr.yaml=tiles/tile-prowlarr.yaml.tmpl
+      - tile-radarr.yaml=tiles/tile-radarr.yaml.tmpl
+      - tile-sabnzbd.yaml=tiles/tile-sabnzbd.yaml.tmpl
+      - tile-seerr.yaml=tiles/tile-seerr.yaml.tmpl
+      - tile-sonarr.yaml=tiles/tile-sonarr.yaml.tmpl
     options:
       labels:
         app.kubernetes.io/name: homepage

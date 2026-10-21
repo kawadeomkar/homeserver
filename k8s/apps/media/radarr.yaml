@@ -4,6 +4,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: radarr-config
   namespace: media
+  labels:
+    app.kubernetes.io/name: radarr
   annotations:
     kustomize.toolkit.fluxcd.io/prune: disabled
 spec:

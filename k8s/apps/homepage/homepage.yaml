@@ -2,10 +2,11 @@
 # Homepage, the start page at the domain's apex. The one app with two replicas, rolled one at a time and spread
 # across nodes when there are two, since it holds nothing. Homepage writes into /app/config (its logs, and a skeleton
 # file for any its configuration lacks) and exits when it cannot, so /app/config is an emptyDir the ConfigMap is
-# copied into at each start: a release that adds a skeleton file then starts too. The ConfigMap is generated
-# (kustomization.yaml), so a change to its files rolls the pods. Kustomize takes its hash before Flux fills in the
-# settings, so the pod template carries those too: the domain in HOMEPAGE_ALLOWED_HOSTS, Home Assistant's address in
-# an annotation, and a change to either rolls the pods as well.
+# copied into at each start: a release that adds a skeleton file then starts too. Its services.yaml is joined there
+# from the tiles of the apps this host runs, in the order HOMEPAGE_SERVICES gives (kustomization.yaml). The
+# ConfigMaps are generated, so a change to their files rolls the pods. Kustomize takes their hash before Flux fills
+# in the settings, so the pod template carries those too: the domain in HOMEPAGE_ALLOWED_HOSTS, the tiles in
+# HOMEPAGE_SERVICES, Home Assistant's address in an annotation, and a change to any of them rolls the pods as well.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -62,7 +63,19 @@ spec:
       initContainers:
         - name: copy-config
           image: ghcr.io/gethomepage/homepage:v1.13.2@sha256:a0b71c8e757298d02560186bab9fbe3fc2d375c523a62cc1019177b37e48aa28
-          command: [sh, -c, 'cp /seed/* /app/config/']
+          # A fragment that is missing fails the start; no tile at all is an empty list, which Homepage reads.
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              cp /seed/* /app/config/
+              : > /app/config/services.yaml
+              for f in $HOMEPAGE_SERVICES; do cat "/tiles/$f.yaml" >> /app/config/services.yaml; done
+              [ -s /app/config/services.yaml ] || echo '[]' > /app/config/services.yaml
+          env:
+            - name: HOMEPAGE_SERVICES
+              value: "${HOMEPAGE_SERVICES}"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -74,6 +87,8 @@ spec:
           volumeMounts:
             - name: seed
               mountPath: /seed
+            - name: tiles
+              mountPath: /tiles
             - name: config
               mountPath: /app/config
       containers:
@@ -116,6 +131,9 @@ spec:
         - name: seed
           configMap:
             name: homepage
+        - name: tiles
+          configMap:
+            name: homepage-tiles
         - name: config
           emptyDir: {}
 ---

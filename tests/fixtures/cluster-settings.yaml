@@ -16,6 +16,9 @@ nas:
   LB_TRAEFIK_IP: 192.0.2.40
   LB_FRIGATE_IP: 192.0.2.41
   DATA_NODE: homeserver-worker-1
+  HOMEPAGE_SERVICES: >-
+    section-media tile-jellyfin tile-seerr tile-sonarr tile-radarr tile-prowlarr tile-sabnzbd tile-filebrowser
+    section-nextcloud tile-nextcloud section-photoprism tile-photoprism section-frigate tile-frigate
   NAS_ADDRESS: 192.0.2.10
   NAS_POOL_PERSISTENT: persistent
   NAS_POOL_EPHEMERAL: ephemeral
@@ -34,5 +37,8 @@ local:
   LB_TRAEFIK_IP: 192.0.2.40
   LB_FRIGATE_IP: 192.0.2.41
   DATA_NODE: homeserver-worker-1
+  HOMEPAGE_SERVICES: >-
+    section-media tile-jellyfin tile-seerr tile-sonarr tile-radarr tile-prowlarr tile-sabnzbd tile-filebrowser
+    section-nextcloud tile-nextcloud section-photoprism tile-photoprism section-frigate tile-frigate
   MEDIA_LOCAL_PATH: /var/mnt/media/library
   FRIGATE_LOCAL_PATH: /var/mnt/media/frigate

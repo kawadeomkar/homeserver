@@ -226,8 +226,8 @@ test key there too), and never merge that branch.
 
 Never set `proxmox_vm_allow_overcommit` on a host whose thin pool other VMs share: a full pool gives them all I/O
 errors. Once Flux is up, Homepage is the one app that starts there, since every other group holds a Secret
-(FileBrowser's, in media). To test a group, encrypt its Secrets for the test key as above, and stop the heavy ones
-once they run (`make down ONLY=nextcloud,photoprism,frigate`, from the clone: it refuses an app that never started),
-or point `flux_sync_ref` at a branch that lists fewer apps (`refs/heads/<branch>`, a full reference, with
-`flux_sync_ref_unprotected`; see below). Afterwards: `qm stop 300 301`, then `qm destroy 300 --purge` and
+(FileBrowser's, in media). To test a group, encrypt its Secrets for the test key as above. Choose what the host runs
+in its `local.yml` rather than stopping apps once they start: `kubernetes_apps` takes whole groups and single apps,
+`[group=homepage, app=jellyfin]` say, and the settings check refuses a choice whose requests the worker cannot hold,
+before anything changes (`group_vars/all/local.yml.example` has the numbers). Afterwards: `qm stop 300 301`, then `qm destroy 300 --purge` and
 `qm destroy 301 --purge`, delete their backups and the ISO, the clone, and its `kubernetes_talos_config_dir`.

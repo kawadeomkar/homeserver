@@ -27,8 +27,10 @@ flux_bootstrap_age_key_file: "{{ sops_age_key_file | default('~/.config/sops/age
 # appear in a manifest. With a NAS, its address, pools and the media dataset; without one, where the media and
 # camera recordings live on the worker: its media disk (Talos's media volume, /var/mnt/media), or its data volume when
 # local.yml keeps them there (kubernetes_media_on_data_volume), so one set of manifests serves both. HAOS_URL,
-# Home Assistant OS's address for Homepage's tile, only when local.yml sets haos_url. Prometheus keeps less history
-# without a NAS, whose host is usually the smaller.
+# Home Assistant OS's address for Homepage's tile, only when local.yml sets haos_url. LB_FRIGATE_IP only when local.yml
+# gives Frigate's address, which kubernetes_settings_error requires while Frigate runs: its manifests are the only ones
+# that name it, and Flux never builds them without Frigate. HOMEPAGE_SERVICES, the tiles Homepage shows (below).
+# Prometheus keeps less history without a NAS, whose host is usually the smaller.
 # With the host's iGPU passed to the worker (local.yml's kubernetes_gpu_mapping), Jellyfin and Frigate ask for it
 # (GPU_I915 1) and Frigate detects on it; without, they ask for none (a limit of 0 schedules anywhere) and use the CPU.
 # INGRESS_ALLOWED_RANGE is who Traefik serves: local.yml's kubernetes_ingress_allowed_range, set once every app's
@@ -41,8 +43,9 @@ flux_bootstrap_settings: >-
       'TZ': kubernetes_timezone,
       'LB_RANGE': kubernetes_lb_range | string,
       'LB_TRAEFIK_IP': kubernetes_lb_traefik_ip | string,
-      'LB_FRIGATE_IP': kubernetes_lb_frigate_ip | string,
-      'DATA_NODE': kubernetes_data_node}
+      'DATA_NODE': kubernetes_data_node,
+      'HOMEPAGE_SERVICES': kubernetes_homepage_services}
+     | combine({'LB_FRIGATE_IP': kubernetes_lb_frigate_ip | string} if kubernetes_lb_frigate_ip | default('', true) else {})
      | combine({'NAS_ADDRESS': nas_address, 'NAS_POOL_PERSISTENT': nas_pools.persistent,
                 'NAS_POOL_EPHEMERAL': nas_pools.ephemeral,
                 'MEDIA_DATASET': vm_storage_mount_root ~ '/' ~ nas_pools.ephemeral ~ '/jellyfin'} if nas_present else
@@ -58,3 +61,42 @@ flux_bootstrap_settings: >-
                 'EGRESS_DENIED_ADDRESS': (nas_address if nas_present else proxmox_address) | string | trim,
                 'PROXMOX_ADDRESS': proxmox_address | string | trim})
      | combine({'HAOS_URL': haos_url} if haos_url | default('', true) else {}) }}
+
+# The apps this host leaves out (kubernetes_apps_enabled, group_vars/all/kubernetes.yml), as roles/flux_bootstrap
+# takes them: a group none of whose apps run drops its Flux Kustomization from the sync, which prunes it; a group some
+# of whose apps run keeps it, and its own build drops the others' objects, which carry their app's name, a database's
+# included (kubernetes_app_catalogue's objects). Their claims are marked never to be pruned, so the data stays.
+flux_bootstrap_sync_exclude: >-
+  {%- set out = [] -%}
+  {%- for group, apps in kubernetes_app_catalogue.items() -%}
+  {%-   set off = apps.keys() | reject('in', kubernetes_apps_enabled) | list -%}
+  {%-   if off | length == apps | length -%}
+  {%-     set _ = out.append({'kustomization': 'apps-' ~ group}) -%}
+  {%-   elif off -%}
+  {%-     set names = [] -%}
+  {%-     for app in off -%}
+  {%-       set _ = names.extend(apps[app].objects | default([app])) -%}
+  {%-     endfor -%}
+  {%-     set _ = out.append({'kustomization': 'apps-' ~ group,
+                              'selector': 'app.kubernetes.io/name in (' ~ names | join(',') ~ ')'}) -%}
+  {%-   endif -%}
+  {%- endfor -%}
+  {{ out }}
+# Homepage's tiles, as the fragments of its homepage-tiles ConfigMap (k8s/apps/homepage/tiles/) its init container
+# joins into services.yaml, in order: one section per group, a header before the group's first app that runs, then
+# those apps' tiles; Home Assistant's last, when local.yml gives haos_url. Homepage itself has no tile.
+kubernetes_homepage_services: >-
+  {%- set out = [] -%}
+  {%- for group, apps in kubernetes_app_catalogue.items() if group != 'homepage' -%}
+  {%-   set on = apps.keys() | select('in', kubernetes_apps_enabled) | list -%}
+  {%-   if on -%}
+  {%-     set _ = out.append('section-' ~ group) -%}
+  {%-     for app in on -%}
+  {%-       set _ = out.append('tile-' ~ app) -%}
+  {%-     endfor -%}
+  {%-   endif -%}
+  {%- endfor -%}
+  {%- if haos_url | default('', true) -%}
+  {%-   set _ = out.extend(['section-home', 'tile-homeassistant']) -%}
+  {%- endif -%}
+  {{ out | join(' ') }}

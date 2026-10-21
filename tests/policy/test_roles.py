@@ -559,7 +559,7 @@ def test_flux_settings_resolve_on_the_kubernetes_host(tmp_path, local_yml, path,
         " | select('search', 'kind: UserVolumeConfig') | map('regex_search', 'name: (\\S+)', '\\1') | flatten]",
         *CLUSTER_ARGS,
     )
-    common = {"DOMAIN", "TZ", "LB_RANGE", "LB_TRAEFIK_IP", "LB_FRIGATE_IP", "DATA_NODE"}
+    common = {"DOMAIN", "TZ", "LB_RANGE", "LB_TRAEFIK_IP", "LB_FRIGATE_IP", "DATA_NODE", "HOMEPAGE_SERVICES"}
     common |= {
         "GPU_I915",
         "FRIGATE_DETECTOR_DEVICE",
@@ -822,7 +822,7 @@ def without(settings, *names):
             [
                 "It gives none to homeserver-worker-1.",
                 "homeserver-cp-1 runs the control plane alone and takes no data or media disk",
-                "kubernetes_node_sizes must give homeserver-worker-1, which runs every app, cores, memory_mib",
+                "kubernetes_node_sizes must give homeserver-worker-1, which runs the apps, cores, memory_mib",
             ],
             id="proxmox-only-single-node-as-before",
         ),
@@ -858,7 +858,7 @@ def without(settings, *names):
             PROXMOX_ONLY_CLUSTER_LOCAL_YML.replace("kubernetes_node_sizes:", "unused_sizes:"),
             CLUSTER_VARS,
             [
-                "kubernetes_node_sizes must give homeserver-worker-1, which runs every app, cores, memory_mib, "
+                "kubernetes_node_sizes must give homeserver-worker-1, which runs the apps, cores, memory_mib, "
                 "system_disk_gib, data_disk_gib, media_disk_gib"
             ],
             id="proxmox-only-unsized",
@@ -1159,6 +1159,87 @@ def without(settings, *names):
             ["kubernetes_lb_traefik_ip must be an IPv4 address, such as 192.0.2.40, not 192.0.2.400."],
             id="lb-address-out-of-bounds",
         ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_apps": "group=media"},
+            ["kubernetes_apps must be a list of group=<group> and app=<app> entries"],
+            id="apps-not-a-list",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_apps": ["nextcloud", "jellyfin"]},
+            [
+                "kubernetes_apps entries are group=<group> or app=<app>, such as group=media or app=jellyfin; "
+                "nextcloud is neither. nextcloud is both a group and an app: write group=nextcloud or app=nextcloud.",
+                "app=jellyfin; jellyfin is neither.",
+            ],
+            id="apps-without-a-prefix",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_apps": ["group=medias", "app=jelyfin"]},
+            [
+                "kubernetes_apps names group=medias, and there is no such group. The groups: media, nextcloud, "
+                "photoprism, frigate, homepage.",
+                "kubernetes_apps names app=jelyfin, and there is no such app. The apps: jellyfin, seerr, sonarr,",
+            ],
+            id="apps-that-do-not-exist",
+        ),
+        # A 16 GB host's worker: the media apps, Nextcloud and Homepage fit it, and every app does not.
+        pytest.param(
+            None,
+            CLUSTER_VARS
+            | {"kubernetes_node_sizes": {"homeserver-worker-1": {"cores": 4, "memory_mib": 7680}}}
+            | {"kubernetes_apps": ["group=media", "group=nextcloud", "group=homepage"]},
+            [],
+            id="apps-that-fit",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"cores": 4, "memory_mib": 7680}}},
+            [
+                "Every app and the platform request 10.0 GiB of memory, and homeserver-worker-1's 7.5 GiB leaves "
+                "about 6.7 GiB for pods, which Kubernetes places by their requests. Give it memory_mib: 11264 or "
+                "more in kubernetes_node_sizes, or run fewer apps (kubernetes_apps)."
+            ],
+            id="apps-too-many-for-the-memory",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS
+            | {"kubernetes_node_sizes": {"homeserver-worker-1": {"cores": 2, "memory_mib": 7680}}}
+            | {"kubernetes_apps": ["group=media", "app=nextcloud", "app=homepage"]},
+            [
+                "The apps chosen in kubernetes_apps (9 of 11) and the platform request 2.65 CPU, and "
+                "homeserver-worker-1's 2 cores leave 1.95 for pods",
+                "Give it cores: 3 or more in kubernetes_node_sizes",
+            ],
+            id="apps-too-many-for-the-cores",
+        ),
+        pytest.param(
+            as_local_yml(without(example(), "kubernetes_lb_frigate_ip")),
+            CLUSTER_VARS | {"kubernetes_apps": ["group=media"]},
+            [],
+            id="apps-without-frigate-need-no-address-for-it",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_apps": ["group=media"], "kubernetes_lb_frigate_ip": "192.0.2.400"},
+            ["kubernetes_lb_frigate_ip must be an IPv4 address, such as 192.0.2.40, not 192.0.2.400."],
+            id="apps-without-frigate-still-check-its-address",
+        ),
+        pytest.param(
+            PROXMOX_ONLY_CLUSTER_LOCAL_YML.replace(", media_disk_gib: 100", ""),
+            CLUSTER_VARS | {"kubernetes_apps": ["group=nextcloud", "group=photoprism", "group=homepage"]},
+            [],
+            id="proxmox-only-apps-without-media-need-no-media-disk",
+        ),
+        pytest.param(
+            PROXMOX_ONLY_CLUSTER_LOCAL_YML.replace(", media_disk_gib: 100", ""),
+            CLUSTER_VARS | {"kubernetes_apps": ["app=sonarr"]},
+            ["kubernetes_node_sizes must give homeserver-worker-1, which runs the apps, media_disk_gib."],
+            id="proxmox-only-a-media-app-needs-the-media-disk",
+        ),
     ],
 )
 def test_kubernetes_settings_are_checked(tmp_path, local_yml, extra, expected):
@@ -1238,6 +1319,79 @@ def test_secret_options_are_no_log():
     assert excepted == set(NOT_SECRET), "NOT_SECRET names an option that no longer exists or is now no_log"
 
 
+EVERY_TILE = (
+    "section-media tile-jellyfin tile-seerr tile-sonarr tile-radarr tile-prowlarr tile-sabnzbd tile-filebrowser "
+    "section-nextcloud tile-nextcloud section-photoprism tile-photoprism section-frigate tile-frigate"
+)
+
+
+@pytest.mark.parametrize(
+    ("apps", "excluded", "tiles", "left_out"),
+    [
+        pytest.param(None, [], EVERY_TILE, [], id="every-app"),
+        pytest.param(
+            ["group=media", "group=nextcloud", "group=homepage"],
+            [{"kustomization": "apps-photoprism"}, {"kustomization": "apps-frigate"}],
+            EVERY_TILE.partition(" section-photoprism")[0],
+            ["photoprism", "photoprism-db", "frigate"],
+            id="groups",
+        ),
+        pytest.param(
+            ["app=jellyfin", "app=sonarr", "app=photoprism", "group=homepage", "app=jellyfin"],
+            [
+                {
+                    "kustomization": "apps-media",
+                    "selector": "app.kubernetes.io/name in (seerr,radarr,prowlarr,sabnzbd,filebrowser)",
+                },
+                {"kustomization": "apps-nextcloud"},
+                {"kustomization": "apps-frigate"},
+            ],
+            "section-media tile-jellyfin tile-sonarr section-photoprism tile-photoprism",
+            ["seerr", "radarr", "prowlarr", "sabnzbd", "filebrowser", "nextcloud", "nextcloud-db", "frigate"],
+            id="single-apps",
+        ),
+        pytest.param(
+            [],
+            [{"kustomization": f"apps-{g}"} for g in ("media", "nextcloud", "photoprism", "frigate", "homepage")],
+            "",
+            [
+                "media",
+                "jellyfin",
+                "seerr",
+                "sonarr",
+                "radarr",
+                "prowlarr",
+                "sabnzbd",
+                "filebrowser",
+                "nextcloud",
+                "nextcloud-db",
+                "photoprism",
+                "photoprism-db",
+                "frigate",
+                "homepage",
+            ],
+            id="the-platform-alone",
+        ),
+    ],
+)
+def test_apps_this_host_runs(tmp_path, apps, excluded, tiles, left_out):
+    """local.yml's kubernetes_apps, group=<group> and app=<app> entries, becomes what Flux's sync leaves out: a group
+    none of whose apps run whole, and the others' objects in a group some of whose apps run, a database with its app;
+    Homepage's tiles, a section per group that runs anything; and what make down and make up say a host leaves out.
+    Unset, every app runs and nothing is left out."""
+    given = CLUSTER_VARS | ({"kubernetes_apps": apps} if apps is not None else {})
+    tree = example_tree(tmp_path)
+    got = resolve_on(
+        tree,
+        "homeserver-k8s",
+        "[flux_bootstrap_sync_exclude, flux_bootstrap_settings.HOMEPAGE_SERVICES, kubernetes_apps_disabled_names]",
+        "-e",
+        json.dumps(given),
+    )
+    assert got == [excluded, tiles, left_out]
+    assert resolve_on(tree, "homeserver", "kubernetes_settings_error", "-e", json.dumps(given)) == []
+
+
 def test_home_assistant_url_is_a_setting_only_when_given(tmp_path):
     """Homepage's tile reads ${HAOS_URL:=}: the setting exists only when local.yml names Home Assistant OS's address,
     which is never tracked."""
@@ -1246,6 +1400,8 @@ def test_home_assistant_url_is_a_setting_only_when_given(tmp_path):
     given = json.dumps({**CLUSTER_VARS, "haos_url": "http://homeassistant.home.arpa:8123"})
     settings = resolve_on(tree, "homeserver-k8s", "flux_bootstrap_settings", "-e", given)
     assert settings["HAOS_URL"] == "http://homeassistant.home.arpa:8123"
+    # Homepage shows its tile then, last.
+    assert settings["HOMEPAGE_SERVICES"].endswith(" section-frigate tile-frigate section-home tile-homeassistant")
 
 
 @pytest.mark.parametrize("local_yml", [None, PROXMOX_ONLY_CLUSTER_LOCAL_YML], ids=["nas", "proxmox-only"])

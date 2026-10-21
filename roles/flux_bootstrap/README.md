@@ -24,6 +24,17 @@ Each object is compared with `kubectl diff --server-side` and applied with `kube
 under the field manager `homeserver-ansible`, only when it differs. A dry run before the operator exists says what
 a real run would install; the diffs need the operator's namespace and its FluxInstance definition.
 
+`flux_bootstrap_sync_exclude` has the sync leave part of the repository out, through the FluxInstance's own
+patches (`spec.kustomize.patches`), which the operator applies to the sync Kustomization `flux-system` it renders. An
+entry with a `kustomization` alone drops that Flux Kustomization from the sync, which prunes it and what it applied,
+bar objects marked `kustomize.toolkit.fluxcd.io/prune: disabled`; all such entries share one delete, whose target
+names them in one regular expression, and a target that matches nothing is no error. An entry with a `selector` too
+keeps the Kustomization and adds a delete by that label selector to its own `spec.patches`, so its build drops the
+matching objects, which it then prunes. Empty, the FluxInstance carries no patch. A real run then reads the sync back
+and fails if it does not carry the patches, waits for each Kustomization dropped to be deleted and for each kept one
+to have applied its new patch, and deletes the Deployments it left out that carry
+`kustomize.toolkit.fluxcd.io/reconcile: disabled`, which Flux's prune skips; a dry run names them.
+
 A FluxInstance that already syncs another path is refused, in a dry run too, before anything is applied: Flux
 prunes what the new path lacks, so moving it deletes everything the old one applied, the apps' volumes with
 them. `flux_bootstrap_allow_path_change` lets one run do it.
@@ -49,6 +60,7 @@ Never install Flux through Talos's `KubeExternalManifestConfig`: Talos re-applie
 | `flux_bootstrap_settings` | `{}` | The `cluster-settings` ConfigMap's keys and values, all strings |
 | `flux_bootstrap_age_key_file` | `""` | The age key file; one key, mode 0600 |
 | `flux_bootstrap_wait_timeout` | `10m` | How long a real run waits for the operator, the FluxInstance and the Kustomizations |
+| `flux_bootstrap_sync_exclude` | `[]` | What the sync leaves out: `{kustomization}` drops one, `{kustomization, selector}` drops the objects a label selector matches from its build |
 | `flux_bootstrap_allow_path_change` | `false` | Let a run move the FluxInstance to another path, deleting what the old one applied |
 
 ## Example

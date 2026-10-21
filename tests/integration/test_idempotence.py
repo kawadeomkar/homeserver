@@ -2301,6 +2301,110 @@ def test_flux_bootstrap(tmp_path, operator_releases, nas):
     no_age_key(outputs)
 
 
+GROUPS = ["apps-media", "apps-nextcloud", "apps-photoprism", "apps-frigate", "apps-homepage"]
+
+
+def app_deployment(namespace, name, kustomization, held=False):
+    """A Deployment as Flux applies it, labelled with its Kustomization and its app; `held` as make down leaves it."""
+    meta = {
+        "name": name,
+        "namespace": namespace,
+        "labels": {
+            "app.kubernetes.io/name": name,
+            "kustomize.toolkit.fluxcd.io/name": kustomization,
+            "kustomize.toolkit.fluxcd.io/namespace": "flux-system",
+        },
+    }
+    if held:
+        meta["annotations"] = {"kustomize.toolkit.fluxcd.io/reconcile": "disabled", "homeserver.internal/replicas": "1"}
+    return {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": meta,
+        "spec": {"replicas": 0 if held else 1, "selector": {"matchLabels": {"app.kubernetes.io/name": name}}},
+    }
+
+
+@pytest.mark.cluster
+def test_flux_bootstrap_leaves_apps_out(tmp_path, operator_releases):
+    """local.yml's kubernetes_apps reaches Flux through the FluxInstance alone: a group none of whose apps run is
+    dropped from the sync, which prunes it, and a group some of whose apps run keeps its Kustomization, whose own build
+    drops the others by their label. The run waits until Flux has done both, then deletes the Deployments make down
+    held there, which Flux's prune skips; a dry run names them and changes nothing. Running every app again takes
+    the patch away, and the groups come back."""
+    extra, env = flux_vars(tmp_path, operator_releases), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    (Path(extra["talos_config_dir"]) / "kubeconfig").write_text("apiVersion: v1\n")
+    write(state, {"nodes": {}, "mutations": 0, "bootstrapped": True, "synced": GROUPS})
+    expect(run("flux.yml", extra, env=env), "homeserver-k8s", changed=True, note="every app")
+    objects = flux_objects(state)
+    assert "kustomize" not in objects["FluxInstance/flux-system/flux"]["spec"]
+    assert "patches" not in objects["Kustomization/flux-system/flux-system"]["spec"]
+    assert {k.rpartition("/")[2] for k in objects if k.startswith("Kustomization/")} == {"flux-system", *GROUPS}
+
+    # The apps as Flux applied them: Seerr and PhotoPrism held by make down, the others running.
+    s = read(state)
+    for namespace, name, group, held in [
+        ("media", "jellyfin", "apps-media", False),
+        ("media", "seerr", "apps-media", True),
+        ("media", "radarr", "apps-media", False),
+        ("nextcloud", "nextcloud", "apps-nextcloud", False),
+        ("photoprism", "photoprism", "apps-photoprism", True),
+        ("photoprism", "photoprism-db", "apps-photoprism", False),
+    ]:
+        s["objects"][f"Deployment/{namespace}/{name}"] = app_deployment(namespace, name, group, held)
+    write(state, s)
+
+    chosen = extra | {"kubernetes_apps": ["app=jellyfin", "app=sonarr", "group=nextcloud", "group=homepage"]}
+    mutations = read(state)["mutations"]
+    result = run("flux.yml", chosen, check=True, env=env)
+    expect(result, "homeserver-k8s", changed=True, note="dry run leaving apps out")
+    held = "Would delete, as make down left them, once Flux has left them out: media/seerr, photoprism/photoprism."
+    assert held in result[2], result[2][-3000:]
+    assert read(state)["mutations"] == mutations
+
+    result = run("flux.yml", chosen, env=env)
+    expect(result, "homeserver-k8s", changed=True, note="leaving apps out")
+    objects = flux_objects(state)
+    patches = objects["FluxInstance/flux-system/flux"]["spec"]["kustomize"]["patches"]
+    assert [p["target"] for p in patches] == [
+        {"group": "kustomize.toolkit.fluxcd.io", "kind": "Kustomization", "name": "flux-system"}
+    ]
+    sync = objects["Kustomization/flux-system/flux-system"]["spec"]["patches"]
+    assert [p["target"]["name"] for p in sync] == ["(apps-photoprism|apps-frigate)", "apps-media"]
+    assert sync[0]["patch"].startswith("$patch: delete\n")
+    media = objects["Kustomization/flux-system/apps-media"]["spec"]["patches"]
+    assert media == [
+        {
+            "target": {"labelSelector": "app.kubernetes.io/name in (seerr,radarr,prowlarr,sabnzbd,filebrowser)"},
+            "patch": "$patch: delete\napiVersion: v1\nkind: Excluded\nmetadata:\n  name: excluded\n",
+        }
+    ]
+    kustomizations = {k.rpartition("/")[2] for k in objects if k.startswith("Kustomization/")}
+    assert kustomizations == {"flux-system", "apps-media", "apps-nextcloud", "apps-homepage"}
+    # Flux pruned Radarr and PhotoPrism's database; the role deleted the two make down held, which Flux skipped.
+    deployments = {k.partition("/")[2] for k in objects if k.startswith("Deployment/") and "flux-operator" not in k}
+    assert deployments == {"media/jellyfin", "nextcloud/nextcloud"}
+    assert [e for e in read(state)["events"] if e.startswith("delete")] == [
+        "delete media/seerr",
+        "delete photoprism/photoprism",
+    ]
+    settings = objects["ConfigMap/flux-system/cluster-settings"]["data"]
+    assert settings["HOMEPAGE_SERVICES"] == "section-media tile-jellyfin tile-sonarr section-nextcloud tile-nextcloud"
+
+    for check in (False, True):
+        result = run("flux.yml", chosen, check=check, env=env)
+        expect(result, "homeserver-k8s", changed=0, note=f"{'dry run' if check else 'second run'} leaving apps out")
+
+    # Every app again: no patch anywhere, and every group back.
+    expect(run("flux.yml", extra, env=env), "homeserver-k8s", changed=True, note="every app again")
+    objects = flux_objects(state)
+    assert "kustomize" not in objects["FluxInstance/flux-system/flux"]["spec"]
+    assert "patches" not in objects["Kustomization/flux-system/flux-system"]["spec"]
+    assert "patches" not in objects["Kustomization/flux-system/apps-media"]["spec"]
+    assert {k.rpartition("/")[2] for k in objects if k.startswith("Kustomization/")} == {"flux-system", *GROUPS}
+
+
 @pytest.mark.cluster
 def test_flux_bootstrap_refuses_a_shared_key_and_reports_a_stuck_operator(tmp_path, operator_releases):
     """An age key file holding two keys, one others can read, or none, is refused before anything is applied. An

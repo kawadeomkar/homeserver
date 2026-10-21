@@ -4,6 +4,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: nextcloud-config
   namespace: nextcloud
+  labels:
+    app.kubernetes.io/name: nextcloud
   annotations:
     kustomize.toolkit.fluxcd.io/prune: disabled
 spec:
@@ -20,6 +22,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: nextcloud-data
   namespace: nextcloud
+  labels:
+    app.kubernetes.io/name: nextcloud
   annotations:
     kustomize.toolkit.fluxcd.io/prune: disabled
 spec:

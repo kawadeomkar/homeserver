@@ -31,6 +31,7 @@ says what it would stop or start, in order.
 | `app_scale_state` | `""` | `down` or `up`; empty does nothing |
 | `app_scale_only` | `[]` | The apps and groups to act on; empty means every app |
 | `app_scale_other_names` | `[]` | Names another play acts on, accepted and left to it |
+| `app_scale_disabled_names` | `[]` | Apps and groups the cluster leaves out on purpose; still refused, saying so |
 | `app_scale_kubeconfig` | `""` | The cluster's kubeconfig |
 | `app_scale_server` | `""` | The API server the kubeconfig must name |
 | `app_scale_path` | `""` | The apps are what the Flux Kustomizations under this path apply |

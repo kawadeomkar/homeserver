@@ -4,6 +4,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: filebrowser-data
   namespace: media
+  labels:
+    app.kubernetes.io/name: filebrowser
   annotations:
     kustomize.toolkit.fluxcd.io/prune: disabled
 spec:

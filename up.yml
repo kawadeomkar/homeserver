@@ -120,6 +120,8 @@
         app_scale_state: up
         # Accepted in ONLY besides the apps and groups: Home Assistant, which the next play takes.
         app_scale_other_names: "{{ ['homeassistant'] if haos_present else [] }}"
+        # What local.yml's kubernetes_apps leaves out, which a refused name is said to be.
+        app_scale_disabled_names: "{{ kubernetes_apps_disabled_names }}"
         app_scale_only: "{{ only_names }}"
 
 # A play of its own on the Proxmox host. The apps' play, whose failure ends the run before this one, has refused any

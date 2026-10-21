@@ -14,8 +14,12 @@ resources:
   - seerr.yaml
   - jellyfin.yaml
   - filebrowser.yaml
+# Labelled with its app, as every app's object is, so that leaving FileBrowser out (kubernetes_apps) leaves it out too.
 configMapGenerator:
   - name: filebrowser-config
     namespace: media
     files:
       - config.yaml=filebrowser-config.yaml.tmpl
+    options:
+      labels:
+        app.kubernetes.io/name: filebrowser

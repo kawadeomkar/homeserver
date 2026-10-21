@@ -119,6 +119,18 @@ Description: Hand a Kubernetes cluster to Flux, through the Flux Operator
   
   
 
+  - **flux_bootstrap_sync_exclude**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: What the FluxInstance's sync leaves out. An entry with a kustomization alone drops that Flux Kustomization (in flux-system) from the sync, which prunes it and what it applied, bar objects marked kustomize.toolkit.fluxcd.io/prune disabled. An entry with a selector too keeps it, and its own build drops the objects the label selector matches. Empty leaves the sync as the repository has it.
+  
+  
+  
+    
+  
+
   - **flux_bootstrap_allow_path_change**
     - **Required**: false
     - **Type**: bool
@@ -153,7 +165,8 @@ Description: Hand a Kubernetes cluster to Flux, through the Flux Operator
 | [flux_bootstrap_settings](defaults/main.yml#L19)   | dict | `{}` |    
 | [flux_bootstrap_age_key_file](defaults/main.yml#L22)   | str |  |    
 | [flux_bootstrap_wait_timeout](defaults/main.yml#L24)   | str | `10m` |    
-| [flux_bootstrap_allow_path_change](defaults/main.yml#L27)   | bool | `False` |    
+| [flux_bootstrap_sync_exclude](defaults/main.yml#L29)   | list | `[]` |    
+| [flux_bootstrap_allow_path_change](defaults/main.yml#L32)   | bool | `False` |    
 
 
 
@@ -191,6 +204,7 @@ Description: Hand a Kubernetes cluster to Flux, through the Flux Operator
 | objects ¦ Say the operator would be upgraded | ansible.builtin.debug | True |
 | objects ¦ Wait for the operator | ansible.builtin.command | True |
 | objects ¦ Render the age key as the Secret flux-system/sops-age | ansible.builtin.command | False |
+| objects ¦ Work out what the sync leaves out | ansible.builtin.set_fact | False |
 | objects ¦ Render the settings and the FluxInstance | ansible.builtin.set_fact | False |
 | objects ¦ Read the FluxInstance's path | ansible.builtin.command | False |
 | objects ¦ Refuse to move Flux to another path | ansible.builtin.assert | False |
@@ -200,6 +214,15 @@ Description: Hand a Kubernetes cluster to Flux, through the Flux Operator
 | objects ¦ Apply the age key's Secret | ansible.builtin.command | True |
 | objects ¦ Apply the settings and the FluxInstance | ansible.builtin.command | False |
 | objects ¦ Wait for the FluxInstance to be ready | ansible.builtin.command | True |
+| objects ¦ Wait for the sync to carry what it leaves out | ansible.builtin.command | True |
+| objects ¦ Refuse a sync that does not carry what it leaves out | ansible.builtin.assert | True |
+| objects ¦ Read Flux's Kustomizations | ansible.builtin.command | True |
+| objects ¦ Wait for the Kustomizations left out to be deleted | ansible.builtin.command | True |
+| objects ¦ Wait for the Kustomizations kept to leave out what their selector matches | ansible.builtin.command | True |
+| objects ¦ Refuse Kustomizations that have not left out what their selector matches | ansible.builtin.assert | True |
+| objects ¦ Find the Deployments make down held among those left out | ansible.builtin.command | False |
+| objects ¦ Say which held Deployments would be deleted | ansible.builtin.debug | True |
+| objects ¦ Delete the Deployments make down held among those left out | ansible.builtin.command | True |
 | objects ¦ Wait for Flux's Kustomizations to be ready | ansible.builtin.command | True |
 | objects ¦ Read Flux's Kustomizations | ansible.builtin.command | True |
 | objects ¦ Show Flux's Kustomizations | ansible.builtin.debug | True |
@@ -264,20 +287,30 @@ classDef rescue stroke:#665352,stroke-width:2px;
   objects___Apply_the_release4-->|Task| objects___Say_the_operator_would_be_upgraded2[objects   say the operator would be upgraded<br>When: **ansible check mode and flux bootstrap operator<br>current    flux bootstrap operator pinned**]:::task
   objects___Say_the_operator_would_be_upgraded2-->|Task| objects___Wait_for_the_operator3[objects   wait for the operator<br>When: **not ansible check mode**]:::task
   objects___Wait_for_the_operator3-->|Task| objects___Render_the_age_key_as_the_Secret_flux_system_sops_age4[objects   render the age key as the secret flux<br>system sops age]:::task
-  objects___Render_the_age_key_as_the_Secret_flux_system_sops_age4-->|Task| objects___Render_the_settings_and_the_FluxInstance5[objects   render the settings and the fluxinstance]:::task
-  objects___Render_the_settings_and_the_FluxInstance5-->|Task| objects___Read_the_FluxInstance_s_path6[objects   read the fluxinstance s path]:::task
-  objects___Read_the_FluxInstance_s_path6-->|Task| objects___Refuse_to_move_Flux_to_another_path7[objects   refuse to move flux to another path]:::task
-  objects___Refuse_to_move_Flux_to_another_path7-->|Task| objects___Compare_the_age_key_s_Secret_with_the_cluster_s8[objects   compare the age key s secret with the<br>cluster s]:::task
-  objects___Compare_the_age_key_s_Secret_with_the_cluster_s8-->|Task| objects___Compare_the_settings_and_the_FluxInstance_with_the_cluster_s9[objects   compare the settings and the<br>fluxinstance with the cluster s]:::task
-  objects___Compare_the_settings_and_the_FluxInstance_with_the_cluster_s9-->|Task| objects___Show_what_differs10[objects   show what differs<br>When: **flux bootstrap secret diff rc    1 or flux<br>bootstrap diffs results   selectattr  rc    eq   1<br>   list   length   0**]:::task
-  objects___Show_what_differs10-->|Task| objects___Apply_the_age_key_s_Secret11[objects   apply the age key s secret<br>When: **flux bootstrap secret diff rc    1**]:::task
-  objects___Apply_the_age_key_s_Secret11-->|Task| objects___Apply_the_settings_and_the_FluxInstance12[objects   apply the settings and the fluxinstance]:::task
-  objects___Apply_the_settings_and_the_FluxInstance12-->|Task| objects___Wait_for_the_FluxInstance_to_be_ready13[objects   wait for the fluxinstance to be ready<br>When: **not ansible check mode**]:::task
-  objects___Wait_for_the_FluxInstance_to_be_ready13-->|Task| objects___Wait_for_Flux_s_Kustomizations_to_be_ready14[objects   wait for flux s kustomizations to be<br>ready<br>When: **not ansible check mode**]:::task
-  objects___Wait_for_Flux_s_Kustomizations_to_be_ready14-->|Task| objects___Read_Flux_s_Kustomizations15[objects   read flux s kustomizations<br>When: **not ansible check mode**]:::task
-  objects___Read_Flux_s_Kustomizations15-->|Task| objects___Show_Flux_s_Kustomizations16[objects   show flux s kustomizations<br>When: **flux bootstrap kustomizations is not skipped**]:::task
-  objects___Show_Flux_s_Kustomizations16-->|Task| objects___Refuse_Kustomizations_that_are_not_ready17[objects   refuse kustomizations that are not ready<br>When: **flux bootstrap kustomizations ready is not skipped**]:::task
-  objects___Refuse_Kustomizations_that_are_not_ready17-->End
+  objects___Render_the_age_key_as_the_Secret_flux_system_sops_age4-->|Task| objects___Work_out_what_the_sync_leaves_out5[objects   work out what the sync leaves out]:::task
+  objects___Work_out_what_the_sync_leaves_out5-->|Task| objects___Render_the_settings_and_the_FluxInstance6[objects   render the settings and the fluxinstance]:::task
+  objects___Render_the_settings_and_the_FluxInstance6-->|Task| objects___Read_the_FluxInstance_s_path7[objects   read the fluxinstance s path]:::task
+  objects___Read_the_FluxInstance_s_path7-->|Task| objects___Refuse_to_move_Flux_to_another_path8[objects   refuse to move flux to another path]:::task
+  objects___Refuse_to_move_Flux_to_another_path8-->|Task| objects___Compare_the_age_key_s_Secret_with_the_cluster_s9[objects   compare the age key s secret with the<br>cluster s]:::task
+  objects___Compare_the_age_key_s_Secret_with_the_cluster_s9-->|Task| objects___Compare_the_settings_and_the_FluxInstance_with_the_cluster_s10[objects   compare the settings and the<br>fluxinstance with the cluster s]:::task
+  objects___Compare_the_settings_and_the_FluxInstance_with_the_cluster_s10-->|Task| objects___Show_what_differs11[objects   show what differs<br>When: **flux bootstrap secret diff rc    1 or flux<br>bootstrap diffs results   selectattr  rc    eq   1<br>   list   length   0**]:::task
+  objects___Show_what_differs11-->|Task| objects___Apply_the_age_key_s_Secret12[objects   apply the age key s secret<br>When: **flux bootstrap secret diff rc    1**]:::task
+  objects___Apply_the_age_key_s_Secret12-->|Task| objects___Apply_the_settings_and_the_FluxInstance13[objects   apply the settings and the fluxinstance]:::task
+  objects___Apply_the_settings_and_the_FluxInstance13-->|Task| objects___Wait_for_the_FluxInstance_to_be_ready14[objects   wait for the fluxinstance to be ready<br>When: **not ansible check mode**]:::task
+  objects___Wait_for_the_FluxInstance_to_be_ready14-->|Task| objects___Wait_for_the_sync_to_carry_what_it_leaves_out15[objects   wait for the sync to carry what it<br>leaves out<br>When: **not ansible check mode**]:::task
+  objects___Wait_for_the_sync_to_carry_what_it_leaves_out15-->|Task| objects___Refuse_a_sync_that_does_not_carry_what_it_leaves_out16[objects   refuse a sync that does not carry what<br>it leaves out<br>When: **flux bootstrap sync is not skipped**]:::task
+  objects___Refuse_a_sync_that_does_not_carry_what_it_leaves_out16-->|Task| objects___Read_Flux_s_Kustomizations17[objects   read flux s kustomizations<br>When: **not ansible check mode and flux bootstrap<br>exclusions   rejectattr  selector     list  <br>length   0**]:::task
+  objects___Read_Flux_s_Kustomizations17-->|Task| objects___Wait_for_the_Kustomizations_left_out_to_be_deleted18[objects   wait for the kustomizations left out to<br>be deleted<br>When: **not ansible check mode and  gone   length   0**]:::task
+  objects___Wait_for_the_Kustomizations_left_out_to_be_deleted18-->|Task| objects___Wait_for_the_Kustomizations_kept_to_leave_out_what_their_selector_matches19[objects   wait for the kustomizations kept to<br>leave out what their selector matches<br>When: **not ansible check mode and flux bootstrap<br>exclusions   selectattr  selector     list  <br>length   0**]:::task
+  objects___Wait_for_the_Kustomizations_kept_to_leave_out_what_their_selector_matches19-->|Task| objects___Refuse_Kustomizations_that_have_not_left_out_what_their_selector_matches20[objects   refuse kustomizations that have not left<br>out what their selector matches<br>When: **flux bootstrap kept is not skipped**]:::task
+  objects___Refuse_Kustomizations_that_have_not_left_out_what_their_selector_matches20-->|Task| objects___Find_the_Deployments_make_down_held_among_those_left_out21[objects   find the deployments make down held<br>among those left out]:::task
+  objects___Find_the_Deployments_make_down_held_among_those_left_out21-->|Task| objects___Say_which_held_Deployments_would_be_deleted22[objects   say which held deployments would be<br>deleted<br>When: **ansible check mode and  held   length   0**]:::task
+  objects___Say_which_held_Deployments_would_be_deleted22-->|Task| objects___Delete_the_Deployments_make_down_held_among_those_left_out23[objects   delete the deployments make down held<br>among those left out<br>When: **not ansible check mode**]:::task
+  objects___Delete_the_Deployments_make_down_held_among_those_left_out23-->|Task| objects___Wait_for_Flux_s_Kustomizations_to_be_ready24[objects   wait for flux s kustomizations to be<br>ready<br>When: **not ansible check mode**]:::task
+  objects___Wait_for_Flux_s_Kustomizations_to_be_ready24-->|Task| objects___Read_Flux_s_Kustomizations25[objects   read flux s kustomizations<br>When: **not ansible check mode**]:::task
+  objects___Read_Flux_s_Kustomizations25-->|Task| objects___Show_Flux_s_Kustomizations26[objects   show flux s kustomizations<br>When: **flux bootstrap kustomizations is not skipped**]:::task
+  objects___Show_Flux_s_Kustomizations26-->|Task| objects___Refuse_Kustomizations_that_are_not_ready27[objects   refuse kustomizations that are not ready<br>When: **flux bootstrap kustomizations ready is not skipped**]:::task
+  objects___Refuse_Kustomizations_that_are_not_ready27-->End
 ```
 
 

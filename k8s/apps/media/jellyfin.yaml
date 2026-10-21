@@ -4,6 +4,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: jellyfin-config
   namespace: media
+  labels:
+    app.kubernetes.io/name: jellyfin
   annotations:
     kustomize.toolkit.fluxcd.io/prune: disabled
 spec:

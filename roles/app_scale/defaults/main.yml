@@ -8,6 +8,8 @@ app_scale_state: ""
 app_scale_only: []
 # Names another play acts on, such as a VM's, which are accepted in app_scale_only and left to it.
 app_scale_other_names: []
+# Names of apps and groups this cluster leaves out on purpose, which the refusal of an unknown name says so of.
+app_scale_disabled_names: []
 # The cluster's kubeconfig, and the API server it must name: another cluster's kubeconfig is refused.
 app_scale_kubeconfig: ""
 app_scale_server: ""

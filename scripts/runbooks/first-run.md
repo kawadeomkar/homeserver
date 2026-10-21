@@ -16,6 +16,8 @@ export KUBECONFIG=~/.talos/homeserver/kubeconfig
 kubectl -n media port-forward svc/sonarr 8989      # then http://localhost:8989; Ctrl-C when done
 ```
 
+Only the apps this host runs are there: all of them, unless `local.yml`'s `kubernetes_apps` chooses some.
+
 | App | Namespace | Forward | What the first visit asks |
 |---|---|---|---|
 | Sonarr | `media` | `svc/sonarr 8989` | Authentication: method **Forms**, a username and a long password from your password manager |
@@ -40,7 +42,7 @@ start; regenerate it (Settings → General → Security) if it was ever seen out
 
 ## Opening the LAN
 
-Once every app above is set up, set the range of addresses Traefik serves, usually the LAN's, in
+Once every app above that this host runs is set up, set the range of addresses Traefik serves, usually the LAN's, in
 `group_vars/all/local.yml`:
 
 ```yaml

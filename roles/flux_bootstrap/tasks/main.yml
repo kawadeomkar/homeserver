@@ -44,6 +44,20 @@
       {%- for k, v in flux_bootstrap_settings.items() if v is not string -%}
       {%-   set _ = out.append('flux_bootstrap_settings.' ~ k ~ ' must be a string: Flux substitutes text.') -%}
       {%- endfor -%}
+      {%- set excluded = [] -%}
+      {%- for e in flux_bootstrap_sync_exclude -%}
+      {%-   if (e.kustomization | default('', true) | string) is not match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$') -%}
+      {%-     set _ = out.append('flux_bootstrap_sync_exclude: ' ~ (e.kustomization | default('an entry', true))
+                                 ~ ' is no Flux Kustomization name (lower-case letters, digits and dashes).') -%}
+      {%-   elif e.kustomization in excluded -%}
+      {%-     set _ = out.append('flux_bootstrap_sync_exclude names ' ~ e.kustomization ~ ' twice: one entry each.') -%}
+      {%-   elif e.selector | default(none) is not none and not (e.selector | string | trim)
+               or '\n' in (e.selector | default('') | string) -%}
+      {%-     set _ = out.append('flux_bootstrap_sync_exclude: ' ~ e.kustomization ~ "'s selector must be one label "
+                                 ~ 'selector, such as app.kubernetes.io/name in (seerr,filebrowser).') -%}
+      {%-   endif -%}
+      {%-   set _ = excluded.append(e.kustomization) -%}
+      {%- endfor -%}
       {%- for name in ['flux_bootstrap_kubeconfig', 'flux_bootstrap_age_key_file'] if not lookup('vars', name) -%}
       {%-   set _ = out.append(name ~ ' must be set.') -%}
       {%- endfor -%}
