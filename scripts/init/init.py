@@ -492,6 +492,8 @@ class Init:
             self.apply(s, self.ask_value(s, self.current(s), None, lambda t: cfg.parse(s, t), secret=True))
         elif s.kind == "bool":
             self.ask_bool(s)
+        elif s.kind == "app_list":
+            self.ask_app_list(s)
         elif s.kind in ("node_map_ipv4", "node_map_mac"):
             self.ask_node_map(s)
         elif s.kind == "node_sizes":
@@ -516,6 +518,25 @@ class Init:
             raise ValueError("answer y or n")
 
         self.console.say("  Answer y or n.")
+        self.apply(s, self.ask_value(s, self.current(s), None, parse))
+
+    def ask_app_list(self, s: cfg.Setting) -> None:
+        """kubernetes_apps, its names checked against the catalogue the playbooks read."""
+        data = yaml.safe_load((self.root / "group_vars/all/kubernetes.yml").read_text())
+        catalogue = {group: list(apps) for group, apps in (data.get("kubernetes_app_catalogue") or {}).items()}
+        apps = {app for names in catalogue.values() for app in names}
+        listed = "; ".join(f"group={group}: {', '.join(names)}" for group, names in catalogue.items())
+        self.console.say(
+            textwrap.fill(f"The groups and their apps: {listed}.", 110, initial_indent="  ", subsequent_indent="  ")
+        )
+
+        def parse(text: str) -> list[str]:
+            entries = cfg.parse(s, text)
+            unknown = [e for e in entries if e.split("=", 1)[1] not in (catalogue if e.startswith("group=") else apps)]
+            if unknown:
+                raise ValueError(f"no such {unknown[0].split('=')[0]}: {unknown[0]}")
+            return entries
+
         self.apply(s, self.ask_value(s, self.current(s), None, parse))
 
     def ask_node_map(self, s: cfg.Setting) -> None:

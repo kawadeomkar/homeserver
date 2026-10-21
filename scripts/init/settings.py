@@ -114,6 +114,20 @@ def _list_of(parse):
     return parse_list
 
 
+def _app_list(text: str) -> list[str]:
+    """kubernetes_apps: group=<group> and app=<app> entries, or none for the platform alone. init.py checks the names
+    against the catalogue; the playbooks' settings check, whether the worker can hold them."""
+    if text.strip().lower() == "none":
+        return []
+    entries = [e.lower() for e in _split(text)]
+    if not entries:
+        raise ValueError("give at least one entry, or none for the platform alone")
+    bad = [e for e in entries if not re.fullmatch(r"(group|app)=[a-z0-9][a-z0-9-]*", e)]
+    if bad:
+        raise ValueError(f"each entry is group=<group> or app=<app>, such as group=media or app=jellyfin, not {bad[0]}")
+    return entries
+
+
 def _mac(text: str) -> str:
     text = text.strip().lower().replace("-", ":")
     if not re.fullmatch(r"[0-9a-f][26ae](:[0-9a-f]{2}){5}", text):
@@ -329,6 +343,7 @@ PARSERS = {
     "owner_password": _owner_password,
     "positive_int": _count,
     "size_or_none": _size_or_none,
+    "app_list": _app_list,
 }
 
 # Composite kinds, asked part by part: node_map (each node's value, of fields' kind), node_sizes, haos_size,
@@ -597,6 +612,15 @@ SETTINGS: tuple[Setting, ...] = (
         help="Without a NAS, the worker's every size is required (the defaults fit the home host): at least 4 cores, "
         "12 GiB of memory, a 32 GiB system disk and an 11 GiB data disk, with a media disk (11 GiB or more) unless the "
         "media stay on the data volume.",
+    ),
+    S(
+        "kubernetes_apps",
+        "cluster",
+        "app_list",
+        "The apps this host runs, when not every one: group=<group> or app=<app> entries, or none",
+        popular=True,
+        help="Unset, every app runs. A small worker runs a few: the settings check refuses a choice whose requests "
+        "its memory or cores cannot hold, before anything changes (local.yml.example has each group's needs).",
     ),
     S(
         "kubernetes_media_on_data_volume",

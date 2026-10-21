@@ -255,6 +255,8 @@ def fill(value):
         ("mail_security", "tls", "TLS"),
         ("vmid_list", "320 330", [320, 330]),
         ("size_or_none", "0", 0),
+        ("app_list", "group=media, App=Jellyfin", ["group=media", "app=jellyfin"]),
+        ("app_list", "none", []),
     ],
 )
 def test_answers_are_read_as_the_playbooks_want_them(kind, text, value):
@@ -275,6 +277,8 @@ def test_answers_are_read_as_the_playbooks_want_them(kind, text, value):
         ("vmid", "99"),
         ("positive_int", "0"),
         ("size_or_none", "-1"),
+        ("app_list", "media"),
+        ("app_list", "group=media, jellyfin"),
     ],
 )
 def test_a_bad_answer_is_refused(kind, text):
@@ -636,6 +640,18 @@ def test_the_home_assistant_step_names_its_storage_and_keeps_its_content(repo):
     summary = " ".join(console.out[-1].split())
     assert "pvesh get /storage/local-btrfs" in summary and "pvesm set local-btrfs --content" in summary
     assert "--content replaces the whole list" in summary
+
+
+def test_the_apps_a_host_runs_are_named_from_the_catalogue(repo):
+    """kubernetes_apps lists the groups and their apps, and refuses a name the catalogue does not hold, so a typo is
+    caught at once rather than by the playbooks' check."""
+    console = Scripted(
+        {**first_run_answers(), "kubernetes_apps": ["group=media, app=nope", "group=media app=homepage"]}
+    )
+    init_run(repo, console)
+    assert local(repo)["kubernetes_apps"] == ["group=media", "app=homepage"]
+    assert "no such app: app=nope" in console.text
+    assert any("group=media: jellyfin" in line for line in console.out), "the choices are shown"
 
 
 def test_a_size_is_never_zero_but_a_disk_may_be_none(repo):
