@@ -3,10 +3,11 @@
 # are on the target, so a change cannot weaken its own scan, and for a *.sops.yaml that was never encrypted
 # (check-sops-staged.sh).
 # Used by CI (.github/workflows/ci.yml) and by the pre-push hook (.pre-commit-config.yaml), which gives the refs
-# as pre-commit's PRE_COMMIT_FROM_REF and PRE_COMMIT_TO_REF.
-#   BASE               the target: a pull request's base, a push's previous tip, the remote ref a pre-push
-#                      hook updates (default PRE_COMMIT_FROM_REF); empty or all zeros means origin/main
-#   HEAD               last commit checked (default PRE_COMMIT_TO_REF, else HEAD)
+# as pre-commit's PRE_COMMIT_FROM_REF and PRE_COMMIT_TO_REF. Those come first when set, so a BASE or HEAD that the
+# shell happens to export cannot move the range a push is checked over.
+#   BASE               the target: a pull request's base, a push's previous tip (outside the hook; inside it,
+#                      PRE_COMMIT_FROM_REF, the remote ref the push updates); empty or all zeros means origin/main
+#   HEAD               last commit checked (outside the hook; inside it, PRE_COMMIT_TO_REF), else HEAD
 #   FIRST_PARENT=1     follow the first-parent line only (pushes to main)
 #   REQUIRE_COMMITS=1  fail when there is nothing to check (pull requests and pushes)
 # The commits checked are the ones after the merge-base of BASE and HEAD: a pull request's base is the
@@ -14,8 +15,8 @@
 # Written for bash 3.2 as well (macOS), so no arrays under set -u.
 set -euo pipefail
 command -v gitleaks >/dev/null || { echo "gitleaks is not on PATH (brew install gitleaks)"; exit 1; }
-head=${HEAD:-${PRE_COMMIT_TO_REF:-HEAD}}
-target=${BASE:-${PRE_COMMIT_FROM_REF:-}}
+head=${PRE_COMMIT_TO_REF:-${HEAD:-HEAD}}
+target=${PRE_COMMIT_FROM_REF:-${BASE:-}}
 if [ -z "$target" ] || [ -z "${target//0/}" ]; then
   target=origin/main
 fi

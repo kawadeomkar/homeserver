@@ -5,7 +5,7 @@
 # Written for bash 3.2 as well (macOS).
 set -euo pipefail
 command -v gitleaks >/dev/null || { echo "gitleaks is not on PATH (brew install gitleaks)"; exit 1; }
-here=$(cd "$(dirname "$0")" && pwd)
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 cd "$(git rev-parse --show-toplevel)"
 rc=0
 gitleaks git --pre-commit --staged --config .gitleaks.toml --ignore-gitleaks-allow --redact --verbose --no-banner || rc=1

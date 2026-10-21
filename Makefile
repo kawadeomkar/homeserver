@@ -6,14 +6,24 @@
 # version, and each binary's checksum), as does openssl, which the idempotence tests and make vault TYPE=new use.
 # The virtualenv is yours to make and keep, wherever you keep them (pyenv virtualenv, python3 -m venv): make never
 # creates one, and make install fills it from the lock. make uses the active one (VIRTUAL_ENV, set by
-# `pyenv activate <env>` or `source <env>/bin/activate`), otherwise the one python3 runs from in this directory,
-# which `pyenv local <env>` chooses without activating anything. Override with VENV=<path>. A python3 that fails, or
-# crashes, finds none, and make then stops on any target but help, saying how to point it at one.
+# `pyenv activate <env>` or `source <env>/bin/activate`); otherwise the virtualenv python3 runs from, but only when
+# this checkout chose it: `pyenv local <env>` wrote a .python-version at the checkout's top (a worktree also takes its
+# main checkout's), or `pyenv shell <env>` chose it for the shell. A version pyenv takes from anywhere else (pyenv
+# global, a .python-version above the checkout) is no one project's, and make install would remove every package
+# poetry.lock does not list from it; a python3 that is not a virtualenv (the system's, Homebrew's) would run tools no
+# lock pinned. Override with VENV=<path>. Finding none, make stops on any target but help, saying how to choose one.
+CHOSEN_PYTHON = (f=$$(pyenv version-file 2>/dev/null) || exit 0; \
+	d=$$(CDPATH='' cd -- "$$(dirname -- "$$f")" && pwd -P); \
+	top=$$(git rev-parse --show-toplevel); \
+	main=$$(dirname -- "$$(git rev-parse --path-format=absolute --git-common-dir)"); \
+	if [ -n "$${PYENV_VERSION:-}" ] || [ "$$d" = "$$top" ] || [ "$$d" = "$$main" ]; then \
+	  python3 -c 'import sys; print(sys.prefix if sys.prefix != sys.base_prefix else "")'; \
+	fi) 2>/dev/null
 ifeq ($(origin VENV),undefined)
-VENV := $(or $(VIRTUAL_ENV),$(shell (python3 -c 'import sys; print(sys.prefix)' || :) 2>/dev/null))
+VENV := $(or $(VIRTUAL_ENV),$(shell $(CHOSEN_PYTHON)))
 endif
 ifeq ($(strip $(VENV)),)
-$(if $(filter-out help,$(MAKECMDGOALS)),$(error No Python environment: activate the project's virtualenv, choose it for this directory with pyenv local <env>, or pass VENV=<its path>))
+$(if $(filter-out help,$(MAKECMDGOALS)),$(error No Python environment for this checkout: activate the project's virtualenv, choose it here with pyenv local <env> (a .python-version at the checkout's top), or pass VENV=<its path>))
 endif
 BIN     := $(VENV)/bin
 # Recipes find the virtualenv's tools first, as in an activated virtualenv (ansible-lint warns when its
@@ -154,7 +164,7 @@ help: ## Show this help
 	@printf '\nOther parameters:\n'
 	@printf '  \033[36m%-20s\033[0m %s\n' \
 	  'UPDATE=<packages>' 'lock: move these to their newest allowed versions too' \
-	  'PYTEST_ARGS=<args>' "test: more for pytest, e.g. PYTEST_ARGS='-m cluster'" \
+	  'PYTEST_ARGS=<args>' "test TYPE=idempotence: more for its pytest, e.g. PYTEST_ARGS='-m cluster'" \
 	  'TAGS=<tags>' 'check, deploy: those stages only, e.g. TYPE=truenas TAGS=truenas_pools' \
 	  'ONLY=<names>' 'suspend, resume, check TYPE=suspend|resume: some apps, groups or homeassistant' \
 	  'ALL=1' "suspend, resume, check TYPE=suspend|resume: the cluster's VMs too" \
@@ -317,22 +327,24 @@ lint/talos:
 	  ANSIBLE_CONFIG=tests/integration/ansible.cfg ANSIBLE_NOCOLOR=1 $(PLAYBOOK) tests/talos_validate.yml </dev/null
 
 .PHONY: test $(addprefix test/,$(test_TYPES))
-# More for pytest, for every type, e.g. PYTEST_ARGS='-k plan' or, as CI splits the idempotence tests between its jobs,
-# PYTEST_ARGS='-m cluster' (the VM, backup, Talos and Flux playbooks) and PYTEST_ARGS='-m "not cluster"'.
+# More for the idempotence tests' pytest, e.g. PYTEST_ARGS='-k storage' or, as CI splits them between its jobs,
+# PYTEST_ARGS='-m cluster' (the VM, backup, Talos and Flux playbooks) and PYTEST_ARGS='-m "not cluster"'. The other types
+# leave it out: a marker or a shard meant for these would select nothing there, or replace the marker that keeps the
+# policy and gitleaks tests apart. Run pytest itself to narrow those.
 PYTEST_ARGS ?=
 test: $(call targets,test) ## Every test: unit, policy, the gitleaks rules, then each role against local fakes
 
 # One pytest worker per CPU, as for the idempotence tests. The unit tests report the modules' coverage (.coveragerc).
 test/unit:
-	$(BIN)/pytest -q -n auto --cov --cov-report=term $(PYTEST_ARGS) tests/unit
+	$(BIN)/pytest -q -n auto --cov --cov-report=term tests/unit
 
 # The tests that check the repo's own rules, bar the gitleaks ones.
 test/policy:
-	$(BIN)/pytest -q -n auto -m "not gitleaks" $(PYTEST_ARGS) tests/policy
+	$(BIN)/pytest -q -n auto -m "not gitleaks" tests/policy
 
 # .gitleaks.toml against generated fixtures, with gitleaks from PATH: skipped without it, and failing in CI.
 test/gitleaks:
-	$(BIN)/pytest -q -m gitleaks $(PYTEST_ARGS) tests/policy
+	$(BIN)/pytest -q -m gitleaks tests/policy
 
 # Each role run repeatedly against local fakes. One pytest worker per CPU: each test runs its own fakes and playbooks,
 # so they run side by side, and in sequence the suite outgrew the CI job's timeout. Work stealing: the tests take from

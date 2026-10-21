@@ -46,8 +46,8 @@ Everything runs from a checkout of this repo.
 4. Check the toolchain works: `make -k lint test`. The Kubernetes checks (`make lint TYPE=k8s`) take kubeconform,
    kustomize, helm and kube-linter from Homebrew; until those are installed, `-k` reports them and runs the rest.
 
-`make` finds the environment that `pyenv local` chose for the checkout, or an activated one (`pyenv activate
-homeserver`); `VENV=<path to the env>` names one outright.
+`make` finds the environment that `pyenv local` chose for the checkout (its `.python-version`), or an activated one
+(`pyenv activate homeserver`); `VENV=<path to the env>` names one outright. It never takes pyenv's global version.
 
 ## 2. The NAS
 

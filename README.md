@@ -73,9 +73,11 @@ With vim, open it without them: `EDITOR="vim -n -i NONE --cmd 'set noundofile no
 
 The tooling runs from a Python virtualenv of the project's own, which you make and keep where you like; make never
 creates one. With pyenv, for example: `pyenv virtualenv 3.14.6 homeserver && pyenv local homeserver`, after which
-make finds it in this directory without activating it (`.python-version` is gitignored). An activated virtualenv
-(`VIRTUAL_ENV`) works too, and `VENV=<path>` names one outright. `make install` refuses a Python that is not a
-virtualenv, since it removes every package there that `poetry.lock` does not list.
+make finds it in this checkout without activating it (`.python-version` is gitignored; a worktree takes its main
+checkout's). An activated virtualenv (`VIRTUAL_ENV`) works too, and `VENV=<path>` names one outright. make takes
+`python3`'s environment only when it is a virtualenv this checkout chose, never one pyenv takes from its global
+setting or from a `.python-version` above the checkout: `make install` removes every package there that
+`poetry.lock` does not list, so it must be the project's own.
 
 ```bash
 make help                         # every target, the TYPEs each takes, and the other parameters
