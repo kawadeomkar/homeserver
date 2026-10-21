@@ -15,6 +15,8 @@ audit of the tree before the cluster was built.
 
 - [ ] Reserve every node's address in the router's DHCP, for its MAC (`kubernetes_node_macs`): the NAS's exports
       trust the worker's address, so a device that leases it reads the cluster's shares as root
+- [ ] Reserve Home Assistant's address for its MAC (`haos_mac`), with the hostname `homeassistant`, and point
+      `haos_url` at that name (`scripts/runbooks/haos.md`)
 - [ ] A servers VLAN for the NAS, the Proxmox host and the nodes, which the IoT and Wi-Fi devices cannot reach: NFS
       with sec=sys trusts addresses, and the nightly VM backups on the NAS hold the cluster's keys and etcd
       (CLAUDE.md, Landmines). Then narrow `kubernetes_ingress_allowed_range` to the clients' VLAN
@@ -129,6 +131,28 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 
       Then compare `tailscale status --json` and `tailscale get --json` on the host with `fake_tailscale.py`, which
       was written from a 1.102 client, and fix the fake where they differ
+
+## Bringing the apps up
+
+Once the cluster is built and Flux syncs it (`scripts/runbooks/talos.md`). Merge app by app, or suspend the app
+Kustomizations and resume one at a time, in this order: homepage; prowlarr, sonarr, radarr, sabnzbd, seerr and
+filebrowser; jellyfin; nextcloud and photoprism; frigate. Each must start, survive `kubectl delete pod` and a node
+reboot (`talosctl reboot -n <worker>`), keep its data, and come back from a VM backup once, by the isolated drill
+(`scripts/runbooks/vm-restore.md`).
+
+- [ ] With a NAS, before the media apps import anything: move the media dataset's content into the apps' layout and
+      fix its ownership once (`README.md`, Manifests). Check first that its NFSv4 ACLs let uid 1000 write over NFS
+      with root mapped to root, and that `chown-mount` can chown its mount point
+- [ ] The TrueNAS CORE snapshot of 2024 on the media dataset pins every block the move replaces: decide with the
+      "TrueNAS CORE leftovers" item whether to delete it, through the role
+- [ ] After each app's first start, its own steps through a port forward (`scripts/runbooks/first-run.md`), then
+      `kubernetes_ingress_allowed_range` to open the LAN; Frigate's cameras after
+- [ ] With an Intel iGPU in the host, pass it to the worker for Jellyfin and Frigate
+      (`scripts/runbooks/gpu.md`), and run that runbook's checks: the render node's group inside the pods, and
+      that without a GPU both apps still schedule
+- [ ] Check that LinuxServer.io's images start with `allowPrivilegeEscalation: false`, which their s6 init has not
+      been seen to need. (Frigate 0.17's form under `go2rtc` is settled: it fills in `{FRIGATE_...}` only in streams
+      and the RTSP user and password, and go2rtc expands `${...}` everywhere else, from its environment.)
 
 ## Removed with the Ubuntu host layer
 

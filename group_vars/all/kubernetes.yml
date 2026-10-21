@@ -76,6 +76,11 @@ kubernetes_worker: "{{ kubernetes_nodes | selectattr('role', 'equalto', 'worker'
 kubernetes_data_node: "{{ kubernetes_worker.name }}"
 # Whether the worker has a media disk of its own (without a NAS, unless media lives on the data volume).
 kubernetes_media_disk: "{{ (kubernetes_worker.media_disk_gib | default(0) | int) > 0 }}"
+# The VMs make down ALL=1 shuts down, in this order: the worker, then the control plane, whose API answers until the
+# end. make up ALL=1 starts them the other way round.
+kubernetes_power_order: >-
+  {{ kubernetes_nodes | rejectattr('role', 'equalto', 'controlplane') | map(attribute='vmid') | list
+     + kubernetes_nodes | selectattr('role', 'equalto', 'controlplane') | map(attribute='vmid') | list }}
 
 # The apps answer at <app>.<domain>, unless local.yml names another domain (kubernetes_domain).
 kubernetes_domain_default: homeserver.internal
@@ -127,7 +132,8 @@ kubernetes_settings_error: >-
                    'flux_sync_url': flux_sync_url | default(''),
                    'flux_sync_ref': flux_sync_ref | default(''),
                    'flux_sync_ref_unprotected': flux_sync_ref_unprotected | default(''),
-                   'kubernetes_ingress_allowed_range': kubernetes_ingress_allowed_range | default('')}
+                   'kubernetes_ingress_allowed_range': kubernetes_ingress_allowed_range | default(''),
+                   'haos_url': haos_url | default('')}
                   | dict2items | selectattr('value') | map(attribute='key') | list -%}
   {%- if kubernetes_present is not boolean -%}
   {%-   set _ = out.append('kubernetes_present is worked out from kubernetes_node_addresses in group_vars/all/local.yml, '

@@ -1,0 +1,148 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: filebrowser-data
+  namespace: media
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local
+  resources:
+    requests:
+      storage: 1Gi
+---
+# FileBrowser Quantum, the maintained successor of FileBrowser (whose last release, v2.63.18, is archived): the media
+# library in a browser. Runs as 1000 itself. It keeps an index of the library in memory, hence the requests.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: filebrowser
+  namespace: media
+  labels:
+    app.kubernetes.io/name: filebrowser
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: filebrowser
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: filebrowser
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # The library's mount point belongs to root on a new dataset; the app runs as 1000. Only the mount point,
+        # never recursively, so it is quick on a full library and a no-op once done.
+        - name: chown-mount
+          image: docker.io/library/busybox:1.38.0@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
+          command: [sh, -c, 'd=/mnt/v; [ "$(stat -c %u:%g "$d")" = 1000:1000 ] || chown 1000:1000 "$d"']
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+          volumeMounts:
+            - name: media
+              mountPath: /mnt/v
+      containers:
+        - name: filebrowser
+          image: ghcr.io/gtsteffaniak/filebrowser:2.0.0-stable@sha256:9d42f635e32913d7daf05259428b6c70061cfdca3affc9602b4c31717e0a4bae
+          env:
+            - name: FILEBROWSER_CONFIG
+              value: /config/config.yaml
+            - name: TZ
+              value: "${TZ}"
+          envFrom:
+            - secretRef:
+                name: filebrowser
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+          volumeMounts:
+            - name: data
+              mountPath: /home/filebrowser/data
+            - name: media
+              mountPath: /data
+            - name: config
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: filebrowser-data
+        - name: media
+          persistentVolumeClaim:
+            claimName: media
+        - name: config
+          configMap:
+            name: filebrowser-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: filebrowser
+  namespace: media
+  labels:
+    app.kubernetes.io/name: filebrowser
+spec:
+  selector:
+    app.kubernetes.io/name: filebrowser
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: filebrowser
+  namespace: media
+  labels:
+    app.kubernetes.io/name: filebrowser
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: filebrowser.${DOMAIN}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: filebrowser
+                port:
+                  name: http

@@ -23,7 +23,7 @@ without a kind, are not objects.
   volume, which would chown the whole volume at every start.
 - No PodDisruptionBudget: with one node for the apps, it would only stop a drain.
 - Every app namespace has a NetworkPolicy over all its pods that limits who reaches them and keeps them from the one
-  host they must never reach (EGRESS_DENIED_ADDRESS: the NAS, or the Proxmox host without one).
+  hosts they must never reach (EGRESS_DENIED_ADDRESS, the NAS or the Proxmox host without one, and PROXMOX_ADDRESS).
 - No service account outside kube-system and flux-system may read Secrets in every namespace, flux-system's age key
   among them, bar the few listed below; in what the charts render too.
 - Every Secret is SOPS-encrypted.
@@ -1012,13 +1012,15 @@ def test_apps_are_labelled_by_name():
     assert wrong == []
 
 
-DENIED_EGRESS = "${EGRESS_DENIED_ADDRESS}/32"
+# The hosts no app pod may reach: the NAS (the Proxmox host without one), and the Proxmox host.
+DENIED_EGRESS = ("${EGRESS_DENIED_ADDRESS}/32", "${PROXMOX_ADDRESS}/32")
 
 
 def test_app_namespaces_are_fenced():
     """Each app namespace has a NetworkPolicy over every pod in it, for traffic in and out: in, its ingress rules name
     who may connect (an app namespace never takes the whole cluster); out, any address wide enough to cover the NAS
-    leaves it out, since its NFS exports trust the node's address, which pods' traffic leaves with."""
+    and the Proxmox host leaves both out: the NAS's NFS exports trust the node's address, which pods' traffic leaves
+    with, and the host's API and SSH answer the LAN."""
     if not APPS.is_dir():
         pytest.skip("no apps under k8s/apps/ yet")
     app_namespaces = {obj["metadata"]["name"] for path, obj in of_kind("Namespace") if path.is_relative_to("k8s/apps")}
@@ -1037,9 +1039,9 @@ def test_app_namespaces_are_fenced():
             for peer in rule.get("to") or [{}]:
                 block = peer.get("ipBlock")
                 if peer == {} or (
-                    block and DENIED_EGRESS not in (block.get("except") or []) and block["cidr"].endswith("/0")
+                    block and not set(DENIED_EGRESS) <= set(block.get("except") or []) and block["cidr"].endswith("/0")
                 ):
-                    wrong.append(f"{label(obj)}: egress reaches {DENIED_EGRESS}")
+                    wrong.append(f"{label(obj)}: egress reaches {' or '.join(DENIED_EGRESS)}")
     assert sorted(app_namespaces - fenced) == [], "these app namespaces have no NetworkPolicy over all their pods"
     assert wrong == []
 

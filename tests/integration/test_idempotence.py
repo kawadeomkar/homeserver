@@ -1020,6 +1020,13 @@ def test_proxmox_backup_with_a_nas(tmp_path):
     # Proxmox's own placeholder, untouched by Ansible's templating.
     assert job["notes-template"] == "{{guestname}}"
 
+    # Home Assistant's VM joins the job once local.yml gives its MAC, once even when also listed as an extra VM.
+    haos = extra | {"haos_mac": mac(9), "vm_backup_extra_vmids": [310]}
+    expect(run("proxmox_backup.yml", haos), "homeserver", changed=1, note="Home Assistant's VM added")
+    assert backup_job(state)["vmid"] == "300,301,310"
+    expect(run("proxmox_backup.yml", haos), "homeserver", changed=0, note="Home Assistant's VM added, again")
+    expect(run("proxmox_backup.yml", extra), "homeserver", changed=1, note="Home Assistant's VM taken away")
+
     # Drift: the schedule and the VMIDs changed by hand, the job disabled. VMIDs in another order are no change.
     s = read(state)
     s["backup_jobs"]["vm-nightly"].update(schedule="03:30", vmid="301,300,999", enabled="0")
@@ -2165,6 +2172,7 @@ def flux_vars(tmp_path, operator_releases, nas=True, **more):
         "kubernetes_lb_range": "127.0.0.40-127.0.0.49",
         "kubernetes_lb_traefik_ip": "127.0.0.40",
         "kubernetes_lb_frigate_ip": "127.0.0.41",
+        "proxmox_address": PROXMOX_ADDRESS,
         "flux_sync_url": "https://example.invalid/homeserver.git",
         "flux_bootstrap_operator_url": operator_releases,
         "flux_bootstrap_operator_sha256": hashlib.sha256(operator_release("v0.61.0")).hexdigest(),
@@ -2239,9 +2247,11 @@ def test_flux_bootstrap(tmp_path, operator_releases, nas):
     assert all(isinstance(v, str) for v in settings.values())
     if nas:
         assert settings["NAS_ADDRESS"] == "127.0.0.10" and settings["MEDIA_DATASET"] == "/mnt/ephemeral/jellyfin"
-        assert not set(media) & set(settings)
+        assert settings["EGRESS_DENIED_ADDRESS"] == "127.0.0.10" and not set(media) & set(settings)
     else:
         assert {k: settings[k] for k in media} == media and "NAS_ADDRESS" not in settings
+        assert settings["EGRESS_DENIED_ADDRESS"] == PROXMOX_ADDRESS
+    assert settings["PROXMOX_ADDRESS"] == PROXMOX_ADDRESS
     secret = objects["Secret/flux-system/sops-age"]["data"]["age.agekey"]
     assert AGE_KEY in base64.b64decode(secret).decode()
 
@@ -2323,3 +2333,493 @@ def test_flux_bootstrap_refuses_a_shared_key_and_reports_a_stuck_operator(tmp_pa
     rc, _, out = run("flux.yml", extra, env=env)
     assert rc != 0 and "Flux's Kustomizations are not all ready after 0s: error: timed out waiting" in out, out[-3000:]
     assert "flux-system   flux-system" in out, out[-3000:]
+
+
+# ------------------------------------------------------------------------------------------ Home Assistant ---
+
+HAOS_PASSWORD = "HAOS-TEST-OWNER-PASSWORD"
+HAOS_OVA = "local:import/haos_ova-18.3.ova"
+
+
+@pytest.fixture
+def home_assistant():
+    """A Home Assistant's onboarding API, from its source (homeassistant/components/onboarding/views.py): GET
+    /api/onboarding lists the steps, POST /api/onboarding/users creates the owner account while the user step is
+    not done, and refuses it once done. `not_ready` counts requests answered 401 first, as Home Assistant OS's
+    landing page answers every /api/ request while it prepares. Every request to the port's /api/ is redirected
+    (307) to /ha/api/, as Home Assistant OS 18 redirects port 8123 to Home Assistant on port 80, which its first live
+    run showed."""
+    state = {"not_ready": 0, "users": [], "posted": 0}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def reply(self, status, body):
+            data = json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def redirected(self):
+            if self.path.startswith("/api/"):
+                self.send_response(307)
+                self.send_header("Location", "/ha" + self.path)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return True
+            self.path = self.path.removeprefix("/ha")
+            return False
+
+        def do_GET(self):
+            if self.redirected():
+                return
+            if state["not_ready"] > 0:
+                state["not_ready"] -= 1
+                self.reply(401, {"message": "Unauthorized"})
+            elif self.path == "/api/onboarding":
+                steps = ["user", "core_config", "analytics", "integration"]
+                self.reply(200, [{"step": s, "done": s == "user" and bool(state["users"])} for s in steps])
+            else:
+                self.reply(404, {"message": "Not found"})
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            if self.redirected():
+                return
+            if self.path != "/api/onboarding/users" or state["not_ready"] > 0:
+                self.reply(401 if state["not_ready"] else 404, {"message": "Unauthorized"})
+                return
+            state["posted"] += 1
+            if state["users"]:
+                self.reply(403, {"message": "User step already done"})
+            elif set(body) != {"name", "username", "password", "client_id", "language"}:
+                self.reply(400, {"message": f"Message format incorrect: {sorted(body)}"})
+            else:
+                state["users"].append(body)
+                self.reply(200, {"auth_code": "HAOS-TEST-AUTH-CODE"})
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    state["port"] = server.server_address[1]
+    yield state
+    server.shutdown()
+
+
+def haos_vars(tmp_path, ha, nas=True, **more):
+    """The homeassistant test playbook's variables: the VM's MAC, the owner's password, the fake's port, short waits."""
+    extra = {
+        "fake_pve_state": str(tmp_path / "pve.json"),
+        "truenas_static_address": "127.0.0.10/24" if nas else "",
+        "haos_mac": mac(9),
+        "vault_haos_owner_password": HAOS_PASSWORD,
+        "haos_onboard_port": ha["port"],
+        "haos_onboard_delay": 0,
+        "haos_onboard_retries": 5,
+        "haos_onboard_agent_retries": 5,
+    }
+    return extra | more
+
+
+def no_haos_secret(outputs):
+    for out in outputs:
+        assert HAOS_PASSWORD not in out and "HAOS-TEST-AUTH-CODE" not in out, "a secret reached Ansible's output"
+
+
+@pytest.mark.cluster
+def test_haos_with_a_nas(tmp_path, home_assistant):
+    """With a NAS: a dry run on a fresh host says what it would download, create and onboard, changing nothing; the
+    persistent storage must exist; then the OVA is downloaded with its checksum, the VM created from its disk, started,
+    and Home Assistant, once past its landing page, given its owner account, once; later runs change nothing; USB
+    devices come and go on the running VM; a larger disk is grown."""
+    ha = home_assistant
+    extra = haos_vars(tmp_path, ha)
+    state = Path(extra["fake_pve_state"])
+    vm_state(state)
+    outputs = []
+
+    result = run("homeassistant.yml", extra, check=True)
+    expect(result, "homeserver", changed=True, note="dry run on a fresh host")
+    outputs.append(result[2])
+    assert "Would download: haos_ova-18.3.ova" in result[2] and re.search(r'homeassistant"?:\s*"?create', result[2])
+    assert "Would wait for Home Assistant on VM 310 and create the owner account owner" in result[2], result[2][-3000:]
+    assert read(state)["mutations"] == 0 and ha["posted"] == 0, "the dry run changed something"
+
+    rc, _, out = run("homeassistant.yml", extra)
+    assert rc != 0 and "homeserver-persistent: does not exist" in out and vms_of(state) == {}, out[-3000:]
+
+    seed_storage(state, PERSISTENT_NFS)
+    ha["not_ready"] = 3
+    result = run("homeassistant.yml", extra)
+    expect(result, "homeserver", changed=True, note="first run")
+    outputs.append(result[2])
+    vm = vms_of(state)["310"]
+    assert vm["status"] == "running" and vm["config"]["name"] == "homeassistant"
+    assert (
+        vm["config"]["scsi0"].startswith("homeserver-persistent:310/vm-310-disk-1.qcow2,")
+        and "size=32G" in (vm["config"]["scsi0"])
+    )
+    efi = vm["config"]["efidisk0"]
+    assert efi.startswith("homeserver-persistent:310/vm-310-disk-0.") and "pre-enrolled-keys=0" in efi, efi
+    assert (vm["config"]["boot"], vm["config"]["tags"], vm["config"]["bios"]) == ("order=scsi0", "haos", "ovmf")
+    assert vm["config"]["watchdog"] == "model=i6300esb,action=reset" and vm["config"]["startup"].startswith("order=3,")
+    assert vm["config"]["net0"].lower().startswith(f"virtio={mac(9)},") and "ide2" not in vm["config"]
+    assert [v["volid"] for v in read(state)["content"]["local"]] == [HAOS_OVA], "the OVA was not downloaded once"
+    pinned = yaml.safe_load((HERE.parents[1] / "group_vars" / "proxmox" / "haos.yml").read_text())["haos_ova_sha256"]
+    assert read(state)["checksums"] == {"haos_ova-18.3.ova": ["sha256", pinned]}, "the OVA was not checked"
+    assert ha["users"] == [
+        {
+            "name": "Owner",
+            "username": "owner",
+            "password": HAOS_PASSWORD,
+            "client_id": f"http://127.0.0.1:{ha['port']}/ha/",
+            "language": "en",
+        }
+    ]
+    assert f"answers at http://127.0.0.1:{ha['port']}/ha/ with its owner account owner" in result[2], result[2][-3000:]
+
+    result = run("homeassistant.yml", extra)
+    expect(result, "homeserver", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")
+    outputs.append(result[2])
+    result = run("homeassistant.yml", extra, check=True)
+    expect(result, "homeserver", changed=0, note=f"dry run after applying (changed: {changed_tasks(result[2])})")
+    assert ha["posted"] == 1, "the owner account was asked for again"
+
+    # A Zigbee stick passed through: it reaches the running VM at once, and goes again.
+    stick = extra | {"haos_usb": [{"host": "10c4:ea60"}]}
+    expect(run("homeassistant.yml", stick), "homeserver", changed=1, note="a USB stick added")
+    assert vms_of(state)["310"]["config"]["usb0"] == "host=10c4:ea60"
+    expect(run("homeassistant.yml", stick), "homeserver", changed=0, note="a USB stick added, again")
+    expect(run("homeassistant.yml", extra), "homeserver", changed=1, note="the USB stick taken away")
+    assert "usb0" not in vms_of(state)["310"]["config"]
+
+    # A larger disk is grown; the image's own size is the least local.yml may give.
+    grown = extra | {"haos_size": {"disk_gib": 64}}
+    expect(run("homeassistant.yml", grown), "homeserver", changed=1, note="a larger disk")
+    assert "size=64G" in vms_of(state)["310"]["config"]["scsi0"]
+    rc, _, out = run("homeassistant.yml", extra | {"haos_size": {"disk_gib": 16}}, check=True)
+    assert rc != 0 and "disk_gib must be at least 32" in out, out[-3000:]
+    no_haos_secret(outputs)
+
+
+@pytest.mark.cluster
+def test_haos_without_a_nas(tmp_path, home_assistant):
+    """Without a NAS: the disk on local-lvm, grown to its size in the run that creates it; the guest agent answers
+    only once the VM has booted; a Home Assistant already set up (restored from a backup, say) is left alone."""
+    ha = home_assistant
+    ha["users"].append({"username": "someone"})
+    extra = haos_vars(tmp_path, ha, nas=False, haos_size={"disk_gib": 40, "memory_mib": 3072})
+    state = Path(extra["fake_pve_state"])
+    vm_state(state, agent_down=2)
+
+    # The installer's local holds no images, so Proxmox could not extract the OVA's disk there: refused, naming the
+    # command that enables them, before anything is made.
+    for check in (True, False):
+        rc, _, out = run("homeassistant.yml", extra, check=check)
+        assert rc != 0 and "pvesm set local --content backup,import,iso,vztmpl,images" in out, out[-3000:]
+    assert vms_of(state) == {}
+    s = read(state)
+    next(e for e in s["storage"] if e["storage"] == "local")["content"] += ",images"
+    write(state, s)
+
+    result = run("homeassistant.yml", extra)
+    expect(result, "homeserver", changed=True, note="first run")
+    vm = vms_of(state)["310"]["config"]
+    assert vm["scsi0"].startswith("local-lvm:vm-310-disk-1,") and "size=40G" in vm["scsi0"] and vm["memory"] == "3072"
+    assert ha["posted"] == 0, "an onboarded Home Assistant was asked to onboard"
+    result = run("homeassistant.yml", extra)
+    expect(result, "homeserver", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")
+
+    # Without Home Assistant, nothing is read, created or downloaded.
+    without = {k: v for k, v in extra.items() if not k.startswith("haos_")}
+    result = run("homeassistant.yml", without)
+    expect(result, "homeserver", changed=0, note="no Home Assistant")
+    assert "this setup has no Home Assistant VM" in result[2] and "Read the node's VMs" not in result[2]
+
+
+@pytest.mark.cluster
+def test_haos_refusals(tmp_path, home_assistant):
+    """A Home Assistant is never started without its owner's password; an OVA whose checksum does not match is never
+    stored, and no VM is made without it; a Home Assistant that refuses the account stops the run, saying so."""
+    ha = home_assistant
+    extra = haos_vars(tmp_path, ha, nas=False)
+    state = Path(extra["fake_pve_state"])
+    vm_state(state)
+    s = read(state)
+    next(e for e in s["storage"] if e["storage"] == "local")["content"] += ",images"
+    write(state, s)
+
+    for check in (True, False):
+        rc, _, out = run("homeassistant.yml", extra | {"vault_haos_owner_password": "short"}, check=check)
+        assert rc != 0 and "no vault_haos_owner_password of at least 12 characters" in out, out[-3000:]
+    assert read(state)["mutations"] == 0
+
+    s = read(state)
+    s["checksum_fails"] = True
+    write(state, s)
+    rc, _, out = run("homeassistant.yml", extra)
+    assert rc != 0 and "checksum mismatch" in out and "938408c5" in out, out[-3000:]
+    assert "local" not in read(state).get("content", {}) or not read(state)["content"]["local"]
+    assert vms_of(state) == {}, "a VM was made without its image"
+
+    s = read(state)
+    s["checksum_fails"] = False
+    write(state, s)
+    ha["not_ready"] = 99
+    rc, _, out = run("homeassistant.yml", extra)
+    assert rc != 0 and "Wait for Home Assistant's onboarding API" in out, out[-3000:]
+    assert ha["users"] == [], "an account was made on the landing page"
+    no_haos_secret([out])
+
+
+# -------------------------------------------------------------------------------------- app_scale ---
+
+FLUX_LABELS = "kustomize.toolkit.fluxcd.io"
+RECONCILE = "kustomize.toolkit.fluxcd.io/reconcile"
+RECORDED = "homeserver.internal/replicas"
+
+
+def kustomization(name, path):
+    return {
+        "apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+        "kind": "Kustomization",
+        "metadata": {"name": name, "namespace": "flux-system"},
+        "spec": {"path": path},
+    }
+
+
+def deployment(namespace, name, owner, replicas=1, **labels):
+    """A Deployment as Flux leaves it: labelled with the Kustomization that applied it (`owner`)."""
+    return {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "labels": {
+                "app.kubernetes.io/name": name,
+                f"{FLUX_LABELS}/name": owner,
+                f"{FLUX_LABELS}/namespace": "flux-system",
+                **labels,
+            },
+        },
+        "spec": {"replicas": replicas, "selector": {"matchLabels": {"app.kubernetes.io/name": name}}},
+    }
+
+
+DATABASE = {"app.kubernetes.io/component": "database"}
+APP_OBJECTS = [
+    {
+        "apiVersion": "apiextensions.k8s.io/v1",
+        "kind": "CustomResourceDefinition",
+        "metadata": {"name": "kustomizations.kustomize.toolkit.fluxcd.io"},
+        "spec": {"names": {"kind": "Kustomization"}, "scope": "Namespaced"},
+    },
+    kustomization("apps-media", "./k8s/apps/media"),
+    kustomization("apps-nextcloud", "./k8s/apps/nextcloud"),
+    kustomization("apps-homepage", "./k8s/apps/homepage"),
+    kustomization("infra-controllers", "./k8s/infrastructure/controllers/nas"),
+    deployment("media", "sonarr", "apps-media"),
+    deployment("media", "jellyfin", "apps-media"),
+    deployment("nextcloud", "nextcloud", "apps-nextcloud"),
+    deployment("nextcloud", "nextcloud-db", "apps-nextcloud", **DATABASE),
+    deployment("homepage", "homepage", "apps-homepage", replicas=2),
+    # The platform's: one a Flux Kustomization outside k8s/apps applies, one a HelmRelease.
+    deployment("local-path-storage", "local-path-provisioner", "infra-controllers"),
+    {
+        **deployment("traefik", "traefik", "-"),
+        "metadata": {"name": "traefik", "namespace": "traefik", "labels": {"helm.toolkit.fluxcd.io/name": "traefik"}},
+    },
+]
+
+
+def apps_vars(tmp_path, **more):
+    """The apps test playbook's variables: the flux test's cluster, its kubeconfig naming the control plane."""
+    # The apps' play never downloads the Flux Operator, so its release server is never asked.
+    extra = flux_vars(tmp_path, "https://example.invalid/flux-operator")
+    kubeconfig = Path(extra["talos_config_dir"]) / "kubeconfig"
+    kubeconfig.write_text(yaml.safe_dump({"clusters": [{"cluster": {"server": "https://127.0.0.30:6443"}}]}))
+    return extra | more
+
+
+def apps_state(path, **more):
+    objects = {f"{o['kind']}/{o['metadata'].get('namespace', '')}/{o['metadata']['name']}": o for o in APP_OBJECTS}
+    write(path, {"nodes": {}, "mutations": 0, "bootstrapped": True, "objects": objects, **more})
+
+
+def deployments_of(state):
+    return {
+        k.removeprefix("Deployment/"): (o["spec"]["replicas"], (o["metadata"].get("annotations") or {}))
+        for k, o in read(state)["objects"].items()
+        if k.startswith("Deployment/")
+    }
+
+
+UP = {
+    "media/sonarr": (1, {}),
+    "media/jellyfin": (1, {}),
+    "nextcloud/nextcloud": (1, {}),
+    "nextcloud/nextcloud-db": (1, {}),
+    "homepage/homepage": (2, {}),
+    "local-path-storage/local-path-provisioner": (1, {}),
+    "traefik/traefik": (1, {}),
+}
+
+
+def held(replicas):
+    return (0, {RECONCILE: "disabled", RECORDED: str(replicas)})
+
+
+@pytest.mark.cluster
+def test_app_scale_down_and_up(tmp_path):
+    """Down stops every app, apps before their databases, and holds each against Flux, leaving the platform alone;
+    up brings back what down stopped, databases first. Both change nothing a second time, and a dry run nothing
+    at all. ONLY narrows either to apps or groups, and a name that is neither is refused before anything changes."""
+    extra, env = apps_vars(tmp_path), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    apps_state(state)
+    down, up = extra | {"apps_state": "down"}, extra | {"apps_state": "up"}
+
+    result = run("apps.yml", down, check=True, env=env)
+    expect(result, "homeserver-k8s", changed=1, note="dry run of down")
+    assert (
+        "Would stop, in this order: homepage/homepage, media/jellyfin, media/sonarr, nextcloud/nextcloud, "
+        "then nextcloud/nextcloud-db." in result[2]
+    ), result[2][-3000:]
+    assert read(state)["mutations"] == 0
+
+    expect(run("apps.yml", down, env=env), "homeserver-k8s", changed=True, note="down")
+    assert deployments_of(state) == UP | {
+        "media/sonarr": held(1),
+        "media/jellyfin": held(1),
+        "nextcloud/nextcloud": held(1),
+        "nextcloud/nextcloud-db": held(1),
+        "homepage/homepage": held(2),
+    }
+    events = read(state)["events"]
+    # Nextcloud's pods are gone before its database is touched.
+    assert events.index("wait nextcloud app.kubernetes.io/name=nextcloud") < events.index(
+        "patch nextcloud/nextcloud-db 0"
+    ), events
+    for check in (False, True):
+        result = run("apps.yml", down, check=check, env=env)
+        expect(result, "homeserver-k8s", changed=0, note=f"{'dry run of' if check else 'second'} down")
+        assert "Already down: homepage/homepage, media/jellyfin" in result[2], result[2][-3000:]
+
+    result = run("apps.yml", up, check=True, env=env)
+    expect(result, "homeserver-k8s", changed=1, note="dry run of up")
+    assert "Would start, in this order: nextcloud/nextcloud-db, then homepage/homepage" in result[2], result[2][-3000:]
+    write(state, read(state) | {"events": []})
+    expect(run("apps.yml", up, env=env), "homeserver-k8s", changed=True, note="up")
+    assert deployments_of(state) == UP
+    events = read(state)["events"]
+    assert events.index("rollout nextcloud/nextcloud-db") < events.index("patch nextcloud/nextcloud 1"), events
+    for check in (False, True):
+        result = run("apps.yml", up, check=check, env=env)
+        expect(result, "homeserver-k8s", changed=0, note=f"{'dry run of' if check else 'second'} up")
+        assert "No app is down." in result[2], result[2][-3000:]
+
+    # An app and a group; up for one of them; then the rest.
+    expect(run("apps.yml", down | {"only": "jellyfin, nextcloud"}, env=env), "homeserver-k8s", changed=True)
+    assert deployments_of(state) == UP | {
+        "media/jellyfin": held(1),
+        "nextcloud/nextcloud": held(1),
+        "nextcloud/nextcloud-db": held(1),
+    }
+    expect(run("apps.yml", up | {"only": "jellyfin"}, env=env), "homeserver-k8s", changed=True)
+    assert deployments_of(state) == UP | {"nextcloud/nextcloud": held(1), "nextcloud/nextcloud-db": held(1)}
+    expect(run("apps.yml", up, env=env), "homeserver-k8s", changed=True)
+    assert deployments_of(state) == UP
+
+    # Started by hand while held: down stops it again and keeps the replicas it recorded first.
+    expect(run("apps.yml", down | {"only": "homepage"}, env=env), "homeserver-k8s", changed=True)
+    s = read(state)
+    s["objects"]["Deployment/homepage/homepage"]["spec"]["replicas"] = 1
+    write(state, s)
+    expect(run("apps.yml", down | {"only": "homepage"}, env=env), "homeserver-k8s", changed=True)
+    assert deployments_of(state)["homepage/homepage"] == held(2)
+    expect(run("apps.yml", up, env=env), "homeserver-k8s", changed=True)
+    assert deployments_of(state)["homepage/homepage"] == (2, {})
+
+    mutations = read(state)["mutations"]
+    for check in (True, False):
+        rc, _, out = run("apps.yml", down | {"only": "jellyfin,plex,traefik"}, check=check, env=env)
+        assert rc != 0 and "No app or group is called plex, traefik. The apps: homepage, jellyfin," in out, out[-3000:]
+    assert read(state)["mutations"] == mutations
+
+
+@pytest.mark.cluster
+def test_app_scale_refusals_and_timeouts(tmp_path):
+    """No kubeconfig, or another cluster's, is refused before the cluster is read. Pods that never stop, or an app
+    that never becomes available, fail the run, and the next run picks up where it stopped."""
+    extra, env = apps_vars(tmp_path), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    apps_state(state)
+    down, up = extra | {"apps_state": "down"}, extra | {"apps_state": "up"}
+    kubeconfig = Path(extra["talos_config_dir"]) / "kubeconfig"
+
+    kubeconfig.write_text(yaml.safe_dump({"clusters": [{"cluster": {"server": "https://127.0.0.99:6443"}}]}))
+    rc, _, out = run("apps.yml", down, check=True, env=env)
+    assert rc != 0 and "names the server https://127.0.0.99:6443, not https://127.0.0.30:6443" in out, out[-3000:]
+    kubeconfig.unlink()
+    rc, _, out = run("apps.yml", down, env=env)
+    assert rc != 0 and "No kubeconfig at" in out, out[-3000:]
+    assert read(state)["mutations"] == 0
+    apps_vars(tmp_path)
+
+    write(state, read(state) | {"pods_linger": ["nextcloud"]})
+    rc, _, out = run("apps.yml", down | {"only": "nextcloud"}, env=env)
+    assert rc != 0 and "timed out waiting for the condition on pods/nextcloud-" in out, out[-3000:]
+    # Its database was never touched: the wave after it did not start.
+    assert deployments_of(state)["nextcloud/nextcloud-db"] == (1, {})
+    write(state, read(state) | {"pods_linger": []})
+    expect(run("apps.yml", down | {"only": "nextcloud"}, env=env), "homeserver-k8s", changed=True)
+    assert deployments_of(state)["nextcloud/nextcloud-db"] == held(1)
+
+    write(state, read(state) | {"never_available": ["nextcloud-db"]})
+    rc, _, out = run("apps.yml", up, env=env)
+    assert rc != 0 and "timed out waiting for the condition" in out, out[-3000:]
+    assert deployments_of(state)["nextcloud/nextcloud"] == held(1), "nextcloud waits for its database"
+
+
+@pytest.mark.cluster
+def test_haos_power(tmp_path):
+    """make down shuts Home Assistant's VM down through its own shutdown, never a forced stop, and make up starts
+    it again; each leaves a VM already as asked alone, a dry run changes nothing, a VMID that does not exist is
+    refused, and a shutdown that never finishes fails the run with the VM still running."""
+    extra = {"fake_pve_state": str(tmp_path / "pve.json"), "haos_mac": mac(9)}
+    state = Path(extra["fake_pve_state"])
+    vm_state(state, vms={"310": {"config": {"name": "homeassistant"}, "pending": {}, "status": "running"}})
+    down, up = extra | {"haos_power": "stopped"}, extra | {"haos_power": "running"}
+
+    def status():
+        return read(state)["vms"]["310"]["status"]
+
+    result = run("haos_power.yml", down, check=True)
+    expect(result, "homeserver", changed=1, note="dry run of down")
+    assert "Would shut down VM 310." in result[2] and status() == "running", result[2][-3000:]
+    expect(run("haos_power.yml", down), "homeserver", changed=True, note="down")
+    assert status() == "stopped"
+    for check in (False, True):
+        result = run("haos_power.yml", down, check=check)
+        expect(result, "homeserver", changed=0, note=f"{'dry run of' if check else 'second'} down")
+        assert "VM 310 already stopped." in result[2], result[2][-3000:]
+
+    result = run("haos_power.yml", up, check=True)
+    expect(result, "homeserver", changed=1, note="dry run of up")
+    assert "Would start VM 310." in result[2] and status() == "stopped", result[2][-3000:]
+    expect(run("haos_power.yml", up), "homeserver", changed=True, note="up")
+    assert status() == "running"
+    expect(run("haos_power.yml", up), "homeserver", changed=0, note="second up")
+
+    rc, _, out = run("haos_power.yml", down | {"haos_vm_vmid": 311}, check=True)
+    assert rc != 0 and "VM 311 does not exist on this host" in out, out[-3000:]
+
+    s = read(state)
+    s["shutdown_hangs"] = True
+    write(state, s)
+    rc, _, out = run("haos_power.yml", down)
+    assert rc != 0 and "VM quit/powerdown failed - got timeout" in out, out[-3000:]
+    assert status() == "running"

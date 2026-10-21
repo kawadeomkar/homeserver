@@ -1,0 +1,107 @@
+---
+# Home Assistant OS, as a VM of its own on the Proxmox host (homeassistant.yml; the VM's layout is
+# group_vars/proxmox/haos.yml): its switch, its VMID and size, and the checks of local.yml's Home Assistant section.
+# Here, in group_vars/all/, because proxmox.yml reads them too: the nightly backup covers the VM. Names only: its MAC
+# and USB devices come from local.yml.
+#
+# This file sorts before local.yml, so a value local.yml sets wins over one set here; never set here what local.yml
+# is meant to set.
+
+# True when local.yml gives the VM's MAC, which DHCP must know before its first boot. Worked out, never set, like
+# nas_present and kubernetes_present. Without it, homeassistant.yml ends by itself and no backup covers the VM.
+haos_present: "{{ (haos_mac | default('', true) | string | trim | length) > 0 }}"
+
+# VMID 310 (after the cluster's 300 and 301), unless local.yml sets haos_vmid.
+haos_vm_vmid: "{{ haos_vmid | default(310, true) | int }}"
+# Home Assistant's own recommendation: 2 cores, 4 GiB and a 32 GiB disk, the image's own size and so the least.
+# local.yml's haos_size changes any of them.
+haos_size_default: {cores: 2, memory_mib: 4096, disk_gib: 32}
+haos_vm_size: >-
+  {{ haos_size_default | combine(haos_size | default({}, true) if haos_size | default({}, true) is mapping else {}) }}
+# The owner account homeassistant.yml creates on a new Home Assistant; the password is the vault's.
+haos_owner: >-
+  {{ {'name': haos_owner_name | default('Owner', true) | string | trim,
+      'username': haos_owner_username | default('owner', true) | string | trim} }}
+# The Proxmox storage the OVA is downloaded to, as import content (Proxmox VE 8.2 and later): the installer's local
+# on an LVM or ZFS install. A BTRFS install disables local and keeps it on local-btrfs, which local.yml then names
+# (it is read after this file, so its value wins).
+haos_import_storage: local
+
+# Problems with local.yml's Home Assistant section, one message each, naming the variable. proxmox.yml and
+# homeassistant.yml assert it is empty first. It refuses:
+#   - haos_present given with -e, where "false" is a non-empty string and counts as true;
+#   - without a MAC, the section's other settings: what a misspelt haos_mac looks like;
+#   - with one, a MAC that is not locally administered lower case, or that a cluster node has too; a VMID that is not
+#     one or that a cluster node has; sizes that are not whole numbers, or a disk under the image's 32 GiB; USB
+#     devices that are not a list of {host} or {mapping}; a username Home Assistant would refuse; and the VM's VMID
+#     in vm_backup_extra_vmids, which the nightly backup now covers by itself: what a setup that listed it there
+#     by hand, before this file existed, still has, and should delete.
+haos_settings_error: >-
+  {%- set out = [] -%}
+  {%- set given = {'haos_vmid': haos_vmid | default(''), 'haos_size': haos_size | default(''),
+                   'haos_usb': haos_usb | default(''), 'haos_owner_name': haos_owner_name | default(''),
+                   'haos_owner_username': haos_owner_username | default('')}
+                  | dict2items | selectattr('value') | map(attribute='key') | list -%}
+  {%- if haos_present is not boolean -%}
+  {%-   set _ = out.append('haos_present is worked out from haos_mac in group_vars/all/local.yml, not set: given with -e '
+                           ~ 'it is a string, which counts as true whatever it says. To run without Home Assistant, '
+                           ~ 'delete its section there.') -%}
+  {%- elif not haos_present -%}
+  {%-   if given -%}
+  {%-     set _ = out.append('group_vars/all/local.yml sets ' ~ given | join(', ') ~ ' but no haos_mac, which usually '
+                             ~ 'means it is misspelt. Correct it, or delete the whole Home Assistant section to run '
+                             ~ 'without it.') -%}
+  {%-   endif -%}
+  {%- else -%}
+  {%-   set mac = haos_mac | string | trim -%}
+  {%-   if mac is not match('^[0-9a-f][26ae](:[0-9a-f]{2}){5}$') -%}
+  {%-     set _ = out.append('haos_mac must be a locally administered MAC in lower case, its second hex digit 2, 6, a or '
+                             ~ "e (02:... for instance), chosen by you and reserved in the router's DHCP before the "
+                             ~ 'first run, not ' ~ mac ~ '.') -%}
+  {%-   endif -%}
+  {%-   set node_macs = kubernetes_node_macs | default({}, true) -%}
+  {%-   if node_macs is mapping and mac in (node_macs.values() | map('string') | map('trim') | list) -%}
+  {%-     set _ = out.append('haos_mac is a cluster node\'s MAC too (kubernetes_node_macs): each VM needs its own, or '
+                             ~ 'both lease one address.') -%}
+  {%-   endif -%}
+  {%-   set vmid = haos_vmid | default(310, true) | string | trim -%}
+  {%-   if vmid is not match('^[0-9]+$') or not (100 <= vmid | int <= 999999999) -%}
+  {%-     set _ = out.append('haos_vmid must be a number from 100 to 999999999, not ' ~ vmid ~ '.') -%}
+  {%-   elif kubernetes_present is boolean and kubernetes_present
+             and vmid | int in (kubernetes_nodes | map(attribute='vmid') | map('int') | list) -%}
+  {%-     set _ = out.append('haos_vmid ' ~ vmid ~ ' is a cluster node\'s VMID: choose another.') -%}
+  {%-   endif -%}
+  {%-   set size = haos_size | default({}, true) -%}
+  {%-   if size is not mapping -%}
+  {%-     set _ = out.append('haos_size must map cores, memory_mib and disk_gib to whole numbers.') -%}
+  {%-   else -%}
+  {%-     for k, v in size.items() -%}
+  {%-       if k not in haos_size_default -%}
+  {%-         set _ = out.append('haos_size: ' ~ k ~ ' is not a size (' ~ haos_size_default | join(', ') ~ ').') -%}
+  {%-       elif v is not integer or v is boolean or v < 1 -%}
+  {%-         set _ = out.append('haos_size: ' ~ k ~ ' must be a whole number above 0.') -%}
+  {%-       elif k == 'disk_gib' and v < haos_size_default.disk_gib -%}
+  {%-         set _ = out.append('haos_size: disk_gib must be at least ' ~ haos_size_default.disk_gib ~ ', the size of '
+                                 ~ "Home Assistant OS's image: a disk is never shrunk.") -%}
+  {%-       endif -%}
+  {%-     endfor -%}
+  {%-   endif -%}
+  {%-   set usb = haos_usb | default([], true) -%}
+  {%-   if usb is string or usb is mapping or (usb | reject('mapping') | list)
+           or (usb | select('mapping') | rejectattr('host', 'defined') | rejectattr('mapping', 'defined') | list) -%}
+  {%-     set _ = out.append('haos_usb must be a list of devices, each {host: "<vendor>:<product>"} as lsusb on the '
+                             ~ 'Proxmox host shows it, or {mapping: <a Proxmox USB resource mapping>}.') -%}
+  {%-   endif -%}
+  {%-   if (haos_owner.username | string) is not match('^[a-z0-9][a-z0-9_.-]*$') -%}
+  {%-     set _ = out.append('haos_owner_username must be lower case letters, digits, dots, dashes and underscores, as '
+                             ~ 'Home Assistant takes it.') -%}
+  {%-   endif -%}
+  {%-   set extra = vm_backup_extra_vmids | default([], true) -%}
+  {%-   if extra is iterable and extra is not string and extra is not mapping
+           and (haos_vm_vmid | int) in (extra | map('int') | list) -%}
+  {%-     set _ = out.append('vm_backup_extra_vmids names ' ~ (haos_vm_vmid | int) ~ ", Home Assistant's VM, which the "
+                             ~ 'nightly backup covers by itself now that local.yml gives haos_mac: delete it from '
+                             ~ 'vm_backup_extra_vmids in group_vars/all/local.yml.') -%}
+  {%-   endif -%}
+  {%- endif -%}
+  {{ out }}

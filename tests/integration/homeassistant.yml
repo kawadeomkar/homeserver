@@ -1,0 +1,58 @@
+---
+# homeassistant.yml's play with this repo's own configuration, against the fakes: the VM on the fake Proxmox host
+# (fake_pve_bin/), and a fake Home Assistant, the test's own HTTP server, at the address the fake guest agent reports.
+# Its vars, pre-tasks that use no connection and roles are homeassistant.yml's own (tests/policy/test_roles.py checks
+# they stay so); the test passes the fake's port and short waits as extra vars. Each group's files load by name:
+# vars_files does not expand a glob.
+- name: Create Home Assistant's VM on the fake Proxmox host and give it its owner
+  hosts: proxmox
+  gather_facts: false
+  vars_files:
+    - ../../group_vars/all/storage.yml
+    - ../../group_vars/all/kubernetes.yml
+    - ../../group_vars/all/haos.yml
+    - ../../group_vars/proxmox/storage.yml
+    - ../../group_vars/proxmox/haos.yml
+  vars:
+    proxmox_vm_vms: "{{ haos_vms }}"
+    proxmox_vm_isos: []
+    proxmox_vm_imports: "{{ haos_imports }}"
+    proxmox_vm_pending_storages: "{{ haos_pending_storages }}"
+    proxmox_vm_rebuild_command: "make homeassistant ANSIBLE_ARGS='-e proxmox_vm_ignore_existing_volumes=true'"
+    haos_onboard_vmid: "{{ haos_vm_vmid | int if haos_present else 0 }}"
+    haos_onboard_mac: "{{ haos_mac | default('', true) | string | trim }}"
+    haos_onboard_name: "{{ haos_owner.name }}"
+    haos_onboard_username: "{{ haos_owner.username }}"
+    haos_onboard_password: "{{ haos_owner_password }}"
+  environment:
+    PATH: "{{ playbook_dir }}/fake_pve_bin:{{ lookup('ansible.builtin.env', 'PATH') }}"
+    FAKE_PVE_STATE: "{{ fake_pve_state }}"
+    FAKE_PVE_PYTHON: "{{ ansible_playbook_python }}"
+  pre_tasks:
+    - name: Refuse an incomplete Home Assistant section
+      ansible.builtin.assert:
+        that: haos_settings_error | length == 0
+        fail_msg: "{{ haos_settings_error | join(' ') }}"
+        quiet: true
+      tags: [always]
+    - name: Refuse a Home Assistant without its owner's password
+      ansible.builtin.assert:
+        that: not haos_present or haos_owner_password | length >= 12
+        fail_msg: >-
+          The vault has no vault_haos_owner_password of at least 12 characters: the owner account homeassistant.yml
+          gives a new Home Assistant before anyone else can claim it. Add one with make vault-edit (a long random one,
+          kept in your password manager), then run again.
+        quiet: true
+      tags: [always]
+    - name: Say why Home Assistant is skipped
+      ansible.builtin.debug:
+        msg: No haos_mac in group_vars/all/local.yml, so this setup has no Home Assistant VM.
+      when: not haos_present
+      tags: [always]
+    - name: Skip Home Assistant when local.yml names no MAC for it
+      ansible.builtin.meta: end_host
+      when: not haos_present
+      tags: [always]
+  roles:
+    - role: proxmox_vm
+    - role: haos_onboard
