@@ -1,9 +1,10 @@
 """make init: ask for the settings a deployment needs, write them, and say what is still missing.
 
-Settings go in group_vars/all/local.yml and secrets in the vault (group_vars/all/vault.yml, opened with .vault_pass),
-one top-level key at a time, so the rest of each file and its comments stay as they are. Each answer is written at
-once: stopping halfway keeps what was answered. A setting already set is shown, and Enter keeps it, so make init can
-be run again to change a setting or fill in one that was skipped. Secrets are never shown, only whether they are set.
+Settings go in group_vars/all/local.yml and secrets in the vault (group_vars/all/local.vault.yml, opened with
+.vault_pass), both git-ignored, one top-level key at a time, so the rest of each file and its comments stay as they are.
+Each answer is written at once: stopping halfway keeps what was answered. A setting already set is shown, and Enter
+keeps it, so make init can be run again to change a setting or fill in one that was skipped. Secrets are never shown,
+only whether they are set.
 
 A new local.yml is local.yml.example with every setting commented out, so the playbooks read nothing from it until
 a setting is answered. One an older make init copied from the example loses the example's own values the same way,
@@ -41,7 +42,9 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 LOCAL = Path("group_vars/all/local.yml")
 EXAMPLE = Path("group_vars/all/local.yml.example")
-VAULT = Path("group_vars/all/vault.yml")
+VAULT = Path("group_vars/all/local.vault.yml")
+# Where the vault was committed until 2026-10-20: a checkout from before moves it (README.md, The vault).
+OLD_VAULT = Path("group_vars/all/vault.yml")
 VAULT_PASS = Path(".vault_pass")
 INVENTORY = Path("inventory")
 VALIDATE = Path("scripts/init/validate.yml")
@@ -220,7 +223,7 @@ def show(value: Any) -> str:
 
 # ------------------------------------------------------------------------------------------------------ vault ---
 class Vault:
-    """group_vars/all/vault.yml, decrypted in memory with .vault_pass and encrypted again whenever it changes."""
+    """group_vars/all/local.vault.yml, decrypted in memory with .vault_pass and encrypted again whenever it changes."""
 
     def __init__(self, root: Path):
         self.path = root / VAULT
@@ -240,7 +243,7 @@ class Vault:
             self.state = "no password"
             return
         if not self.path.is_file():
-            self.state = "missing"
+            self.state = "not moved" if (self.root / OLD_VAULT).is_file() else "missing"
             return
         from ansible.errors import AnsibleError
         from ansible.parsing.vault import VaultLib, VaultSecret, parse_vaulttext_envelope
@@ -285,13 +288,6 @@ class Vault:
         data = self._lib.encrypt(self.doc.text.encode(), secret=self._secret, vault_id=self._vault_id)
         write_file(self.path, data, stat.S_IMODE(self.path.stat().st_mode))
         self.changed = True
-
-    def tracked(self) -> bool:
-        """Whether git commits it (the maintainer's vault), rather than ignoring it (one of your own, skip-worktree)."""
-        out = subprocess.run(
-            ["git", "ls-files", "-v", "--", str(VAULT)], cwd=self.root, capture_output=True, text=True, check=False
-        ).stdout
-        return out.startswith("H ")
 
 
 # ---------------------------------------------------------------------------------------------------- console ---
@@ -786,6 +782,8 @@ class Init:
         return {
             "no password": "has no password: .vault_pass is missing",
             "missing": f"is missing: {VAULT}",
+            "not moved": f"is still at {OLD_VAULT}, where it was committed until 2026-10-20: move it to {VAULT} "
+            "(README.md, The vault)",
             "does not open": "does not open with .vault_pass",
         }.get(self.vault.state, self.vault.state)
 
@@ -809,9 +807,8 @@ class Init:
                     self.console.say("  It opens: .vault_pass written, readable by you alone.")
                     return
                 self.console.say("  That password does not open the vault.")
-        if self.yes_no(
-            "Make a vault of your own instead (make vault TYPE=new: for a setup without the maintainer's NAS, "
-            "or a fork)?",
+        if self.vault.state != "not moved" and self.yes_no(
+            "Make a new vault instead, empty, with a new password (make vault TYPE=new)?",
             False,
             "vault-new",
         ):
@@ -937,8 +934,8 @@ class Init:
             required.append("inventory is missing: make init copies it from inventory.example")
         if not self.vault.is_open:
             required.append(
-                f"The vault {self.vault_problem()}: restore .vault_pass from your password manager, or "
-                "without the maintainer's NAS make one of your own with make vault TYPE=new (README.md)"
+                f"The vault {self.vault_problem()}: restore it and .vault_pass from your password manager, or make "
+                "new ones with make vault TYPE=new (README.md, The vault)"
             )
         for s in cfg.SETTINGS:
             if not on[s.section] or not self.applies(s):
@@ -1057,7 +1054,7 @@ class Init:
                     f"pvesm set {storage} --content <that list, plus whichever of import and images it lacks> "
                     "(scripts/runbooks/haos.md, step 5)"
                 )
-        keep = ["local.yml", ".vault_pass"] + (
+        keep = ["local.yml", "the vault", ".vault_pass"] + (
             ["the cluster's credentials directory", "its age key"] if on["cluster"] else []
         )
         manual.append(
@@ -1065,8 +1062,6 @@ class Init:
             "they change"
         )
 
-        if self.vault.changed and self.vault.tracked():
-            notes.append(f"{VAULT} changed. It is committed, encrypted: commit it with your next change")
         if not self.full:
             more = [s for s in cfg.SETTINGS if on[s.section] and self.applies(s) and not self.asked(s)]
             if more:

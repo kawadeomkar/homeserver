@@ -72,8 +72,8 @@ jobs:
           python -m venv "$RUNNER_TEMP/venv"
           echo "VIRTUAL_ENV=$RUNNER_TEMP/venv" >> "$GITHUB_ENV"
           VIRTUAL_ENV="$RUNNER_TEMP/venv" make install
-      # The real vault password never reaches CI: without .vault_pass, make gives ansible-lint a
-      # placeholder, and the vault's contents go unlinted (tests/policy checks it stays encrypted).
+      # CI has no vault (it is git-ignored) and no .vault_pass: make gives ansible-lint a placeholder
+      # password file, since ansible.cfg names one.
       # -k: report every failing linter, not only the first. The tests run in the test job, the Kubernetes checks in
       # the kubernetes job.
       - name: the lock, yamllint, ansible-lint, ruff, module documentation and role references, GitHub config schemas

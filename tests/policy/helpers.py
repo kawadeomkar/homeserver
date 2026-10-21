@@ -77,9 +77,11 @@ def blank_nas_local_yml():
 
 def example_tree(tmp_path, local_yml=None):
     """The roles, group_vars and playbooks copied into tmp_path, with local.yml.example or `local_yml` as
-    local.yml, and an ansible.cfg that names no vault password file."""
+    local.yml, no vault (at its path now or its old one), and an ansible.cfg that names no vault password file."""
     for name in ["roles", "group_vars"]:
-        shutil.copytree(ROOT / name, tmp_path / name, ignore=shutil.ignore_patterns("local.yml", "vault.yml"))
+        shutil.copytree(
+            ROOT / name, tmp_path / name, ignore=shutil.ignore_patterns("local.yml", "local.vault.yml", "vault.yml")
+        )
     for playbook in ROOT.glob("*.yml"):
         shutil.copy(playbook, tmp_path)
     shutil.copy(ROOT / "inventory.example", tmp_path)

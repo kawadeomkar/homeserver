@@ -155,7 +155,7 @@ help: ## Show this help
 	@printf '\nTYPE narrows a target to part of what it does (several, comma-separated; check and deploy take one):\n'
 	@printf '  \033[36m%-14s\033[0m %s\n' \
 	  init "$(init_TYPES): every optional setting too" \
-	  vault "$(vault_TYPES): an empty vault of your own, for a setup without the maintainer's NAS" \
+	  vault "$(vault_TYPES): an empty vault of your own, and a .vault_pass if there is none (restore both instead if you have them)" \
 	  lint "$(lint_TYPES)" "" "k8s: $(k8s_TYPES)" \
 	  test "$(test_TYPES)" \
 	  fix "$(fix_TYPES)" \
@@ -202,36 +202,41 @@ lock: ## Update poetry.lock after editing pyproject.toml
 	$(ENV_FOUND)
 	$(POETRY_RUN) $(if $(UPDATE),update --lock $(UPDATE),lock)
 
+# The vault: git-ignored, at a path no commit ever held. Until 2026-10-20 it was committed at OLD_VAULT.
+VAULT     := group_vars/all/local.vault.yml
+OLD_VAULT := group_vars/all/vault.yml
+
 .PHONY: vault vault/edit vault/new
 vault: vault/$(if $(TYPES),$(TYPES),edit) ## Edit the vault's secrets (addresses go in local.yml), then lint it
 
 vault/edit:
-	$(BIN)/ansible-vault edit group_vars/all/vault.yml
+	@test -f $(VAULT) || { echo "There is no $(VAULT): restore it from your password manager, or make vault TYPE=new"; exit 1; }
+	$(BIN)/ansible-vault edit $(VAULT)
 	@$(MAKE) --no-print-directory lint TYPE=ansible
 
-# Without a NAS the vault holds nothing this setup uses, but every run decrypts it, and only the maintainer
-# has the password. This writes an empty vault over the tracked one, encrypted with .vault_pass, which it
-# creates readable by its owner alone if there is none, and tells git to leave the file out of commits. A
-# vault that already opens with .vault_pass, the maintainer's or one made here before, is left alone. Without
-# ansible-vault it stops before anything else, since a vault it cannot open would look like someone else's.
-# The empty vault reaches ansible-vault on stdin, so the file changes only once encryption has worked.
+# Every run decrypts the vault, so it and .vault_pass must exist, and both are yours alone: neither is ever
+# committed (.gitignore; README.md, The vault). This makes what is missing: a random .vault_pass readable by its
+# owner alone, and an empty vault encrypted with it. A vault that already opens with .vault_pass is left alone, and
+# one that does not is refused, since it may hold your secrets with their password lost; so is a checkout that still
+# has the vault's old, committed place, whose vault moves rather than a new one being made beside it. Without
+# ansible-vault it stops before anything else. The empty vault reaches ansible-vault on stdin, so the file is written
+# only once encryption has worked.
 vault/new:
 	@test -x $(BIN)/ansible-vault || { echo "ansible-vault is not in $(VENV): activate the project's virtualenv, or pass VENV=<path>"; exit 1; }
-	@if [ -f .vault_pass ] && $(BIN)/ansible-vault view group_vars/all/vault.yml >/dev/null 2>&1; then \
-	  echo "group_vars/all/vault.yml already opens with .vault_pass: nothing to do."; \
-	elif [ -f group_vars/all/vault.yml ] && ! { tracked=$$(git rev-parse -q --verify :group_vars/all/vault.yml 2>/dev/null) \
-	    && [ -n "$$tracked" ] && [ "$$(git hash-object group_vars/all/vault.yml)" = "$$tracked" ]; }; then \
-	  echo "group_vars/all/vault.yml does not open with .vault_pass and is not the tracked vault, so it may be yours," \
-	    "with your secrets in it: restore the .vault_pass that opens it rather than replace it. To start" \
-	    "afresh all the same, move the file out of the repository first."; \
+	@if [ -f .vault_pass ] && [ -f $(VAULT) ] && $(BIN)/ansible-vault view $(VAULT) >/dev/null 2>&1; then \
+	  echo "$(VAULT) already opens with .vault_pass: nothing to do."; \
+	elif [ -f $(VAULT) ]; then \
+	  echo "$(VAULT) does not open with .vault_pass, so it may hold your secrets: restore the .vault_pass" \
+	    "that opens it rather than replace it. To start afresh all the same, move the file out of the repository first."; \
+	  exit 1; \
+	elif [ -f $(OLD_VAULT) ]; then \
+	  echo "$(OLD_VAULT) is where the vault was committed until 2026-10-20. Move it rather than make a new one:" \
+	    "README.md, The vault, says how."; \
 	  exit 1; \
 	else \
 	  umask 077 && { [ -f .vault_pass ] || openssl rand -hex 32 > .vault_pass; } \
-	  && printf -- '---\n{}\n' | $(BIN)/ansible-vault encrypt --output group_vars/all/vault.yml \
-	  && if git ls-files --error-unmatch group_vars/all/vault.yml >/dev/null 2>&1; then \
-	    git update-index --skip-worktree group_vars/all/vault.yml \
-	    && echo "git now leaves group_vars/all/vault.yml out of commits; README.md says how to pull past it."; \
-	  fi; \
+	  && printf -- '---\n{}\n' | $(BIN)/ansible-vault encrypt --output $(VAULT) \
+	  && echo "Made $(VAULT), encrypted with .vault_pass. Keep a copy of both in your password manager."; \
 	fi
 
 ##@ Code
@@ -247,9 +252,8 @@ lint/lock:
 lint/yaml:
 	$(BIN)/yamllint --strict .
 
-# ansible-lint at the production profile, strict. It needs a vault password file for its syntax check. Without the
-# real one (a fresh clone, or CI) it gets a placeholder, and it then skips the vault's contents; tests/policy checks
-# that the vault stays encrypted.
+# ansible-lint at the production profile, strict. Its syntax check reads the vault password file ansible.cfg names.
+# Without .vault_pass (a fresh clone, or CI, which never has a vault: it is git-ignored) it gets a placeholder.
 lint/ansible:
 	@if [ -z "$$ANSIBLE_VAULT_PASSWORD_FILE" ] && [ ! -f .vault_pass ]; then \
 	  mkdir -p .cache && echo placeholder > .cache/vault-placeholder; \
