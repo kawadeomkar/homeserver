@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "init"))
 import init as wizard  # noqa: E402
 import settings as cfg  # noqa: E402
+import setups  # noqa: E402
 
 VAULT_PASSWORD = "a-vault-password-for-the-test"
 
@@ -40,6 +41,7 @@ class Scripted(wizard.Console):
             "age-key": "n",
             "vault-new": "n",
             "have-password": "n",
+            "setup-adopt": "n",
             **(answers or {}),
         }
         self.out: list[str] = []
@@ -76,7 +78,8 @@ class Silent(Scripted):
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
-    """A checkout's files make init reads, with HOME inside it, so the cluster's files are looked for there."""
+    """A checkout's files make init reads, with HOME inside it, so the cluster's files are looked for there, and a
+    store of setups of its own."""
     root = tmp_path / "repo"
     (root / "group_vars").mkdir(parents=True)
     shutil.copytree(
@@ -90,6 +93,7 @@ def repo(tmp_path, monkeypatch):
     (root / "scripts" / "init").mkdir(parents=True)
     shutil.copy(ROOT / "scripts" / "init" / "validate.yml", root / "scripts" / "init" / "validate.yml")
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SETUPS", str(tmp_path / "setups"))
     return root
 
 
@@ -614,3 +618,59 @@ def test_a_write_through_a_link_changes_the_file_it_links_to(tmp_path):
     wizard.write_file(link, b"---\nproxmox_address: x\n", 0o600)
     assert link.is_symlink(), "the link stays"
     assert stored.read_text() == "---\nproxmox_address: x\n"
+
+
+def flat(text: str) -> str:
+    """The summary without its line breaks, which can fall inside a path."""
+    return " ".join(text.split())
+
+
+def test_the_answers_go_into_the_setup_the_checkout_uses(repo):
+    setup = setups.new(repo, setups.store(), "home", wizard.commented_example(repo))
+    console = Scripted(first_run_answers())
+    init_run(repo, console)
+    assert console.topics[0] == "setup", "the setup is asked for first"
+    assert (repo / "group_vars/all/local.yml").is_symlink()
+    assert yaml.safe_load((setup / "local.yml").read_text())["proxmox_address"] == lan(10)
+    summary = flat(console.out[-1])
+    assert "Setup home: " in summary
+    assert f"Keep copies of the setup's directory, {setup}, the cluster's credentials directory" in summary
+    assert "FROM=current" not in summary
+
+
+def test_the_first_answer_switches_to_another_setup_or_makes_one(repo):
+    where = setups.store()
+    home = setups.new(repo, where, "home", wizard.commented_example(repo))
+    lab = setups.new(repo, where, "lab", wizard.commented_example(repo))
+    init_run(repo, Scripted({**first_run_answers(), "setup": "home"}))
+    assert setups.active(repo) == home
+    assert yaml.safe_load((home / "local.yml").read_text())["proxmox_address"] == lan(10)
+    assert yaml.safe_load((lab / "local.yml").read_text()) is None, "the other setup is left alone"
+    console = Scripted({"setup": ["Not A Name", "spare"], "setup-new": "y"})
+    init_run(repo, console)
+    assert "is no setup's name" in console.text
+    assert setups.active(repo) == where / "spare" and (where / "spare" / "vault_pass").is_file()
+
+
+def test_a_checkout_with_its_own_files_is_offered_to_keep_them_as_a_setup(repo):
+    init_run(repo, Scripted(first_run_answers()))
+    make_vault(repo, {"vault_haos_owner_password": "kept"})
+    before = (repo / "group_vars/all/local.yml").read_text()
+    declined = Scripted()
+    init_run(repo, declined)
+    assert "setup-adopt" in declined.topics and setups.active(repo) is None, "No is the default"
+    assert "FROM=current keeps local.yml" in flat(declined.out[-1])
+    init_run(repo, Scripted({"setup-adopt": "y", "setup-name": "home"}))
+    setup = setups.store() / "home"
+    assert setups.active(repo) == setup
+    assert (setup / "local.yml").read_text() == before
+    assert read_vault(repo) == {"vault_haos_owner_password": "kept"}, "read through its link"
+
+
+def test_a_setup_whose_links_are_not_whole_stops_make_init_before_it_writes(repo):
+    setup = setups.new(repo, setups.store(), "home", wizard.commented_example(repo))
+    (setup / "local.yml").unlink()
+    console = Silent()
+    init_run(repo, console, interactive=False)
+    assert not (setup / "local.yml").exists(), "never made anew through the link"
+    assert "home, is not whole" in flat(console.out[-1])
