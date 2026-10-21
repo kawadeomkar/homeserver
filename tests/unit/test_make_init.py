@@ -5,6 +5,7 @@ Addresses and MACs are built at run time: gitleaks flags any written out in a tr
 
 import shutil
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -93,11 +94,13 @@ def repo(tmp_path, monkeypatch):
     return root
 
 
-def make_vault(root: Path, data: dict) -> None:
+def make_vault(root: Path, data: dict, text: str | None = None) -> None:
+    """A vault holding data, or exactly text."""
     (root / ".vault_pass").write_text(VAULT_PASSWORD + "\n")
     (root / ".vault_pass").chmod(0o600)
     lib = VaultLib([("default", VaultSecret(VAULT_PASSWORD.encode()))])
-    (root / "group_vars/all/vault.yml").write_bytes(lib.encrypt(yaml.safe_dump(data).encode()))
+    plain = yaml.safe_dump(data) if text is None else text
+    (root / "group_vars/all/vault.yml").write_bytes(lib.encrypt(plain.encode()))
 
 
 def read_vault(root: Path) -> dict:
@@ -152,6 +155,35 @@ def test_a_key_is_changed_in_place_and_every_other_line_stays():
     assert not doc.unset("mapping")
     assert "mapping" not in doc.values()
     assert "# Another comment." in doc.lines
+
+
+def test_a_comment_inside_a_mapping_is_part_of_it():
+    doc = wizard.YamlKeys("---\nnodes:\n# The nodes.\n  a: 1\n  b: 2\n# After the nodes.\nlast: 1\n")
+    doc.set("nodes", {"a": 3, "b": 2}, order=[])
+    doc.set("macs", {"a": "x"}, order=["nodes", "macs"])
+    assert doc.values() == {"nodes": {"a": 3, "b": 2}, "macs": {"a": "x"}, "last": 1}
+    assert doc.lines[-2:] == ["# After the nodes.", "last: 1"]
+    assert doc.unset("nodes")
+    assert doc.values() == {"macs": {"a": "x"}, "last": 1}
+
+
+def test_a_key_is_added_to_a_mapping_written_in_flow_style():
+    doc = wizard.YamlKeys("---\n{}\n")  # what make vault-init encrypts
+    doc.set("vault_key", "value", order=[])
+    assert doc.values() == {"vault_key": "value"}
+    doc = wizard.YamlKeys("---\n# A comment.\n{a: 1}\n")
+    doc.set("b", 2, order=[])
+    assert doc.values() == {"a": 1, "b": 2} and doc.lines[:2] == ["---", "# A comment."]
+
+
+def test_an_edit_that_would_change_another_setting_is_refused():
+    doc = wizard.YamlKeys("a: 1\nb: 2\na: 3\n")  # YAML keeps the last a
+    before = list(doc.lines)
+    with pytest.raises(wizard.EditError):
+        doc.set("a", 4, order=[])
+    with pytest.raises(wizard.EditError):
+        doc.unset("a")
+    assert doc.lines == before
 
 
 def test_a_value_yaml_could_misread_is_quoted():
@@ -215,6 +247,35 @@ def test_a_bad_answer_is_refused(kind, text):
 def test_a_universally_administered_mac_is_refused():
     with pytest.raises(ValueError, match="locally administered"):
         cfg.PARSERS["mac"](":".join(["00", "11", "22", "33", "44", "55"]))
+
+
+def test_a_repository_address_with_credentials_is_refused():
+    url = "https://" + ":".join(["someone", "not-a-token"]) + "@git.example.invalid/me/homeserver.git"
+    with pytest.raises(ValueError, match="without a user name or token"):
+        cfg.PARSERS["https_url"](url)
+
+
+@pytest.mark.parametrize(
+    ("value", "placeholder"),
+    [
+        ("smtp.example.org", True),
+        ("nas@example.org", True),
+        ("example.com", True),
+        ("smtp.myexample.com", False),
+        ("me@counterexample.org", False),
+        ("mail.example.org.elsewhere.net", False),
+    ],
+)
+def test_only_the_example_domains_are_placeholders(value, placeholder):
+    assert cfg.is_placeholder(value) is placeholder
+
+
+def test_the_real_part_of_a_value_is_what_is_not_a_placeholder():
+    assert cfg.real_part({"persistent": ["disk-1", "SERIAL-0002"], "ephemeral": ["SERIAL-0006"]}) == {
+        "persistent": ["disk-1"]
+    }
+    assert cfg.real_part({"a": "<mac>"}) is None
+    assert cfg.real_part([False, 0]) == [False, 0]
 
 
 # ------------------------------------------------------------------------------------------------ runs ---
@@ -362,3 +423,134 @@ def test_the_summary_carries_the_playbooks_own_refusals(repo):
     (repo / "group_vars/all/local.yml").write_text(text.replace("kubernetes_lb_frigate_ip", "kubernetes_lb_frigate_x"))
     messages = init.checks()
     assert len(messages) == 1 and "kubernetes_lb_frigate_ip" in messages[0]
+
+
+def test_a_secret_is_written_into_the_empty_vault_make_vault_init_makes(repo):
+    make_vault(repo, {}, text="---\n{}\n")
+    password = "-".join(["a", "long", "owner", "password"])
+    answers = {
+        "switch:nas": "n",
+        "switch:remote": "n",
+        "switch:cluster": "n",
+        "switch:homeassistant": "y",
+        "proxmox_address": lan(10),
+        "vault_haos_owner_password": password,
+    }
+    init_run(repo, Scripted(answers))
+    assert read_vault(repo) == {"vault_haos_owner_password": password}
+
+
+def test_a_comment_inside_a_setting_never_mixes_two_settings(repo):
+    init_run(repo, Scripted(first_run_answers()))
+    path = repo / "group_vars/all/local.yml"
+    macs = local(repo)["kubernetes_node_macs"]
+    path.write_text(
+        path.read_text().replace("kubernetes_node_addresses:\n", "kubernetes_node_addresses:\n# The nodes.\n")
+    )
+    init_run(repo, Scripted({"kubernetes_node_addresses/homeserver-cp-1": lan(32)}))
+    v = local(repo)
+    assert v["kubernetes_node_addresses"] == {"homeserver-cp-1": lan(32), "homeserver-worker-1": lan(31)}
+    assert v["kubernetes_node_macs"] == macs
+
+
+def test_a_change_that_cannot_be_made_in_place_leaves_the_file_as_it_was(repo):
+    path = repo / "group_vars/all/local.yml"
+    path.write_text(path.read_text() + f"proxmox_address: {lan(11)}\n")  # written twice: YAML keeps this one
+    before = path.read_text()
+    console = Scripted({"switch:nas": "n", "switch:remote": "n", "switch:cluster": "n", "switch:homeassistant": "n"})
+    console.answers["proxmox_address"] = lan(12)
+    init_run(repo, console)
+    assert "Not saved: proxmox_address cannot be changed in place" in console.text
+    assert local(repo)["proxmox_address"] == lan(11)
+    assert [line for line in path.read_text().splitlines() if "proxmox_address:" in line] == [
+        line for line in before.splitlines() if "proxmox_address:" in line
+    ]
+
+
+def test_git_origin_is_shown_without_its_credentials_and_never_taken(repo):
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    token = "-".join(["not", "a", "real", "token"])
+    origin = f"https://someone:{token}@git.example.invalid/me/homeserver.git"
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", origin], check=True)
+    answers = first_run_answers()
+    del answers["flux_sync_url"]
+    console = Scripted(answers)
+    init_run(repo, console)
+    assert "flux_sync_url" not in local(repo), "Enter never takes the origin"
+    assert "git's origin here is https://git.example.invalid/me/homeserver.git." in console.text
+    assert token not in console.text
+
+
+@pytest.mark.parametrize(
+    ("origin", "shown"),
+    [
+        ("git@github.com:me/homeserver.git", "https://github.com/me/homeserver.git"),
+        ("ssh://git@git.example.invalid:2222/me/homeserver", "https://git.example.invalid/me/homeserver.git"),
+        ("https://me@git.example.invalid:8443/me/homeserver.git", "https://git.example.invalid:8443/me/homeserver.git"),
+        ("file:///srv/homeserver.git", None),
+    ],
+)
+def test_git_origin_is_shown_as_an_https_address(repo, monkeypatch, origin, shown):
+    init = wizard.Init(repo, Silent(), full=False, interactive=False)
+    monkeypatch.setattr(wizard, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, origin + "\n", ""))
+    assert init.origin_url() == shown
+
+
+def test_the_examples_placeholders_go_and_the_real_values_beside_them_stay(repo):
+    path = repo / "group_vars/all/local.yml"
+    text = path.read_text().replace("SERIAL-0001", "disk-1").replace("SERIAL-0002", "disk-2")
+    path.write_text(text.replace("homeserver-cp-1: 192.0.2.30", f"homeserver-cp-1: {lan(30)}"))
+    console = Scripted(
+        {
+            "switch:nas": "y",
+            "switch:remote": "n",
+            "switch:cluster": "n",
+            "clear:cluster": "n",
+            "switch:homeassistant": "n",
+            "proxmox_address": lan(10),
+            "truenas_static_address": f"{lan(5)}/24",
+        }
+    )
+    init_run(repo, console)
+    v = local(repo)
+    assert v["truenas_pool_disks"] == {"persistent": ["disk-1", "disk-2"]}, "a setting this run does not ask for"
+    assert "clear:cluster" in console.topics, "a node address set by hand is asked about before it goes"
+    assert v["kubernetes_node_addresses"] == {"homeserver-cp-1": lan(30)}
+
+
+def nas_on(**answers) -> Scripted:
+    return Scripted({"switch:nas": "y", "truenas_static_address": f"{lan(5)}/24", **answers})
+
+
+def test_a_setting_the_setup_no_longer_reads_is_offered_for_removal(repo):
+    init_run(repo, Scripted({**first_run_answers(), "vm_backup_storage": "usb-backup"}))
+    assert local(repo)["vm_backup_storage"] == "usb-backup"
+    console = nas_on(**{"remove:vm_backup_storage": "n"})
+    init_run(repo, console)
+    v = local(repo)
+    assert v["vm_backup_storage"] == "usb-backup", "kept when the person says so"
+    assert "kubernetes_media_on_data_volume" not in v, "removed on Enter: a NAS holds the media"
+    assert "local.yml sets vm_backup_storage, but only a setup without a NAS reads it" in console.out[-1]
+    console = Scripted()
+    init_run(repo, console)
+    assert "remove:vm_backup_storage" in console.topics
+    assert "vm_backup_storage" not in local(repo)
+
+
+def test_a_setting_whose_lead_is_cleared_is_offered_for_removal(repo):
+    server = "smtp.myexample.com"  # holds example.com, and is no placeholder
+    answers = {
+        "switch:remote": "n",
+        "switch:cluster": "n",
+        "switch:homeassistant": "n",
+        "proxmox_address": lan(10),
+        "truenas_mail_server": server,
+        "truenas_alert_email": "me@mail.invalid",
+    }
+    init_run(repo, nas_on(**answers))
+    init_run(repo, Scripted())
+    assert (local(repo)["truenas_mail_server"], local(repo)["truenas_alert_email"]) == (server, "me@mail.invalid")
+    console = Scripted({"truenas_mail_server": "-"})
+    init_run(repo, console)
+    assert "remove:truenas_alert_email" in console.topics
+    assert not [k for k in local(repo) if k.startswith(("truenas_mail_", "truenas_alert_"))]

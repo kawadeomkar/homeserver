@@ -12,6 +12,7 @@ import ipaddress
 import re
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 SECTIONS = {
     "proxmox": "Proxmox host",
@@ -138,6 +139,8 @@ def _https_url(text: str) -> str:
     text = text.strip()
     if not re.fullmatch(r"https://[^\s<>]+", text):
         raise ValueError("give an https:// address, such as https://github.com/<you>/homeserver.git")
+    if "@" in urlsplit(text).netloc:
+        raise ValueError("give the address without a user name or token: local.yml and the cluster would keep them")
     return text
 
 
@@ -655,8 +658,11 @@ del S
 BY_KEY = {s.key: s for s in SETTINGS}
 
 # Values local.yml.example carries as documentation, never real ones: RFC 5737 addresses, <...>, made-up serials,
-# example domains and the example fingerprint.
-_PLACEHOLDER = re.compile(r"\b(192\.0\.2|198\.51\.100|203\.0\.113)\.\d+|<[^>]*>|^SERIAL-\d+$|example\.(org|com|net)")
+# the example domains (RFC 2606: the domain itself or a name under it, never a name that only contains it) and the
+# example fingerprint.
+_PLACEHOLDER = re.compile(
+    r"\b(192\.0\.2|198\.51\.100|203\.0\.113)\.\d+|<[^>]*>|^SERIAL-\d+$|(?<![\w-])example\.(org|com|net)(?![\w.-])"
+)
 
 
 # local.yml.example's certificate pin begins so.
@@ -664,6 +670,7 @@ _EXAMPLE_PIN = "AA:BB:CC:DD:EE:FF:00:11:22:33"
 
 
 def is_placeholder(value: Any) -> bool:
+    """Whether the value holds a placeholder anywhere: a mapping or list may hold real values beside it (real_part)."""
     if isinstance(value, str) and value.upper().startswith(_EXAMPLE_PIN):
         return True
     if isinstance(value, dict):
@@ -671,6 +678,18 @@ def is_placeholder(value: Any) -> bool:
     if isinstance(value, list):
         return any(is_placeholder(v) for v in value)
     return isinstance(value, str) and bool(_PLACEHOLDER.search(value))
+
+
+def real_part(value: Any) -> Any:
+    """The value without its placeholders and empty parts: a mapping or list keeps its real entries, and None is left
+    when nothing real is."""
+    if isinstance(value, dict):
+        kept = {k: r for k, v in value.items() if (r := real_part(v)) is not None}
+        return kept or None
+    if isinstance(value, list):
+        kept = [r for v in value if (r := real_part(v)) is not None]
+        return kept or None
+    return value if is_set(value) else None
 
 
 def is_set(value: Any) -> bool:

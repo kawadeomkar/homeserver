@@ -29,6 +29,7 @@ import tempfile
 import textwrap
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import settings as cfg
 import yaml
@@ -61,6 +62,10 @@ def render(key: str, value: Any) -> list[str]:
     return [_flow({key: value})[1:-1]]
 
 
+class EditError(Exception):
+    """A change that would not leave the file as asked, so it was not made."""
+
+
 class YamlKeys:
     """A YAML mapping's text, changed one top-level key at a time; every other line stays as it was."""
 
@@ -83,7 +88,8 @@ class YamlKeys:
         return line.startswith((" ", "\t", "- ")) or line == "-"
 
     def block(self, key: str) -> tuple[int, int] | None:
-        """The lines a top-level key spans: its own and every indented one after it, blank lines between included."""
+        """The lines a top-level key spans: its own and every indented one after it, with the blank lines and
+        comments between them; a comment after its last indented line belongs to what follows."""
         for i, line in enumerate(self.lines):
             m = _TOP.match(line)
             if m and m.group(1) == key:
@@ -91,12 +97,35 @@ class YamlKeys:
                 while j < len(self.lines):
                     if self._continues(self.lines[j]):
                         end = j = j + 1
-                    elif not self.lines[j].strip():
+                    elif not self.lines[j].strip() or self.lines[j].startswith("#"):
                         j += 1
                     else:
                         break
                 return i, end
         return None
+
+    def _to_block_style(self) -> None:
+        """A mapping written in flow style, such as the {} make vault-init encrypts, as one line per key: a key added
+        after a flow mapping would not parse."""
+        start = next(
+            (i for i, line in enumerate(self.lines) if line.strip() and not line.startswith(("#", "---"))), None
+        )
+        if start is not None and self.lines[start].startswith("{"):
+            values = self.values()
+            self.lines = self.lines[:start] + [line for k, v in values.items() for line in render(k, v)]
+
+    def _edit(self, key: str, change, expected: dict) -> None:
+        """Make the change, or refuse it when the file would then read as anything but expected: a key written
+        twice, say, whose last copy YAML keeps."""
+        before = list(self.lines)
+        change()
+        try:
+            after = self.values()
+        except (yaml.YAMLError, ValueError):
+            after = None
+        if after != expected:
+            self.lines = before
+            raise EditError(f"{key} cannot be changed in place without changing other settings too")
 
     def commented(self, key: str) -> tuple[int, int] | None:
         """A commented-out example of the key (# key: value), with its indented commented lines."""
@@ -111,7 +140,10 @@ class YamlKeys:
 
     def set(self, key: str, value: Any, order: list[str]) -> None:
         """In its place: over the key, or over its commented example, or after the key before it in order."""
-        new = render(key, value)
+        self._to_block_style()
+        self._edit(key, lambda: self._put(key, render(key, value), order), {**self.values(), key: value})
+
+    def _put(self, key: str, new: list[str], order: list[str]) -> None:
         span = self.block(key) or self.commented(key)
         if span:
             self.lines[span[0] : span[1]] = new
@@ -129,7 +161,11 @@ class YamlKeys:
     def unset(self, key: str) -> bool:
         span = self.block(key)
         if span:
-            del self.lines[span[0] : span[1]]
+
+            def drop() -> None:
+                del self.lines[span[0] : span[1]]
+
+            self._edit(key, drop, {k: v for k, v in self.values().items() if k != key})
         return bool(span)
 
 
@@ -144,19 +180,18 @@ def write_file(path: Path, data: bytes, mode: int) -> None:
 
 
 def has_value(value: Any) -> bool:
-    """Set to something real: not empty, not local.yml.example's placeholder, in any part."""
-    if isinstance(value, dict):
-        return any(has_value(v) for v in value.values()) and not cfg.is_placeholder(value)
-    if isinstance(value, list):
-        return any(has_value(v) for v in value) and not cfg.is_placeholder(value)
-    return cfg.is_set(value)
+    """Set to something real, in some part: not empty, not only local.yml.example's placeholders."""
+    return cfg.real_part(value) is not None
 
 
 def show(value: Any) -> str:
     if value is None:
         return "not set"
     if cfg.is_placeholder(value):
-        return "local.yml.example's placeholder"
+        real = cfg.real_part(value)
+        if real is None:
+            return "local.yml.example's placeholder"
+        return f"{show(real)}, beside local.yml.example's placeholders, which go"
     if isinstance(value, bool):
         return "yes" if value else "no"
     if isinstance(value, dict):
@@ -331,21 +366,35 @@ class Init:
         if answer is KEEP:
             if not cfg.is_placeholder(self.current(s)):
                 return
-            answer = CLEAR  # a placeholder kept would be used as the real value
+            # A placeholder kept would be used as the real value: only the real part, if any, stays.
+            answer = cfg.real_part(self.current(s))
+            answer = CLEAR if answer is None else answer
         elif answer is not CLEAR and answer == self.current(s):
             return  # unchanged: the file keeps its own way of writing it
-        if s.secret:
+        try:
+            if s.secret:
+                if answer is CLEAR:
+                    self.vault.unset(s.key)
+                else:
+                    self.vault.set(s.key, answer, self.order)
+                return
             if answer is CLEAR:
-                self.vault.unset(s.key)
+                if self.local.unset(s.key):
+                    self.save_local()
             else:
-                self.vault.set(s.key, answer, self.order)
-            return
-        if answer is CLEAR:
-            if self.local.unset(s.key):
+                self.local.set(s.key, answer, self.order)
                 self.save_local()
-        else:
-            self.local.set(s.key, answer, self.order)
-            self.save_local()
+        except EditError as e:
+            where = "the vault: make vault-edit" if s.secret else str(LOCAL)
+            self.console.say(f"  Not saved: {e}. Change it by hand in {where}.")
+
+    def unset_local(self, key: str) -> bool:
+        """Unset a key in local.yml, in memory: False, and saying so, when it cannot be done in place."""
+        try:
+            return self.local.unset(key)
+        except EditError as e:
+            self.console.say(f"  Not removed: {e}. Remove it by hand from {LOCAL}.")
+            return False
 
     # -------------------------------------------------------------------------------------------- asking ---
     def yes_no(self, question: str, default: bool, topic: str) -> bool:
@@ -432,6 +481,8 @@ class Init:
             self.ask_pool_disks(s)
         elif not (s.key == "truenas_api_cert_sha256" and self.offer_certificate(s)):
             now = self.current(s)
+            if s.key == "flux_sync_url" and not has_value(now):
+                self.origin_hint()
             suggestion = None if has_value(now) else self.suggest(s)
             self.apply(s, self.ask_value(s, now, suggestion, lambda t: cfg.parse(s, t)))
 
@@ -461,7 +512,7 @@ class Init:
                 out[node] = value
             elif answer not in (KEEP, CLEAR):
                 out[node] = answer
-        self.apply(s, out or CLEAR)
+        self.apply(s, cfg.real_part(out) or CLEAR)
 
     def ask_parts(
         self, s: cfg.Setting, parts: tuple[str, ...], defaults: dict, now: dict | None = None, node: str = ""
@@ -513,7 +564,7 @@ class Init:
                 out[pool] = value
             elif answer not in (KEEP, CLEAR):
                 out[pool] = answer
-        self.apply(s, out or CLEAR)
+        self.apply(s, cfg.real_part(out) or CLEAR)  # the example's serials beside real ones go
 
     # ------------------------------------------------------------------------------------------ suggestions ---
     def taken_macs(self) -> set[str]:
@@ -542,8 +593,6 @@ class Init:
             lb = str(lb)
             first = ipaddress.IPv4Address(lb.split("-")[0]) if "-" in lb else next(ipaddress.IPv4Network(lb).hosts())
             return str(first + (0 if s.key == "kubernetes_lb_traefik_ip" else 1))
-        if s.key == "flux_sync_url":
-            return self.origin_url()
         if s.key == "haos_mac":
             mac = random_mac(self.taken_macs())
             self.offered_macs.add(mac)
@@ -551,11 +600,30 @@ class Init:
         return None
 
     def origin_url(self) -> str | None:
+        """git's origin as an https:// address, without the user name or token it may carry."""
         url = run(["git", "remote", "get-url", "origin"], cwd=self.root).stdout.strip()
-        m = re.fullmatch(r"(?:git@|ssh://git@)([^:/]+)[:/](.+?)(?:\.git)?", url)
+        m = re.fullmatch(r"git@([^:/]+):(.+?)(?:\.git)?", url)
         if m:
             return f"https://{m.group(1)}/{m.group(2)}.git"
-        return url if url.startswith("https://") else None
+        try:
+            parts = urlsplit(url)
+            host = parts.hostname and parts.hostname + (f":{parts.port}" if parts.port else "")
+        except ValueError:
+            return None
+        if parts.scheme == "ssh" and host:
+            return f"https://{parts.hostname}{parts.path.removesuffix('.git')}.git"
+        if parts.scheme == "https" and host:
+            return urlunsplit(("https", host, parts.path, "", ""))
+        return None
+
+    def origin_hint(self) -> None:
+        """Say what git's origin is, for the person to type: Enter never takes it, since a clone's origin is the
+        repository it was cloned from, which Flux would then apply with cluster-admin rights."""
+        url = self.origin_url()
+        if url:
+            self.console.say(
+                f"  git's origin here is {url}. Type it if that repository is yours: a fork syncs its own."
+            )
 
     def offer_certificate(self, s: cfg.Setting) -> bool:
         """Read the certificate the NAS presents, and offer its fingerprint; False when it was not read."""
@@ -598,9 +666,8 @@ class Init:
         ):
             self.console.say("  Kept as they are, so the playbooks still see it: its settings come next.")
             return True
-        for key in keys:
-            self.local.unset(key)
-        if keys:
+        removed = [key for key in keys if self.unset_local(key)]
+        if removed:
             self.save_local()
         return False
 
@@ -609,16 +676,47 @@ class Init:
         for s in cfg.SETTINGS:
             if s.section != section:
                 continue
-            if not (self.applies(s) and self.asked(s)):
-                # local.yml.example's value for a setting this run leaves out would pass for a real one
-                if not s.secret and cfg.is_placeholder(self.values.get(s.key)) and self.local.unset(s.key):
-                    self.save_local()
-                continue
-            self.ask_setting(s)
-            if s.key == "proxmox_address" and has_value(self.current(s)):
-                self.offer_ssh()
+            if self.applies(s) and self.asked(s):
+                self.ask_setting(s)
+                if s.key == "proxmox_address" and has_value(self.current(s)):
+                    self.offer_ssh()
+            elif not s.secret:  # a secret no setting reads does no harm in the vault, and is there when one does
+                if self.applies(s):
+                    self.drop_placeholders(s)
+                else:
+                    self.offer_removal(s)
         if section == "cluster":
             self.cluster_files()
+
+    def unread(self, s: cfg.Setting) -> str:
+        """Why this setup does not read the setting, which applies() says."""
+        if s.nas is not None and s.nas != self.on("nas"):
+            return f"only a setup {'with' if s.nas else 'without'} a NAS reads it"
+        if s.after == "flux_sync_ref":
+            return "it is read only with flux_sync_ref naming a branch other than main"
+        return f"it is read only with {s.after} set"
+
+    def offer_removal(self, s: cfg.Setting) -> None:
+        """A setting this setup does not read: the playbooks refuse some (vm_backup_storage with a NAS, an alert
+        address without a mail server), and make init would never ask for it again, so it offers to delete it."""
+        if s.key not in self.values:
+            return
+        value = self.values[s.key]
+        if has_value(value) and not self.yes_no(
+            f"\n{s.key} is set ({show(value)}), but {self.unread(s)}. Delete it?", True, f"remove:{s.key}"
+        ):
+            return
+        if self.unset_local(s.key):
+            self.save_local()
+
+    def drop_placeholders(self, s: cfg.Setting) -> None:
+        """local.yml.example's value for a setting this run leaves out would pass for a real one: it goes, and
+        anything real beside it stays."""
+        value = self.values.get(s.key)
+        if not cfg.is_placeholder(value):
+            return
+        real = cfg.real_part(value)
+        self.apply(s, CLEAR if real is None else real)
 
     def offer_ssh(self) -> None:
         address = self.values["proxmox_address"]
@@ -871,6 +969,10 @@ class Init:
             refused = self.checks()
             # A setting a check names is said better by the check.
             required = [r for r in required if not any(r.split(":")[0] in m for m in refused)]
+        for s in cfg.SETTINGS:
+            unread = on[s.section] and not s.secret and not self.applies(s) and has_value(v.get(s.key))
+            if unread and not any(s.key in m for m in refused):
+                notes.append(f"local.yml sets {s.key}, but {self.unread(s)}: make init offers to delete it")
 
         if not self.ssh:
             manual.append(

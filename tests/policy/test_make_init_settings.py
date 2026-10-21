@@ -38,9 +38,10 @@ def test_make_init_asks_for_every_secret_the_playbooks_read():
 
 
 def test_the_example_holds_only_placeholders():
-    """So a copy of it never passes for a configured setup: make init counts every value in it as unset."""
+    """So a copy of it never passes for a configured setup, in whole or in part: make init counts every value in it
+    as unset."""
     values = yaml.safe_load(EXAMPLE.read_text())
-    assert [k for k, v in values.items() if not cfg.is_placeholder(v)] == []
+    assert [k for k, v in values.items() if cfg.real_part(v) is not None] == []
 
 
 def test_every_setting_is_of_a_kind_make_init_can_ask():
