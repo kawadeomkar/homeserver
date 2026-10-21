@@ -52,7 +52,8 @@ digest is refused. With --check-node, each mapping's entries for that node are c
 Proxmox checks them when a VM starts, and `qm start` refuses a VM whose mapping does not hold: a missing entry for
 the node, a device no longer there, or an id, IOMMU group or subsystem that differs, compared with 0x dropped, case
 as it is. `modprobe --resolve-alias` answers from the state's `aliases` (modalias: [modules]), and
-`update-initramfs -u -k all` counts in `initramfs_updates`.
+`update-initramfs -u -k all` counts in `initramfs_updates`, failing once, as with a full /boot, when the state's
+`initramfs_fails` is set.
 
 Images (as on Proxmox VE 9.2, read from its API code): `download-url --content import` takes an .ova, .qcow2, .raw or
 .vmdk; with `--checksum` it needs `--checksum-algorithm`, and the state's `checksum_fails` makes the task fail as a
@@ -1069,6 +1070,10 @@ def update_initramfs(state, args):
     if args != ["-u", "-k", "all"]:
         fail(f"fake update-initramfs: unsupported {args}")
     print("update-initramfs: Generating /boot/initrd.img-7.0.14-23-pve")
+    if state.get("initramfs_fails"):
+        state["initramfs_fails"] = False
+        save(state)
+        fail("cpio: write error: No space left on device\nE: mkinitramfs failure cpio 2")
     state["initramfs_updates"] = state.get("initramfs_updates", 0) + 1
     state["mutations"] += 1
 

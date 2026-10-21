@@ -1161,7 +1161,8 @@ def fake_pve_command(state, *argv):
 
 # A host's PCI devices, made up, as `pvesh get /nodes/<node>/hardware/pci --pci-class-blacklist ""` lists them, with
 # the driver holding each and the modules that claim it (the fake modprobe's --resolve-alias): an iGPU that is the
-# console, and an Arc card behind a root port, its audio function beside it.
+# console, and an Arc card behind a root port as Arc cards show: the card's own switch, the GPU behind one of its
+# ports and its audio behind another, on a bus of its own, all in the root port's IOMMU group.
 IGPU = {
     "id": "0000:00:02.0",
     "class": "0x030000",
@@ -1183,8 +1184,12 @@ ROOT_PORT = {
     "iommugroup": 2,
     "driver": "pcieport",
 }
+ARC_SWITCH = [
+    {"id": address, "class": "0x060400", "vendor": "0x8086", "device": device, "iommugroup": 2, "driver": "pcieport"}
+    for address, device in (("0000:02:00.0", "0xe2ff"), ("0000:03:01.0", "0xe2f0"), ("0000:03:04.0", "0xe2f1"))
+]
 ARC = {
-    "id": "0000:03:00.0",
+    "id": "0000:04:00.0",
     "class": "0x030000",
     "vendor": "0x8086",
     "device": "0xe20b",
@@ -1197,7 +1202,7 @@ ARC = {
     "modules": ["xe"],
 }
 ARC_AUDIO = {
-    "id": "0000:03:00.1",
+    "id": "0000:05:00.0",
     "class": "0x040300",
     "vendor": "0x8086",
     "device": "0xe2f7",
@@ -1239,7 +1244,8 @@ def seed_pci(tmp_path, state, devices, iommu=True, console="0000:00:02.0"):
 def cluster_vars(tmp_path, nas=True, **more):
     """The kubernetes test playbook's variables: the same two nodes in both setups; without a NAS, sized for a small
     host, the worker with a media disk. The GPU role reads the test's sysfs tree, a host without a GPU until a test
-    seeds one, and writes its modprobe.d file in the test's directory."""
+    seeds one, finds the guests' configurations in the test's own directory, empty until a test writes one, and writes
+    its modprobe.d file and its record of the initramfs there too."""
     if not (tmp_path / "sysfs").exists():
         (tmp_path / "sysfs" / "bus" / "pci" / "devices").mkdir(parents=True)
         (tmp_path / "sysfs" / "class" / "iommu").mkdir(parents=True)
@@ -1250,7 +1256,9 @@ def cluster_vars(tmp_path, nas=True, **more):
         "kubernetes_node_addresses": NODE_ADDRESSES,
         "kubernetes_node_macs": NODE_MACS,
         "proxmox_gpu_sysfs": str(tmp_path / "sysfs"),
+        "proxmox_gpu_pve_dir": str(tmp_path / "pve"),
         "proxmox_gpu_modprobe_file": str(tmp_path / "modprobe.d" / "proxmox-gpu.conf"),
+        "proxmox_gpu_state_dir": str(tmp_path / "proxmox-gpu"),
     }
     if not nas:
         extra["kubernetes_node_sizes"] = SMALL_SIZES
@@ -1351,56 +1359,88 @@ def test_proxmox_vm_with_a_nas(tmp_path):
     seed_pci(tmp_path, state, [IGPU])
     result = run("kubernetes.yml", extra)
     expect(result, "homeserver", changed=0, note="an iGPU that is the console")
-    assert "set kubernetes_gpu in group_vars/all/local.yml to 0000:00:02.0 to pass it anyway" in result[2]
+    # Ansible prints the note as JSON, its quotes escaped.
+    assert r"set kubernetes_gpu in group_vars/all/local.yml to \"0000:00:02.0\" to pass it anyway" in result[2]
     assert "hostpci0" not in str(vms_of(state)) and not read(state).get("pci_mappings")
 
-    # An Arc card added: auto passes it, every function, to the running worker through the mapping it creates, which
-    # a dry run shows first. The host's drivers are kept off it from the next boot, which every run says until then;
-    # the PCI device waits for the worker's restart, and is reported until then.
-    seed_pci(tmp_path, state, [IGPU, ROOT_PORT, ARC, ARC_AUDIO])
+    # An Arc card that another VM already has: auto leaves it alone, and says which VM. A snapshot's section of that
+    # VM's configuration is not read.
+    seed_pci(tmp_path, state, [IGPU, ROOT_PORT, *ARC_SWITCH, ARC, ARC_AUDIO])
+    (tmp_path / "pve" / "qemu-server").mkdir(parents=True)
+    other = tmp_path / "pve" / "qemu-server" / "105.conf"
+    other.write_text("name: transcoder\nhostpci0: 0000:04:00.0,pcie=1\n\n[before]\nhostpci1: 0000:00:02.0\n")
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=0, note="a GPU another VM has")
+    assert "Arc B580 at 0000:04:00.0 is not passed: VM 105 (hostpci0) uses it" in result[2], result[2][-3000:]
+    assert "(hostpci1)" not in result[2], "a snapshot's configuration was read"
+    other.unlink()
+
+    # The card free: auto passes it to the running worker through the mapping it creates, which a dry run shows first,
+    # its audio held with it. The host's drivers are kept off both from the next boot, which every run says until
+    # then; the PCI device waits for the worker's restart, and is reported until then.
     mutations = read(state)["mutations"]
     result = run("kubernetes.yml", extra, check=True)
     expect(result, "homeserver", changed=True, note="dry run with a GPU")
-    assert (
-        "PCI mapping homeserver-gpu: create (node=pve,path=0000:03:00,id=8086:e20b,subsystem-id=8086:1100,"
-        in (result[2])
-    ), result[2][-3000:]
+    entry = "node=pve,path=0000:04:00.0,id=8086:e20b,subsystem-id=8086:1100,iommugroup=2"
+    assert f"PCI mapping homeserver-gpu: create ({entry})" in result[2], result[2][-3000:]
     assert read(state)["mutations"] == mutations and not (tmp_path / "modprobe.d" / "proxmox-gpu.conf").exists()
     result = run("kubernetes.yml", extra)
-    expect(result, "homeserver", changed=4, note="a GPU for the running worker")
-    assert "GPU for the VM: Intel Corporation Arc B580 at 0000:03:00.0, claimed by xe" in result[2], result[2][-3000:]
-    assert "The host's own drivers hold 0000:03:00.0 (xe), 0000:03:00.1 (snd_hda_intel): reboot the host" in result[2]
-    assert read(state)["pci_mappings"]["homeserver-gpu"]["map"] == [
-        "node=pve,path=0000:03:00,id=8086:e20b,subsystem-id=8086:1100,iommugroup=2"
-    ]
-    assert (tmp_path / "modprobe.d" / "proxmox-gpu.conf").read_text().splitlines()[1:] == [
+    expect(result, "homeserver", changed=6, note="a GPU for the running worker")
+    assert "GPU for the VM: Intel Corporation Arc B580 at 0000:04:00.0, claimed by xe" in result[2], result[2][-3000:]
+    assert "The host's own drivers hold 0000:04:00.0 (xe), 0000:05:00.0 (snd_hda_intel): reboot the host" in result[2]
+    assert read(state)["pci_mappings"]["homeserver-gpu"]["map"] == [entry]
+    conf = (tmp_path / "modprobe.d" / "proxmox-gpu.conf").read_text()
+    assert conf.splitlines()[1:] == [
         "options vfio-pci ids=8086:e20b:8086:1100,8086:e2f7:8086:1100",
         "softdep snd_hda_intel pre: vfio-pci",
         "softdep xe pre: vfio-pci",
     ]
     assert read(state)["initramfs_updates"] == 1
+    assert (tmp_path / "proxmox-gpu" / "initramfs-modprobe.conf").read_text() == conf
     assert vms_of(state)["301"]["pending"]["hostpci0"] == "mapping=homeserver-gpu,pcie=1"
     assert "hostpci0" not in str(vms_of(state)["300"])
     assert re.search(r'"301":\s*\[[^\]]*"hostpci0"', result[2]), result[2][-3000:]
     expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="the GPU, again")
+    expect(run("kubernetes.yml", extra, check=True), "homeserver", changed=0, note="dry run with the GPU passed")
     # Proxmox checks the mapping against the card as it starts the worker.
     assert fake_pve_command(state, "qm", "shutdown", "301").returncode == 0
     started = fake_pve_command(state, "qm", "start", "301")
     assert started.returncode == 0, started.stderr
     assert vms_of(state)["301"]["config"]["hostpci0"] == "mapping=homeserver-gpu,pcie=1"
 
-    # The card taken out while the worker was off: Proxmox refuses to start it, and the next run drops the device so
-    # it starts, on the CPU, keeping the mapping for the card's return; the host's drivers are no longer kept off.
+    # Drift: the mapping's IOMMU group changed by hand, as another card's arrival renumbers them, is set again under
+    # the digest read; the modprobe.d file edited by hand is written again, the initramfs already holding it.
+    s = read(state)
+    s["pci_mappings"]["homeserver-gpu"]["map"] = [entry.replace("iommugroup=2", "iommugroup=7")]
+    write(state, s)
+    expect(run("kubernetes.yml", extra), "homeserver", changed=1, note="a mapping changed by hand")
+    assert read(state)["pci_mappings"]["homeserver-gpu"]["map"] == [entry]
+    (tmp_path / "modprobe.d" / "proxmox-gpu.conf").write_text("options vfio-pci ids=8086:e20b\n")
+    expect(run("kubernetes.yml", extra), "homeserver", changed=1, note="the modprobe.d file changed by hand")
+    assert (tmp_path / "modprobe.d" / "proxmox-gpu.conf").read_text() == conf
+    assert read(state)["initramfs_updates"] == 1
+    expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="after the drift")
+
+    # The card taken out while the worker was off: Proxmox refuses to start it. The next run's initramfs build fails
+    # (a full /boot) and stops it; the run after builds it again, though the file is already gone, drops the device
+    # so the worker starts, on the CPU, and keeps the mapping for the card's return.
     assert fake_pve_command(state, "qm", "shutdown", "301").returncode == 0
     seed_pci(tmp_path, state, [IGPU])
     started = fake_pve_command(state, "qm", "start", "301")
     assert started.returncode != 0 and "PCI device mapping invalid (hardware probably changed): pci device" in (
         started.stderr
     ), started.stderr
+    s = read(state)
+    s["initramfs_fails"] = True
+    write(state, s)
+    rc, _, out = run("kubernetes.yml", extra)
+    assert rc != 0 and "No space left on device" in out, out[-3000:]
+    assert not (tmp_path / "modprobe.d" / "proxmox-gpu.conf").exists() and vms_of(state)["301"]["status"] == "stopped"
     expect(run("kubernetes.yml", extra), "homeserver", changed=True, note="the GPU taken out")
     worker = vms_of(state)["301"]
     assert worker["status"] == "running" and "hostpci0" not in worker["config"], worker
-    assert not (tmp_path / "modprobe.d" / "proxmox-gpu.conf").exists() and read(state)["initramfs_updates"] == 2
+    assert read(state)["initramfs_updates"] == 2, "the failed build was not made again"
+    assert not (tmp_path / "proxmox-gpu" / "initramfs-modprobe.conf").exists()
     assert "homeserver-gpu" in read(state)["pci_mappings"]
     expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="the GPU taken out, again")
 
@@ -2389,6 +2429,7 @@ def test_flux_bootstrap(tmp_path, operator_releases, nas):
         assert {k: settings[k] for k in media} == media and "NAS_ADDRESS" not in settings
         assert settings["EGRESS_DENIED_ADDRESS"] == PROXMOX_ADDRESS
     assert settings["PROXMOX_ADDRESS"] == PROXMOX_ADDRESS
+    assert (settings["GPU_I915"], settings["GPU_XE"], settings["FRIGATE_DETECTOR_DEVICE"]) == ("0", "0", "CPU")
     secret = objects["Secret/flux-system/sops-age"]["data"]["age.agekey"]
     assert AGE_KEY in base64.b64decode(secret).decode()
 
@@ -2412,6 +2453,21 @@ def test_flux_bootstrap(tmp_path, operator_releases, nas):
         outputs.append(result[2])
         expect(result, "homeserver-k8s", changed=1, note="a path change allowed")
     assert flux_objects(state)["FluxInstance/flux-system/flux"]["spec"]["sync"]["path"] == instance["sync"]["path"]
+
+    # Intel's plugin offering the worker's GPU, then not: the apps' settings ask for it while the worker's capacity has
+    # it, under the resource's name, and not once it is gone.
+    for offered, wanted in (
+        ({"gpu.intel.com/i915": "2"}, ("1", "0", "GPU")),
+        ({"gpu.intel.com/i915": "0"}, ("0", "0", "CPU")),
+    ):
+        s = read(state)
+        s["node_capacity"] = {"homeserver-worker-1": offered}
+        write(state, s)
+        result = run("flux.yml", extra, env=env)
+        outputs.append(result[2])
+        expect(result, "homeserver-k8s", changed=1, note=f"the worker offering {offered}")
+        data = flux_objects(state)["ConfigMap/flux-system/cluster-settings"]["data"]
+        assert (data["GPU_I915"], data["GPU_XE"], data["FRIGATE_DETECTOR_DEVICE"]) == wanted, data
 
     # A setting changed, then one removed: each is applied, and a removed key disappears.
     result = run("flux.yml", extra | {"kubernetes_domain": "home.example.org"}, env=env)

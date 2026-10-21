@@ -99,6 +99,24 @@
           is bootstrapped.
         quiet: true
 
+    # What a node offers, for settings that follow it (flux_bootstrap_capacity_node). A node not there yet offers
+    # nothing; any other error stops the run, rather than settings that would take a device away from the apps.
+    - name: Read what the node offers
+      ansible.builtin.command:
+        argv: [kubectl, --kubeconfig, "{{ flux_bootstrap_kubeconfig }}", get, node, "{{ flux_bootstrap_capacity_node }}", -o, json]
+      register: flux_bootstrap_node
+      changed_when: false
+      check_mode: false
+      failed_when: flux_bootstrap_node.rc != 0 and 'NotFound' not in flux_bootstrap_node.stderr and not ansible_check_mode
+      when: flux_bootstrap_capacity_node | length > 0 and flux_bootstrap_kubeconfig_file.stat.exists
+
+    - name: Keep what the node offers
+      ansible.builtin.set_fact:
+        flux_bootstrap_node_capacity: >-
+          {{ ((flux_bootstrap_node.stdout | from_json).status.capacity | default({}))
+             if flux_bootstrap_node.rc | default(1) == 0 else {} }}
+      when: flux_bootstrap_capacity_node | length > 0
+
     - name: Read the Flux Operator
       ansible.builtin.command:
         argv: [kubectl, --kubeconfig, "{{ flux_bootstrap_kubeconfig }}", get, deployment, flux-operator, -n, flux-system, -o, json]

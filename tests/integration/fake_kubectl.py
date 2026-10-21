@@ -1,22 +1,24 @@
-"""The kubectl verbs roles/flux_bootstrap and roles/app_scale use, for fake_talos.py's kubectl (its docstring has
-the state).
+"""The kubectl verbs roles/flux_bootstrap and roles/app_scale use, for fake_talos.py's kubectl (its docstring has the
+state).
 
 `apply --server-side --field-manager M -f -|<file>`, `diff --server-side --field-manager M -f -`, `get <kind> <name>
--n <namespace> -o json`, `get kustomizations -A`, `get <kustomizations|deployments> -A -o json`, `create secret
-generic ... --dry-run=client -o yaml`, `wait --for=condition=<Available|Ready> <kind>/<name> -n <namespace>
---timeout=<d>`, `wait --for=condition=Ready kustomizations --all -A --timeout=<d>`, which times out on the state's
-`kustomizations_not_ready`, `patch deployment <name> -n <namespace> --type=merge --field-manager=M -p <json>`, `wait
---for=delete pod -l <selector> -n <namespace> --timeout=<d>` and `rollout status deployment/<name> -n <namespace>
---timeout=<d>`. Objects live in the state's `objects`, keyed "<kind>/<namespace>/<name>". As on a real cluster, every
-verb but the client-side render needs a reachable cluster, and apply and diff fail for a namespace that does not exist
-or a kind no CRD defines. A diff prints the whole new object, values included, as kubectl diff prints them, so a test
-proves the role never shows a Secret's. `apply -f <file>` takes a Flux Operator release, which its Deployment
-flux-system/flux-operator marks (operator_objects, as the tests' release server serves it): applied in order, as
-kubectl applies a file, its operator's image recorded in `operator_installs`.
+-n <namespace> -o json`, `get node <name> -o json` (the cluster's two nodes, each with a CPU and memory capacity and
+what the state's `node_capacity` adds for it, such as a device plugin's count), `get kustomizations -A`, `get
+<kustomizations|deployments> -A -o json`, `create secret generic ... --dry-run=client -o yaml`, `wait
+--for=condition=<Available|Ready> <kind>/<name> -n <namespace> --timeout=<d>`, `wait --for=condition=Ready
+kustomizations --all -A --timeout=<d>`, which times out on the state's `kustomizations_not_ready`, `patch deployment
+<name> -n <namespace> --type=merge --field-manager=M -p <json>`, `wait --for=delete pod -l <selector> -n <namespace>
+--timeout=<d>` and `rollout status deployment/<name> -n <namespace> --timeout=<d>`. Objects live in the state's
+`objects`, keyed "<kind>/<namespace>/<name>". As on a real cluster, every verb but the client-side render needs a
+reachable cluster, and apply and diff fail for a namespace that does not exist or a kind no CRD defines. A diff
+prints the whole new object, values included, as kubectl diff prints them, so a test proves the role never shows a
+Secret's. `apply -f <file>` takes a Flux Operator release, which its Deployment flux-system/flux-operator marks
+(operator_objects, as the tests' release server serves it): applied in order, as kubectl applies a file, its
+operator's image recorded in `operator_installs`.
 
 A Deployment has pods while its replicas are above zero: they go the moment it is scaled to zero, unless the state's
-`pods_linger` names it, and it is available once scaled up, unless `never_available` names it; either makes the
-wait time out. Every patch and wait is appended to the state's `events`, so a test sees their order.
+`pods_linger` names it, and it is available once scaled up, unless `never_available` names it; either makes the wait
+time out. Every patch and wait is appended to the state's `events`, so a test sees their order.
 """
 
 import base64
@@ -27,6 +29,8 @@ from pathlib import Path
 import yaml
 
 OPERATOR_KEY = "Deployment/flux-system/flux-operator"
+# The cluster's nodes, as `get node` finds them.
+NODES = ("homeserver-cp-1", "homeserver-worker-1")
 BUILT_IN = {
     "Namespace": False,
     "ConfigMap": True,
@@ -216,6 +220,21 @@ def run(state, kubeconfig, args, reach, fail):
             if "Kustomization" not in kinds(state):
                 fail('error: the server doesn\'t have a resource type "kustomizations"')
             print("NAMESPACE     NAME          AGE   READY   STATUS\nflux-system   flux-system   1m    True    Applied")
+            return
+        if positional[:1] == ["node"] and len(positional) == 2 and flags.get("-o") == "json":
+            if positional[1] not in NODES:
+                fail(f'Error from server (NotFound): nodes "{positional[1]}" not found')
+            capacity = {"cpu": "4", "memory": "8Gi"} | state.get("node_capacity", {}).get(positional[1], {})
+            print(
+                json.dumps(
+                    {
+                        "apiVersion": "v1",
+                        "kind": "Node",
+                        "metadata": {"name": positional[1]},
+                        "status": {"capacity": capacity, "allocatable": capacity},
+                    }
+                )
+            )
             return
         kind = {"deployment": "Deployment", "fluxinstance": "FluxInstance", "configmap": "ConfigMap"}[positional[0]]
         obj = objects.get(f"{kind}/{flags.get('-n', '')}/{positional[1]}")

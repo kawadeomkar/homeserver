@@ -87,17 +87,12 @@ kubernetes_power_order: >-
 # AMD's (1002) and NVIDIA's (10de) are not supported yet, so the Proxmox play leaves them alone.
 kubernetes_gpu_vendors:
   "8086": {label: intel, schematic: gpu}
-# The GPU the Proxmox play found for the worker in this run (roles/proxmox_gpu's proxmox_gpu_selected): {} for none,
-# and in a playbook that does not look, which is why kubernetes.yml and talos-upgrade.yml both look first.
+# The GPU the Proxmox play found for the worker in this run (roles/proxmox_gpu's proxmox_gpu_selected): {} for none.
+# A playbook that does not look reads {} too, so kubernetes.yml and talos-upgrade.yml look first, and refuse a run
+# that left that play out (--limit, tags) rather than take the GPU's schematic and label away.
 kubernetes_gpu_found: >-
   {{ (hostvars[groups['proxmox'][0]].proxmox_gpu_selected | default({}, true))
      if groups['proxmox'] | default([]) else {} }}
-# The kernel driver the worker binds to it, which Intel's plugin names its resource after (gpu.intel.com/<driver>):
-# i915 when it claims the device, as it does every Intel iGPU before Lunar Lake and Arc's A-series, else xe (Arc's
-# B-series, Lunar Lake and newer). The host's kernel answers for the worker's, both a Linux of the same years.
-kubernetes_gpu_driver: >-
-  {{ 'i915' if 'i915' in kubernetes_gpu_found.drivers | default([])
-     else 'xe' if 'xe' in kubernetes_gpu_found.drivers | default([]) else '' }}
 
 # The apps answer at <app>.<domain>, unless local.yml names another domain (kubernetes_domain).
 kubernetes_domain_default: homeserver.internal
@@ -131,6 +126,8 @@ kubernetes_data_storage: "{{ vm_storage_classes.persistent.proxmox_id if nas_pre
 #     kubernetes_media_on_data_volume;
 #   - without a NAS, a worker without every size, since the defaults fit the home host, or without a media disk
 #     (unless media goes on the data volume, when its size may be left out), or with both;
+#   - with a cluster, a kubernetes_gpu that is not a string: YAML reads an unquoted address of digits as a number
+#     (0000:00:02.0 as 2.0) and no or false as a boolean;
 #   - in any setup, the Talos secrets bundle in the vault (vault_talos_secrets), where this public repository
 #     would publish it: it lives in talos_config_dir; and kubernetes_gpu_mapping, which make proxmox now keeps itself.
 kubernetes_settings_error: >-
@@ -298,6 +295,11 @@ kubernetes_settings_error: >-
   {%-     set _ = out.append("kubernetes_ingress_allowed_range must be one IPv4 range in CIDR form, such as your LAN's "
                              ~ '192.0.2.0/24: the clients Traefik serves.') -%}
   {%-   endif -%}
+  {%-   if kubernetes_gpu is defined and kubernetes_gpu is not none and kubernetes_gpu is not string -%}
+  {%-     set _ = out.append('kubernetes_gpu must be auto, none, or a PCI address in quotes, such as "0000:00:02.0": '
+                             ~ 'YAML reads an address of digits written without them as a number (0000:00:02.0 as '
+                             ~ '2.0), and no or false as a boolean, so ' ~ kubernetes_gpu ~ ' is none of these.') -%}
+  {%-   endif -%}
   {%-   if kubernetes_api_sans | default([], true) is string -%}
   {%-     set _ = out.append('kubernetes_api_sans must be a list of names, not a string.') -%}
   {%-   endif -%}
@@ -410,8 +412,10 @@ kubernetes_settings_error: >-
   {%- if kubernetes_gpu_mapping is defined -%}
   {%-   set _ = out.append('kubernetes_gpu_mapping is gone: make proxmox now finds the GPU and keeps its PCI mapping '
                            ~ 'itself (scripts/runbooks/gpu.md). Delete it from group_vars/all/local.yml; to pass the '
-                           ~ "host's iGPU, which is its console, set kubernetes_gpu to its address instead, such as "
-                           ~ '0000:00:02.0.') -%}
+                           ~ "host's iGPU, which is its console, set kubernetes_gpu to its address in quotes instead, "
+                           ~ 'such as "0000:00:02.0". On the Proxmox host, delete what the old runbook made by hand: '
+                           ~ 'its /etc/modprobe.d/vfio-igpu.conf, then update-initramfs -u -k all, and its mapping '
+                           ~ '(pvesh delete /cluster/mapping/pci/igpu).') -%}
   {%- endif -%}
   {%- if vault_talos_secrets is defined -%}
   {%-   set _ = out.append('The vault holds vault_talos_secrets, the Talos secrets bundle: every key of the cluster, which '

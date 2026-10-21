@@ -1,17 +1,18 @@
 """What roles/proxmox_gpu does, worked out from what it read on the Proxmox host.
 
 The role's tasks read the host's PCI devices (`pvesh get /nodes/<node>/hardware/pci`), a few of their sysfs
-attributes (the console's device, the driver holding each, its modalias) and the PCI resource mappings, pass them
-here, and act on what comes back. Everything here is pure: it runs on the controller, never connects anywhere, and
-is unit-tested in tests/unit/test_proxmox_gpu.py.
+attributes (the console's device, the driver holding each, its modalias, the DRM nodes), the guests' configurations
+and the PCI resource mappings, pass them here, and act on what comes back. Everything here is pure: it runs on the
+controller, never connects anywhere, and is unit-tested in tests/unit/test_proxmox_gpu.py.
 
 How Proxmox reads these, from its own code (pve-guest-common's PVE/Mapping/PCI.pm, qemu-server's PCI handling):
 - a mapping's entry for a node names the device by `path` (a function, 0000:01:00.0, or a whole slot, 0000:01:00,
   for every function of a card) and must carry the `id` (vendor:device), `iommugroup` and, when the device has one,
   `subsystem-id` of that function, or of function 0 for a slot; a VM using it refuses to start otherwise ("PCI device
-  mapping invalid (hardware probably changed)"). Values compare without their 0x, so they are written without it.
+  mapping invalid (hardware probably changed)"). Values compare with every 0x dropped, case as it is, so they are
+  written without it, in lower case.
 - starting a VM binds vfio-pci to every device in the passed device's IOMMU group but bridges, taking any of them
-  from the host: a GPU is passed only when its group holds nothing but its own functions and PCI bridges.
+  from the host: a GPU is passed only when its group holds nothing but the card's own devices and PCI bridges.
 """
 
 import re
@@ -20,6 +21,9 @@ import re
 DISPLAY_CLASS = re.compile(r"^(0x)?03")
 # PCI-to-PCI bridges, which the kernel groups with the devices behind them and vfio leaves alone.
 BRIDGE_CLASS = re.compile(r"^(0x)?0604")
+# Multimedia devices (0x04: audio, 0x0403 HDMI audio): a card's own, when its vendor's and in its IOMMU group. An Arc
+# card puts its audio on a bus of its own, behind the card's own PCIe switch, not beside the GPU in its slot.
+MULTIMEDIA_CLASS = re.compile(r"^(0x)?04")
 # A PCI address as lspci and Proxmox write it, the domain and the function optional: 0000:01:00.0, 01:00.0, 01:00.
 ADDRESS = re.compile(r"^(?:([0-9a-f]{4}):)?([0-9a-f]{2}):([0-9a-f]{2})(?:\.([0-7]))?$", re.IGNORECASE)
 # A mapping id as Proxmox takes one (pve-configid).
@@ -27,6 +31,10 @@ MAPPING_ID = re.compile(r"^[a-z][a-z0-9_-]+$", re.IGNORECASE)
 VENDOR = re.compile(r"^[0-9a-f]{4}$")
 # The fields of a mapping's entry this role writes and compares; Proxmox may keep others (a description).
 ENTRY_KEYS = ("node", "path", "id", "subsystem-id", "iommugroup")
+# A DRM device node, as sysfs's class/drm names it and a container's configuration passes it.
+DRM_NODE = re.compile(r"^(card|renderD)\d+$")
+# DRM's character-device major: a container allowed c 226:<minor> reaches card<minor>, or renderD<minor> from 128.
+DRM_MAJOR = "226"
 
 
 def hexid(value):
@@ -48,10 +56,15 @@ def select_errors(select, vendors, mapping, select_name="proxmox_gpu_select"):
     """The role's inputs, one message each."""
     out = []
     text = str(select if select is not None else "").strip().lower()
-    if text not in ("", "none", "auto") and parse_address(text) is None:
+    if not isinstance(select, (str, type(None))):
+        out.append(
+            f'{select_name} must be auto, none, or a PCI address in quotes, such as "0000:01:00.0": YAML reads an'
+            f" address of digits written without them as a number, and no or false as a boolean, not {select!r}."
+        )
+    elif text not in ("", "none", "auto") and parse_address(text) is None:
         out.append(
             f"{select_name} must be auto, none, or a PCI address as lspci or Proxmox's PCI list shows it, such as "
-            f"0000:01:00.0 or 01:00.0, not {select!r}."
+            f'"0000:01:00.0" or "01:00.0", in quotes, not {select!r}.'
         )
     if isinstance(vendors, str) or not isinstance(vendors, (list, tuple)):
         out.append('proxmox_gpu_vendors must be a list of PCI vendor ids, such as ["8086"], not a string.')
@@ -66,9 +79,9 @@ def select_errors(select, vendors, mapping, select_name="proxmox_gpu_select"):
 
 
 def parse_sysfs(text):
-    """What the role's sysfs script printed: whether the host has an IOMMU, and per device its boot_vga flag, the
-    driver holding it and its modalias ("-" for none)."""
-    iommu, devices = False, {}
+    """What the role's sysfs script printed: whether the host has an IOMMU; per device its boot_vga flag, the driver
+    holding it and its modalias ("-" for none); and each DRM node's PCI device."""
+    iommu, devices, drm = False, {}, {}
     for line in str(text or "").splitlines():
         fields = line.split("\t")
         if fields[0] == "iommu" and len(fields) == 2:
@@ -80,7 +93,9 @@ def parse_sysfs(text):
                 "driver": "" if driver.strip() == "-" else driver.strip(),
                 "modalias": "" if modalias.strip() == "-" else modalias.strip(),
             }
-    return iommu, devices
+        elif fields[0] == "drm" and len(fields) == 3 and DRM_NODE.fullmatch(fields[1]):
+            drm[fields[1]] = fields[2].strip().lower()
+    return iommu, devices, drm
 
 
 def slot_of(address):
@@ -102,17 +117,28 @@ def ids_of(device):
 
 
 def describe(device, devices, sysfs, iommu, vendors):
-    """A display device as the role reports and passes it, with what keeps it from being passed alone."""
+    """A display device as the role reports and passes it, with what keeps it from being passed alone. `functions`
+    are its slot's, which the VM gets; `held` adds the card's own devices elsewhere in its IOMMU group (an Arc card's
+    audio), which vfio-pci holds too, since a VM's start takes the whole group from the host."""
     address = device["id"].lower()
     slot = slot_of(address)
+    vendor = hexid(device["vendor"])
     functions = sorted(d["id"].lower() for d in devices if slot_of(d["id"]) == slot)
     group = device.get("iommugroup")
     group = int(group) if str(group).lstrip("-").isdigit() else -1
-    members = [
-        d["id"].lower()
+    others = [
+        d
         for d in devices
-        if str(d.get("iommugroup")) == str(group) and slot_of(d["id"]) != slot and not BRIDGE_CLASS.match(d["class"])
+        if group >= 0
+        and str(d.get("iommugroup")) == str(group)
+        and slot_of(d["id"]) != slot
+        and not BRIDGE_CLASS.match(d["class"])
     ]
+    companions = sorted(
+        d["id"].lower() for d in others if hexid(d["vendor"]) == vendor and MULTIMEDIA_CLASS.match(d["class"])
+    )
+    members = sorted(d["id"].lower() for d in others if d["id"].lower() not in companions)
+    held = functions + companions
     # A slot's entry names function 0's ids, which Proxmox checks for the whole card.
     first = next((d for d in devices if d["id"].lower() == f"{slot}.0"), device)
     problems = []
@@ -122,47 +148,147 @@ def describe(device, devices, sysfs, iommu, vendors):
         )
     elif members:
         problems.append(
-            f"it shares IOMMU group {group} with {', '.join(sorted(members))}, which a VM would take from the host too"
+            f"it shares IOMMU group {group} with {', '.join(members)}, which a VM would take from the host too"
         )
-    if vendors and hexid(device["vendor"]) not in [hexid(v) for v in vendors]:
-        problems.append(
-            f"its vendor ({device.get('vendor_name') or hexid(device['vendor'])}) is not supported here yet"
-        )
+    if vendors and vendor not in [hexid(v) for v in vendors]:
+        problems.append(f"its vendor ({device.get('vendor_name') or vendor}) is not supported here yet")
     facts = sysfs.get(address, {})
     return {
         "address": address,
         "slot": slot,
         "path": slot if len(functions) > 1 else address,
         "functions": functions,
-        "vendor": hexid(device["vendor"]),
+        "held": held,
+        "vendor": vendor,
         "device": hexid(device["device"]),
         "name": " ".join(filter(None, [device.get("vendor_name"), device.get("device_name")])) or address,
         "entry_id": f"{hexid(first['vendor'])}:{hexid(first['device'])}",
         "subsystem": subsystem_of(first),
-        "vfio_ids": list(dict.fromkeys(ids_of(d) for d in devices if d["id"].lower() in functions)),
+        "vfio_ids": list(dict.fromkeys(ids_of(d) for d in devices if d["id"].lower() in held)),
         "iommugroup": group,
         "boot_vga": facts.get("boot_vga", False),
-        "host_drivers": {f: sysfs.get(f, {}).get("driver", "") for f in functions},
-        "modaliases": {f: sysfs.get(f, {}).get("modalias", "") for f in functions},
+        "host_drivers": {f: sysfs.get(f, {}).get("driver", "") for f in held},
+        "modaliases": {f: sysfs.get(f, {}).get("modalias", "") for f in held},
         "problems": problems,
     }
 
 
-def choose(devices, sysfs_text, select, vendors=None, select_name="proxmox_gpu_select"):
+def props(text, default_key):
+    """A Proxmox property string as a dict, a first item without "=" the value of `default_key`."""
+    out = {}
+    for index, item in enumerate(str(text).split(",")):
+        key, sep, value = item.partition("=")
+        if sep:
+            out[key.strip()] = value.strip()
+        elif index == 0 and key.strip():
+            out[default_key] = key.strip()
+    return out
+
+
+def guest_lines(text):
+    """(kind, id, key, value) for each line of the role's read of the guests' configurations, as
+    "qemu-server/105.conf:hostpci0: 0000:03:00.0,pcie=1" or "lxc/200.conf:dev0: /dev/dri/renderD128,gid=44"."""
+    out = []
+    for line in str(text or "").splitlines():
+        found = re.fullmatch(r"(qemu-server|lxc)/(\d+)\.conf:([^:\s]+):\s*(.*)", line.strip())
+        if found:
+            kind, guest, key, value = found.groups()
+            out.append(("VM" if kind == "qemu-server" else "container", int(guest), key, value))
+    return out
+
+
+def users(gpu, guests_text, drm, mappings, own_mapping, node, allowed):
+    """The other guests that use the GPU, as "VM 105 (hostpci0)": a VM given it by address, or through a mapping other
+    than the role's own that names it on this node, and a container given its DRM nodes, by name, by number (c 226:N)
+    or all of /dev/dri. The guests in `allowed`, those the GPU is meant for, never count."""
+    held = set(gpu["held"])
+    slots = {slot_of(a) for a in held}
+
+    def names_it(address):
+        parsed = parse_address(address)
+        if parsed is None:
+            return False
+        slot, function = parsed
+        return slot in slots if function is None else f"{slot}.{function}" in held
+
+    out = []
+    allowed = {int(g) for g in allowed or []}
+    for kind, guest, key, value in guest_lines(guests_text):
+        if guest in allowed:
+            continue
+        hit = False
+        if kind == "VM" and re.fullmatch(r"hostpci\d+", key):
+            given = props(value, "host")
+            if given.get("mapping"):
+                if given["mapping"] == own_mapping:
+                    continue
+                paths = [
+                    entry_props(e).get("path", "")
+                    for m in mappings or []
+                    if m.get("id") == given["mapping"]
+                    for e in ([m.get("map")] if isinstance(m.get("map"), str) else m.get("map") or [])
+                    if entry_props(e).get("node") == node
+                ]
+            else:
+                paths = [given.get("host", "")]
+            hit = any(names_it(a) for path in paths for a in path.split(";"))
+        elif kind == "container":
+            if re.fullmatch(r"dev\d+", key):
+                path = value.split(",", 1)[0].strip()
+            elif key == "lxc.mount.entry":
+                path = (value.split() or [""])[0]
+            elif key in ("lxc.cgroup.devices.allow", "lxc.cgroup2.devices.allow"):
+                found = re.fullmatch(rf"c\s+{DRM_MAJOR}:(\d+|\*)\s*\S*", value.strip())
+                if not found:
+                    continue
+                minor = found.group(1)
+                path = "/dev/dri" if minor == "*" else f"/dev/dri/{'renderD' if int(minor) >= 128 else 'card'}{minor}"
+            else:
+                continue
+            path = path.rstrip("/")
+            if path == "/dev/dri" or path == "/dev/dri/by-path":
+                hit = True
+            elif path.startswith("/dev/dri/"):
+                name = path.rsplit("/", 1)[1]
+                by_path = re.search(r"pci-([0-9a-f:.]+)-", name)
+                hit = names_it(by_path.group(1)) if by_path else drm.get(name, "") in held
+        if hit:
+            out.append(f"{kind} {guest} ({key})")
+    return sorted(dict.fromkeys(out))
+
+
+def choose(devices, sysfs_text, select, vendors=None, select_name="proxmox_gpu_select", guests=None):
     """The GPU to pass, from the host's PCI devices and the sysfs script's output.
 
     `select` is auto, none (or empty), or an address. auto takes the one GPU that can be passed alone, of a vendor in
-    `vendors` (any when empty), that is not the host's console (boot_vga: passing it blanks the host's own screen);
-    none found means no GPU, more than one is refused. An address takes that GPU; one no longer in the host means no
-    GPU (the card was taken out, and the VM must still start), while one that is not a GPU, or cannot be passed, is
-    refused. Returns {gpu: {...} or {}, notes: [...], error: "..."}."""
+    `vendors` (any when empty), that is not the host's console (boot_vga: passing it blanks the host's own screen)
+    and that no other guest uses; none found means no GPU, more than one is refused. An address takes that GPU; one
+    no longer in the host means no GPU (the card was taken out, and the VM must still start), while one that is not a
+    GPU, cannot be passed alone, or that another guest uses, is refused. `guests` is what users() needs: the guests'
+    configuration lines (`text`), the PCI mappings, the role's own mapping, the node and the guests the GPU is meant
+    for. Returns {gpu: {...} or {}, notes: [...], error: "..."}."""
     text = str(select if select is not None else "").strip().lower()
     out = {"gpu": {}, "notes": [], "error": ""}
     if text in ("", "none"):
         return out
-    iommu, sysfs = parse_sysfs(sysfs_text)
+    iommu, sysfs, drm = parse_sysfs(sysfs_text)
+    guests = guests or {}
     devices = [d for d in devices or [] if d.get("id") and d.get("class")]
     gpus = [describe(d, devices, sysfs, iommu, vendors or []) for d in devices if DISPLAY_CLASS.match(d["class"])]
+    for g in gpus:
+        using = users(
+            g,
+            guests.get("text", ""),
+            drm,
+            guests.get("mappings", []),
+            guests.get("mapping", ""),
+            guests.get("node", ""),
+            guests.get("allowed", []),
+        )
+        if using:
+            g["problems"].append(
+                f"{', '.join(using)} {'uses' if len(using) == 1 else 'use'} it: take it from there first"
+            )
     if text == "auto":
         usable = [g for g in gpus if not g["problems"] and not g["boot_vga"]]
         if len(usable) > 1:
@@ -181,8 +307,8 @@ def choose(devices, sysfs_text, select, vendors=None, select_name="proxmox_gpu_s
                 why = "; ".join(g["problems"])
             else:
                 why = (
-                    f"it is the host's console, which auto leaves alone: set {select_name} to {g['address']} to pass"
-                    " it anyway, and the host's own screen goes dark"
+                    f'it is the host\'s console, which auto leaves alone: set {select_name} to "{g["address"]}" to'
+                    " pass it anyway, and the host's own screen goes dark"
                 )
             out["notes"].append(f"{g['name']} at {g['address']} is not passed: {why}.")
         if not gpus:
@@ -278,13 +404,14 @@ def mapping_plan(mappings, mapping_id, node, gpu, description=""):
 
 
 def modprobe_conf(gpu, drivers, header=""):
-    """The modprobe.d file that keeps the host's drivers off the GPU: vfio-pci claims each of its functions by id, and
-    loads before every driver that would claim one (softdep). `drivers` maps each function to the modules
-    `modprobe --resolve-alias` gives for its modalias. Empty when there is no GPU, and the file goes."""
+    """The modprobe.d file that keeps the host's drivers off the GPU: vfio-pci claims each device it holds (its
+    functions and the card's own devices beside them) by id, and loads before every driver that would claim one
+    (softdep). `drivers` maps each device to the modules `modprobe --resolve-alias` gives for its modalias. Empty when
+    there is no GPU, and the file goes."""
     if not gpu:
         return ""
     modules = set()
-    for function in gpu["functions"]:
+    for function in gpu["held"]:
         modules.update(m for m in (drivers or {}).get(function, []) if m and m not in ("vfio_pci", "vfio-pci"))
     lines = [f"# {line}" if line else "#" for line in str(header).splitlines()]
     lines.append(f"options vfio-pci ids={','.join(gpu['vfio_ids'])}")

@@ -248,11 +248,11 @@ alone. Whenever `local.yml` changes, update its copy in your password manager.
 
 If the Proxmox host has an Intel GPU, an Arc card or its iGPU, Jellyfin can transcode and Frigate detect on it.
 `make proxmox` and `make kubernetes` find it and pass it whole to the worker: the PCI resource mapping, the host's
-`vfio-pci` binding, the worker's PCI device, Talos's Intel drivers and the apps' settings. By default
-(`kubernetes_gpu: auto` in `local.yml`) that is the one Intel GPU the host can pass alone that is not its console,
-so an iGPU, usually the console, passes only once `kubernetes_gpu` names its address. The firmware's VT-d, the host's
-reboot, restarting that VM and `make talos-upgrade` are yours: `scripts/runbooks/gpu.md`. Without a GPU, the same
-manifests run both apps on the CPU.
+`vfio-pci` binding, the worker's PCI device and Talos's Intel drivers, and once the worker offers it, the apps'
+settings. By default (`kubernetes_gpu: auto` in `local.yml`) that is the one Intel GPU the host can pass alone that is
+not its console and that no other VM or container uses, so an iGPU, usually the console, passes only once
+`kubernetes_gpu` names its address, in quotes. The firmware's VT-d, the host's reboot, restarting that VM and
+`make talos-upgrade` are yours: `scripts/runbooks/gpu.md`. Without a GPU, the same manifests run both apps on the CPU.
 
 #### Switching setups
 

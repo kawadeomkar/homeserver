@@ -48,6 +48,12 @@ argument_specs:
         type: dict
         default: {}
         description: The cluster-settings ConfigMap's keys and values, all strings.
+      flux_bootstrap_capacity_node:
+        type: str
+        default: ""
+        description: >-
+          A node whose capacity is read first into flux_bootstrap_node_capacity, for settings that follow what it
+          offers. Empty, nothing is read.
       flux_bootstrap_age_key_file:
         type: str
         default: ""

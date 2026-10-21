@@ -42,19 +42,20 @@ SATA = device("0000:00:17.0", "0x010601", "0x8086", "0x7a62", 4)
 HOST = [HOST_BRIDGE, ROOT_PORT, IGPU, SATA, ARC, ARC_AUDIO]
 
 
-def sysfs(devices, iommu=True, console="0000:00:02.0", drivers=None):
-    """What the role's sysfs script prints for `devices`."""
+def sysfs(devices, iommu=True, console="0000:00:02.0", drivers=None, drm=None):
+    """What the role's sysfs script prints for `devices`, with DRM nodes as `drm` gives them (name: address)."""
     drivers = {"0000:00:02.0": "i915", "0000:03:00.0": "xe", "0000:03:00.1": "snd_hda_intel"} | (drivers or {})
     lines = [f"iommu\t{1 if iommu else 0}"]
     for d in devices:
         vga = ("1" if d["id"] == console else "0") if d["class"].startswith("0x03") else "-"
         alias = f"pci:v0000{d['vendor'][2:].upper()}d0000{d['device'][2:].upper()}"
         lines.append(f"device\t{d['id']}\t{vga}\t{drivers.get(d['id'], '-')}\t{alias}")
+    lines += [f"drm\t{name}\t{address}" for name, address in (drm or {}).items()]
     return "\n".join(lines) + "\n"
 
 
-def choose(devices, select, vendors=("8086",), **facts):
-    return pg.choose(devices, sysfs(devices, **facts), select, list(vendors), "kubernetes_gpu")
+def choose(devices, select, vendors=("8086",), guests=None, **facts):
+    return pg.choose(devices, sysfs(devices, **facts), select, list(vendors), "kubernetes_gpu", guests)
 
 
 def test_auto_leaves_the_console_alone():
@@ -63,8 +64,8 @@ def test_auto_leaves_the_console_alone():
     assert result["gpu"] == {} and result["error"] == ""
     assert result["notes"] == [
         "Intel Corporation Raptor Lake-S GT1 [UHD Graphics 770] at 0000:00:02.0 is not passed: it is the host's"
-        " console, which auto leaves alone: set kubernetes_gpu to 0000:00:02.0 to pass it anyway, and the host's own"
-        " screen goes dark."
+        ' console, which auto leaves alone: set kubernetes_gpu to "0000:00:02.0" to pass it anyway, and the host\'s'
+        " own screen goes dark."
     ]
 
 
@@ -185,6 +186,7 @@ def test_the_subsystem_is_kept_whatever_it_is():
         ("auto", ["8086"], "homeserver-gpu", []),
         ("none", "8086", "", ['proxmox_gpu_vendors must be a list of PCI vendor ids, such as ["8086"], not a string.']),
         ("", ["0x10DE"], "", []),
+        (None, [], "", []),
         (
             "",
             ["intel"],
@@ -196,8 +198,8 @@ def test_the_subsystem_is_kept_whatever_it_is():
             [],
             "gpu",
             [
-                "kubernetes_gpu must be auto, none, or a PCI address as lspci or Proxmox's PCI list shows it,"
-                " such as 0000:01:00.0 or 01:00.0, not 'igpu'."
+                "kubernetes_gpu must be auto, none, or a PCI address as lspci or Proxmox's PCI list shows it, such as"
+                ' "0000:01:00.0" or "01:00.0", in quotes, not \'igpu\'.'
             ],
         ),
         (
@@ -205,14 +207,140 @@ def test_the_subsystem_is_kept_whatever_it_is():
             [],
             "",
             [
-                "proxmox_gpu_mapping must name the PCI resource mapping the GPU is kept under (letters,"
-                " digits, - and _, starting with a letter), not '': a VM is given the GPU through it."
+                "proxmox_gpu_mapping must name the PCI resource mapping the GPU is kept under (letters, digits, - and"
+                " _, starting with a letter), not '': a VM is given the GPU through it."
             ],
         ),
     ],
 )
 def test_select_errors(select, vendors, mapping, expected):
     assert pg.select_errors(select, vendors, mapping, "kubernetes_gpu") == expected
+
+
+@pytest.mark.parametrize("select", [2.0, 60.0, False, 0], ids=["iGPU-unquoted", "slot-unquoted", "no", "zero"])
+def test_a_select_yaml_read_as_another_type_is_refused(select):
+    """YAML 1.1 reads 0000:00:02.0 unquoted as 2.0 and 01:00.0 as 60.0, and no as false: none is what was meant."""
+    errors = pg.select_errors(select, ["8086"], "homeserver-gpu", "kubernetes_gpu")
+    assert errors and errors[0].startswith("kubernetes_gpu must be auto, none, or a PCI address in quotes, such as")
+
+
+# An Arc card as one shows in a host: its own PCIe switch (an upstream port and two downstream ones), the GPU behind
+# one, its audio behind the other, on a bus of its own; all in one IOMMU group with the root port above them.
+ARC_UPSTREAM = device("0000:02:00.0", "0x060400", "0x8086", "0xe2ff", 2)
+ARC_DOWN_1 = device("0000:03:01.0", "0x060400", "0x8086", "0xe2f0", 2)
+ARC_DOWN_2 = device("0000:03:04.0", "0x060400", "0x8086", "0xe2f1", 2)
+ARC_BEHIND = device(
+    "0000:04:00.0", "0x030000", "0x8086", "0xe20b", 2, ("0x8086", "0x1100"), "Battlemage G21 [Arc B580]"
+)
+ARC_BEHIND_AUDIO = device("0000:05:00.0", "0x040300", "0x8086", "0xe2f7", 2, ("0x8086", "0x1100"))
+ARC_HOST = [HOST_BRIDGE, ROOT_PORT, IGPU, SATA, ARC_UPSTREAM, ARC_DOWN_1, ARC_DOWN_2, ARC_BEHIND, ARC_BEHIND_AUDIO]
+
+
+def test_an_arc_cards_own_audio_beside_it_in_the_group_is_held_too():
+    """The audio is the card's own (its vendor's, a multimedia device): vfio-pci holds it with the GPU, as the VM's
+    start would take it anyway, while the VM is given the GPU's slot alone."""
+    gpu = choose(ARC_HOST, "auto", drivers={"0000:04:00.0": "xe", "0000:05:00.0": "snd_hda_intel"})["gpu"]
+    assert (gpu["address"], gpu["path"], gpu["functions"]) == ("0000:04:00.0", "0000:04:00.0", ["0000:04:00.0"])
+    assert gpu["held"] == ["0000:04:00.0", "0000:05:00.0"]
+    assert gpu["vfio_ids"] == ["8086:e20b:8086:1100", "8086:e2f7:8086:1100"]
+    assert pg.held_by_host(gpu) == ["0000:04:00.0 (xe)", "0000:05:00.0 (snd_hda_intel)"]
+    assert pg.modprobe_conf(gpu, {"0000:04:00.0": ["xe"], "0000:05:00.0": ["snd_hda_intel"]}).splitlines() == [
+        "options vfio-pci ids=8086:e20b:8086:1100,8086:e2f7:8086:1100",
+        "softdep snd_hda_intel pre: vfio-pci",
+        "softdep xe pre: vfio-pci",
+    ]
+
+
+def test_another_vendors_audio_in_the_group_is_not_the_cards():
+    """Only the card's own vendor's multimedia device counts as its own: another's would be taken from the host."""
+    other = device("0000:05:00.0", "0x040300", "0x1002", "0xab28", 2)
+    result = choose([*ARC_HOST[:-1], other], "auto")
+    assert result["gpu"] == {} and any("shares IOMMU group 2 with 0000:05:00.0" in n for n in result["notes"])
+
+
+def guests(text, mappings=(), allowed=(301,)):
+    return {
+        "text": text,
+        "mappings": list(mappings),
+        "mapping": "homeserver-gpu",
+        "node": "pve",
+        "allowed": list(allowed),
+    }
+
+
+DRM = {"card0": "0000:00:02.0", "renderD128": "0000:00:02.0", "card1": "0000:03:00.0", "renderD129": "0000:03:00.0"}
+
+
+@pytest.mark.parametrize(
+    ("text", "mappings", "user"),
+    [
+        pytest.param("qemu-server/105.conf:hostpci0: 0000:03:00,pcie=1", [], "VM 105 (hostpci0)", id="vm-by-slot"),
+        pytest.param("qemu-server/105.conf:hostpci1: host=03:00.0;03:00.1", [], "VM 105 (hostpci1)", id="vm-host"),
+        pytest.param(
+            "qemu-server/106.conf:hostpci0: mapping=arc,pcie=1",
+            [{"id": "arc", "map": ["node=pve,path=0000:03:00.0,id=8086:e20b"]}],
+            "VM 106 (hostpci0)",
+            id="vm-other-mapping",
+        ),
+        pytest.param("lxc/200.conf:dev0: /dev/dri/renderD129,gid=104", [], "container 200 (dev0)", id="ct-render"),
+        pytest.param(
+            "lxc/201.conf:lxc.mount.entry: /dev/dri dev/dri none bind,optional,create=dir",
+            [],
+            "container 201 (lxc.mount.entry)",
+            id="ct-all-dri",
+        ),
+        pytest.param(
+            "lxc/202.conf:lxc.cgroup2.devices.allow: c 226:129 rwm",
+            [],
+            "container 202 (lxc.cgroup2.devices.allow)",
+            id="ct-cgroup-minor",
+        ),
+        pytest.param(
+            "lxc/203.conf:lxc.cgroup2.devices.allow: c 226:* rwm",
+            [],
+            "container 203 (lxc.cgroup2.devices.allow)",
+            id="ct-cgroup-all",
+        ),
+        pytest.param(
+            "lxc/204.conf:dev1: /dev/dri/by-path/pci-0000:03:00.0-render",
+            [],
+            "container 204 (dev1)",
+            id="ct-by-path",
+        ),
+    ],
+)
+def test_a_gpu_another_guest_uses_is_left_alone(text, mappings, user):
+    """auto skips it, saying who uses it; named, it is refused: vfio-pci would take it from that guest at boot."""
+    auto = choose(HOST, "auto", guests=guests(text, mappings), drm=DRM)
+    assert auto["gpu"] == {}, auto
+    assert any(f"{user} uses it: take it from there first" in n for n in auto["notes"]), auto["notes"]
+    named = choose(HOST, "03:00.0", guests=guests(text, mappings), drm=DRM)
+    assert f"{user} uses it: take it from there first" in named["error"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("qemu-server/301.conf:hostpci0: mapping=homeserver-gpu,pcie=1", id="the-worker-itself"),
+        pytest.param("qemu-server/301.conf:hostpci0: mapping=igpu,pcie=1", id="the-worker-through-an-old-mapping"),
+        pytest.param("qemu-server/107.conf:hostpci0: mapping=homeserver-gpu", id="the-roles-own-mapping"),
+        pytest.param("qemu-server/108.conf:hostpci0: 0000:05:00.0", id="another-device"),
+        pytest.param("lxc/205.conf:dev0: /dev/dri/renderD128", id="the-igpus-render-node"),
+        pytest.param("lxc/206.conf:lxc.cgroup2.devices.allow: c 10:200 rwm", id="another-major"),
+        pytest.param("lxc/207.conf:dev0: /dev/net/tun", id="another-device-node"),
+    ],
+)
+def test_what_is_not_another_guests_use(text):
+    """The guests the GPU is meant for, the role's own mapping, and devices other than the card's never count."""
+    mappings = [{"id": "igpu", "map": ["node=pve,path=0000:03:00.0,id=8086:e20b"]}]
+    assert choose(HOST, "auto", guests=guests(text, mappings), drm=DRM)["gpu"]["address"] == "0000:03:00.0"
+
+
+def test_guest_lines_read_only_what_the_script_prints():
+    assert pg.guest_lines("qemu-server/105.conf:hostpci0: 0000:03:00.0,pcie=1\nnoise\nlxc/2.conf:dev0: /dev/dri") == [
+        ("VM", 105, "hostpci0", "0000:03:00.0,pcie=1"),
+        ("container", 2, "dev0", "/dev/dri"),
+    ]
 
 
 ARC_ENTRY = "node=pve,path=0000:03:00,id=8086:e20b,subsystem-id=8086:1100,iommugroup=2"

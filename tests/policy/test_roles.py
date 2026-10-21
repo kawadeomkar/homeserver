@@ -1172,6 +1172,20 @@ def without(settings, *names):
             ["group_vars/all/local.yml sets kubernetes_gpu but no kubernetes_node_addresses"],
             id="gpu-without-a-cluster",
         ),
+        pytest.param(
+            as_local_yml(example()) + "kubernetes_gpu: 0000:00:02.0\n",
+            CLUSTER_VARS,
+            ['kubernetes_gpu must be auto, none, or a PCI address in quotes, such as "0000:00:02.0"', "so 2.0 is"],
+            id="gpu-address-unquoted",
+        ),
+        pytest.param(
+            as_local_yml(example()) + "kubernetes_gpu: no\n",
+            CLUSTER_VARS,
+            ["kubernetes_gpu must be auto, none, or a PCI address in quotes", "so False is"],
+            id="gpu-no",
+        ),
+        pytest.param(as_local_yml(example()) + 'kubernetes_gpu: "0000:00:02.0"\n', CLUSTER_VARS, [], id="gpu-quoted"),
+        pytest.param(as_local_yml(example()) + "kubernetes_gpu:\n", CLUSTER_VARS, [], id="gpu-blank"),
     ],
 )
 def test_kubernetes_settings_are_checked(tmp_path, local_yml, extra, expected):
@@ -1261,26 +1275,15 @@ def test_home_assistant_url_is_a_setting_only_when_given(tmp_path):
     assert settings["HAOS_URL"] == "http://homeassistant.home.arpa:8123"
 
 
-# What roles/proxmox_gpu leaves in proxmox_gpu_selected, in part: an iGPU the i915 driver runs, and an Arc B-series
-# card xe runs.
-FOUND_I915 = {"vendor": "8086", "address": "0000:00:02.0", "drivers": ["i915"]}
-FOUND_XE = {"vendor": "8086", "address": "0000:03:00.0", "drivers": ["xe"]}
+# What roles/proxmox_gpu leaves in proxmox_gpu_selected, in part: an Intel GPU found for the worker.
+FOUND_INTEL = {"vendor": "8086", "address": "0000:03:00.0", "drivers": ["xe"]}
 
 
 @pytest.mark.parametrize("local_yml", [None, PROXMOX_ONLY_CLUSTER_LOCAL_YML], ids=["nas", "proxmox-only"])
-@pytest.mark.parametrize(
-    ("found", "settings"),
-    [
-        pytest.param({}, ("0", "0", "CPU"), id="no-gpu"),
-        pytest.param(FOUND_I915, ("1", "0", "GPU"), id="i915"),
-        pytest.param(FOUND_XE, ("0", "1", "CPU"), id="xe"),
-    ],
-)
-def test_gpu_follows_what_the_proxmox_play_found(tmp_path, local_yml, found, settings):
+@pytest.mark.parametrize("found", [{}, FOUND_INTEL], ids=["no-gpu", "gpu"])
+def test_the_worker_follows_the_gpu_the_proxmox_play_found(tmp_path, local_yml, found):
     """The GPU the Proxmox play found (roles/proxmox_gpu, on the Proxmox host): the worker alone gets the PCI device
-    through the role's mapping, its vendor's schematic and label, in both setups; the apps' settings ask for the device
-    under its driver's name, or for none, and Frigate detects on an i915 one. The manifests stay the same either
-    way."""
+    through the role's mapping, and its vendor's schematic and label, in both setups."""
     tree = example_tree(tmp_path, local_yml)
     given = json.dumps({**CLUSTER_VARS, "proxmox_gpu_selected": found})
     vms = resolve_on(tree, "homeserver", "proxmox_vm_vms", "-e", given)
@@ -1295,8 +1298,41 @@ def test_gpu_follows_what_the_proxmox_play_found(tmp_path, local_yml, found, set
     }
     labelled = [n["name"] for n in nodes if any("homeserver.internal/gpu: intel" in p for p in n["patches"])]
     assert labelled == ([worker] if found else [])
-    flux = resolve_on(tree, "homeserver-k8s", "flux_bootstrap_settings", "-e", given)
+
+
+@pytest.mark.parametrize(
+    ("capacity", "settings"),
+    [
+        pytest.param({}, ("0", "0", "CPU"), id="before-the-cluster"),
+        pytest.param({"cpu": "4", "memory": "8Gi"}, ("0", "0", "CPU"), id="no-gpu"),
+        pytest.param({"gpu.intel.com/i915": "2"}, ("1", "0", "GPU"), id="i915"),
+        pytest.param({"gpu.intel.com/xe": "2"}, ("0", "1", "CPU"), id="xe"),
+        pytest.param({"gpu.intel.com/i915": "0"}, ("0", "0", "CPU"), id="plugin-without-a-device"),
+    ],
+)
+def test_the_apps_ask_for_the_gpu_the_worker_offers(tmp_path, capacity, settings):
+    """Jellyfin and Frigate ask for a GPU only once the worker's capacity has it, under the name of the driver it
+    binds, whatever the Proxmox play found: a GPU just found waits for the reboot and the Talos upgrade, rather than
+    leave the apps Pending. Frigate detects on an i915 one only."""
+    given = json.dumps({**CLUSTER_VARS, "proxmox_gpu_selected": FOUND_INTEL, "flux_bootstrap_node_capacity": capacity})
+    flux = resolve_on(example_tree(tmp_path), "homeserver-k8s", "flux_bootstrap_settings", "-e", given)
     assert (flux["GPU_I915"], flux["GPU_XE"], flux["FRIGATE_DETECTOR_DEVICE"]) == settings
+    node = resolve_on(example_tree(tmp_path / "again"), "homeserver-k8s", "flux_bootstrap_capacity_node", *CLUSTER_ARGS)
+    assert node == "homeserver-worker-1"
+
+
+@pytest.mark.parametrize("playbook", ["kubernetes.yml", "talos-upgrade.yml"])
+def test_talos_is_never_rendered_without_the_gpu_found(tmp_path, playbook):
+    """A run that leaves out the Proxmox play (--limit homeserver-k8s) reads no GPU, and would take the worker's GPU
+    schematic and label away: refused before the talos role runs."""
+    rc, out = ansible_cli(
+        example_tree(tmp_path),
+        "ansible-playbook",
+        *["-i", "inventory.example", playbook, "--limit", "homeserver-k8s", "-e", "ansible_connection=local"],
+        *CLUSTER_ARGS,
+    )
+    assert rc != 0 and "and this run left that play out" in out, out[-3000:]
+    assert "TASK [talos :" not in out, out[-3000:]
 
 
 @pytest.mark.parametrize(
