@@ -282,8 +282,12 @@ def tree(tmp_path: Path) -> Path:
     return checkout
 
 
-# What an outer make (make test TYPE=unit) hands every make below it, its TYPE among them.
-OUTER_MAKE = {"MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEOVERRIDES"}
+# What an outer make (make test TYPE=unit) hands every make below it: its flags, and the variables of its command line,
+# which it puts in the environment too, TYPE among them.
+OUTER_MAKE = {
+    *("MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEOVERRIDES"),
+    *("TYPE", "NAME", "FROM", "SETUPS", "TAGS", "ONLY", "ALL", "ANSIBLE_ARGS", "PYTEST_ARGS", "UPDATE"),
+}
 
 
 def make(checkout: Path, *args: str, **env: str) -> subprocess.CompletedProcess:
