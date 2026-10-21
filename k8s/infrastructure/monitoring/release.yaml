@@ -1,0 +1,193 @@
+---
+# Prometheus, Alertmanager, Grafana, node-exporter and kube-state-metrics, with the community's rules and dashboards.
+# One replica each, their data on local volumes. Retention comes from the cluster's settings (shorter without a NAS,
+# whose node is smaller). The control plane's components serve metrics beyond localhost (roles/talos binds them to
+# 0.0.0.0): the controller manager and scheduler are static pods the chart's Services find by their component label,
+# and etcd, which is no pod on Talos, is found through the API server's (below), so no address is written here.
+# Every component requests CPU and memory (make lint-helm checks the rendered chart).
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kube-prometheus-stack
+  namespace: monitoring
+spec:
+  interval: 1h
+  timeout: 15m
+  chartRef:
+    kind: OCIRepository
+    name: kube-prometheus-stack
+  install:
+    crds: CreateReplace
+  upgrade:
+    crds: CreateReplace
+  values:
+    # The overcommit alerts ask whether the pods' requests would still fit with the largest node gone. With the worker
+    # gone, the one node left would be the control plane, which the apps may not use, so they fire for as long as the apps
+    # request more than it has: always, from the first minutes. A pod that finds no room still raises KubePodNotReady
+    # and the replica-mismatch alerts.
+    defaultRules:
+      disabled:
+        KubeCPUOvercommit: true
+        KubeMemoryOvercommit: true
+    # Each image by its version and digest (CLAUDE.md): a chart bump changes both here too. The charts take the
+    # digest's hex alone, in sha, but kube-state-metrics's whole, in sha, and node-exporter's whole, in digest.
+    alertmanager:
+      alertmanagerSpec:
+        image:
+          sha: e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a
+        replicas: 1
+        resources:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+        storage:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: local
+              accessModes: [ReadWriteOnce]
+              resources:
+                requests:
+                  storage: 1Gi
+    grafana:
+      image:
+        sha: 202e5d5b3f8499e70ccac7991eea6d7da72d2790eb2e0597e7987acf724e7180
+      replicas: 1
+      deploymentStrategy:
+        type: Recreate
+      # The chart makes this claim, so Flux's prune annotation cannot guard it: Helm's own keeps it when the release
+      # is uninstalled, as renaming or pruning infra-monitoring would.
+      persistence:
+        enabled: true
+        storageClassName: local
+        size: 5Gi
+        annotations:
+          helm.sh/resource-policy: keep
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+      initChownData:
+        image:
+          sha: fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+      # Its sidecars read dashboards and datasources from ConfigMaps in this namespace alone, through the Role in
+      # grafana-rbac.yaml: no ClusterRole, and no Secret anywhere (the chart's default reads both kinds, in every
+      # namespace for dashboards).
+      rbac:
+        namespaced: true
+        useExistingRole: grafana-sidecar
+      sidecar:
+        image:
+          sha: 2912be006f62f9ea080194cf6d3afcd90daead8d101d0ba686a137a849f6a4f6
+        dashboards:
+          searchNamespace: [monitoring]
+          resource: configmap
+        datasources:
+          searchNamespace: [monitoring]
+          resource: configmap
+        resources:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+      ingress:
+        enabled: true
+        ingressClassName: traefik
+        hosts:
+          - "grafana.${DOMAIN}"
+      # Behind Traefik's HTTPS: the address Grafana writes into its links and redirects.
+      grafana.ini:
+        server:
+          root_url: "https://grafana.${DOMAIN}"
+    prometheusOperator:
+      image:
+        sha: 7c88d4e7bae63bd8d0f8da986054337c23b4472fa8d3c6817f5bc4b8407a2d6a
+      thanosImage:
+        sha: b567818fe608067eb0f1d7c2c4fe361e7ad83c8a256234c97685f1d0bf670cc8
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+      admissionWebhooks:
+        patch:
+          image:
+            sha: 58e4ac2e15bf7785eb00ac90d03f9be1ff3f2fe0add6c71b54af6e5c80031148
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+      prometheusConfigReloader:
+        image:
+          sha: 06b52bd4dbe3ed6dd5905aadaf8b9987d9da4c31d37bb86deaadae68cee2d26b
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+    prometheus:
+      prometheusSpec:
+        image:
+          sha: b2a413d5a03ea6a76782a508d1c7947440bba3b973931a25676e278431891b01
+        replicas: 1
+        retention: "${PROMETHEUS_RETENTION}"
+        retentionSize: "${PROMETHEUS_RETENTION_SIZE}"
+        resources:
+          requests:
+            cpu: 250m
+            memory: 1Gi
+        # Every ServiceMonitor, PodMonitor and rule in the cluster, not only the chart's.
+        serviceMonitorSelectorNilUsesHelmValues: false
+        podMonitorSelectorNilUsesHelmValues: false
+        ruleSelectorNilUsesHelmValues: false
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: local
+              accessModes: [ReadWriteOnce]
+              resources:
+                requests:
+                  storage: 20Gi
+    kube-state-metrics:
+      image:
+        sha: sha256:42cfe3723a5f058171c627537fb57a3ea0f26e4380fa18555a95cb1a1b4cfc5b
+      # Its secrets collector lists every Secret in the cluster, values and all, for metrics that name them.
+      collectorsExclude: [secrets]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 64Mi
+    prometheus-node-exporter:
+      image:
+        digest: sha256:8c9bac11973b94b59be88d6e11fee4429aa743c8846cdc75d65b18db33f6a106
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+    # etcd is no pod on Talos, so its Service selects the API server's static pod instead: that pod runs in the
+    # control plane's host network, where etcd serves its metrics on 2381, so the scrape follows the control plane
+    # to whatever address it has.
+    kubeEtcd:
+      service:
+        selector:
+          component: kube-apiserver
+        port: 2381
+        targetPort: 2381
+        # Single-stack, said outright: the API server makes a headless Service without a selector, as this one
+        # was while it named the control plane's address, dual-stack, and a cluster without IPv6 refuses that once
+        # it selects a pod. Server-side apply would keep the old value on a cluster built before.
+        ipDualStack:
+          enabled: true
+          ipFamilies: [IPv4]
+          ipFamilyPolicy: SingleStack
+      serviceMonitor:
+        authorization: null
+    # etcd's, kube-proxy's and CoreDNS's metrics are plain HTTP and ask for no credentials, yet the chart sends
+    # Prometheus's service account token with each scrape, in clear on the LAN or the pod network. null removes
+    # the chart's default (an empty map would merge into it).
+    kubeProxy:
+      serviceMonitor:
+        authorization: null
+    coreDns:
+      serviceMonitor:
+        authorization: null
