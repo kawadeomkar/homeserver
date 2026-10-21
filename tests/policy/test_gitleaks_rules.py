@@ -99,6 +99,9 @@ FIXTURES = [
     ("vault_pass.txt", "x\n", {"sensitive-file"}),
     ("group_vars/all/local.yml", "x: 1\n", {"sensitive-file"}),
     ("group_vars/all/local.yml.bak", "x: 1\n", {"sensitive-file"}),
+    # make init's copies of the two, left by a run killed while writing (scripts/init/init.py, temp_copy)
+    (".vault_pass.init-tmp", "x\n", {"sensitive-file"}),
+    ("group_vars/all/local.yml.init-tmp", "x: 1\n", {"sensitive-file"}),
     ("inventory", "[nas]\n", {"sensitive-file"}),
     ("inventory.ini", "[nas]\n", {"sensitive-file"}),
     ("notes/MACHINES.md", "machines\n", {"sensitive-file"}),

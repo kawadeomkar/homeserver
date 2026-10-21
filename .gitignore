@@ -32,6 +32,9 @@ logs/
 # Ansible runtime and backups
 *.original
 *.tmp
+# make init's copy of a file it is writing (scripts/init/init.py, write_file): removed when a write fails, but a run
+# killed outright leaves it, and .vault_pass's holds the vault's password
+*.init-tmp
 *.bkp
 *.retry
 *.*~

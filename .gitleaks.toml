@@ -89,4 +89,4 @@ keywords = ["kind"]
 [[rules]]
 id = "sensitive-file"
 description = "A file that is never committed: vault password, local vars, inventory, machine notes, run logs, the cluster's credentials and Talos's generated files"
-path = '''(?i)(^|/)(\.?vault[-_.]?pass[^/]*|local\.ya?ml(\.(bak|orig|old|save|swp|tmp))?|MACHINES[^/]*|talosconfig(\.[^/]*)?|kubeconfig(\.[^/]*)?|[^/]*\.kubeconfig|[^/]*\.agekey|secrets\.ya?ml|controlplane\.ya?ml|worker\.ya?ml|logs/[^/]+\.log)$|^inventory(\.(bak|orig|old|ini))?$'''
+path = '''(?i)(^|/)(\.?vault[-_.]?pass[^/]*|local\.ya?ml(\.(bak|orig|old|save|swp|tmp|init-tmp))?|MACHINES[^/]*|talosconfig(\.[^/]*)?|kubeconfig(\.[^/]*)?|[^/]*\.kubeconfig|[^/]*\.agekey|secrets\.ya?ml|controlplane\.ya?ml|worker\.ya?ml|logs/[^/]+\.log)$|^inventory(\.(bak|orig|old|ini))?$'''

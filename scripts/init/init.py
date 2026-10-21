@@ -187,14 +187,26 @@ class YamlKeys:
         return bool(span)
 
 
+def temp_copy(path: Path) -> Path:
+    """The copy write_file writes before it takes the file's place. Its name keeps the file's own (.vault_pass's
+    copy is .vault_pass.init-tmp), so .gitignore and gitleaks keep it out of git as they do the file."""
+    return path.with_name(f"{path.name}.init-tmp")
+
+
 def write_file(path: Path, data: bytes, mode: int) -> None:
-    """Written whole or not at all, readable by its owner alone unless it already was by more."""
-    tmp = path.with_name(f".{path.name}.init-tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
-    with os.fdopen(fd, "wb") as f:
-        f.write(data)
-    os.chmod(tmp, mode)
-    os.replace(tmp, path)
+    """Written whole or not at all, readable by its owner alone unless it already was by more. The copy is made anew,
+    so it never takes an older one's mode, and removed when the write fails or is interrupted."""
+    tmp = temp_copy(path)
+    tmp.unlink(missing_ok=True)
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def has_value(value: Any) -> bool:
