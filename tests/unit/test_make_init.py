@@ -409,7 +409,7 @@ def test_secrets_go_to_the_vault_and_never_to_the_screen(repo):
 
 
 def test_remote_access_requires_the_auth_key_for_the_hosts_first_login(repo):
-    # make proxmox refuses a host that is not logged in without the key, after changing it, and a dry run cannot tell.
+    # proxmox.yml refuses a host that is not logged in without the key, after changing it, and a dry run cannot tell.
     make_vault(repo, {})
     answers = {
         "switch:nas": "n",
