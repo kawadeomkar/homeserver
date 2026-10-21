@@ -1,0 +1,12 @@
+---
+# PhotoPrism and its database (Flux Kustomization apps-photoprism). The Secrets photoprism/photoprism and
+# photoprism/photoprism-db are SOPS files (k8s/README-secrets.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - network-policy.yaml
+  - photoprism-db.sops.yaml
+  - photoprism.sops.yaml
+  - photoprism.yaml
+  - database.yaml

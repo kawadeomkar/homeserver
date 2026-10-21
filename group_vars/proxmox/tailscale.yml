@@ -25,8 +25,8 @@ proxmox_tailscale_settings:
   ssh: false
   auto-update: false
 # The role only installs Tailscale. proxmox_apt's upgrade (group_vars/proxmox/apt.yml), earlier in the same run,
-# upgrades it with every other package, so `make proxmox` stays the one moment anything on the host is upgraded, and
-# that role's switch is the only one.
+# upgrades it with every other package, so `make deploy TYPE=proxmox` stays the one moment anything on the host is
+# upgraded, and that role's switch is the only one.
 proxmox_tailscale_upgrade: false
 # The guard: hosts that trust this host by its address, which tailnet clients may reach only on the listed ports,
 # whatever the tailnet's policy says. With a NAS, the NAS, whose VM disk and backup shares are exported to this

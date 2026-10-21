@@ -1,0 +1,25 @@
+apiVersion: v1
+data:
+    FILEBROWSER_ADMIN_PASSWORD: ENC[AES256_GCM,data:0oNznfJC+ZMQimZJ/S90DQHZ//DdmpYFNE/vdYR4N7u9QMityWl7LuRkkaM=,iv:XKR8V8eho8cPevDT0+SQlwtDKaxmJJANUbreCylvn38=,tag:44trUcG+976RKpre6cLVsQ==,type:str]
+    FILEBROWSER_JWT_TOKEN_SECRET: ENC[AES256_GCM,data:iwrFn8bCenfjPTUJtwxiQQ86Mxv71Oy2vTfcTdMcCjYGV05oHLVw7wEi6Myv29UhDG4xLwnI03pVuZgIG/PWB6OgMd8/d9UvzzypbojSHwT3Uzf4OFyvSQ==,iv:S5xYkctGFvC/QbJn/7vxeabva0CUvSwhDYf6LcmTIhI=,tag:ge5LCpHjaBth2zBrV5uizA==,type:str]
+kind: Secret
+metadata:
+    labels:
+        app.kubernetes.io/name: filebrowser
+    name: filebrowser
+    namespace: media
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSB2L202dmJyWS9sdXJOL1Nu
+            RU9kcGJIYlVHS3dLUjYyZUdZSzV4dEQ5ZEEwCk4zQ2o3blBwbnF0MFVoclNtaWd4
+            UUgxQnZFV1dpSTFYT3VsRzRVMmNEaHcKLS0tIGhkVE5hMjJsSmNDRDU1OCszbHpr
+            VjhpNElXMEZRcVBObzY3SmQyamNBSE0KAJYeFRC2a52/JlBrLXSfVgBl67XxdUv5
+            0bj2Wu9cap8/IWQ4dPunTPa6fVM9JzQpyB29ZTk/3Z/SgyuXYVDxxA==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age19jhwvwxawyjzj7yc0ud700dtj5gws77t9pgm8f3zv9kqgssqgpgs5zq4qw
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-10-17T18:00:54Z"
+    mac: ENC[AES256_GCM,data:EyfS3xcywHbR5Aey7gXW4HynBC5NXvxOcPgQNngbjDTGjMBEef93WIAhtWTtHV/5cqOOdbSukI69t7d+oMlr++CX8456gmUSdUzXz6zI14VW4MV4PrZf/y3d/JRSzWS2StOWgSMn4wPk85DACtMC9L6gb8naE0NRi/slRJw7NH4=,iv:ZF23ytPwEb4wPF/pEU7qs1JvPlMPyVTtoZZJOR6nVeA=,tag:/QNAdoAa7QByKpmB2BblLA==,type:str]
+    version: 3.13.3

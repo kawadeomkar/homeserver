@@ -1,0 +1,22 @@
+---
+# suspend.yml's and resume.yml's Home Assistant play: the proxmox_vm role's power entry point with this repo's own
+# configuration, against the fake Proxmox host (fake_pve_bin/). haos_power stands for the state each playbook sets.
+- name: Shut the fake Home Assistant's VM down or start it
+  hosts: proxmox
+  gather_facts: false
+  vars_files:
+    - ../../group_vars/all/storage.yml
+    - ../../group_vars/all/kubernetes.yml
+    - ../../group_vars/all/haos.yml
+  environment:
+    PATH: "{{ playbook_dir }}/fake_pve_bin:{{ lookup('ansible.builtin.env', 'PATH') }}"
+    FAKE_PVE_STATE: "{{ fake_pve_state }}"
+    FAKE_PVE_PYTHON: "{{ ansible_playbook_python }}"
+  tasks:
+    - name: Shut it down or start it
+      ansible.builtin.import_role:
+        name: proxmox_vm
+        tasks_from: power
+      vars:
+        proxmox_vm_power: "{{ haos_power }}"
+        proxmox_vm_power_vmids: ["{{ haos_vm_vmid | int }}"]

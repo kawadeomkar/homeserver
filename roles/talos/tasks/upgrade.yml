@@ -1,7 +1,7 @@
 ---
 # tasks_from: upgrade. The only way a running node moves to new pins (make talos-upgrade): an etcd snapshot, then
 # each node whose Talos release or schematic differs from the pins, control plane first, then Kubernetes. A dry run
-# (make check-talos-upgrade) shows the plan and Kubernetes's own dry run, deprecated APIs included; read it first.
+# (make check TYPE=talos-upgrade) shows the plan and Kubernetes's own dry run, deprecated APIs included; read it first.
 # talosctl upgrade drains the node first (no PodDisruptionBudget can block it here) and waits for it to come back.
 - name: upgrade | Check the role's inputs
   ansible.builtin.import_tasks: validate.yml
@@ -16,7 +16,7 @@
       ansible.builtin.assert:
         that: talos_state.values() | rejectattr('state', 'eq', 'configured') | list | length == 0 and talos_running_kubernetes | default('', true) | length > 0
         fail_msg: >-
-          Every node must be configured and the cluster's Kubernetes version readable to upgrade; run make kubernetes
+          Every node must be configured and the cluster's Kubernetes version readable to upgrade; run make deploy TYPE=kubernetes
           first. Nodes: {{ talos_state.values() | map(attribute='name') | zip(talos_state.values() | map(attribute='state')) | list }}.
         quiet: true
 

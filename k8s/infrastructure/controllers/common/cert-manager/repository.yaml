@@ -1,0 +1,17 @@
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: cert-manager
+  namespace: cert-manager
+spec:
+  interval: 12h
+  url: oci://quay.io/jetstack/charts/cert-manager
+  # The digest is what is pulled (the tag says which release it is): a tag moved upstream changes nothing here, and
+  # make lint TYPE=charts fails until both are bumped together.
+  ref:
+    tag: v1.21.2
+    digest: sha256:634dce9c13b56677a2c05e2ab76c312d0be2664022d5dd05815da67e1fd5f610
+  layerSelector:
+    mediaType: application/vnd.cncf.helm.chart.content.v1.tar+gzip
+    operation: copy

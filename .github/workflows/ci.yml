@@ -1,5 +1,6 @@
 ---
-# The pull-request gate. The lint, test and kubernetes jobs run the make targets a local `make ci` runs,
+# The pull-request gate. The linters, test, cluster, kubernetes and leaks jobs split between them what a local
+# `make lint test` runs (tests/policy/test_github.py checks that each of its types runs here),
 # from the hash-locked toolchain, and ci-success is the one check for the "Protect main" ruleset to
 # require (its body is .github/rulesets/main.json, applied through the API). No job holds a secret, and
 # nothing here can reach the home network: the roles are tested against local fakes.
@@ -31,10 +32,16 @@ env:
   KUBECONFORM_SHA256: "9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883"
   KUBE_LINTER_VERSION: "0.8.3"
   KUBE_LINTER_SHA256: "1a6d8419b11971372971fdbc22682b684ebfb7cf1c39591662d1b6ca736c41df"
-  # talosctl validates the rendered Talos configurations (make lint-talos). Bumped with talos_version in
+  # talosctl validates the rendered Talos configurations (make lint TYPE=talos). Bumped with talos_version in
   # group_vars/all/kubernetes.yml, whose minor release it must share.
   TALOSCTL_VERSION: "1.14.2"
   TALOSCTL_SHA256: "c6c9552b0e5f767352c595fa1c0af4f186f697488646872955057d23990a66c4"
+  # kustomize builds each manifest directory as Flux does (make lint TYPE=manifests); helm renders the HelmReleases'
+  # charts (make lint TYPE=charts).
+  KUSTOMIZE_VERSION: "5.8.3"
+  KUSTOMIZE_SHA256: "cb9e31198d3f63b44848bd0afc4c8efc56e6cfef9c93a4a39a211940e6decd61"
+  HELM_VERSION: "4.3.0"
+  HELM_SHA256: "86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb"
   GITLEAKS_VERSION: "8.30.1"
   GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
   # Poetry, pinned by version as its CI recommendations advise, and bumped by hand like the tools above.
@@ -56,16 +63,21 @@ jobs:
         with:
           python-version: "3.14"
       # pipx, which the runner image has, installs Poetry into a virtualenv of its own, as Poetry's docs
-      # require; make then creates .venv with setup-python's Python and syncs it to poetry.lock.
+      # require. The tooling goes into another, of setup-python's Python and outside the checkout, as a user's
+      # does: make install syncs it to poetry.lock, and every later step's make finds it through VIRTUAL_ENV.
       - name: Install Poetry
         run: pipx install "poetry==${POETRY_VERSION}"
       - name: Install the locked tooling
-        run: make venv PYTHON=python
-      # The real vault password never reaches CI: without .vault_pass, make gives ansible-lint a
-      # placeholder, and the vault's contents go unlinted (tests/policy checks it stays encrypted).
-      # -k: report every failing linter, not only the first. The tests run in the test job.
-      - name: yamllint, ansible-lint, ruff, module documentation, GitHub config schemas, role references
-        run: make -k linters
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "VIRTUAL_ENV=$RUNNER_TEMP/venv" >> "$GITHUB_ENV"
+          VIRTUAL_ENV="$RUNNER_TEMP/venv" make install
+      # CI has no vault (it is git-ignored) and no .vault_pass: make gives ansible-lint a placeholder
+      # password file, since ansible.cfg names one.
+      # -k: report every failing linter, not only the first. The tests run in the test job, the Kubernetes checks in
+      # the kubernetes job.
+      - name: the lock, yamllint, ansible-lint, ruff, module documentation and role references, GitHub config schemas
+        run: make -k lint TYPE=lock,yaml,ansible,python,docs,github
 
   test:
     name: test (python ${{ matrix.python }})
@@ -92,13 +104,16 @@ jobs:
       - name: Install Poetry
         run: pipx install "poetry==${POETRY_VERSION}"
       - name: Install the locked tooling
-        run: make venv PYTHON=python
-      - name: Unit tests
-        run: make test
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "VIRTUAL_ENV=$RUNNER_TEMP/venv" >> "$GITHUB_ENV"
+          VIRTUAL_ENV="$RUNNER_TEMP/venv" make install
+      - name: Unit and policy tests
+        run: make -k test TYPE=unit,policy
       # Runs the roles against fake_truenas.py and fake_pve_bin; needs openssl, which the image has. The cluster
       # job runs the rest.
       - name: Idempotence against the TrueNAS and Proxmox fakes
-        run: make test-idempotence PYTEST_ARGS='-m "not cluster"'
+        run: make test TYPE=idempotence PYTEST_ARGS='-m "not cluster"'
 
   # The VM, backup, Talos and Flux roles against their fakes, apart from the test job's matrix: they have no Python
   # modules of their own, so one Python, the newest, is enough, and the matrix stays within its time limit.
@@ -124,11 +139,14 @@ jobs:
       - name: Install Poetry
         run: pipx install "poetry==${POETRY_VERSION}"
       - name: Install the locked tooling
-        run: make venv PYTHON=python
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "VIRTUAL_ENV=$RUNNER_TEMP/venv" >> "$GITHUB_ENV"
+          VIRTUAL_ENV="$RUNNER_TEMP/venv" make install
       - name: Idempotence of the cluster's roles against their fakes, this runner's share
         env:
           SHARD: ${{ matrix.shard }}
-        run: make test-idempotence PYTEST_ARGS="-m cluster --shard $SHARD"
+        run: make test TYPE=idempotence PYTEST_ARGS="-m cluster --shard $SHARD"
 
   kubernetes:
     name: kubernetes
@@ -140,15 +158,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # make lint-talos runs the talos role's render tasks through ansible-playbook.
+      # make lint TYPE=talos runs the talos role's render tasks through ansible-playbook.
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
       - name: Install Poetry
         run: pipx install "poetry==${POETRY_VERSION}"
       - name: Install the locked tooling
-        run: make venv PYTHON=python
-      - name: Install kubeconform, kube-linter and talosctl (checksums verified)
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "VIRTUAL_ENV=$RUNNER_TEMP/venv" >> "$GITHUB_ENV"
+          VIRTUAL_ENV="$RUNNER_TEMP/venv" make install
+      - name: Install kubeconform, kube-linter, talosctl, kustomize and helm (checksums verified)
         run: |
           cd "$RUNNER_TEMP"
           curl -fsSLo kubeconform.tgz \
@@ -163,10 +184,17 @@ jobs:
             "https://github.com/siderolabs/talos/releases/download/v${TALOSCTL_VERSION}/talosctl-linux-amd64"
           echo "${TALOSCTL_SHA256}  talosctl" | sha256sum -c -
           chmod +x talosctl
+          curl -fsSLo kustomize.tgz \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+          echo "${KUSTOMIZE_SHA256}  kustomize.tgz" | sha256sum -c -
+          tar -xzf kustomize.tgz kustomize
+          curl -fsSLo helm.tgz "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  helm.tgz" | sha256sum -c -
+          tar -xzf helm.tgz --strip-components=1 linux-amd64/helm
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       # -k: report every tool's findings, not only the first's.
-      - name: kubeconform, kube-linter and the Talos configurations
-        run: make -k lint-k8s
+      - name: kubeconform, kustomize builds, kube-linter, the charts and the Talos configurations
+        run: make -k lint TYPE=k8s
 
   leaks:
     name: leaks
@@ -186,7 +214,10 @@ jobs:
       - name: Install Poetry
         run: pipx install "poetry==${POETRY_VERSION}"
       - name: Install the locked tooling
-        run: make venv PYTHON=python
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "VIRTUAL_ENV=$RUNNER_TEMP/venv" >> "$GITHUB_ENV"
+          VIRTUAL_ENV="$RUNNER_TEMP/venv" make install
       - name: Install gitleaks (checksum verified)
         run: |
           cd "$RUNNER_TEMP"
@@ -196,7 +227,7 @@ jobs:
           tar -xzf gitleaks.tgz gitleaks
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - name: The rules and the range check still catch what they must
-        run: make test-gitleaks-rules
+        run: make test TYPE=gitleaks
       # The event's values reach the script only through env:, never inside run:.
       - name: The commits this change adds, with the target's rules
         env:

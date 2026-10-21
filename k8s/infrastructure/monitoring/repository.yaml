@@ -1,0 +1,17 @@
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: kube-prometheus-stack
+  namespace: monitoring
+spec:
+  interval: 12h
+  url: oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack
+  # The digest is what is pulled (the tag says which release it is): a tag moved upstream changes nothing here, and
+  # make lint TYPE=charts fails until both are bumped together.
+  ref:
+    tag: 92.0.0
+    digest: sha256:2bf266f50a0d4b8aa1c1e7cbaaa2a1af47a008fced22e338570a366beee05d93
+  layerSelector:
+    mediaType: application/vnd.cncf.helm.chart.content.v1.tar+gzip
+    operation: copy

@@ -14,20 +14,24 @@ talos_config_dir: >-
   {{ (kubernetes_talos_config_dir | default('', true) or lookup('ansible.builtin.env', 'HOME') ~ '/.talos/homeserver')
      | ansible.builtin.expanduser }}
 
-# The schematics the nodes boot: the QEMU guest agent. No CPU microcode in a VM: the host applies it.
+# The schematics the nodes boot: the QEMU guest agent, and with the iGPU passed through, Intel's i915 driver and
+# firmware. No CPU microcode in a VM: the host applies it.
 talos_schematics:
   base: [siderolabs/qemu-guest-agent]
+  gpu: [siderolabs/qemu-guest-agent, siderolabs/i915]
 
 kubernetes_controlplane: "{{ kubernetes_nodes | selectattr('role', 'equalto', 'controlplane') | first }}"
 talos_endpoint: "https://{{ kubernetes_node_addresses[kubernetes_controlplane.name] | trim }}:6443"
 # Names the API can later be reached by, set before the first build (local.yml's kubernetes_api_sans).
 talos_extra_sans: "{{ kubernetes_api_sans | default([], true) }}"
 
-# Each node: its hostname, and the volumes on its data and media disks. Disks are found by the by-id link QEMU names
-# after their slot (kubernetes_disk_slots, group_vars/all/kubernetes.yml).
+# Each node: its hostname, and the volumes on its data and media disks. The worker gets the GPU schematic and a label
+# for the GPU plugin when local.yml names the host's iGPU mapping. Disks are found by the by-id link QEMU names after
+# their slot (kubernetes_disk_slots, group_vars/all/kubernetes.yml).
 talos_nodes: >-
   {%- set out = [] -%}
   {%- for n in kubernetes_nodes -%}
+  {%-   set gpu = kubernetes_gpu_mapping | default('', true) and n.name == kubernetes_data_node -%}
   {%-   set patches = ['apiVersion: v1alpha1\nkind: HostnameConfig\nhostname: ' ~ n.name ~ '\nauto: "off"\n'] -%}
   {%-   for volume, slot, size in [('local-path-provisioner', kubernetes_disk_slots.data, n.data_disk_gib | default(0)),
                                    ('media', kubernetes_disk_slots.media, n.media_disk_gib | default(0))] if size | int > 0 -%}
@@ -35,8 +39,11 @@ talos_nodes: >-
                                  ~ '  diskSelector:\n    match: "!system_disk && disk.symlinks.exists(s, s.endsWith(\'_'
                                  ~ 'drive-' ~ slot ~ '\'))"\n  minSize: 10GiB\n  grow: true\nfilesystem:\n  type: xfs\n') -%}
   {%-   endfor -%}
+  {%-   if gpu -%}
+  {%-     set _ = patches.append('apiVersion: v1alpha1\nkind: KubeNodeConfig\nlabels:\n  homeserver.internal/gpu: intel\n') -%}
+  {%-   endif -%}
   {%-   set _ = out.append({'name': n.name, 'role': n.role, 'address': kubernetes_node_addresses[n.name] | trim,
-                            'schematic': 'base', 'patches': patches}) -%}
+                            'schematic': 'gpu' if gpu else 'base', 'patches': patches}) -%}
   {%- endfor -%}
   {{ out }}
 
@@ -147,9 +154,17 @@ talos_patches_firewall_controlplane:
     ingress: {{ talos_firewall_nodes_and_pods | to_json }}
 # The control plane's components serve their metrics beyond localhost, for kube-prometheus-stack. Set before the
 # first build: etcd reads its settings only when it starts, so a later change waits for a restart of etcd by hand.
-# The control plane keeps Talos's taint and the label that keeps load balancers off it in both setups: the worker
-# runs the apps.
-talos_patches_controlplane: "{{ talos_patches_controlplane_metrics + talos_patches_firewall_controlplane }}"
+# Flannel runs with its network policy agent. The control plane keeps Talos's taint and the label that keeps load
+# balancers off it in both setups: the worker runs the apps.
+talos_patches_controlplane: >-
+  {{ talos_patches_controlplane_metrics + [talos_patch_network_policies] + talos_patches_firewall_controlplane }}
+# Flannel with kube-network-policies, which enforces NetworkPolicy objects: without it Kubernetes accepts them and
+# nothing applies them, so every pod reaches every other pod's ports and, through the node's address, the NAS
+# (k8s/apps/*/network-policy.yaml). The control plane renders the cluster's CNI manifests, so it alone needs it.
+talos_patch_network_policies: |
+  apiVersion: v1alpha1
+  kind: KubeFlannelCNIConfig
+  kubeNetworkPoliciesEnabled: true
 talos_patches_controlplane_metrics:
   - |
     apiVersion: v1alpha1

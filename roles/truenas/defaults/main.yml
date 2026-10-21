@@ -72,7 +72,8 @@ truenas_ntp_server_defaults: {}
 
 # -------------------------------------------------------------------- datasets ---
 # Each entry: name, properties (as pool.dataset.create takes them), and optionally share_type,
-# create_ancestors, allow_acl_change. Listed parents first. None is ever deleted.
+# create_ancestors, allow_acl_change, and create_only (create it when missing, otherwise leave it exactly as it
+# is). Listed parents first. None is ever deleted.
 truenas_datasets: []
 
 # ------------------------------------------------------------------- snapshots ---

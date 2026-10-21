@@ -1,0 +1,6 @@
+---
+# cert-manager runs as non-root with every capability dropped: baseline, which Talos enforces by default, is enough.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager

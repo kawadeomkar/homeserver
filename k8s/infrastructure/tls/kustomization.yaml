@@ -1,0 +1,10 @@
+---
+# The cluster's own CA, its issuer, the wildcard certificate it signs and Traefik's default certificate, applied once
+# infra-controllers is ready, by a Flux Kustomization of its own that nothing waits for: a cluster that cannot
+# decrypt the CA (a test host's, with an age key of its own) runs everything else, and Traefik serves its own
+# certificate. Never a Namespace: each lives with its controller.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - homeserver-ca.sops.yaml
+  - tls.yaml

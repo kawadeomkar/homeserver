@@ -1,0 +1,41 @@
+# Frigate's first configuration, copied to /config/config.yml only when there is none, so the UI's editor keeps
+# working. It names no camera, no MQTT broker and no address: this repository is public. Add cameras in the UI,
+# which keeps them in /config on the local volume, or here with their hosts and credentials as {FRIGATE_<NAME>}
+# variables from the SOPS Secret frigate, which Frigate fills in there and in go2rtc's RTSP user and password, and
+# nowhere else. Flux leaves this file alone (its ConfigMap has substitution off), so go2rtc's own ${VAR}, read from
+# its environment, works everywhere in its section. DETECTOR_DEVICE is replaced as it is copied. An edit here reaches
+# a Frigate that already has a configuration only through its own editor.
+mqtt:
+  enabled: false
+
+# Traefik serves it; Frigate's own TLS would be a second layer.
+tls:
+  enabled: false
+
+detectors:
+  ov:
+    type: openvino
+    device: DETECTOR_DEVICE
+
+model:
+  width: 300
+  height: 300
+  input_tensor: nhwc
+  input_pixel_format: bgr
+  path: /openvino-model/ssdlite_mobilenet_v2.xml
+  labelmap_path: /openvino-model/coco_91cl_bkgr.txt
+
+go2rtc:
+  # The restreams frigate-rtsp publishes on the LAN need a password (the Secret's FRIGATE_RTSP_PASSWORD): go2rtc
+  # serves them to anyone otherwise.
+  rtsp:
+    username: admin
+    password: "{FRIGATE_RTSP_PASSWORD}"
+  webrtc:
+    # The address WebRTC clients reach the streams on, frigate-rtsp's LoadBalancer address, from the environment:
+    # Frigate fills in no {FRIGATE_*} here, go2rtc fills in ${VAR}.
+    candidates:
+      - "${FRIGATE_WEBRTC_CANDIDATE}"
+      - stun:8555
+
+cameras: {}

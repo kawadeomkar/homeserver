@@ -2,13 +2,18 @@
 # Neutral defaults: with nothing else set, the role changes nothing. The VMs and ISOs are configuration, set in
 # inventory group_vars; see README.md.
 
-# VMs, each: vmid, name, cores, memory_mib, disks ({slot, storage, size_gib, serial, format, backup}), net
-# ({bridge, mac}), and optionally machine, bios, efidisk_storage, cpu, scsihw, iso, boot, watchdog ({model,
-# action}), onboot, startup, tags, hostpci ([{mapping, pcie}]) and start. A VM is created once, then corrected;
-# a disk is only ever grown.
+# VMs, each: vmid, name, cores, memory_mib, disks ({slot, storage, size_gib, serial, format, backup,
+# import_from}), net ({bridge, mac}), and optionally machine, bios, efidisk_storage, cpu, scsihw, iso, boot,
+# watchdog ({model, action}), onboot, startup, tags, hostpci ([{mapping, pcie}]), usb ([{host or mapping, usb3}]),
+# import_working_storage (where Proxmox extracts a disk out of an OVA) and start. A VM is created once, then
+# corrected; a disk is only ever grown.
 proxmox_vm_vms: []
-# ISOs to download into a storage, each: storage, filename, url. Never deleted.
+# ISOs to download into a storage, each: storage, filename, url and sha256, which Proxmox checks before storing the
+# file. Never deleted.
 proxmox_vm_isos: []
+# Images a disk is imported from (import_from), downloaded into a storage's import content, each: storage,
+# filename, url and sha256, which Proxmox checks before storing the file. Never deleted.
+proxmox_vm_imports: []
 # Storage ids that an earlier role creates on a real run, such as the NFS storages proxmox_storage adds. A dry run
 # on a fresh host reports a VM's missing storage from this list as pending instead of refusing it.
 proxmox_vm_pending_storages: []
@@ -25,5 +30,13 @@ proxmox_vm_host_headroom_gib: 0
 # A missing VM whose VMID still has disks or backups somewhere is refused: it is being rebuilt, and would get new,
 # empty disks beside the old ones. True builds it new anyway.
 proxmox_vm_ignore_existing_volumes: false
+# How to run the role again with proxmox_vm_ignore_existing_volumes, which that refusal names: the play's own make
+# target, say. Empty: the play again with -e proxmox_vm_ignore_existing_volumes=true.
+proxmox_vm_rebuild_command: ""
 # The Proxmox node's name. Empty means the host's short hostname, which is what Proxmox uses.
 proxmox_vm_node: ""
+# The power entry point (tasks_from: power): stopped shuts the VMs of proxmox_vm_power_vmids down, running starts
+# them; empty does nothing. A shutdown that takes longer than proxmox_vm_power_timeout seconds fails.
+proxmox_vm_power: ""
+proxmox_vm_power_vmids: []
+proxmox_vm_power_timeout: 180

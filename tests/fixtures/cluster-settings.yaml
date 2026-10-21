@@ -1,0 +1,38 @@
+---
+# Placeholder cluster settings per setup, for make lint TYPE=charts (scripts/ci/render_helm.py): what
+# roles/flux_bootstrap puts in the cluster-settings ConfigMap, with RFC 5737 addresses. tests/policy/test_k8s.py checks
+# that each setup here has exactly the keys the configuration gives that setup.
+nas:
+  DOMAIN: homeserver.internal
+  GPU_I915: "0"
+  FRIGATE_DETECTOR_DEVICE: CPU
+  TZ: America/Los_Angeles
+  PROMETHEUS_RETENTION: 15d
+  PROMETHEUS_RETENTION_SIZE: 15GB
+  INGRESS_ALLOWED_RANGE: 192.0.2.0/24
+  EGRESS_DENIED_ADDRESS: 192.0.2.10
+  PROXMOX_ADDRESS: 192.0.2.20
+  LB_RANGE: 192.0.2.40-192.0.2.49
+  LB_TRAEFIK_IP: 192.0.2.40
+  LB_FRIGATE_IP: 192.0.2.41
+  DATA_NODE: homeserver-worker-1
+  NAS_ADDRESS: 192.0.2.10
+  NAS_POOL_PERSISTENT: persistent
+  NAS_POOL_EPHEMERAL: ephemeral
+  MEDIA_DATASET: /mnt/ephemeral/jellyfin
+local:
+  DOMAIN: homeserver.internal
+  GPU_I915: "0"
+  FRIGATE_DETECTOR_DEVICE: CPU
+  TZ: America/Los_Angeles
+  PROMETHEUS_RETENTION: 7d
+  PROMETHEUS_RETENTION_SIZE: 5GB
+  INGRESS_ALLOWED_RANGE: 192.0.2.0/24
+  EGRESS_DENIED_ADDRESS: 192.0.2.20
+  PROXMOX_ADDRESS: 192.0.2.20
+  LB_RANGE: 192.0.2.40-192.0.2.49
+  LB_TRAEFIK_IP: 192.0.2.40
+  LB_FRIGATE_IP: 192.0.2.41
+  DATA_NODE: homeserver-worker-1
+  MEDIA_LOCAL_PATH: /var/mnt/media/library
+  FRIGATE_LOCAL_PATH: /var/mnt/media/frigate

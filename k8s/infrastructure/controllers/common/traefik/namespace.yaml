@@ -1,0 +1,6 @@
+---
+# Traefik needs nothing beyond baseline, which Talos enforces by default.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: traefik
