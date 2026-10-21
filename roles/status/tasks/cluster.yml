@@ -1,0 +1,82 @@
+---
+# The cluster, read from this machine with kubectl and talosctl as the other roles reach it: the credentials first,
+# then everything else at once, each read a fraction of a second. The credentials hold the cluster's admin keys, so
+# they are read under no_log and only the server the kubeconfig names and when each client certificate expires are
+# kept. Another cluster's kubeconfig, such as the home cluster's on a test host whose local.yml leaves
+# kubernetes_talos_config_dir unset, is reported, never read with.
+
+- name: cluster | Read the credentials' server and expiry
+  ansible.builtin.set_fact:
+    status_cluster_access: >-
+      {{ (lookup('ansible.builtin.file', status_cluster_kubeconfig) | from_yaml
+          if status_cluster_kubeconfig is file else {})
+         | status_credentials(lookup('ansible.builtin.file', status_cluster_talosconfig) | from_yaml
+                              if status_cluster_talosconfig and status_cluster_talosconfig is file else {}) }}
+  no_log: true
+
+- name: cluster | Check the credentials are this cluster's
+  ansible.builtin.set_fact:
+    status_cluster_unread: >-
+      {{ ('no kubeconfig at ' ~ status_cluster_kubeconfig) if status_cluster_kubeconfig is not file
+         else (status_cluster_kubeconfig ~ ' names the server ' ~ (status_cluster_access.server or 'none') ~ ', not '
+               ~ status_cluster_server ~ ": another cluster's credentials, not read with")
+         if status_cluster_server and status_cluster_access.server != status_cluster_server
+         else '' }}
+
+# Every kind the report reads, none a Secret: the Deployments with the times each field was set (when make suspend
+# stopped an app), each node's kubelet statistics (its memory, and its disks: Talos's guest agent lists none),
+# Alertmanager's firing alerts, etcd's state, and the commit the branch Flux syncs points at now.
+- name: cluster | Read the cluster, at once
+  status_read:
+    commands: "{{ _commands }}"
+    parallel: "{{ status_parallel }}"
+    timeout: "{{ status_timeout }}"
+  register: status_cluster_reads
+  when: status_cluster_unread | length == 0
+  vars:
+    _kubectl:
+      - kubectl
+      - --kubeconfig
+      - "{{ status_cluster_kubeconfig }}"
+      - --request-timeout={{ status_cluster_request_timeout }}s
+    _kinds: [nodes, pods, services, ingresses, persistentvolumes, kustomizations, helmreleases, fluxinstances, certificates]
+    _commands: >-
+      {%- set c = {'deployments': _kubectl + ['get', 'deployments', '-A', '-o', 'json', '--show-managed-fields']} -%}
+      {%- for kind in _kinds -%}
+      {%-   set _ = c.update({kind: _kubectl + ['get', kind, '-A', '-o', 'json']}) -%}
+      {%- endfor -%}
+      {%- if status_cluster_settings.name | default('') -%}
+      {%-   set _ = c.update({'settings': _kubectl + ['get', 'configmap', status_cluster_settings.name, '-n',
+                                                      status_cluster_settings.namespace, '-o', 'json']}) -%}
+      {%- endif -%}
+      {%- for node in status_cluster_nodes -%}
+      {%-   set _ = c.update({'stats-' ~ node.name: _kubectl + ['get', '--raw',
+                                                               '/api/v1/nodes/' ~ node.name ~ '/proxy/stats/summary']}) -%}
+      {%- endfor -%}
+      {%- if status_cluster_alertmanager.pod | default('') -%}
+      {%-   set _ = c.update({'alerts': _kubectl + ['exec', '-n', status_cluster_alertmanager.namespace,
+                                                    status_cluster_alertmanager.pod, '-c', 'alertmanager', '--', 'amtool',
+                                                    'alert', 'query', '-o', 'json',
+                                                    '--alertmanager.url=http://127.0.0.1:9093']}) -%}
+      {%- endif -%}
+      {%- if status_cluster_talosconfig and status_cluster_talosconfig is file -%}
+      {%-   set _ = c.update({'etcd': ['talosctl', '--talosconfig', status_cluster_talosconfig, 'service', 'etcd']}) -%}
+      {%- endif -%}
+      {%- if status_cluster_flux_url and status_cluster_flux_ref -%}
+      {%-   set _ = c.update({'remote': ['git', 'ls-remote', status_cluster_flux_url, status_cluster_flux_ref]}) -%}
+      {%- endif -%}
+      {{ c }}
+
+- name: cluster | Work out what the cluster says
+  ansible.builtin.set_fact:
+    status_found:
+      cluster: >-
+        {{ {'unread': status_cluster_unread, 'results': status_cluster_reads.results | default({}),
+            'access': status_cluster_access}
+           | status_cluster(nodes=status_cluster_nodes, apps_path=status_cluster_apps_path,
+                            annotation=status_cluster_annotation, database_label=status_cluster_database_label,
+                            volumes=status_cluster_volumes, settings=status_cluster_settings,
+                            pins=status_cluster_pins, kubeconfig=_shown, now=now().timestamp() | int) }}
+  vars:
+    # The kubeconfig as the kubectl commands the report suggests name it.
+    _shown: "{{ status_cluster_kubeconfig | regex_replace('^' ~ (lookup('ansible.builtin.env', 'HOME') | regex_escape) ~ '/', '~/') }}"

@@ -20,6 +20,8 @@ _spec.loader.exec_module(status_read)
 
 JSON = ["--output-format", "json"]
 DAY = ["--timeframe", "day", "--cf", "AVERAGE"]
+KUBECTL = ["kubectl", "--kubeconfig", "/home/me/.talos/homeserver/kubeconfig", "--request-timeout=10s"]
+AMTOOL = ["--", "amtool", "alert", "query", "-o", "json", "--alertmanager.url=http://127.0.0.1:9093"]
 
 
 @pytest.mark.parametrize(
@@ -37,6 +39,49 @@ DAY = ["--timeframe", "day", "--cf", "AVERAGE"]
         ["qm", "guest", "cmd", "310", "get-osinfo"],
         ["qm", "guest", "cmd", "310", "network-get-interfaces"],
         ["apt-get", "-q", "-s", "dist-upgrade"],
+        *(
+            [*KUBECTL, "get", kind, "-A", "-o", "json"]
+            for kind in (
+                "nodes",
+                "pods",
+                "services",
+                "ingresses",
+                "persistentvolumes",
+                "kustomizations",
+                "helmreleases",
+                "fluxinstances",
+                "certificates",
+            )
+        ),
+        [*KUBECTL, "get", "deployments", "-A", "-o", "json", "--show-managed-fields"],
+        [*KUBECTL, "get", "configmap", "cluster-settings", "-n", "flux-system", "-o", "json"],
+        [*KUBECTL, "get", "--raw", "/api/v1/nodes/homeserver-worker-1/proxy/stats/summary"],
+        [
+            *KUBECTL,
+            "exec",
+            "-n",
+            "monitoring",
+            "alertmanager-kube-prometheus-stack-alertmanager-0",
+            "-c",
+            "alertmanager",
+            *AMTOOL,
+        ],
+        # A credentials file is wherever its owner keeps it, spaces and all: no shell reads it.
+        [
+            "kubectl",
+            "--kubeconfig",
+            "/Users/A Person/.talos/homeserver/kubeconfig",
+            "--request-timeout=10s",
+            "get",
+            "nodes",
+            "-A",
+            "-o",
+            "json",
+        ],
+        ["talosctl", "--talosconfig", "/home/me/.talos/homeserver/talosconfig", "service", "etcd"],
+        ["git", "ls-remote", "https://github.com/example/homeserver.git", "refs/heads/main"],
+        ["git", "ls-remote", "git@github.com:example/homeserver.git", "refs/heads/deploy/nuc"],
+        ["git", "ls-remote", "ssh://git@example.com/homeserver.git", "refs/tags/v1"],
     ],
 )
 def test_reads_are_allowed(argv):
@@ -68,6 +113,28 @@ def test_reads_are_allowed(argv):
         ["hostname", "new-name"],
         ["sh", "-c", "hostname -s"],
         [],
+        # The cluster: never a Secret, never a write, never another --raw path, never talosctl get.
+        [*KUBECTL, "get", "secrets", "-A", "-o", "json"],
+        [*KUBECTL, "get", "secret", "sops-age", "-n", "flux-system", "-o", "json"],
+        [*KUBECTL, "get", "nodes,secrets", "-A", "-o", "json"],
+        [*KUBECTL, "get", "deployments", "-A", "-o", "yaml"],
+        [*KUBECTL, "get", "--raw", "/api/v1/namespaces/flux-system/secrets"],
+        [*KUBECTL, "get", "--raw", "/api/v1/nodes/../../namespaces/flux-system/secrets/proxy/stats/summary"],
+        [*KUBECTL, "delete", "pods", "-A", "-o", "json"],
+        [*KUBECTL, "apply", "-f", "/tmp/x.yaml"],
+        [*KUBECTL, "exec", "-n", "monitoring", "alertmanager-0", "-c", "alertmanager", "--", "sh", "-c", "id"],
+        [*KUBECTL, "exec", "-n", "monitoring", "prometheus-0", "-c", "prometheus", *AMTOOL],
+        ["kubectl", "get", "nodes", "-A", "-o", "json"],
+        ["kubectl", "--kubeconfig", "relative/kubeconfig", "--request-timeout=10s", "get", "nodes", "-A", "-o", "json"],
+        ["talosctl", "--talosconfig", "/home/me/.talos/homeserver/talosconfig", "get", "machineconfig"],
+        ["talosctl", "--talosconfig", "/home/me/.talos/homeserver/talosconfig", "service", "etcd", "restart"],
+        ["talosctl", "--talosconfig", "/home/me/.talos/homeserver/talosconfig", "service", "kubelet"],
+        # git lists a branch over HTTPS or SSH, never through a transport that runs a command, nor fetches or pushes.
+        ["git", "ls-remote", "ext::sh -c touch% /tmp/pwned", "refs/heads/main"],
+        ["git", "ls-remote", "--upload-pack=touch /tmp/x", "refs/heads/main"],
+        ["git", "ls-remote", "/srv/repo.git", "refs/heads/main"],
+        ["git", "ls-remote", "https://github.com/example/homeserver.git", "HEAD"],
+        ["git", "fetch", "https://github.com/example/homeserver.git", "refs/heads/main"],
     ],
 )
 def test_anything_else_is_refused(argv):
@@ -98,6 +165,11 @@ def test_a_command_that_runs_too_long_is_stopped():
 def test_a_command_that_cannot_start_is_reported():
     result = status_read.run_one(["/nonexistent/status-read-test"], timeout=1)
     assert result["rc"] is None and result["error"]
+
+
+def test_git_never_waits_for_a_password():
+    result = status_read.run_one([sys.executable, "-c", "import os; print(os.environ['GIT_TERMINAL_PROMPT'])"], 10)
+    assert result["stdout"].strip() == "0"
 
 
 def test_output_is_never_translated():

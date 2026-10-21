@@ -10,7 +10,8 @@ description:
     each C(pvesh) or C(qm) call starts Proxmox's API afresh and takes about a second, so twenty of them one
     after another, as a loop of tasks would run them, take twenty seconds.
   - Runs a command only if it has one of the exact forms in the module's own read list, and otherwise refuses
-    the whole task before running anything. A tool's name alone is never enough, since most tools also write.
+    the whole task before running anything. A tool's name alone is never enough, since most tools also write or
+    return secrets, such as C(kubectl get secrets) or C(talosctl get machineconfig).
   - Never changes anything, so a dry run runs the commands too.
   - A command that fails or times out is reported, not a failure of the task; the caller decides what it means.
 options:
@@ -45,6 +46,14 @@ EXAMPLES = r"""
       resources: [pvesh, get, /cluster/resources, --output-format, json]
       fsinfo-310: [qm, guest, cmd, "310", get-fsinfo]
   register: found
+
+- name: Read the cluster's nodes and the commit its Flux source points at
+  status_read:
+    commands:
+      nodes: [kubectl, --kubeconfig, /home/me/.talos/homeserver/kubeconfig, --request-timeout=10s, get, nodes, -A,
+              -o, json]
+      remote: [git, ls-remote, "https://github.com/example/homeserver.git", refs/heads/main]
+  register: found
 """
 
 RETURN = r"""
@@ -71,11 +80,23 @@ NODE = r"[A-Za-z0-9][A-Za-z0-9.-]*"
 VMID = r"[1-9][0-9]{2,8}"
 STORAGE = r"[A-Za-z][A-Za-z0-9_.-]*"
 PATH = r"/[A-Za-z0-9_./-]+"
+# A credentials file, wherever its owner keeps it: no shell ever reads an argument, so any absolute path is one word.
+CONFIG = r"/[^\x00\n]+"
 JSON = ["--output-format", "json"]
 DAY = ["--timeframe", "day", "--cf", "AVERAGE"]
+# A Kubernetes object's name, and the kinds kubectl may list: none holds a secret, and Secrets are not among them.
+K8S_NAME = r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?"
+KINDS = "nodes|pods|services|ingresses|persistentvolumes|kustomizations|helmreleases|fluxinstances|certificates"
+KUBECTL = ["kubectl", "--kubeconfig", CONFIG, r"--request-timeout=[1-9][0-9]?s"]
+# A repository git can list over HTTPS or SSH, never through a transport that runs a command (ext::) or a local path.
+GIT_URL = r"(https://|ssh://)[A-Za-z0-9._~:/@%+=-]+|git@[A-Za-z0-9.-]+:[A-Za-z0-9._~/-]+"
+GIT_REF = r"refs/(heads|tags)/[A-Za-z0-9._/-]+"
 
 # Every command this module runs, as one regular expression per argument. Nothing here writes, and nothing returns
-# a secret: no other pvesh path, no qm guest command beyond these three reads, and apt-get only simulating.
+# a secret: no other pvesh path, no qm guest command beyond these three reads, apt-get only simulating, kubectl only
+# listing kinds that hold no secret (the Deployments with the times each field was set), one ConfigMap, a node's
+# kubelet statistics and Alertmanager's alerts, talosctl only the etcd service's state (talosctl get could read the
+# machine configuration, every key of the cluster), and git only the commit a branch points at.
 READS = [
     ["hostname", "-s"],
     ["test", "-e", PATH],
@@ -87,6 +108,28 @@ READS = [
     ["pvesh", "get", f"/nodes/{NODE}/storage/{STORAGE}/content", *JSON],
     ["qm", "guest", "cmd", VMID, "get-fsinfo|get-osinfo|network-get-interfaces"],
     ["apt-get", "-q", "-s", "dist-upgrade"],
+    [*KUBECTL, "get", KINDS, "-A", "-o", "json"],
+    [*KUBECTL, "get", "deployments", "-A", "-o", "json", "--show-managed-fields"],
+    [*KUBECTL, "get", "configmap", K8S_NAME, "-n", K8S_NAME, "-o", "json"],
+    [*KUBECTL, "get", "--raw", f"/api/v1/nodes/{K8S_NAME}/proxy/stats/summary"],
+    [
+        *KUBECTL,
+        "exec",
+        "-n",
+        K8S_NAME,
+        K8S_NAME,
+        "-c",
+        "alertmanager",
+        "--",
+        "amtool",
+        "alert",
+        "query",
+        "-o",
+        "json",
+        "--alertmanager.url=http://127.0.0.1:9093",
+    ],
+    ["talosctl", "--talosconfig", CONFIG, "service", "etcd"],
+    ["git", "ls-remote", GIT_URL, GIT_REF],
 ]
 _READS = [[re.compile(part) for part in form] for form in READS]
 
@@ -100,8 +143,9 @@ def allowed(argv):
 
 
 def run_one(argv, timeout):
-    """One command's result. C and UTF-8, so that tools whose output is parsed never print it translated."""
-    env = {**os.environ, "LC_ALL": "C.UTF-8", "LANG": "C.UTF-8"}
+    """One command's result. C and UTF-8, so that tools whose output is parsed never print it translated, and git
+    never asks for a password, which would wait on a terminal that is not there."""
+    env = {**os.environ, "LC_ALL": "C.UTF-8", "LANG": "C.UTF-8", "GIT_TERMINAL_PROMPT": "0"}
     start = time.monotonic()
     try:
         proc = subprocess.run(

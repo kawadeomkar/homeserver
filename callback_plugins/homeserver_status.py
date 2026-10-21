@@ -5,8 +5,9 @@ name: homeserver_status
 type: stdout
 short_description: make status's report, without Ansible's task output
 description:
-  - Prints one line saying, for each host the reading play ran on, whether it answered and how long it took, then
-    the text of the task that shows the report (status.yml, roles/status's report entry point).
+  - Prints one line saying, for each host the reading play ran on, whether it answered and how long it took, and
+    how long asking the apps' addresses took, then the text of the task that shows the report (status.yml,
+    roles/status's report entry point).
   - Prints nothing on standard output when STATUS_QUIET is set, for make status JSON=1, which prints the report's
     file instead.
   - Prints every failure and every unreachable host on standard error, and nothing else of Ansible's.
@@ -21,8 +22,9 @@ from ansible.plugins.callback import CallbackBase
 
 # What the report calls each inventory group's host.
 LABELS = {"proxmox": "proxmox", "nas": "nas", "kubernetes": "cluster"}
-# The task whose message is the report, and the play that reads the hosts.
+# The task whose message is the report, the one that asks the apps' addresses, and the play that reads the hosts.
 REPORT_TASK = "Show the report"
+PROBE_TASK = "Ask the apps' addresses"
 READING_PLAY = "Read the machines"
 
 
@@ -36,6 +38,7 @@ class CallbackModule(CallbackBase):
         self._quiet = bool(os.environ.get("STATUS_QUIET"))
         self._reading = False
         self._started = 0.0
+        self._task_started = 0.0
         self._hosts = {}
 
     def _label(self, host):
@@ -52,19 +55,27 @@ class CallbackModule(CallbackBase):
             entry["state"] = state
 
     def _flush(self):
-        if self._reading and self._hosts and not self._quiet:
+        """The line on what was read, once, before the report or at the end of a run that made none."""
+        if self._hosts and not self._quiet:
             parts = [f"{h['label']} {h['state']} {h['seconds']:.1f} s" for h in self._hosts.values()]
             self._display.display("reading  " + " · ".join(parts) + "\n")
-        self._reading, self._hosts = False, {}
+        self._hosts = {}
 
     def v2_playbook_on_play_start(self, play):
-        self._flush()
         self._reading = play.get_name() == READING_PLAY
         self._started = time.monotonic()
 
+    def v2_playbook_on_task_start(self, task, is_conditional):
+        self._task_started = time.monotonic()
+
     def v2_runner_on_ok(self, result):
         self._seen(result, "ok")
-        if result._task.get_name().endswith(REPORT_TASK) and not self._quiet:
+        name = result._task.get_name()
+        if name.endswith(PROBE_TASK):
+            seconds = time.monotonic() - self._task_started
+            self._hosts["probes"] = {"label": "probes", "state": "ok", "seconds": seconds}
+        if name.endswith(REPORT_TASK) and not self._quiet:
+            self._flush()
             self._display.display(result._result.get("msg", ""))
 
     def v2_runner_on_failed(self, result, ignore_errors=False):

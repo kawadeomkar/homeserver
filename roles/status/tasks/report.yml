@@ -1,19 +1,36 @@
 ---
 # tasks_from: report. Puts together what each host of status_hosts found (status_found, from the main entry point),
-# ranks what needs attention, writes the report to status_report_file and shows it as text. make status runs as a
-# dry run and takes its exit code from that file, so the file is written in a dry run too; it holds addresses, so
-# only its owner may read it.
+# asks each app's addresses from this machine, ranks what needs attention, writes the report to status_report_file
+# and shows it as text. make status runs as a dry run and takes its exit code from that file, so the file is written
+# in a dry run too; it holds addresses, so only its owner may read it.
 
 - name: report | Put the findings together
   ansible.builtin.set_fact:
-    status_report: "{{ _found | status_report(status_setup, status_types, now().strftime('%Y-%m-%d %H:%M %Z') | trim) }}"
-  vars:
-    _found: >-
+    status_findings: >-
       {%- set out = {} -%}
       {%- for host in status_hosts -%}
       {%-   set _ = out.update(hostvars[host].status_found | default({})) -%}
       {%- endfor -%}
       {{ out }}
+
+# A DNS lookup per app's name, and one GET per URL, sent to the address Traefik answers on whatever DNS says, closed
+# once the headers arrive. No certificate is checked, so no CA and no credential is needed.
+- name: report | Ask the apps' addresses
+  status_probe:
+    targets: "{{ _targets }}"
+    timeout: "{{ status_probe_timeout }}"
+  register: status_probes
+  when: status_probe_apps and _targets | length > 0
+  vars:
+    _targets: "{{ status_findings | status_probe_targets(status_types) }}"
+
+- name: report | Rank what needs attention
+  ansible.builtin.set_fact:
+    status_report: >-
+      {{ status_findings
+         | status_report(status_setup, status_types, now().strftime('%Y-%m-%d %H:%M %Z') | trim,
+                         probes=status_probes.results | default([]), admin=status_admin, commands=status_commands,
+                         now=now().timestamp() | int) }}
 
 - name: report | Write the report
   when: status_report_file | length > 0

@@ -8,17 +8,20 @@ status_setup:
   cluster: "{{ kubernetes_present }}"
   home_assistant: "{{ haos_present }}"
 # Each with what makes it and what starts it, which the report suggests while it is missing or stopped, and whether
-# its guest agent reports its filesystems: Home Assistant's does; Talos's lists none, so the nodes' disks come from
-# the cluster instead.
+# its guest agent reports its filesystems: Home Assistant's does; Talos's lists none, so the nodes' memory and disks
+# come from the cluster instead (node). Home Assistant is an app too, at haos_url or else the address its guest
+# agent reports, on the port Home Assistant answers on.
 status_vms: >-
   {%- set out = [] -%}
   {%- for n in kubernetes_nodes if kubernetes_present -%}
-  {%-   set _ = out.append({'vmid': n.vmid | int, 'name': n.name, 'made_by': 'make kubernetes',
-                            'start': 'make up ALL=1', 'guest_agent': false}) -%}
+  {%-   set _ = out.append({'vmid': n.vmid | int, 'name': n.name, 'made_by': 'make deploy TYPE=kubernetes',
+                            'start': 'make resume ALL=1', 'guest_agent': false, 'node': n.name}) -%}
   {%- endfor -%}
   {%- if haos_present -%}
-  {%-   set _ = out.append({'vmid': haos_vm_vmid | int, 'name': 'homeassistant', 'made_by': 'make homeassistant',
-                            'start': 'make up ONLY=homeassistant', 'guest_agent': true}) -%}
+  {%-   set _ = out.append({'vmid': haos_vm_vmid | int, 'name': 'homeassistant',
+                            'made_by': 'make deploy TYPE=homeassistant', 'start': 'make resume ONLY=homeassistant',
+                            'guest_agent': true,
+                            'app': {'name': 'homeassistant', 'url': haos_url | default('', true), 'port': 8123}}) -%}
   {%- endif -%}
   {%- for vmid in vm_backup_extra_vmids | default([], true) | map('int')
         if vmid not in out | map(attribute='vmid') | list -%}
@@ -26,3 +29,29 @@ status_vms: >-
                             'guest_agent': true}) -%}
   {%- endfor -%}
   {{ out }}
+# The admin pages the report lists: the Proxmox host's, the NAS's, and the cluster's two APIs, on the control plane.
+status_admin: >-
+  {%- set out = [] -%}
+  {%- if proxmox_address | default('', true) -%}
+  {%-   set _ = out.append({'name': 'Proxmox VE', 'url': 'https://' ~ proxmox_address | trim ~ ':8006'}) -%}
+  {%- endif -%}
+  {%- if nas_present and nas_address -%}
+  {%-   set _ = out.append({'name': 'TrueNAS', 'url': 'https://' ~ nas_address}) -%}
+  {%- endif -%}
+  {%- if kubernetes_present -%}
+  {%-   set cp = kubernetes_node_addresses[(kubernetes_nodes | selectattr('role', 'equalto', 'controlplane')
+                                            | first).name] | trim -%}
+  {%-   set _ = out.append({'name': 'Kubernetes API', 'url': 'https://' ~ cp ~ ':6443'}) -%}
+  {%-   set _ = out.append({'name': 'Talos API', 'url': cp ~ ':50000'}) -%}
+  {%- endif -%}
+  {{ out }}
+# What the report suggests for each kind of thing to do; {names} is the apps make suspend stopped.
+status_commands:
+  upgrade: make deploy TYPE=proxmox
+  resume: make resume ONLY={names}
+  talos_upgrade: make check TYPE=talos-upgrade, then make talos-upgrade
+  credentials: make deploy TYPE=kubernetes, which renews them
+  allowlist: >-
+    the first visits (scripts/runbooks/first-run.md), then kubernetes_ingress_allowed_range in local.yml and make
+    deploy TYPE=kubernetes
+  secrets: k8s/README-secrets.md says how to make it

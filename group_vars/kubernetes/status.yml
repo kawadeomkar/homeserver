@@ -1,0 +1,37 @@
+---
+# make status on the cluster (roles/status's main entry point, on this machine): read with the credentials
+# roles/talos writes, refusing another cluster's as roles/app_scale does, its apps found as make suspend finds them,
+# the worker's Talos user volumes by their mount (talos_nodes, group_vars/kubernetes/talos.yml), the settings
+# roles/flux_bootstrap keeps, Alertmanager's pod (kube-prometheus-stack's, k8s/infrastructure/monitoring/), and the
+# pins make talos-upgrade moves the nodes to. Without a cluster it reads nothing.
+status_source: "{{ 'cluster' if kubernetes_present else '' }}"
+status_cluster_kubeconfig: "{{ talos_config_dir }}/kubeconfig"
+status_cluster_talosconfig: "{{ talos_config_dir }}/talosconfig"
+status_cluster_server: "{{ talos_endpoint if kubernetes_present else '' }}"
+status_cluster_nodes: >-
+  {%- set out = [] -%}
+  {%- for n in kubernetes_nodes -%}
+  {%-   set _ = out.append({'name': n.name, 'role': n.role}) -%}
+  {%- endfor -%}
+  {{ out }}
+status_cluster_apps_path: "{{ app_scale_path }}"
+status_cluster_annotation: "{{ app_scale_annotation }}"
+status_cluster_database_label: "{{ app_scale_late_label }}"
+# Talos mounts a user volume at /var/mnt/<its name>.
+status_cluster_volumes:
+  /var/mnt/local-path-provisioner: data
+  /var/mnt/media: media
+status_cluster_settings:
+  namespace: flux-system
+  name: cluster-settings
+  allowlist: INGRESS_ALLOWED_RANGE
+status_cluster_alertmanager:
+  namespace: monitoring
+  pod: alertmanager-kube-prometheus-stack-alertmanager-0
+status_cluster_flux_url: "{{ flux_sync_url | default('', true) if kubernetes_present else '' }}"
+status_cluster_flux_ref: "{{ flux_sync_ref | default('refs/heads/main', true) }}"
+status_cluster_pins:
+  talos: "{{ talos_version }}"
+  kubernetes: "{{ talos_kubernetes_version }}"
+# A cluster that does not answer should not hold the report up for long: kubectl gives up after its own 10 seconds.
+status_timeout: 15

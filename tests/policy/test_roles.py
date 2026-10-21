@@ -1643,18 +1643,92 @@ STATUS_SETUPS = [
 @pytest.mark.parametrize(("local_yml", "extra"), STATUS_SETUPS)
 def test_status_passes_the_argument_specs(tmp_path, local_yml, extra):
     """make status passes roles/status's checks with the tracked configuration and make's TYPE, in each setup: the
-    main entry point's on the Proxmox host, the report's on the controller."""
-    types = ("-e", json.dumps({"types": " vms,, storage "}))
+    main entry point's on the Proxmox host and on the cluster's host (which reads nothing without a cluster), the
+    report's on the controller."""
+    types = ("-e", json.dumps({"types": " vms,, storage,apps "}))
     rc, out = argspec_pass(example_tree(tmp_path, local_yml), "status.yml", *extra, *types)
     assert rc == 0, out[-3000:]
-    assert out.count("Validating arguments against arg spec 'main'") == 1, out[-3000:]
+    validated = {
+        host
+        for section in out.split("Validating arguments against arg spec 'main'")[1:]
+        for host in re.findall(r"^ok: \[([^\]]+)\]", section.split("TASK [", 1)[0], re.M)
+    }
+    assert validated == {"homeserver", "homeserver-k8s"}, out[-3000:]
     assert out.count("Validating arguments against arg spec 'report'") == 1, out[-3000:]
 
 
 def test_status_refuses_a_section_it_does_not_have(tmp_path):
-    rc, out = argspec_pass(example_tree(tmp_path), "status.yml", *CLUSTER_ARGS, "-e", json.dumps({"types": "vms,apps"}))
+    rc, out = argspec_pass(example_tree(tmp_path), "status.yml", *CLUSTER_ARGS, "-e", json.dumps({"types": "vms,nas"}))
     assert rc != 0, out[-3000:]
-    assert "make status has no section apps: TYPE takes vms, storage, comma-separated." in out, out[-3000:]
+    message = "make status has no section nas: TYPE takes apps, admin, vms, storage, cluster, comma-separated."
+    assert message in out, out[-3000:]
+
+
+def test_status_reads_the_cluster_as_it_is_built(tmp_path):
+    """make status reads the cluster with roles/talos's credentials and endpoint, finds the apps as make suspend does,
+    shows every Talos user volume the nodes declare by its mount, and reads Alertmanager's pod by the name
+    kube-prometheus-stack gives it."""
+    tree = example_tree(tmp_path, PROXMOX_ONLY_CLUSTER_LOCAL_YML)
+    names = [
+        "status_source",
+        "status_cluster_kubeconfig",
+        "status_cluster_server",
+        "status_cluster_nodes",
+        "status_cluster_apps_path",
+        "status_cluster_annotation",
+        "status_cluster_database_label",
+        "status_cluster_volumes",
+        "status_cluster_settings",
+        "status_cluster_alertmanager",
+        "status_cluster_pins",
+        "talos_config_dir",
+        "talos_endpoint",
+        "app_scale_path",
+        "app_scale_annotation",
+        "app_scale_late_label",
+        "talos_nodes",
+        "kubernetes_nodes",
+        "flux_bootstrap_settings",
+        "talos_version",
+        "talos_kubernetes_version",
+    ]
+    found = resolve_on(tree, "homeserver-k8s", "{" + ", ".join(f"'{n}': {n}" for n in names) + "}", *CLUSTER_ARGS)
+    assert found["status_source"] == "cluster"
+    assert found["status_cluster_kubeconfig"] == found["talos_config_dir"] + "/kubeconfig"
+    assert found["status_cluster_server"] == found["talos_endpoint"]
+    assert found["status_cluster_nodes"] == [{"name": n["name"], "role": n["role"]} for n in found["kubernetes_nodes"]]
+    assert [found[f"status_cluster_{k}"] for k in ("apps_path", "annotation", "database_label")] == [
+        found["app_scale_path"],
+        found["app_scale_annotation"],
+        found["app_scale_late_label"],
+    ]
+    declared = {
+        re.search(r"^name: (\S+)$", patch, re.M).group(1)
+        for n in found["talos_nodes"]
+        for patch in n["patches"]
+        if "kind: UserVolumeConfig" in patch
+    }
+    assert declared == {"local-path-provisioner", "media"}
+    assert set(found["status_cluster_volumes"]) == {f"/var/mnt/{name}" for name in declared}
+    assert found["status_cluster_settings"]["allowlist"] in found["flux_bootstrap_settings"]
+    assert found["status_cluster_pins"] == {
+        "talos": found["talos_version"],
+        "kubernetes": found["talos_kubernetes_version"],
+    }
+    release = yaml.safe_load((ROOT / "k8s" / "infrastructure" / "monitoring" / "release.yaml").read_text())
+    values = release["spec"].get("values") or {}
+    assert not values.get("fullnameOverride") and not values.get("nameOverride")
+    alertmanager = found["status_cluster_alertmanager"]
+    assert alertmanager == {
+        "namespace": release["metadata"]["namespace"],
+        "pod": f"alertmanager-{release['metadata']['name']}-alertmanager-0",
+    }
+    without = resolve_on(
+        example_tree(tmp_path / "local", PROXMOX_ONLY_LOCAL_YML),
+        "homeserver-k8s",
+        "[status_source, status_cluster_server]",
+    )
+    assert without == ["", ""]
 
 
 @pytest.mark.parametrize(
@@ -1705,6 +1779,8 @@ def test_status_reads_only_through_status_read():
     read list refuses everything else; it writes only its own report, on the controller."""
     allowed = {
         "status_read",
+        # The report entry point's questions to the apps, from this machine: a GET each, no certificate checked.
+        "status_probe",
         "ansible.builtin.assert",
         "ansible.builtin.set_fact",
         "ansible.builtin.include_tasks",

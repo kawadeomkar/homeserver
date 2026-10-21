@@ -8,13 +8,19 @@ argument_specs:
         runs them at once and refuses any that is not on its read list.
       - On the Proxmox host (proxmox) it reads the host, its storages and the VMs of status_vms; every other VM is
         only counted.
+      - For the cluster (cluster), on this machine, it reads the nodes, the apps (each Ingress's Service, then the
+        Deployment it selects, and every Deployment a Flux Kustomization under status_cluster_apps_path applies),
+        Flux, the certificates, the nodes' kubelet statistics, Alertmanager's alerts, etcd's state and the newest
+        commit of the branch Flux syncs. It reads the credentials under no_log, keeping only the server the
+        kubeconfig names and when each client certificate expires, and reports another cluster's credentials
+        rather than use them. It never reads a Secret.
       - A host that does not answer is recorded as such, not a failure, so the report can say so.
       - Refuses a section name that is not one of the report's.
       - The defaults read nothing.
     options:
       status_source:
         type: str
-        choices: ["", proxmox]
+        choices: ["", proxmox, cluster]
         default: ""
         description: What the host is; empty reads nothing.
       status_types:
@@ -48,6 +54,26 @@ argument_specs:
             type: bool
             default: false
             description: Whether its guest agent reports its filesystems (Talos's reports none).
+          node:
+            type: str
+            default: ""
+            description: The cluster node it is, whose memory and disks the cluster reports in place of Proxmox's.
+          app:
+            type: dict
+            description: The app it serves, listed with the cluster's.
+            options:
+              name:
+                type: str
+                required: true
+                description: The app's name.
+              url:
+                type: str
+                default: ""
+                description: Its address; empty takes the one its guest agent reports, with port.
+              port:
+                type: int
+                default: 80
+                description: The port of the address its guest agent reports.
       status_setup:
         type: dict
         default: {}
@@ -69,6 +95,74 @@ argument_specs:
         type: str
         default: ""
         description: The file that says the host waits for a reboot; empty does not look.
+      status_cluster_kubeconfig:
+        type: str
+        default: ""
+        description: The kubeconfig the cluster is read with.
+      status_cluster_talosconfig:
+        type: str
+        default: ""
+        description: The talosconfig etcd's state is read with; a missing file reads none.
+      status_cluster_server:
+        type: str
+        default: ""
+        description: The API server the kubeconfig must name; another is reported and not read. Empty checks nothing.
+      status_cluster_nodes:
+        type: list
+        elements: dict
+        default: []
+        description: The cluster's nodes, whose kubelet statistics give their memory and disks.
+        options:
+          name:
+            type: str
+            required: true
+            description: The node's name.
+          role:
+            type: str
+            default: ""
+            description: Its role, controlplane or worker.
+      status_cluster_apps_path:
+        type: str
+        default: ""
+        description: The path in the repository under which Flux's Kustomizations apply the apps.
+      status_cluster_annotation:
+        type: str
+        default: ""
+        description: The annotation in which make suspend records an app's replicas, which marks it suspended.
+      status_cluster_database_label:
+        type: str
+        default: ""
+        description: The label (key=value) of an app's database, listed under the app.
+      status_cluster_volumes:
+        type: dict
+        default: {}
+        description: The nodes' own volumes to show, as {mount path, name}.
+      status_cluster_settings:
+        type: dict
+        default: {}
+        description: >-
+          The ConfigMap of the cluster's settings, as {namespace, name, allowlist}, allowlist the key of Traefik's
+          allowed range; empty reads none.
+      status_cluster_alertmanager:
+        type: dict
+        default: {}
+        description: Alertmanager's pod, as {namespace, pod}, whose firing alerts amtool lists; empty reads none.
+      status_cluster_flux_url:
+        type: str
+        default: ""
+        description: The repository Flux syncs; empty does not compare its branch with what Flux applied.
+      status_cluster_flux_ref:
+        type: str
+        default: ""
+        description: The branch Flux syncs, as refs/heads/<name>.
+      status_cluster_pins:
+        type: dict
+        default: {}
+        description: The versions the configuration pins, as {talos, kubernetes}, compared with what the nodes run.
+      status_cluster_request_timeout:
+        type: int
+        default: 10
+        description: Seconds kubectl waits for the API server on each read.
       status_parallel:
         type: int
         default: 8
@@ -94,12 +188,33 @@ argument_specs:
         type: bool
         default: false
         description: Whether the report entry point shows no report.
+      status_probe_apps:
+        type: bool
+        default: true
+        description: Whether the report asks each app's addresses from this machine, a DNS lookup and one GET per URL.
+      status_probe_timeout:
+        type: int
+        default: 5
+        description: Seconds each lookup and each request may take.
+      status_admin:
+        type: list
+        elements: dict
+        default: []
+        description: The admin pages the report lists, each {name, url}.
+      status_commands:
+        type: dict
+        default: {}
+        description: >-
+          The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials,
+          allowlist, secrets. One left out is suggested by text alone.
   report:
     short_description: Put make status's findings together, write the report and show it
     description:
       - Puts together what each host of status_hosts found (its status_found), ranks what needs attention, writes
         the report to status_report_file as JSON, mode 0600, and shows it as text, unless status_quiet.
       - Writes the report in a dry run too, since make status runs as one and takes its exit code from the file.
+      - Unless status_probe_apps is off, first asks each app's addresses from this machine with the role's module
+        status_probe, checking no certificate and sending no credentials.
     options:
       status_types:
         type: list
@@ -127,3 +242,22 @@ argument_specs:
         type: bool
         default: false
         description: Whether no report is shown.
+      status_probe_apps:
+        type: bool
+        default: true
+        description: Whether the report asks each app's addresses from this machine, a DNS lookup and one GET per URL.
+      status_probe_timeout:
+        type: int
+        default: 5
+        description: Seconds each lookup and each request may take.
+      status_admin:
+        type: list
+        elements: dict
+        default: []
+        description: The admin pages the report lists, each {name, url}.
+      status_commands:
+        type: dict
+        default: {}
+        description: >-
+          The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials,
+          allowlist, secrets. One left out is suggested by text alone.

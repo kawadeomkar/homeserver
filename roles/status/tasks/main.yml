@@ -18,12 +18,28 @@
       {%-   set _ = out.append('make status has no section ' ~ unknown | join(', ') ~ ': TYPE takes '
                                ~ [] | status_types_shown | join(', ') ~ ', comma-separated.') -%}
       {%- endif -%}
+      {%- if status_source == 'cluster' and not status_cluster_kubeconfig -%}
+      {%-   set _ = out.append('status_cluster_kubeconfig must be set to read the cluster.') -%}
+      {%- endif -%}
+      {%- if status_cluster_database_label and status_cluster_database_label is not match('^[^=\s]+=[^=\s]+$') -%}
+      {%-   set _ = out.append('status_cluster_database_label must be one label as key=value, or empty.') -%}
+      {%- endif -%}
       {%- set vmids = status_vms | map(attribute='vmid') | map('int') | list -%}
       {%- if vmids | select('<', 100) | list or vmids | unique | length != vmids | length -%}
       {%-   set _ = out.append('status_vms must be VMs with distinct VMIDs from 100 up.') -%}
       {%- endif -%}
       {{ out }}
 
+# A host with nothing to read still says so, so that the report play can tell it from one refused before its reads.
+- name: Read nothing here
+  ansible.builtin.set_fact:
+    status_found: {}
+  when: status_source | length == 0
+
 - name: Read the Proxmox host
   ansible.builtin.include_tasks: proxmox.yml
   when: status_source == 'proxmox'
+
+- name: Read the cluster
+  ansible.builtin.include_tasks: cluster.yml
+  when: status_source == 'cluster'

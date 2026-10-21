@@ -66,7 +66,7 @@ fix_TYPES   := python docs
 deploy_TYPES := truenas proxmox homeassistant kubernetes
 check_TYPES := $(deploy_TYPES) talos-upgrade suspend resume
 # make status's sections, in the order the report shows them.
-status_TYPES := vms storage
+status_TYPES := apps admin vms storage cluster
 list     = $(subst $(space),$(comma),$(strip $(1)))
 define check_types
 $(if $(filter $(1),$(TYPED)),,$(error make $(1) takes no TYPE))

@@ -19,7 +19,8 @@
          else status_proxmox_name.results.node.stdout | default('') | trim }}
 
 # The day's history and the pending changes of each of this setup's VMs; the guest agent's filesystems and OS of those
-# whose agent reports them (Home Assistant's; Talos's lists no filesystem); the disks on each budgeted storage; the
+# whose agent reports them (Home Assistant's; Talos's lists no filesystem), and the address of one that serves an app
+# without a URL of its own; the disks on each budgeted storage; the
 # upgrades apt would make, from the lists as last refreshed (a simulation, which is quick, where the API's own list
 # takes four seconds); and whether an upgrade asked for a reboot.
 - name: proxmox | Read the host, its storages and its VMs, at once
@@ -48,12 +49,16 @@
       {%-     set vmid = vm.vmid | string -%}
       {%-     set _ = c.update({'rrd-' ~ vmid: ['pvesh', 'get', _node ~ '/qemu/' ~ vmid ~ '/rrddata'] + _day + _json,
                                 'pending-' ~ vmid: ['pvesh', 'get', _node ~ '/qemu/' ~ vmid ~ '/pending'] + _json}) -%}
-      {%-     if vm.guest_agent | default(false) -%}
-      {%-       set _ = c.update({'fsinfo-' ~ vmid: ['qm', 'guest', 'cmd', vmid, 'get-fsinfo'],
-                                  'osinfo-' ~ vmid: ['qm', 'guest', 'cmd', vmid, 'get-osinfo']}) -%}
-      {%-     endif -%}
       {%-   endfor -%}
       {%- endif -%}
+      {%- for vm in status_vms if vm.guest_agent | default(false) and ('vms' in _types or 'apps' in _types) -%}
+      {%-   set vmid = vm.vmid | string -%}
+      {%-   set _ = c.update({'fsinfo-' ~ vmid: ['qm', 'guest', 'cmd', vmid, 'get-fsinfo'],
+                              'osinfo-' ~ vmid: ['qm', 'guest', 'cmd', vmid, 'get-osinfo']}) -%}
+      {%-   if vm.app | default(none) and not vm.app.url | default('') -%}
+      {%-     set _ = c.update({'network-' ~ vmid: ['qm', 'guest', 'cmd', vmid, 'network-get-interfaces']}) -%}
+      {%-   endif -%}
+      {%- endfor -%}
       {%- if 'storage' in _types -%}
       {%-   for storage in status_budget_storages -%}
       {%-     set _ = c.update({'content-' ~ storage: ['pvesh', 'get', _node ~ '/storage/' ~ storage ~ '/content'] + _json}) -%}
