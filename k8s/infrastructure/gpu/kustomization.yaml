@@ -1,7 +1,7 @@
 ---
 # Intel's GPU plugin, as vendored in intel-gpu-plugin.yaml, changed by the patches below rather than by edits to that
 # file (README.md): two pods may share the device (Jellyfin and Frigate), and it runs only on the node labelled for
-# the iGPU, so with none it runs nowhere.
+# an Intel GPU, so with none it runs nowhere.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:

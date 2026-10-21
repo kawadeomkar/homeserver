@@ -1,0 +1,35 @@
+---
+# Neutral defaults: with nothing else set, the role reads nothing and changes nothing. What to pass is configuration,
+# set in inventory group_vars; see README.md.
+
+# Which GPU a VM may be given: auto (the one the host can pass alone that is not its console), none, or a PCI address
+# (0000:01:00.0, 01:00.0). Empty is none.
+proxmox_gpu_select: ""
+# What messages call that setting: the variable the owner edits, when group_vars set this one from it.
+proxmox_gpu_select_name: proxmox_gpu_select
+# The PCI vendor ids auto may take and an address may name, such as ["8086"] for Intel. Empty, any.
+proxmox_gpu_vendors: []
+# The VMIDs the GPU is meant for: their own use of it never counts, while any other guest's keeps auto off the GPU,
+# and is refused for one named by address.
+proxmox_gpu_guests: []
+
+# The PCI resource mapping the GPU is kept under, created or corrected to the device the host has now; a VM is given
+# it as hostpci mapping=<id>. Empty, no mapping is kept. Never deleted.
+proxmox_gpu_mapping: ""
+# The mapping's description when the role creates it.
+proxmox_gpu_mapping_description: ""
+
+# Keep the host's own drivers off the GPU from boot: vfio-pci claims it by id, before any driver that would, in
+# proxmox_gpu_modprobe_file, then the initramfs is rebuilt. The host takes it at its next boot, which the role never
+# makes. With no GPU to pass, that file is removed; off, it is left as it is.
+proxmox_gpu_vfio: false
+proxmox_gpu_modprobe_file: /etc/modprobe.d/proxmox-gpu.conf
+# Where the role records the file the initramfs was last built with, so a build that failed is made again.
+proxmox_gpu_state_dir: /var/lib/proxmox-gpu
+
+# Where the host's sysfs is, read for the console's device, the IOMMU, each device's driver and modalias, and the DRM
+# nodes; and Proxmox's configuration directory, read for the guests' devices.
+proxmox_gpu_sysfs: /sys
+proxmox_gpu_pve_dir: /etc/pve
+# The Proxmox node's name. Empty means the host's short hostname, which is what Proxmox uses.
+proxmox_gpu_node: ""

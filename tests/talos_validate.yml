@@ -13,8 +13,8 @@
     - ../group_vars/kubernetes/talos.yml
   vars:
     # Each setup's local.yml, as the policy tests' placeholders give it: with a NAS; without one (the worker sized for
-    # a small host, with a media disk); and without one with the iGPU passed to the worker (and extra names for the
-    # API). All have the same two nodes.
+    # a small host, with a media disk); and without one with an Intel GPU passed to the worker, as the Proxmox play
+    # leaves it found (and extra names for the API). All have the same two nodes.
     talos_validate_setups:
       - name: nas
         settings:
@@ -33,7 +33,7 @@
           kubernetes_node_sizes:
             homeserver-worker-1: {cores: 4, memory_mib: 12288, system_disk_gib: 32, data_disk_gib: 20, media_disk_gib: 0}
           kubernetes_media_on_data_volume: true
-          kubernetes_gpu_mapping: igpu
+          kubernetes_gpu_found: {vendor: "8086", address: "0000:00:02.0", drivers: [i915]}
           kubernetes_api_sans: [k8s-api.home.arpa]
   tasks:
     - name: Render and validate each setup
@@ -42,7 +42,7 @@
         truenas_static_address: "{{ setup.settings.truenas_static_address }}"
         kubernetes_node_addresses: "{{ setup.settings.kubernetes_node_addresses }}"
         kubernetes_node_sizes: "{{ setup.settings.kubernetes_node_sizes | default({}) }}"
-        kubernetes_gpu_mapping: "{{ setup.settings.kubernetes_gpu_mapping | default('') }}"
+        kubernetes_gpu_found: "{{ setup.settings.kubernetes_gpu_found | default({}) }}"
         kubernetes_media_on_data_volume: "{{ setup.settings.kubernetes_media_on_data_volume | default(false) }}"
         kubernetes_api_sans: "{{ setup.settings.kubernetes_api_sans | default([]) }}"
       loop: "{{ talos_validate_setups }}"

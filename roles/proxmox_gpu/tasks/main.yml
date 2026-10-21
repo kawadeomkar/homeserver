@@ -1,0 +1,128 @@
+---
+# Finds the GPU to pass (detect.yml), keeps the PCI resource mapping a VM is given it through, and with
+# proxmox_gpu_vfio keeps the host's own drivers off it from the next boot. Over root SSH, with pvesh: no
+# community.proxmox module manages PCI mappings. Never deletes a mapping, never reboots.
+- name: Find the GPU
+  ansible.builtin.import_tasks: detect.yml
+
+- name: Work out what the mapping needs
+  ansible.builtin.set_fact:
+    proxmox_gpu_mapping_plan: >-
+      {{ proxmox_gpu_mappings.stdout | from_json
+         | proxmox_gpu_mapping_plan(proxmox_gpu_mapping, proxmox_gpu_node_name, proxmox_gpu_selected,
+                                    proxmox_gpu_mapping_description) }}
+  when: proxmox_gpu_selected | length > 0 and proxmox_gpu_mapping | length > 0
+
+# Commands do not run in check mode, so this is what a dry run shows: create, set or ok, and the entry.
+- name: Show what the mapping needs
+  ansible.builtin.debug:
+    msg: "PCI mapping {{ proxmox_gpu_mapping }}: {{ proxmox_gpu_mapping_plan.action }} ({{ proxmox_gpu_mapping_plan.entry }})"
+  when: proxmox_gpu_selected | length > 0 and proxmox_gpu_mapping | length > 0
+
+# Set replaces the whole list of entries, so other nodes' are sent back as they were, under the digest read above:
+# Proxmox refuses the change if the mappings changed since.
+- name: Create or correct the mapping
+  ansible.builtin.command:
+    argv: "{{ proxmox_gpu_mapping_plan.argv }}"
+  changed_when: true
+  when:
+    - proxmox_gpu_selected | length > 0 and proxmox_gpu_mapping | length > 0
+    - proxmox_gpu_mapping_plan.action in ['create', 'set']
+
+- name: Read the mapping as Proxmox checks it
+  ansible.builtin.command:
+    argv: [pvesh, get, /cluster/mapping/pci, --check-node, "{{ proxmox_gpu_node_name }}", --output-format, json]
+  register: proxmox_gpu_checked
+  changed_when: false
+  when:
+    - not ansible_check_mode
+    - proxmox_gpu_selected | length > 0 and proxmox_gpu_mapping | length > 0
+
+# What a VM given the mapping would fail to start with, found now rather than at its start.
+- name: Refuse a mapping Proxmox finds invalid
+  ansible.builtin.assert:
+    that: _errors | length == 0
+    fail_msg: "Proxmox finds the PCI mapping {{ proxmox_gpu_mapping }} invalid on {{ proxmox_gpu_node_name }}: {{ _errors | join('; ') }}"
+    quiet: true
+  when: proxmox_gpu_checked is not skipped and proxmox_gpu_checked.stdout is defined
+  vars:
+    _errors: >-
+      {{ proxmox_gpu_checked.stdout | from_json | selectattr('id', 'eq', proxmox_gpu_mapping)
+         | map(attribute='checks', default=[]) | flatten | selectattr('severity', 'eq', 'error')
+         | map(attribute='message') | list }}
+
+# vfio-pci claims each device it is to hold by id, and loads before every driver that would claim one, from the
+# initramfs on. Proxmox also binds vfio-pci when a VM with the device starts, but a host driver that took the GPU at
+# boot (the console's framebuffer, a sound driver on its audio) may not let go cleanly. Without proxmox_gpu_vfio the
+# file, the initramfs and the record below are left as they are.
+- name: Keep the host's drivers off the GPU
+  when: proxmox_gpu_vfio
+  vars:
+    _wanted: >-
+      {{ proxmox_gpu_selected | proxmox_gpu_modprobe_conf(proxmox_gpu_selected.function_drivers | default({}),
+         'Written by Ansible (roles/proxmox_gpu): vfio-pci holds ' ~ proxmox_gpu_selected.address | default('')
+         ~ ', which a VM is given, from boot.') }}
+    _record: "{{ proxmox_gpu_state_dir }}/initramfs-modprobe.conf"
+  block:
+    - name: Write the modprobe.d file that does it
+      ansible.builtin.copy:
+        content: "{{ _wanted }}"
+        dest: "{{ proxmox_gpu_modprobe_file }}"
+        mode: "0644"
+      when: _wanted | length > 0
+
+    - name: Remove that file without a GPU to pass
+      ansible.builtin.file:
+        path: "{{ proxmox_gpu_modprobe_file }}"
+        state: absent
+      when: _wanted | length == 0
+
+    # The file as the initramfs was last built with it, recorded once the build succeeded: a build that failed, or a
+    # run cut off before it, is made by the next run, whatever the file says now. No record means none.
+    - name: Read what the initramfs was last built with
+      ansible.builtin.slurp:
+        src: "{{ _record }}"
+      register: proxmox_gpu_built
+      failed_when: false
+
+    # The initramfs carries modprobe.d, so the order holds before the root filesystem is mounted; Proxmox's hook
+    # copies it to every boot partition proxmox-boot-tool keeps.
+    - name: Rebuild the initramfs
+      ansible.builtin.command:
+        argv: [update-initramfs, -u, -k, all]
+      changed_when: true
+      when: _built != _wanted
+      vars:
+        _built: "{{ proxmox_gpu_built.content | b64decode if proxmox_gpu_built.content is defined else '' }}"
+
+    - name: Make the directory for the record
+      ansible.builtin.file:
+        path: "{{ proxmox_gpu_state_dir }}"
+        state: directory
+        mode: "0755"
+      when: _wanted | length > 0
+
+    - name: Record what the initramfs was built with
+      ansible.builtin.copy:
+        content: "{{ _wanted }}"
+        dest: "{{ _record }}"
+        mode: "0644"
+      when: _wanted | length > 0
+
+    - name: Remove the record without a GPU to pass
+      ansible.builtin.file:
+        path: "{{ _record }}"
+        state: absent
+      when: _wanted | length == 0
+
+# Read before any change above, so it says what the host runs now: a host driver holds the GPU until the host boots
+# with the file. Proxmox takes it from that driver when the VM starts, which may work, and every run says so until
+# the reboot.
+- name: Say whether the host must reboot for vfio-pci to hold the GPU
+  ansible.builtin.debug:
+    msg: >-
+      The host's own drivers hold {{ _held | join(', ') }}: reboot the host, every VM down first, so that vfio-pci
+      holds the GPU from boot. Until then Proxmox takes it from them as the VM starts.
+  when: proxmox_gpu_vfio and _held | length > 0
+  vars:
+    _held: "{{ proxmox_gpu_selected | proxmox_gpu_held_by_host }}"

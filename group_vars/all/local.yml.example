@@ -154,9 +154,12 @@ flux_sync_url: https://github.com/<you>/homeserver.git
 # kubernetes_media_on_data_volume: true
 # On a BTRFS install, which disables local, the Talos ISO goes on local-btrfs.
 # kubernetes_iso_storage: local-btrfs
-# The host's iGPU for the worker: the id of a Proxmox PCI resource mapping you
-# made for it (scripts/runbooks/gpu.md). Unset, every app runs on the CPU.
-# kubernetes_gpu_mapping: igpu
+# The GPU the worker gets, for Jellyfin and Frigate (scripts/runbooks/gpu.md).
+# Unset, auto: make proxmox and make kubernetes pass the one Intel GPU the host
+# can pass alone that is not its console, and none without one. none passes
+# nothing; a PCI address, in quotes, passes that GPU, such as the host's iGPU,
+# which is its console, so its screen goes dark: "0000:00:02.0".
+# kubernetes_gpu: auto
 # Home Assistant OS's address, for Homepage's tile: its own local name and
 # port, never under the cluster's domain (scripts/runbooks/haos.md).
 # haos_url: http://homeassistant.home.arpa/

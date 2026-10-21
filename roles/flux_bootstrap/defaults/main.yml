@@ -17,6 +17,10 @@ flux_bootstrap_instance: {}
 # The keys and values of the flux-system/cluster-settings ConfigMap, which every Flux Kustomization substitutes
 # into its manifests. Strings only: Flux substitutes text.
 flux_bootstrap_settings: {}
+# A node whose capacity the role reads first, from the cluster, into flux_bootstrap_node_capacity (resource: quantity,
+# {} before the cluster or the node exists), for settings that follow what it offers, such as a device plugin's
+# resource. Empty, nothing is read.
+flux_bootstrap_capacity_node: ""
 # The age private key that decrypts the repository's SOPS secrets: a file holding that key alone, mode 0600. It
 # becomes the Secret flux-system/sops-age. Never printed.
 flux_bootstrap_age_key_file: ""

@@ -5,6 +5,7 @@
 nas:
   DOMAIN: homeserver.internal
   GPU_I915: "0"
+  GPU_XE: "0"
   FRIGATE_DETECTOR_DEVICE: CPU
   TZ: America/Los_Angeles
   PROMETHEUS_RETENTION: 15d
@@ -23,6 +24,7 @@ nas:
 local:
   DOMAIN: homeserver.internal
   GPU_I915: "0"
+  GPU_XE: "0"
   FRIGATE_DETECTOR_DEVICE: CPU
   TZ: America/Los_Angeles
   PROMETHEUS_RETENTION: 7d

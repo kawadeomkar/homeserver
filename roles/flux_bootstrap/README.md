@@ -10,7 +10,10 @@ nothing.
   readable by its owner alone, since the whole file goes into the cluster: never a keyring shared with other
   projects.
 - **`flux-system/cluster-settings`**: a ConfigMap of `flux_bootstrap_settings`, which Flux Kustomizations
-  substitute into their manifests (`postBuild.substituteFrom`). Strings only. A key removed here disappears.
+  substitute into their manifests (`postBuild.substituteFrom`). Strings only. A key removed here disappears. A
+  setting may follow what a node offers: with `flux_bootstrap_capacity_node`, the role first reads that node's
+  capacity into `flux_bootstrap_node_capacity` (resource: quantity, `{}` before the cluster or the node exists), such
+  as the count a device plugin offers, so a setting asks for a device only once the node has it.
 - **The FluxInstance `flux`**: an exact Flux release, built from the operator's manifests artifact pinned by
   digest, and the Git repository, branch and path it syncs. From Flux 2.9,
   kustomize-controller substitutes strictly by default, so a manifest naming a setting that does not exist fails
@@ -47,6 +50,7 @@ Never install Flux through Talos's `KubeExternalManifestConfig`: Talos re-applie
 | `flux_bootstrap_operator_digest` | `""` | The operator image's digest (`sha256:...`); required with a version |
 | `flux_bootstrap_instance` | `{}` | `version` (an exact Flux release, `2.9.6`), `artifact` (`oci://...@sha256:...`), `url` (https), `ref`, `path` |
 | `flux_bootstrap_settings` | `{}` | The `cluster-settings` ConfigMap's keys and values, all strings |
+| `flux_bootstrap_capacity_node` | `""` | A node whose capacity is read first into `flux_bootstrap_node_capacity`, for the settings |
 | `flux_bootstrap_age_key_file` | `""` | The age key file; one key, mode 0600 |
 | `flux_bootstrap_wait_timeout` | `10m` | How long a real run waits for the operator, the FluxInstance and the Kustomizations |
 | `flux_bootstrap_allow_path_change` | `false` | Let a run move the FluxInstance to another path, deleting what the old one applied |

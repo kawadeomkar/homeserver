@@ -30,6 +30,7 @@ roles/truenas/           configures the NAS through its API: address, pools, dat
 roles/proxmox_apt/       sets Proxmox's package repositories (no subscription), upgrades it on every run, and says when it needs a reboot
 roles/proxmox_storage/   adds the NAS's shares to Proxmox as qcow2 VM-disk storage, or checks its own storage
 roles/proxmox_backup/    keeps the nightly vzdump job of the VMs
+roles/proxmox_gpu/       finds the GPU the cluster's worker gets, keeps its PCI mapping, and keeps the host's drivers off it
 roles/proxmox_vm/        creates the cluster's VMs and Home Assistant's, and keeps the settings it manages
 roles/haos_onboard/      gives a new Home Assistant its owner account before anyone else on the network can
 roles/talos/             installs Talos on the VMs, keeps their configuration, bootstraps etcd once, upgrades on request
@@ -243,13 +244,15 @@ With a NAS, `make truenas` then creates the datasets the cluster mounts (`persis
 `persistent/photoprism`, `ephemeral/frigate`) and exports them, with the existing media dataset, to the worker
 alone. Whenever `local.yml` changes, update its copy in your password manager.
 
-### The iGPU
+### A GPU
 
-If the Proxmox host has an Intel iGPU, Jellyfin can transcode and Frigate detect on it: pass it whole to the worker,
-following `scripts/runbooks/gpu.md` (VT-d, the host's `vfio-pci` binding and a PCI resource mapping, all by hand),
-then name the mapping in `local.yml` as `kubernetes_gpu_mapping`. `make kubernetes` gives the worker the device and
-Talos's i915 driver, and the apps ask for it; restarting that VM and `make talos-upgrade` are yours. Without it, the
-same manifests run both apps on the CPU.
+If the Proxmox host has an Intel GPU, an Arc card or its iGPU, Jellyfin can transcode and Frigate detect on it.
+`make proxmox` and `make kubernetes` find it and pass it whole to the worker: the PCI resource mapping, the host's
+`vfio-pci` binding, the worker's PCI device and Talos's Intel drivers, and once the worker offers it, the apps'
+settings. By default (`kubernetes_gpu: auto` in `local.yml`) that is the one Intel GPU the host can pass alone that is
+not its console and that no other VM or container uses, so an iGPU, usually the console, passes only once
+`kubernetes_gpu` names its address, in quotes. The firmware's VT-d, the host's reboot, restarting that VM and
+`make talos-upgrade` are yours: `scripts/runbooks/gpu.md`. Without a GPU, the same manifests run both apps on the CPU.
 
 #### Switching setups
 

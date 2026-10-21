@@ -1,0 +1,19 @@
+---
+# The GPU the cluster's worker is given, applied by roles/proxmox_gpu in proxmox.yml and kubernetes.yml, and read
+# alone by talos-upgrade.yml. With a cluster, local.yml's kubernetes_gpu says which: auto unless it says otherwise,
+# which passes the one GPU the host can pass alone, of a vendor the cluster can use (kubernetes_gpu_vendors), that no
+# other guest uses, and never the host's console, so a host whose only GPU is its iGPU passes nothing until
+# kubernetes_gpu names it. Blank is auto too; anything but a string is refused (kubernetes_settings_error), since YAML
+# reads an unquoted address of digits as a number and no as false. Without a cluster, none: nothing is read.
+# scripts/runbooks/gpu.md has the steps around it, the firmware's and the reboots.
+proxmox_gpu_select: "{{ (kubernetes_gpu | default('auto', true) | string | trim) if kubernetes_present else 'none' }}"
+proxmox_gpu_select_name: kubernetes_gpu in group_vars/all/local.yml
+proxmox_gpu_vendors: "{{ kubernetes_gpu_vendors | list }}"
+# The worker, whose own hostpci never counts as another guest's use of the GPU; any other VM's or container's does,
+# so auto leaves alone a GPU already given to one.
+proxmox_gpu_guests: "{{ [kubernetes_worker.vmid] if kubernetes_present else [] }}"
+# The worker's VM is given the GPU through this mapping (group_vars/proxmox/vms.yml).
+proxmox_gpu_mapping: homeserver-gpu
+proxmox_gpu_mapping_description: The GPU homeserver's cluster worker is given (roles/proxmox_gpu keeps it)
+# The host's own drivers kept off it from the next boot; every run says while the host still has to reboot for that.
+proxmox_gpu_vfio: true

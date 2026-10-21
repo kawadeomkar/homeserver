@@ -1,7 +1,7 @@
 ---
-# Intel's GPU device plugin, which hands the passed-through iGPU (gpu.intel.com/i915) to Jellyfin and Frigate. It
-# runs only on a node labelled homeserver.internal/gpu=intel, which roles/talos gives the worker when local.yml
-# names the host's iGPU (kubernetes_gpu_mapping); elsewhere nothing runs here. Its manifests are Intel's, vendored
+# Intel's GPU device plugin, which hands the passed-through Intel GPU (gpu.intel.com/i915 or gpu.intel.com/xe) to
+# Jellyfin and Frigate. It runs only on a node labelled homeserver.internal/gpu=intel, which roles/talos gives the
+# worker when the Proxmox play passes it an Intel GPU (kubernetes_gpu_found); elsewhere nothing runs here. Its manifests are Intel's, vendored
 # (README.md), applied by the Flux Kustomization infra-gpu (k8s/clusters/*/infrastructure.yaml).
 apiVersion: v1
 kind: Namespace

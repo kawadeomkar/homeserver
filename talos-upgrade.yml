@@ -20,6 +20,30 @@
         quiet: true
       tags: [always]
 
+# The worker's schematic follows its GPU's vendor, so the Proxmox host is asked which GPU the worker has, changing
+# nothing: without this, the upgrade would move the worker to the schematic without the GPU's drivers.
+- name: Find the GPU the worker has
+  hosts: proxmox
+  gather_facts: false
+  pre_tasks:
+    - name: Refuse NAS settings that come without a NAS address
+      ansible.builtin.assert:
+        that: nas_section_error | length == 0
+        fail_msg: "{{ nas_section_error }}"
+        quiet: true
+      tags: [always]
+    - name: Refuse an incomplete Kubernetes section
+      ansible.builtin.assert:
+        that: kubernetes_settings_error | length == 0
+        fail_msg: "{{ kubernetes_settings_error | join(' ') }}"
+        quiet: true
+      tags: [always]
+  tasks:
+    - name: Find the GPU, changing nothing
+      ansible.builtin.include_role:
+        name: proxmox_gpu
+        tasks_from: detect
+
 - name: Upgrade the cluster to the pinned versions
   hosts: kubernetes
   gather_facts: false
@@ -45,6 +69,16 @@
       ansible.builtin.meta: end_host
       when: not kubernetes_present
       tags: [always]
+    # The worker's schematic and label follow the GPU the Proxmox play found in this same run (kubernetes_gpu_found):
+    # a run that left that play out, with --limit or tags, would read no GPU and take them away. Not tagged always,
+    # so it holds whenever the roles below run.
+    - name: Refuse to upgrade Talos without the Proxmox play's GPU
+      ansible.builtin.assert:
+        that: hostvars[groups['proxmox'][0]].proxmox_gpu_selected is defined
+        fail_msg: >-
+          The worker's Talos follows the GPU the Proxmox play finds first, in the same run, and this run left that
+          play out: run the whole playbook, without a --limit or tags that skip it.
+        quiet: true
   tasks:
     - name: Upgrade the nodes, then Kubernetes
       ansible.builtin.include_role:

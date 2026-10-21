@@ -99,6 +99,16 @@ Description: Hand a Kubernetes cluster to Flux, through the Flux Operator
   
   
 
+  - **flux_bootstrap_capacity_node**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: A node whose capacity is read first into flux_bootstrap_node_capacity, for settings that follow what it offers. Empty, nothing is read.
+  
+  
+  
+
   - **flux_bootstrap_age_key_file**
     - **Required**: false
     - **Type**: str
@@ -151,9 +161,10 @@ Description: Hand a Kubernetes cluster to Flux, through the Flux Operator
 | [flux_bootstrap_operator_digest](defaults/main.yml#L13)   | str |  |    
 | [flux_bootstrap_instance](defaults/main.yml#L16)   | dict | `{}` |    
 | [flux_bootstrap_settings](defaults/main.yml#L19)   | dict | `{}` |    
-| [flux_bootstrap_age_key_file](defaults/main.yml#L22)   | str |  |    
-| [flux_bootstrap_wait_timeout](defaults/main.yml#L24)   | str | `10m` |    
-| [flux_bootstrap_allow_path_change](defaults/main.yml#L27)   | bool | `False` |    
+| [flux_bootstrap_capacity_node](defaults/main.yml#L23)   | str |  |    
+| [flux_bootstrap_age_key_file](defaults/main.yml#L26)   | str |  |    
+| [flux_bootstrap_wait_timeout](defaults/main.yml#L28)   | str | `10m` |    
+| [flux_bootstrap_allow_path_change](defaults/main.yml#L31)   | bool | `False` |    
 
 
 
@@ -173,6 +184,8 @@ Description: Hand a Kubernetes cluster to Flux, through the Flux Operator
 | Refuse an age key file that is not one key, or that others can read | ansible.builtin.assert | False |  |
 | Look for the kubeconfig | ansible.builtin.stat | False |  |
 | Refuse to run without a kubeconfig | ansible.builtin.assert | False |  |
+| Read what the node offers | ansible.builtin.command | True |  |
+| Keep what the node offers | ansible.builtin.set_fact | True |  |
 | Read the Flux Operator | ansible.builtin.command | True |  |
 | Say what would be installed | ansible.builtin.debug | True |  |
 | Keep the operator, the age key, the settings and the FluxInstance as configured | ansible.builtin.import_tasks | True |  |
@@ -231,11 +244,13 @@ classDef rescue stroke:#665352,stroke-width:2px;
   Count_the_keys_and_other_lines_in_it1-->|Task| Refuse_an_age_key_file_that_is_not_one_key__or_that_others_can_read2[refuse an age key file that is not one key  or<br>that others can read]:::task
   Refuse_an_age_key_file_that_is_not_one_key__or_that_others_can_read2-->|Task| Look_for_the_kubeconfig3[look for the kubeconfig]:::task
   Look_for_the_kubeconfig3-->|Task| Refuse_to_run_without_a_kubeconfig4[refuse to run without a kubeconfig]:::task
-  Refuse_to_run_without_a_kubeconfig4-->|Task| Read_the_Flux_Operator5[read the flux operator<br>When: **flux bootstrap kubeconfig file stat exists**]:::task
-  Read_the_Flux_Operator5-->|Task| Say_what_would_be_installed6[say what would be installed<br>When: **ansible check mode and  flux bootstrap operator is<br>skipped or flux bootstrap operator rc    0**]:::task
-  Say_what_would_be_installed6-->|Import task| Keep_the_operator__the_age_key__the_settings_and_the_FluxInstance_as_configured_objects_yml_7[/keep the operator  the age key  the settings and<br>the fluxinstance as configured<br>When: **flux bootstrap operator is not skipped and  flux<br>bootstrap operator rc    0 or not ansible check<br>mode**<br>import_task: objects yml/]:::importTasks
-  Keep_the_operator__the_age_key__the_settings_and_the_FluxInstance_as_configured_objects_yml_7-.->|End of Block| Hand_the_cluster_to_Flux1_block_start_0
-  Keep_the_operator__the_age_key__the_settings_and_the_FluxInstance_as_configured_objects_yml_7-->End
+  Refuse_to_run_without_a_kubeconfig4-->|Task| Read_what_the_node_offers5[read what the node offers<br>When: **flux bootstrap capacity node   length   0 and flux<br>bootstrap kubeconfig file stat exists**]:::task
+  Read_what_the_node_offers5-->|Task| Keep_what_the_node_offers6[keep what the node offers<br>When: **flux bootstrap capacity node   length   0**]:::task
+  Keep_what_the_node_offers6-->|Task| Read_the_Flux_Operator7[read the flux operator<br>When: **flux bootstrap kubeconfig file stat exists**]:::task
+  Read_the_Flux_Operator7-->|Task| Say_what_would_be_installed8[say what would be installed<br>When: **ansible check mode and  flux bootstrap operator is<br>skipped or flux bootstrap operator rc    0**]:::task
+  Say_what_would_be_installed8-->|Import task| Keep_the_operator__the_age_key__the_settings_and_the_FluxInstance_as_configured_objects_yml_9[/keep the operator  the age key  the settings and<br>the fluxinstance as configured<br>When: **flux bootstrap operator is not skipped and  flux<br>bootstrap operator rc    0 or not ansible check<br>mode**<br>import_task: objects yml/]:::importTasks
+  Keep_the_operator__the_age_key__the_settings_and_the_FluxInstance_as_configured_objects_yml_9-.->|End of Block| Hand_the_cluster_to_Flux1_block_start_0
+  Keep_the_operator__the_age_key__the_settings_and_the_FluxInstance_as_configured_objects_yml_9-->End
 ```
 
 

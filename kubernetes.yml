@@ -3,8 +3,10 @@
 # first:
 #   make check-kubernetes        (or: ansible-playbook kubernetes.yml --check --diff)
 # Without a cluster (no kubernetes_node_addresses in group_vars/all/local.yml) nothing happens: no VM is created,
-# and the second play ends by itself. Run proxmox.yml first, so the storages the VMs' disks go on exist. Moving
-# a running cluster to new pins is talos-upgrade.yml's job, never this one's.
+# and the second play ends by itself. Run proxmox.yml first, so the storages the VMs' disks go on exist. The first
+# play finds the GPU the worker is given, as proxmox.yml does (roles/proxmox_gpu), so a card added or taken out is
+# followed by this run alone; the second reads which it found. Moving a running cluster to new pins is
+# talos-upgrade.yml's job, never this one's.
 - name: Create the cluster's VMs
   hosts: proxmox
   gather_facts: false
@@ -32,6 +34,7 @@
         quiet: true
       tags: [always]
   roles:
+    - role: proxmox_gpu
     - role: proxmox_vm
 
 - name: Build Talos on the cluster's VMs
@@ -59,6 +62,16 @@
       ansible.builtin.meta: end_host
       when: not kubernetes_present
       tags: [always]
+    # The worker's schematic and label follow the GPU the Proxmox play found in this same run (kubernetes_gpu_found):
+    # a run that left that play out, with --limit or tags, would read no GPU and take them away. Not tagged always,
+    # so it holds whenever the roles below run.
+    - name: Refuse to render Talos without the Proxmox play's GPU
+      ansible.builtin.assert:
+        that: hostvars[groups['proxmox'][0]].proxmox_gpu_selected is defined
+        fail_msg: >-
+          The worker's Talos follows the GPU the Proxmox play finds first, in the same run, and this run left that
+          play out: run the whole playbook, without a --limit or tags that skip it.
+        quiet: true
   roles:
     - role: talos
     - role: flux_bootstrap

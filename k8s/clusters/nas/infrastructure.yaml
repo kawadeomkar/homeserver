@@ -130,8 +130,8 @@ spec:
       - kind: ConfigMap
         name: cluster-settings
 ---
-# Intel's GPU plugin, vendored (k8s/infrastructure/gpu/README.md): it runs only on the node labelled for the iGPU, so
-# with none it runs nowhere.
+# Intel's GPU plugin, vendored (k8s/infrastructure/gpu/README.md): it runs only on the node labelled for an Intel
+# GPU, so with none it runs nowhere.
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
