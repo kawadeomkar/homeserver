@@ -60,7 +60,8 @@ SECURITY.md              how to report a vulnerability privately
 `inventory`, `group_vars/all/local.yml`, the vault (`group_vars/all/local.vault.yml`) and `./.vault_pass` are
 gitignored and must be created locally: `make init` copies `inventory` from its example and writes `local.yml` from
 its example, every setting commented out, then asks for every setting a deployment needs, one by one, and ends with
-what is still missing; `make vault TYPE=new` makes the other two ([The vault](#the-vault)). Run `make init` again
+what is still missing; `make vault TYPE=new` makes the other two. Each machine's three can also be kept as a named
+setup outside the checkout, and switched ([Setups and the vault](#setups-and-the-vault)). Run `make init` again
 whenever a setting changes: each shows its value, and Enter keeps it. A plain run asks for the required and the
 popular optional settings; `make init TYPE=full` for every one.
 No address is ever written in a tracked file: tasks and role defaults read them from variables whose real
@@ -118,7 +119,7 @@ The roles are generic and change nothing by default; this setup's configuration 
 (`all/storage.yml`, `nas/truenas.yml`, `proxmox/apt.yml`, `proxmox/tailscale.yml`, `proxmox/storage.yml`), with
 addresses and serials in the git-ignored `all/local.yml`. Each role's `README.md` describes its variables.
 
-### The vault
+### Setups and the vault
 
 Secrets go in the vault, `group_vars/all/local.vault.yml`, an Ansible Vault file encrypted with the password in
 `.vault_pass`, which `ansible.cfg` names: `vault_truenas_api_key` with a NAS, `vault_truenas_mail_password` with alert
@@ -136,6 +137,32 @@ make vault            # add or change a secret
 your secrets with their password lost. The vault and its password exist nowhere else: keep a copy of both in your
 password manager, and restore them rather than make new ones. (A cluster's secrets bundle is never in the vault: it
 lives in `~/.talos/homeserver`, `scripts/runbooks/talos.md`.)
+
+#### Several machines
+
+A setup is the three files that say which machines a run touches and with what secrets: `local.yml`, the vault and
+`.vault_pass`. A checkout can keep its own, as above, or use one of several named setups, kept together outside it in
+`~/.config/homeserver/setups/<name>/` (under `$XDG_CONFIG_HOME` when that is set; `SETUPS=<dir>` names another place)
+and linked in at the same three paths, so Ansible, `ansible-vault` and git see what they always did:
+
+```bash
+make vault TYPE=new NAME=home FROM=current  # this checkout's own three files become setup home, linked back in
+make vault TYPE=new NAME=lab                # a new setup: local.yml to fill in, an empty vault, a new password; then used
+make init                                   # its settings and secrets; the first question is the setup, and Enter keeps it
+make vault TYPE=list                        # every setup, the one in use marked, whether its vault opens, how many keys
+make vault TYPE=switch NAME=home            # this checkout uses home's three files
+make vault NAME=lab                         # edit lab's vault, with lab's password, without switching
+```
+
+Every playbook run names its setup first (`Setup: home (~/.config/homeserver/setups/home)`), and its log's name
+carries it. Ansible skips a link to a missing file without a word, as if there were no settings or no secrets, so a
+run whose links are not whole stops before anything else, naming the setup and the file. Nothing deletes a setup or
+replaces a file of the checkout's own: `TYPE=switch` and `TYPE=new` refuse a checkout that still has its own files
+until `FROM=current` makes them a setup, and `TYPE=switch` refuses a setup with a file missing or a vault its password
+does not open. Switching never changes the checkout's branch: what else differs between machines is named in each
+setup's `local.yml`, the branch Flux deploys (`flux_sync_ref`), the cluster's credentials directory
+(`kubernetes_talos_config_dir`) and its age key (`sops_age_key_file`). The setups directory holds the only copy of
+each setup's vault: keep a copy of it in your password manager.
 
 Until 2026-10-20 the vault was committed, as `group_vars/all/vault.yml`, and the commits from then keep that
 ciphertext. A checkout from before then moves its vault once, before pulling (the `update-index` line only matters
@@ -172,7 +199,7 @@ names the settings it found.
 
 Two things still apply. The inventory keeps the `truenas` host: the addresses decide whether a NAS exists,
 not the inventory. And every run decrypts the vault, so a vault and its `.vault_pass` must exist even when they hold
-nothing this setup uses: `make vault TYPE=new` makes both ([The vault](#the-vault)).
+nothing this setup uses: `make vault TYPE=new` makes both ([Setups and the vault](#setups-and-the-vault)).
 
 This mode is covered by the fake-backed tests and the argument-spec pass in both modes; the maintainer's own
 setup has a NAS.
@@ -338,7 +365,8 @@ Zigbee stick) and what comes after.
 `scripts/runbooks/REBUILD.md` is the recovery procedure. A reinstalled NAS needs a new API user and key and an
 updated certificate pin before Ansible can reach it, and a reinstalled Proxmox host needs root SSH access. Keep a
 copy of what is not in this repo in your password manager: `group_vars/all/local.yml`, the vault
-(`group_vars/all/local.vault.yml`) and `.vault_pass`; with a cluster, also the age key
+(`group_vars/all/local.vault.yml`) and `.vault_pass`, or with named setups their directory,
+`~/.config/homeserver/setups`; with a cluster, also the age key
 (`~/.config/sops/age/homeserver.agekey`) and `~/.talos/homeserver`, whose `secrets.yaml` is every key of the cluster.
 
 ## Manifests
