@@ -131,6 +131,14 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 
       Then compare `tailscale status --json` and `tailscale get --json` on the host with `fake_tailscale.py`, which
       was written from a 1.102 client, and fix the fake where they differ
+- [ ] A `make` target that prints the tailnet's policy for this setup as JSON, to copy and paste into the admin
+      console's Access controls: section 1 of `scripts/runbooks/tailscale.md` rendered from `local.yml` (the LAN's
+      prefix from `tailscale_advertise_routes`, the NAS's addresses, the Proxmox host's, the tag from
+      `proxmox_tailscale_tags`), with or without a NAS, and its `tests` with the owner's login (asked for, or a
+      `local.yml` setting). The console saves the whole policy at once, so the output says which sections to merge
+      into a policy that already has others, such as another project's tags and grants (`claude-on-proxmox`'s
+      `tag:claude-vm`), rather than replace it. The runbook's section 1 then points at the target instead of its
+      placeholder JSON
 
 ## Bringing the apps up
 
