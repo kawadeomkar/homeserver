@@ -968,7 +968,9 @@ def without(settings, *names):
                         "data_disk_gib": 11,
                         "media_disk_gib": 11,
                     },
-                }
+                },
+                # What such a worker holds: the platform, Homepage and Nextcloud (scripts/runbooks/talos.md).
+                "kubernetes_apps": ["group=homepage", "group=nextcloud"],
             },
             [],
             id="proxmox-only-smallest-sizes",

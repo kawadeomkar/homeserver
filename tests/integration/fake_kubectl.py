@@ -219,10 +219,11 @@ def reconcile_flux(state):
             target = patch.get("target") or {}
             if target.get("kind") != "Kustomization" or not re.fullmatch(target.get("name", ""), name):
                 continue
-            if "$patch: delete" in patch["patch"]:
+            body = yaml.safe_load(patch["patch"])
+            if isinstance(body, dict) and body.get("$patch") == "delete":
                 dropped = True
             else:
-                for op in yaml.safe_load(patch["patch"]):
+                for op in body:
                     if op["op"] == "add" and op["path"] == "/spec/patches":
                         child_patches = op["value"]
         if dropped:

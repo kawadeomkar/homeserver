@@ -117,20 +117,17 @@ kubernetes_apps_enabled: >-
   {%-   set _ = every.extend(apps.keys() | list) -%}
   {%- endfor -%}
   {%- set chosen = kubernetes_apps | default(none) -%}
-  {%- if chosen is none -%}
-  {{ every }}
-  {%- else -%}
-  {%-   set on = [] -%}
-  {%-   for entry in (chosen if chosen is iterable and chosen is not string and chosen is not mapping else []) -%}
-  {%-     set parts = (entry | string).split('=', 1) -%}
-  {%-     if parts[0] == 'group' and parts | length == 2 and parts[1] in kubernetes_app_catalogue -%}
-  {%-       set _ = on.extend(kubernetes_app_catalogue[parts[1]].keys() | list) -%}
-  {%-     elif parts[0] == 'app' and parts | length == 2 and parts[1] in every -%}
-  {%-       set _ = on.append(parts[1]) -%}
-  {%-     endif -%}
-  {%-   endfor -%}
-  {{ every | select('in', on) | list }}
-  {%- endif -%}
+  {%- set on = [] -%}
+  {%- for entry in ([] if chosen is none or chosen is string or chosen is mapping or chosen is not iterable
+                    else chosen) -%}
+  {%-   set parts = (entry | string).split('=', 1) -%}
+  {%-   if parts[0] == 'group' and parts | length == 2 and parts[1] in kubernetes_app_catalogue -%}
+  {%-     set _ = on.extend(kubernetes_app_catalogue[parts[1]].keys() | list) -%}
+  {%-   elif parts[0] == 'app' and parts | length == 2 and parts[1] in every -%}
+  {%-     set _ = on.append(parts[1]) -%}
+  {%-   endif -%}
+  {%- endfor -%}
+  {{ every if chosen is none else every | select('in', on) | list }}
 # What make down and make up are told this host leaves out, so they can say so: the groups none of whose apps run,
 # and the apps that don't, their databases included.
 kubernetes_apps_disabled_names: >-

@@ -201,12 +201,14 @@ kubernetes_node_sizes:
   homeserver-cp-1: {cores: 2, memory_mib: 2048, system_disk_gib: 10}
   homeserver-worker-1: {cores: 2, memory_mib: 6144, system_disk_gib: 32, data_disk_gib: 11, media_disk_gib: 0}
 kubernetes_media_on_data_volume: true
+kubernetes_apps: [group=homepage]
 kubernetes_talos_config_dir: ~/.talos/homeserver-test
 sops_age_key_file: ~/.config/sops/age/homeserver-test.agekey
 ```
 
 That is about 8 GiB of memory and 53 GiB of disk on the installer's storage, which the disk budget counts with the
-host's other VMs' disks.
+host's other VMs' disks. A 6 GiB worker holds the platform and Homepage, which needs no Secret, with room for Nextcloud
+or the media apps; every app would be refused (`kubernetes_apps`, below).
 
 A run refuses a directory that holds another cluster's talosconfig or kubeconfig, so leaving the setting out stops
 at the first task that would use them. Give the test cluster a secrets bundle of its own too, never the home
