@@ -35,12 +35,12 @@ kubernetes_iso_schematic: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f2798332979
 kubernetes_iso_sha256: d541f989abd3fe5ba9a9d4ec66be7c2a29da6b90f540881c966e0fb5192151b9
 talos_schematic_pins:
   base: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
-  gpu: 1ced7e2625c2a315e204530da2daf7a99cc0612fe4392c8ac110eb12f5a54053
+  gpu: 42e8758fe0eb30418e375c5e4846ca294fa941405b631d815ac09e64092b1995
 talos_installer_digests:
   ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.14.2: >-
     sha256:88d11931b80041b53e54724728f6a59ea6580949d73ee3298da8f07329c94835
-  1ced7e2625c2a315e204530da2daf7a99cc0612fe4392c8ac110eb12f5a54053:v1.14.2: >-
-    sha256:5d4ce2585153d6847090c1349b5ba4e5dcc9bd2b326b4485461f11ca7e32e95e
+  42e8758fe0eb30418e375c5e4846ca294fa941405b631d815ac09e64092b1995:v1.14.2: >-
+    sha256:05a1d9e213d5fb5103301cd34f1d4074bba957a6580fbed44b6545637adf5ad8
 # The Proxmox storage the ISO is downloaded to: the installer's local, which holds ISOs on an LVM or ZFS install. A
 # BTRFS install disables local and keeps ISOs on local-btrfs, which local.yml then names (it is read after this
 # file, so its value wins).
@@ -50,8 +50,8 @@ kubernetes_iso_storage: local
 # that runs every app and holds their data disk. Only where the worker's disks live depends on the NAS: its data disk
 # on the NAS with one, and with an optional media disk on the host's own storage without one
 # (group_vars/proxmox/vms.yml). The sizes fit the home host; local.yml's kubernetes_node_sizes changes them per node,
-# never here, and without a NAS it must size the worker to the host. Whether the worker gets the host's iGPU is per
-# host too, so it comes from local.yml (kubernetes_gpu_mapping).
+# never here, and without a NAS it must size the worker to the host. Which GPU the worker gets, if any, is per host
+# too: the Proxmox play finds it (kubernetes_gpu_found, below).
 kubernetes_node_shape:
   - {name: homeserver-cp-1, role: controlplane, vmid: 300, cores: 2, memory_mib: 4096,
      system_disk_gib: 32, data_disk_gib: 0, media_disk_gib: 0}
@@ -81,6 +81,23 @@ kubernetes_media_disk: "{{ (kubernetes_worker.media_disk_gib | default(0) | int)
 kubernetes_power_order: >-
   {{ kubernetes_nodes | rejectattr('role', 'equalto', 'controlplane') | map(attribute='vmid') | list
      + kubernetes_nodes | selectattr('role', 'equalto', 'controlplane') | map(attribute='vmid') | list }}
+
+# The GPUs the cluster can use, by PCI vendor id: Intel's, iGPUs and Arc cards alike, through Intel's GPU plugin
+# (k8s/infrastructure/gpu/), which runs on the node carrying the label. The worker boots the schematic named here.
+# AMD's (1002) and NVIDIA's (10de) are not supported yet, so the Proxmox play leaves them alone.
+kubernetes_gpu_vendors:
+  "8086": {label: intel, schematic: gpu}
+# The GPU the Proxmox play found for the worker in this run (roles/proxmox_gpu's proxmox_gpu_selected): {} for none,
+# and in a playbook that does not look, which is why kubernetes.yml and talos-upgrade.yml both look first.
+kubernetes_gpu_found: >-
+  {{ (hostvars[groups['proxmox'][0]].proxmox_gpu_selected | default({}, true))
+     if groups['proxmox'] | default([]) else {} }}
+# The kernel driver the worker binds to it, which Intel's plugin names its resource after (gpu.intel.com/<driver>):
+# i915 when it claims the device, as it does every Intel iGPU before Lunar Lake and Arc's A-series, else xe (Arc's
+# B-series, Lunar Lake and newer). The host's kernel answers for the worker's, both a Linux of the same years.
+kubernetes_gpu_driver: >-
+  {{ 'i915' if 'i915' in kubernetes_gpu_found.drivers | default([])
+     else 'xe' if 'xe' in kubernetes_gpu_found.drivers | default([]) else '' }}
 
 # The apps answer at <app>.<domain>, unless local.yml names another domain (kubernetes_domain).
 kubernetes_domain_default: homeserver.internal
@@ -115,7 +132,7 @@ kubernetes_data_storage: "{{ vm_storage_classes.persistent.proxmox_id if nas_pre
 #   - without a NAS, a worker without every size, since the defaults fit the home host, or without a media disk
 #     (unless media goes on the data volume, when its size may be left out), or with both;
 #   - in any setup, the Talos secrets bundle in the vault (vault_talos_secrets), where this public repository
-#     would publish it: it lives in talos_config_dir.
+#     would publish it: it lives in talos_config_dir; and kubernetes_gpu_mapping, which make proxmox now keeps itself.
 kubernetes_settings_error: >-
   {%- set out = [] -%}
   {%- set given = {'kubernetes_node_macs': kubernetes_node_macs | default(''),
@@ -125,7 +142,7 @@ kubernetes_settings_error: >-
                    'kubernetes_lb_frigate_ip': kubernetes_lb_frigate_ip | default(''),
                    'kubernetes_domain': kubernetes_domain | default(''),
                    'kubernetes_media_on_data_volume': kubernetes_media_on_data_volume | default(''),
-                   'kubernetes_gpu_mapping': kubernetes_gpu_mapping | default(''),
+                   'kubernetes_gpu': kubernetes_gpu | default(''),
                    'kubernetes_api_sans': kubernetes_api_sans | default(''),
                    'kubernetes_talos_config_dir': kubernetes_talos_config_dir | default(''),
                    'sops_age_key_file': sops_age_key_file | default(''),
@@ -389,6 +406,12 @@ kubernetes_settings_error: >-
                                ~ 'on the NAS. Remove it from group_vars/all/local.yml.') -%}
   {%-     endif -%}
   {%-   endif -%}
+  {%- endif -%}
+  {%- if kubernetes_gpu_mapping is defined -%}
+  {%-   set _ = out.append('kubernetes_gpu_mapping is gone: make proxmox now finds the GPU and keeps its PCI mapping '
+                           ~ 'itself (scripts/runbooks/gpu.md). Delete it from group_vars/all/local.yml; to pass the '
+                           ~ "host's iGPU, which is its console, set kubernetes_gpu to its address instead, such as "
+                           ~ '0000:00:02.0.') -%}
   {%- endif -%}
   {%- if vault_talos_secrets is defined -%}
   {%-   set _ = out.append('The vault holds vault_talos_secrets, the Talos secrets bundle: every key of the cluster, which '

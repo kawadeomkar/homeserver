@@ -22,6 +22,7 @@ import http.server
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -1158,14 +1159,98 @@ def fake_pve_command(state, *argv):
     return subprocess.run([HERE / "fake_pve_bin" / argv[0], *argv[1:]], env=env, capture_output=True, text=True)
 
 
+# A host's PCI devices, made up, as `pvesh get /nodes/<node>/hardware/pci --pci-class-blacklist ""` lists them, with
+# the driver holding each and the modules that claim it (the fake modprobe's --resolve-alias): an iGPU that is the
+# console, and an Arc card behind a root port, its audio function beside it.
+IGPU = {
+    "id": "0000:00:02.0",
+    "class": "0x030000",
+    "vendor": "0x8086",
+    "device": "0xa780",
+    "iommugroup": 0,
+    "subsystem_vendor": "0x1458",
+    "subsystem_device": "0xd000",
+    "vendor_name": "Intel Corporation",
+    "device_name": "UHD Graphics 770",
+    "driver": "i915",
+    "modules": ["i915"],
+}
+ROOT_PORT = {
+    "id": "0000:00:01.0",
+    "class": "0x060400",
+    "vendor": "0x8086",
+    "device": "0xa70d",
+    "iommugroup": 2,
+    "driver": "pcieport",
+}
+ARC = {
+    "id": "0000:03:00.0",
+    "class": "0x030000",
+    "vendor": "0x8086",
+    "device": "0xe20b",
+    "iommugroup": 2,
+    "subsystem_vendor": "0x8086",
+    "subsystem_device": "0x1100",
+    "vendor_name": "Intel Corporation",
+    "device_name": "Arc B580",
+    "driver": "xe",
+    "modules": ["xe"],
+}
+ARC_AUDIO = {
+    "id": "0000:03:00.1",
+    "class": "0x040300",
+    "vendor": "0x8086",
+    "device": "0xe2f7",
+    "iommugroup": 2,
+    "subsystem_vendor": "0x8086",
+    "subsystem_device": "0x1100",
+    "driver": "snd_hda_intel",
+    "modules": ["snd_hda_intel"],
+}
+
+
+def seed_pci(tmp_path, state, devices, iommu=True, console="0000:00:02.0"):
+    """The fake host's PCI devices: Proxmox's list and the modules that claim each in the state, and the sysfs tree
+    the role reads (an IOMMU unit, and each device's boot_vga, driver link and modalias), made anew."""
+    root = tmp_path / "sysfs"
+    shutil.rmtree(root, ignore_errors=True)
+    (root / "class" / "iommu").mkdir(parents=True)
+    if iommu:
+        (root / "class" / "iommu" / "dmar0").mkdir()
+    (root / "bus" / "pci" / "devices").mkdir(parents=True)
+    aliases = {}
+    for device in devices:
+        folder = root / "bus" / "pci" / "devices" / device["id"]
+        folder.mkdir()
+        alias = f"pci:v0000{device['vendor'][2:].upper()}d0000{device['device'][2:].upper()}bc{device['class'][2:4]}"
+        (folder / "modalias").write_text(alias + "\n")
+        if device["class"].startswith("0x03"):
+            (folder / "boot_vga").write_text("1\n" if device["id"] == console else "0\n")
+        if device.get("driver"):
+            (folder / "driver").symlink_to(f"../../../bus/pci/drivers/{device['driver']}")
+        if device.get("modules"):
+            aliases[alias] = device["modules"]
+    s = read(state)
+    s["pci"] = [{k: v for k, v in d.items() if k not in ("driver", "modules")} for d in devices]
+    s["aliases"] = aliases
+    write(state, s)
+
+
 def cluster_vars(tmp_path, nas=True, **more):
     """The kubernetes test playbook's variables: the same two nodes in both setups; without a NAS, sized for a small
-    host, the worker with a media disk."""
+    host, the worker with a media disk. The GPU role reads the test's sysfs tree, a host without a GPU until a test
+    seeds one, and writes its modprobe.d file in the test's directory."""
+    if not (tmp_path / "sysfs").exists():
+        (tmp_path / "sysfs" / "bus" / "pci" / "devices").mkdir(parents=True)
+        (tmp_path / "sysfs" / "class" / "iommu").mkdir(parents=True)
+    (tmp_path / "modprobe.d").mkdir(exist_ok=True)
     extra = {
         "fake_pve_state": str(tmp_path / "pve.json"),
         "truenas_static_address": "127.0.0.10/24" if nas else "",
         "kubernetes_node_addresses": NODE_ADDRESSES,
         "kubernetes_node_macs": NODE_MACS,
+        "proxmox_gpu_sysfs": str(tmp_path / "sysfs"),
+        "proxmox_gpu_modprobe_file": str(tmp_path / "modprobe.d" / "proxmox-gpu.conf"),
     }
     if not nas:
         extra["kubernetes_node_sizes"] = SMALL_SIZES
@@ -1262,24 +1347,62 @@ def test_proxmox_vm_with_a_nas(tmp_path):
     assert re.search(r'"301":\s*\[[^\]]*"boot"', result[2]), result[2][-3000:]
     expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="a system disk replaced, again")
 
-    # The iGPU passed to the running worker: the PCI device waits for a restart, and is reported until then.
-    s = read(state)
-    s["pci_mappings"] = ["igpu"]
-    write(state, s)
-    gpu = extra | {"kubernetes_gpu_mapping": "igpu"}
-    result = run("kubernetes.yml", gpu)
-    expect(result, "homeserver", changed=1, note="the iGPU for the running worker")
-    assert vms_of(state)["301"]["pending"]["hostpci0"] == "mapping=igpu,pcie=1" and "hostpci0" not in str(
-        vms_of(state)["300"]
-    )
+    # A host whose only GPU is its console: auto leaves it alone, and says how to pass it.
+    seed_pci(tmp_path, state, [IGPU])
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=0, note="an iGPU that is the console")
+    assert "set kubernetes_gpu in group_vars/all/local.yml to 0000:00:02.0 to pass it anyway" in result[2]
+    assert "hostpci0" not in str(vms_of(state)) and not read(state).get("pci_mappings")
+
+    # An Arc card added: auto passes it, every function, to the running worker through the mapping it creates, which
+    # a dry run shows first. The host's drivers are kept off it from the next boot, which every run says until then;
+    # the PCI device waits for the worker's restart, and is reported until then.
+    seed_pci(tmp_path, state, [IGPU, ROOT_PORT, ARC, ARC_AUDIO])
+    mutations = read(state)["mutations"]
+    result = run("kubernetes.yml", extra, check=True)
+    expect(result, "homeserver", changed=True, note="dry run with a GPU")
+    assert (
+        "PCI mapping homeserver-gpu: create (node=pve,path=0000:03:00,id=8086:e20b,subsystem-id=8086:1100,"
+        in (result[2])
+    ), result[2][-3000:]
+    assert read(state)["mutations"] == mutations and not (tmp_path / "modprobe.d" / "proxmox-gpu.conf").exists()
+    result = run("kubernetes.yml", extra)
+    expect(result, "homeserver", changed=4, note="a GPU for the running worker")
+    assert "GPU for the VM: Intel Corporation Arc B580 at 0000:03:00.0, claimed by xe" in result[2], result[2][-3000:]
+    assert "The host's own drivers hold 0000:03:00.0 (xe), 0000:03:00.1 (snd_hda_intel): reboot the host" in result[2]
+    assert read(state)["pci_mappings"]["homeserver-gpu"]["map"] == [
+        "node=pve,path=0000:03:00,id=8086:e20b,subsystem-id=8086:1100,iommugroup=2"
+    ]
+    assert (tmp_path / "modprobe.d" / "proxmox-gpu.conf").read_text().splitlines()[1:] == [
+        "options vfio-pci ids=8086:e20b:8086:1100,8086:e2f7:8086:1100",
+        "softdep snd_hda_intel pre: vfio-pci",
+        "softdep xe pre: vfio-pci",
+    ]
+    assert read(state)["initramfs_updates"] == 1
+    assert vms_of(state)["301"]["pending"]["hostpci0"] == "mapping=homeserver-gpu,pcie=1"
+    assert "hostpci0" not in str(vms_of(state)["300"])
     assert re.search(r'"301":\s*\[[^\]]*"hostpci0"', result[2]), result[2][-3000:]
-    expect(run("kubernetes.yml", gpu), "homeserver", changed=0, note="the iGPU, again")
-    restart_all(state)
-    # Taken away again: removed at the next restart too.
-    expect(run("kubernetes.yml", extra), "homeserver", changed=1, note="the iGPU taken away")
-    restart_all(state)
-    assert "hostpci0" not in vms_of(state)["301"]["config"]
-    expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="the iGPU taken away, again")
+    expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="the GPU, again")
+    # Proxmox checks the mapping against the card as it starts the worker.
+    assert fake_pve_command(state, "qm", "shutdown", "301").returncode == 0
+    started = fake_pve_command(state, "qm", "start", "301")
+    assert started.returncode == 0, started.stderr
+    assert vms_of(state)["301"]["config"]["hostpci0"] == "mapping=homeserver-gpu,pcie=1"
+
+    # The card taken out while the worker was off: Proxmox refuses to start it, and the next run drops the device so
+    # it starts, on the CPU, keeping the mapping for the card's return; the host's drivers are no longer kept off.
+    assert fake_pve_command(state, "qm", "shutdown", "301").returncode == 0
+    seed_pci(tmp_path, state, [IGPU])
+    started = fake_pve_command(state, "qm", "start", "301")
+    assert started.returncode != 0 and "PCI device mapping invalid (hardware probably changed): pci device" in (
+        started.stderr
+    ), started.stderr
+    expect(run("kubernetes.yml", extra), "homeserver", changed=True, note="the GPU taken out")
+    worker = vms_of(state)["301"]
+    assert worker["status"] == "running" and "hostpci0" not in worker["config"], worker
+    assert not (tmp_path / "modprobe.d" / "proxmox-gpu.conf").exists() and read(state)["initramfs_updates"] == 2
+    assert "homeserver-gpu" in read(state)["pci_mappings"]
+    expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="the GPU taken out, again")
 
     # A disk configured larger is grown; one configured smaller is refused, before anything changes.
     grown = extra | {"kubernetes_node_sizes": {"homeserver-worker-1": {"system_disk_gib": 80}}}
@@ -1583,7 +1706,10 @@ def factory():
 
 
 # The schematics of group_vars/kubernetes/talos.yml, and the digest the tests pin every installer image to.
-SCHEMATICS = {"base": ["siderolabs/qemu-guest-agent"], "gpu": ["siderolabs/qemu-guest-agent", "siderolabs/i915"]}
+SCHEMATICS = {
+    "base": ["siderolabs/qemu-guest-agent"],
+    "gpu": ["siderolabs/qemu-guest-agent", "siderolabs/i915", "siderolabs/xe"],
+}
 INSTALLER_DIGEST = "sha256:" + "0" * 63 + "2"
 
 
@@ -2110,6 +2236,17 @@ def test_talos_upgrade_and_etcd_snapshot(tmp_path, factory):
 
     # After the upgrade, a normal run renders with the versions now running: no drift.
     expect(run("talos.yml", bumped, check=True, env=env), "homeserver-k8s", changed=0, note="dry run after upgrading")
+
+    # The Proxmox play found the worker a GPU (talos-upgrade.yml asks it first): the worker alone moves to the GPU
+    # schematic, at the same version.
+    gpu = bumped | {"proxmox_gpu_selected": {"vendor": "8086", "drivers": ["i915"], "address": "0000:00:02.0"}}
+    result = run("talos_upgrade.yml", gpu, env=env)
+    expect(result, "homeserver-k8s", changed=True, note="talos-upgrade to the GPU schematic")
+    s = read(state)
+    assert s["upgrades"][2:] == ["127.0.0.31"], s["upgrades"]
+    assert s["nodes"]["127.0.0.31"]["schematic"] == schematic_id(SCHEMATICS["gpu"])
+    assert s["nodes"]["127.0.0.30"]["schematic"] == schematic_id(SCHEMATICS["base"])
+    expect(run("talos_upgrade.yml", gpu, env=env), "homeserver-k8s", changed=0, note="the GPU schematic, again")
 
 
 # ------------------------------------------------------------------------------------------------- Flux ---

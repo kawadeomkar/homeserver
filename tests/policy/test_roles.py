@@ -218,12 +218,12 @@ NO_BACKUP = "are not backed up, because this setup has no NAS"
 @pytest.mark.parametrize(
     ("local_yml", "extra", "validations", "present", "absent"),
     [
-        pytest.param(None, CLUSTER_ARGS, 10, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas-cluster-haos"),
-        pytest.param(EXAMPLE_LOCAL_YML, (), 6, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas"),
+        pytest.param(None, CLUSTER_ARGS, 12, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas-cluster-haos"),
+        pytest.param(EXAMPLE_LOCAL_YML, (), 8, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas"),
         pytest.param(
             EXAMPLE_LOCAL_YML + TAILSCALE_LOCAL_YML,
             (),
-            6,
+            8,
             [NAS_PLAY_RUNS[0], TAILSCALE_CHECK],
             [NO_BACKUP],
             id="nas-tailscale",
@@ -231,18 +231,18 @@ NO_BACKUP = "are not backed up, because this setup has no NAS"
         pytest.param(
             PROXMOX_ONLY_CLUSTER_LOCAL_YML,
             CLUSTER_ARGS,
-            9,
+            11,
             [*NAS_PLAY_ENDS, NO_BACKUP, TAILSCALE_CHECK],
             NAS_ROLE,
             id="proxmox-only-cluster-haos",
         ),
         pytest.param(
-            PROXMOX_ONLY_LOCAL_YML, (), 5, [*NAS_PLAY_ENDS, TAILSCALE_CHECK], [*NAS_ROLE, NO_BACKUP], id="proxmox-only"
+            PROXMOX_ONLY_LOCAL_YML, (), 7, [*NAS_PLAY_ENDS, TAILSCALE_CHECK], [*NAS_ROLE, NO_BACKUP], id="proxmox-only"
         ),
         pytest.param(
             PROXMOX_ONLY_LOCAL_YML + f'haos_mac: "{mac(9)}"\n',
             (),
-            7,
+            9,
             [*NAS_PLAY_ENDS, NO_BACKUP, TAILSCALE_CHECK],
             NAS_ROLE,
             id="proxmox-only-haos",
@@ -250,13 +250,13 @@ NO_BACKUP = "are not backed up, because this setup has no NAS"
         pytest.param(
             PROXMOX_ONLY_LOCAL_YML + TAILSCALE_LOCAL_YML,
             (),
-            5,
+            7,
             [NAS_PLAY_ENDS[0], TAILSCALE_CHECK],
             ["TASK [truenas :", NO_BACKUP],
             id="proxmox-only-tailscale",
         ),
         pytest.param(
-            blank_nas_local_yml(), (), 5, NAS_PLAY_ENDS, [*NAS_ROLE, NO_BACKUP], id="proxmox-only-blank-values"
+            blank_nas_local_yml(), (), 7, NAS_PLAY_ENDS, [*NAS_ROLE, NO_BACKUP], id="proxmox-only-blank-values"
         ),
     ],
 )
@@ -298,7 +298,7 @@ def test_inventory_without_the_nas_host(tmp_path):
     rc, out = argspec_pass(tree)
     assert rc == 0, out[-3000:]
     assert "skipping: no hosts matched" in out, out[-3000:]
-    assert out.count("Validating arguments against arg spec 'main'") == 5, out[-3000:]
+    assert out.count("Validating arguments against arg spec 'main'") == 7, out[-3000:]
 
 
 @pytest.mark.parametrize("playbook", ["site.yml", "talos-upgrade.yml", "etcd-snapshot.yml", "down.yml", "up.yml"])
@@ -562,6 +562,7 @@ def test_flux_settings_resolve_on_the_kubernetes_host(tmp_path, local_yml, path,
     common = {"DOMAIN", "TZ", "LB_RANGE", "LB_TRAEFIK_IP", "LB_FRIGATE_IP", "DATA_NODE"}
     common |= {
         "GPU_I915",
+        "GPU_XE",
         "FRIGATE_DETECTOR_DEVICE",
         "INGRESS_ALLOWED_RANGE",
         "EGRESS_DENIED_ADDRESS",
@@ -1159,6 +1160,18 @@ def without(settings, *names):
             ["kubernetes_lb_traefik_ip must be an IPv4 address, such as 192.0.2.40, not 192.0.2.400."],
             id="lb-address-out-of-bounds",
         ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_gpu_mapping": "igpu"},
+            ["kubernetes_gpu_mapping is gone: make proxmox now finds the GPU and keeps its PCI mapping itself"],
+            id="gpu-mapping-of-before",
+        ),
+        pytest.param(
+            PROXMOX_ONLY_LOCAL_YML,
+            {"kubernetes_gpu": "auto"},
+            ["group_vars/all/local.yml sets kubernetes_gpu but no kubernetes_node_addresses"],
+            id="gpu-without-a-cluster",
+        ),
     ],
 )
 def test_kubernetes_settings_are_checked(tmp_path, local_yml, extra, expected):
@@ -1248,27 +1261,95 @@ def test_home_assistant_url_is_a_setting_only_when_given(tmp_path):
     assert settings["HAOS_URL"] == "http://homeassistant.home.arpa:8123"
 
 
+# What roles/proxmox_gpu leaves in proxmox_gpu_selected, in part: an iGPU the i915 driver runs, and an Arc B-series
+# card xe runs.
+FOUND_I915 = {"vendor": "8086", "address": "0000:00:02.0", "drivers": ["i915"]}
+FOUND_XE = {"vendor": "8086", "address": "0000:03:00.0", "drivers": ["xe"]}
+
+
 @pytest.mark.parametrize("local_yml", [None, PROXMOX_ONLY_CLUSTER_LOCAL_YML], ids=["nas", "proxmox-only"])
-@pytest.mark.parametrize("mapping", ["", "igpu"], ids=["no-gpu", "gpu"])
-def test_gpu_follows_local_yml(tmp_path, local_yml, mapping):
-    """Whether the host passes an iGPU through is per host: local.yml's kubernetes_gpu_mapping. The worker alone gets
-    the PCI device, the GPU schematic and its label, in both setups, and the apps' settings ask for the device or for
-    none; the manifests stay the same either way."""
+@pytest.mark.parametrize(
+    ("found", "settings"),
+    [
+        pytest.param({}, ("0", "0", "CPU"), id="no-gpu"),
+        pytest.param(FOUND_I915, ("1", "0", "GPU"), id="i915"),
+        pytest.param(FOUND_XE, ("0", "1", "CPU"), id="xe"),
+    ],
+)
+def test_gpu_follows_what_the_proxmox_play_found(tmp_path, local_yml, found, settings):
+    """The GPU the Proxmox play found (roles/proxmox_gpu, on the Proxmox host): the worker alone gets the PCI device
+    through the role's mapping, its vendor's schematic and label, in both setups; the apps' settings ask for the device
+    under its driver's name, or for none, and Frigate detects on an i915 one. The manifests stay the same either
+    way."""
     tree = example_tree(tmp_path, local_yml)
-    given = json.dumps({**CLUSTER_VARS, "kubernetes_gpu_mapping": mapping})
+    given = json.dumps({**CLUSTER_VARS, "proxmox_gpu_selected": found})
     vms = resolve_on(tree, "homeserver", "proxmox_vm_vms", "-e", given)
     worker = "homeserver-worker-1"
     assert {vm["name"]: vm["hostpci"] for vm in vms} == {
-        vm["name"]: ([{"mapping": "igpu", "pcie": True}] if mapping and vm["name"] == worker else []) for vm in vms
+        vm["name"]: ([{"mapping": "homeserver-gpu", "pcie": True}] if found and vm["name"] == worker else [])
+        for vm in vms
     }
     nodes = resolve_on(tree, "homeserver-k8s", "talos_nodes", "-e", given)
     assert {n["name"]: n["schematic"] for n in nodes} == {
-        n["name"]: ("gpu" if mapping and n["name"] == worker else "base") for n in nodes
+        n["name"]: ("gpu" if found and n["name"] == worker else "base") for n in nodes
     }
     labelled = [n["name"] for n in nodes if any("homeserver.internal/gpu: intel" in p for p in n["patches"])]
-    assert labelled == ([worker] if mapping else [])
-    settings = resolve_on(tree, "homeserver-k8s", "flux_bootstrap_settings", "-e", given)
-    assert (settings["GPU_I915"], settings["FRIGATE_DETECTOR_DEVICE"]) == (("1", "GPU") if mapping else ("0", "CPU"))
+    assert labelled == ([worker] if found else [])
+    flux = resolve_on(tree, "homeserver-k8s", "flux_bootstrap_settings", "-e", given)
+    assert (flux["GPU_I915"], flux["GPU_XE"], flux["FRIGATE_DETECTOR_DEVICE"]) == settings
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "given", "expected"),
+    [
+        pytest.param(None, {}, "auto", id="cluster"),
+        pytest.param(None, {"kubernetes_gpu": "0000:00:02.0"}, "0000:00:02.0", id="cluster-named"),
+        pytest.param(None, {"kubernetes_gpu": " none "}, "none", id="cluster-none"),
+        pytest.param(EXAMPLE_LOCAL_YML, {}, "none", id="no-cluster"),
+    ],
+)
+def test_the_gpu_role_looks_only_with_a_cluster(tmp_path, local_yml, given, expected):
+    """With a cluster, the GPU is auto unless local.yml's kubernetes_gpu says otherwise; without one, nothing is
+    read: there is no worker to give it to. The role takes Intel's vendor id alone."""
+    tree = example_tree(tmp_path, local_yml)
+    extra = json.dumps({**(CLUSTER_VARS if local_yml is None else {}), **given})
+    select, vendors = resolve_on(tree, "homeserver", "[proxmox_gpu_select, proxmox_gpu_vendors]", "-e", extra)
+    assert (select, vendors) == (expected, ["8086"])
+
+
+def plays_of(path):
+    return [play for play in yaml.safe_load(path.read_text()) if "import_playbook" not in play]
+
+
+def runs_role(play, role, entries):
+    """Whether a play runs `role`, through `roles:` (its main entry point) or include_role with one of `entries`."""
+    if (
+        any((r.get("role") if isinstance(r, dict) else r) == role for r in play.get("roles") or [])
+        and "main" in entries
+    ):
+        return True
+    for task in tasks_in((play.get("pre_tasks") or []) + (play.get("tasks") or [])):
+        include = task.get("ansible.builtin.include_role") or task.get("ansible.builtin.import_role")
+        if include and include.get("name") == role and include.get("tasks_from", "main") in entries:
+            return True
+    return False
+
+
+def test_playbooks_find_the_gpu_before_talos_renders_the_worker():
+    """The worker's schematic follows its GPU's vendor, which only the Proxmox play finds: a playbook that installs or
+    upgrades Talos (the talos role's main or upgrade) without asking first would move the worker off its GPU's
+    drivers. Every such playbook runs roles/proxmox_gpu, or its detect entry point, on the Proxmox host first."""
+    checked = []
+    for path in sorted(ROOT.glob("*.yml")):
+        plays = plays_of(path)
+        for index, play in enumerate(plays):
+            if play.get("hosts") == "kubernetes" and runs_role(play, "talos", {"main", "upgrade"}):
+                checked.append(path.name)
+                assert any(
+                    p.get("hosts") == "proxmox" and runs_role(p, "proxmox_gpu", {"main", "detect"})
+                    for p in plays[:index]
+                ), f"{path.name} renders the worker's Talos without finding its GPU first"
+    assert sorted(checked) == ["kubernetes.yml", "talos-upgrade.yml"]
 
 
 HAOS_ONLY_ARGS = ("-e", json.dumps({"haos_mac": mac(9)}))

@@ -40,8 +40,19 @@ and adding it back does not restore it. `qm disk resize` grows only. A download 
 never powers off); both refuse a VM already as asked, as qm does, and `qm start` also refuses a VM one of whose
 drives, the CD-ROM included, names a volume that is not there, as Proxmox does when it activates them. A backup
 job's VMIDs start at 100. The state's `content` holds each storage's volumes, which tests seed with other guests'
-disks and old backups; `node_memory` the node's memory; `pci_mappings` and `usb_mappings` the resource
-mappings that exist.
+disks and old backups; `node_memory` the node's memory; `usb_mappings` the USB resource mappings that exist.
+
+PCI devices and their mappings, from Proxmox VE 9.2's API code (pve-manager's API2/Hardware/PCI.pm and
+API2/Cluster/Mapping/PCI.pm, pve-guest-common's Mapping/PCI.pm, qemu-server's PCI.pm), not yet captured from a host
+with a GPU to pass: `pvesh get /nodes/<node>/hardware/pci` lists the state's `pci` devices, without classes 05, 06
+and 0b unless --pci-class-blacklist says otherwise, as Proxmox does; `pvesh get|create /cluster/mapping/pci` and
+`pvesh get|set /cluster/mapping/pci/<id>` keep the state's `pci_mappings` (id: {map, description}), each entry a
+property string, `--map` given once per entry; every answer carries a digest of them all, and a set with another
+digest is refused. With --check-node, each mapping's entries for that node are checked against the devices as
+Proxmox checks them when a VM starts, and `qm start` refuses a VM whose mapping does not hold: a missing entry for
+the node, a device no longer there, or an id, IOMMU group or subsystem that differs, compared with 0x dropped, case
+as it is. `modprobe --resolve-alias` answers from the state's `aliases` (modalias: [modules]), and
+`update-initramfs -u -k all` counts in `initramfs_updates`.
 
 Images (as on Proxmox VE 9.2, read from its API code): `download-url --content import` takes an .ova, .qcow2, .raw or
 .vmdk; with `--checksum` it needs `--checksum-algorithm`, and the state's `checksum_fails` makes the task fail as a
@@ -136,12 +147,17 @@ def fail(message):
 
 
 def options(args):
-    """--key value pairs, plus --delete <names>."""
+    """--key value pairs, plus --delete <names>. A key given more than once, as pvesh takes an array (--map), is a
+    list."""
     out, i = {}, 0
     while i < len(args):
         if not args[i].startswith("--") or i + 1 >= len(args):
             fail(f"400 unable to parse option {args[i]!r}")
-        out[args[i][2:]] = args[i + 1]
+        key, value = args[i][2:], args[i + 1]
+        if key in out:
+            out[key] = (out[key] if isinstance(out[key], list) else [out[key]]) + [value]
+        else:
+            out[key] = value
         i += 2
     return out
 
@@ -455,7 +471,7 @@ def checked_value(state, vmid, key, value):
         return f"{name}={(mac or mac_for(vmid)).upper()},{rest}"
     if key.startswith("hostpci"):
         mapping = dict(item.split("=", 1) for item in value.split(",") if "=" in item).get("mapping")
-        if mapping and mapping not in state.get("pci_mappings", []):
+        if mapping and mapping not in state.get("pci_mappings", {}):
             fail(f"no such resource mapping '{mapping}'")
     if key.startswith("usb"):
         device = dict(item.split("=", 1) for item in value.split(",") if "=" in item)
@@ -560,6 +576,17 @@ def qm(state, args):
             state["start_fails"] = False
             save(state)
             fail(f"start failed: QEMU exited with code 1 (VM {args[1]})")
+        # qemu-server resolves each PCI mapping for this node and checks it against the hardware first.
+        for key, value in sorted(applied(vm).items()):
+            mapping = props_of(value).get("mapping") if key.startswith("hostpci") else None
+            if mapping:
+                entries = node_entries(state, mapping, NODE)
+                if not entries:
+                    fail(f"PCI device mapping not found for '{mapping}'")
+                for entry in entries:
+                    problem = mapping_problem(state, mapping, entry)
+                    if problem:
+                        fail(f"PCI device mapping invalid (hardware probably changed): {problem}")
         # Proxmox activates every drive's volume before it starts a VM, the CD-ROM's too.
         volumes = {v["volid"] for vols in state.get("content", {}).values() for v in vols}
         for key, value in sorted(applied(vm).items()):
@@ -751,6 +778,125 @@ def get_task_status(state, node, upid, opts):
     return {"upid": upid, "type": "download", **task}
 
 
+def props_of(text):
+    """A property string as a dict: "mapping=gpu,pcie=1"."""
+    return dict(item.split("=", 1) for item in str(text).split(",") if "=" in item)
+
+
+def get_node_pci(state, node, opts):
+    check_node(node)
+    unknown = set(opts) - {"pci-class-blacklist", "verbose"}
+    if unknown:
+        fail(f"400 Parameter verification failed.\n{sorted(unknown)[0]}: property is not defined in schema")
+    blacklist = [c for c in opts.get("pci-class-blacklist", "05;06;0b").split(";") if c]
+    return [d for d in state.get("pci", []) if not any(d["class"][2:].startswith(c) for c in blacklist)]
+
+
+def mappings_digest(state):
+    return hashlib.sha1(json.dumps(state.get("pci_mappings", {}), sort_keys=True).encode()).hexdigest()
+
+
+def node_entries(state, mapping, node):
+    return [e for e in state.get("pci_mappings", {}).get(mapping, {}).get("map", []) if props_of(e).get("node") == node]
+
+
+def mapping_problem(state, mapping, entry):
+    """Why an entry does not hold for the devices the host has, as pve-guest-common's assert_valid words it: a slot
+    stands for its function 0, and each of id, iommugroup and subsystem-id must be there exactly when the device has
+    it, and equal once every 0x is dropped."""
+    given = props_of(entry)
+    path = given.get("path", "")
+    if not re.search(r"\.[0-9a-f]$", path, re.IGNORECASE):
+        path += ".0"
+    device = next((d for d in state.get("pci", []) if d["id"] == path), None)
+    if device is None:
+        return f"pci device '{path}' not found"
+    expected = {
+        "id": f"{device['vendor']}:{device['device']}",
+        "iommugroup": str(device["iommugroup"]),
+        "subsystem-id": f"{device['subsystem_vendor']}:{device['subsystem_device']}"
+        if "subsystem_vendor" in device
+        else None,
+    }
+    for prop in sorted(expected):
+        want, have = expected[prop], given.get(prop)
+        if want is None and have is None:
+            continue
+        if have is None:
+            return f"missing expected property '{prop}' for device '{path}'"
+        if want is None:
+            return f"unexpected property '{prop}' configured for device '{path}'"
+        if want.replace("0x", "") != have.replace("0x", ""):
+            return f"'{prop}' does not match for '{mapping}' ({want.replace('0x', '')} != {have.replace('0x', '')})"
+    return ""
+
+
+def map_entries(opts):
+    entries = opts.get("map", [])
+    entries = [entries] if isinstance(entries, str) else entries
+    for entry in entries:
+        missing = {"node", "path", "id"} - set(props_of(entry))
+        if missing:
+            fail(f"400 Parameter verification failed.\nmap: missing property {sorted(missing)[0]}")
+    return entries
+
+
+def get_mappings(state, opts):
+    unknown = set(opts) - {"check-node"}
+    if unknown:
+        fail(f"400 Parameter verification failed.\n{sorted(unknown)[0]}: property is not defined in schema")
+    out = []
+    for mid, mapping in sorted(state.get("pci_mappings", {}).items()):
+        entry = {"id": mid, "map": list(mapping["map"]), "digest": mappings_digest(state)}
+        if mapping.get("description"):
+            entry["description"] = mapping["description"]
+        if "check-node" in opts:
+            check_node(opts["check-node"])
+            entries = node_entries(state, mid, NODE)
+            entry["checks"] = [] if entries else [{"severity": "warning", "message": f"No mapping for node {NODE}."}]
+            for e in entries:
+                problem = mapping_problem(state, mid, e)
+                if problem:
+                    entry["checks"].append({"severity": "error", "message": f"Invalid configuration: {problem}"})
+        out.append(entry)
+    return out
+
+
+def create_mapping(state, opts):
+    mid = opts.get("id", "")
+    if not re.fullmatch(r"[a-z][a-z0-9_-]+", mid, re.IGNORECASE):
+        fail(f"400 Parameter verification failed.\nid: invalid format - {mid}")
+    if mid in state.get("pci_mappings", {}):
+        fail(f"create hardware mapping failed: pci ID '{mid}' already defined")
+    unknown = set(opts) - {"id", "map", "description"}
+    if unknown:
+        fail(f"400 Parameter verification failed.\n{sorted(unknown)[0]}: property is not defined in schema")
+    state.setdefault("pci_mappings", {})[mid] = {"map": map_entries(opts), "description": opts.get("description", "")}
+    state["mutations"] += 1
+
+
+def get_mapping(state, mid, opts):
+    no_options(opts)
+    if mid not in state.get("pci_mappings", {}):
+        fail(f"mapping '{mid}' not found")
+    return {**state["pci_mappings"][mid], "digest": mappings_digest(state)}
+
+
+def set_mapping(state, mid, opts):
+    unknown = set(opts) - {"map", "description", "digest", "delete"}
+    if unknown:
+        fail(f"400 Parameter verification failed.\n{sorted(unknown)[0]}: property is not defined in schema")
+    if "digest" in opts and opts["digest"] != mappings_digest(state):
+        fail("update hardware mapping failed: detected modified configuration - file changed by other user? Try again.")
+    if mid not in state.get("pci_mappings", {}):
+        fail(f"update hardware mapping failed: pci ID '{mid}' does not exist")
+    if "map" in opts:
+        state["pci_mappings"][mid]["map"] = map_entries(opts)
+    if "description" in opts:
+        state["pci_mappings"][mid]["description"] = opts["description"]
+    state["mutations"] += 1
+
+
 ROUTES = [
     (re.compile(r"/storage"), {"get": get_storage}),
     (re.compile(r"/nodes/([^/]+)/config"), {"get": get_node_config}),
@@ -766,6 +912,9 @@ ROUTES = [
     (re.compile(r"/nodes/([^/]+)/storage/([^/]+)/status"), {"get": get_storage_status}),
     (re.compile(r"/cluster/backup"), {"get": get_backup_jobs, "create": create_backup_job}),
     (re.compile(r"/cluster/backup/([^/]+)"), {"get": get_backup_job, "set": set_backup_job}),
+    (re.compile(r"/nodes/([^/]+)/hardware/pci"), {"get": get_node_pci}),
+    (re.compile(r"/cluster/mapping/pci"), {"get": get_mappings, "create": create_mapping}),
+    (re.compile(r"/cluster/mapping/pci/([^/]+)"), {"get": get_mapping, "set": set_mapping}),
 ]
 
 
@@ -907,6 +1056,23 @@ def systemctl(state, args):
     state["daemon_reloads"] = state.get("daemon_reloads", 0) + 1
 
 
+def modprobe(state, args):
+    if len(args) != 2 or args[0] != "--resolve-alias":
+        fail(f"fake modprobe: unsupported {args}")
+    modules = state.get("aliases", {}).get(args[1])
+    if not modules:
+        fail(f"modprobe: FATAL: Module {args[1]} not found in directory /lib/modules/7.0.14-23-pve")
+    print("\n".join(modules))
+
+
+def update_initramfs(state, args):
+    if args != ["-u", "-k", "all"]:
+        fail(f"fake update-initramfs: unsupported {args}")
+    print("update-initramfs: Generating /boot/initrd.img-7.0.14-23-pve")
+    state["initramfs_updates"] = state.get("initramfs_updates", 0) + 1
+    state["mutations"] += 1
+
+
 def hostname(state, args):
     if args != ["-s"]:
         fail(f"fake hostname: unsupported {args}")
@@ -924,6 +1090,8 @@ def main():
         "hostname": hostname,
         "systemctl": systemctl,
         "apt-get": apt_get,
+        "modprobe": modprobe,
+        "update-initramfs": update_initramfs,
     }
     tools[tool](state, args)
     save(state)

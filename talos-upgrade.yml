@@ -20,6 +20,17 @@
         quiet: true
       tags: [always]
 
+# The worker's schematic follows its GPU's vendor, so the Proxmox host is asked which GPU the worker has, changing
+# nothing: without this, the upgrade would move the worker to the schematic without the GPU's drivers.
+- name: Find the GPU the worker has
+  hosts: proxmox
+  gather_facts: false
+  tasks:
+    - name: Find the GPU, changing nothing
+      ansible.builtin.include_role:
+        name: proxmox_gpu
+        tasks_from: detect
+
 - name: Upgrade the cluster to the pinned versions
   hosts: kubernetes
   gather_facts: false

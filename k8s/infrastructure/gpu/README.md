@@ -1,7 +1,9 @@
 # Intel's GPU plugin
 
-Hands the host's iGPU, passed whole to the worker (`scripts/runbooks/gpu.md`), to the pods that ask for
-`gpu.intel.com/i915`. Applied by the Flux Kustomization `infra-gpu`, after `infra-controllers`.
+Hands an Intel GPU the host passes whole to the worker, its iGPU or an Arc card (`scripts/runbooks/gpu.md`), to the
+pods that ask for it: as `gpu.intel.com/i915` when the worker's i915 driver runs it, `gpu.intel.com/xe` when its xe
+driver does (Arc's B-series, Lunar Lake and newer). Applied by the Flux Kustomization `infra-gpu`, after
+`infra-controllers`.
 
 **`intel-gpu-plugin.yaml` is upstream's `deployments/gpu_plugin/base/intel-gpu-plugin.yaml` from
 [intel-device-plugins-for-kubernetes](https://github.com/intel/intel-device-plugins-for-kubernetes) v0.37.1

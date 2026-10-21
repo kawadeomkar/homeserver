@@ -1,0 +1,121 @@
+---
+# Which GPU the host can pass to a VM, read and changed nothing: Proxmox's list of the host's PCI devices with their
+# IOMMU groups, then from sysfs whether the IOMMU is on, which device the firmware made the console (boot_vga), and
+# the driver holding each and its modalias. The choice is the filter plugin's (filter_plugins/proxmox_gpu.py). Runs
+# in a dry run too, and alone (tasks_from: detect) in a play that only needs to know which GPU the VM has.
+
+# Tagged always, as the other roles' checks are, so any run refuses a bad setting first.
+- name: detect | Check the role's inputs
+  ansible.builtin.assert:
+    that: _errors | length == 0
+    fail_msg: "{{ _errors | join(' ') }}"
+    quiet: true
+  tags: [always]
+  vars:
+    _errors: >-
+      {{ proxmox_gpu_select | proxmox_gpu_select_errors(proxmox_gpu_vendors, proxmox_gpu_mapping,
+                                                         proxmox_gpu_select_name) }}
+
+- name: detect | Note whether to look at all
+  ansible.builtin.set_fact:
+    proxmox_gpu_looking: "{{ (proxmox_gpu_select | default('', true) | string | trim | lower) not in ['', 'none'] }}"
+    proxmox_gpu_selected: {}
+
+# Proxmox names a node after its short hostname.
+- name: detect | Find the node's name
+  ansible.builtin.command:
+    argv: [hostname, -s]
+  register: proxmox_gpu_hostname
+  changed_when: false
+  check_mode: false
+  when: proxmox_gpu_looking and proxmox_gpu_node | length == 0
+
+- name: detect | Use the node's name
+  ansible.builtin.set_fact:
+    proxmox_gpu_node_name: "{{ proxmox_gpu_node if proxmox_gpu_node | length > 0 else proxmox_gpu_hostname.stdout | trim }}"
+  when: proxmox_gpu_looking
+
+# Every class, bridges included: a GPU passes alone only when its IOMMU group holds nothing but its own functions and
+# bridges, and the default list leaves out bridges, memory controllers and processors.
+- name: detect | Read the host's PCI devices
+  ansible.builtin.command:
+    argv: [pvesh, get, "/nodes/{{ proxmox_gpu_node_name }}/hardware/pci", --pci-class-blacklist, "", --output-format, json]
+  register: proxmox_gpu_pci
+  changed_when: false
+  check_mode: false
+  when: proxmox_gpu_looking
+
+# One line for the IOMMU (on when the kernel lists an IOMMU unit, as qemu-server checks), then one per device: its
+# address, boot_vga (1 for the console), the driver bound to it and its modalias, "-" for none.
+- name: detect | Read each device's console flag, driver and modalias
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - |
+        cd "$1" || exit 1
+        if [ -n "$(ls -A class/iommu 2>/dev/null)" ]; then printf 'iommu\t1\n'; else printf 'iommu\t0\n'; fi
+        for d in bus/pci/devices/*; do
+          [ -e "$d" ] || continue
+          vga=-; [ -r "$d/boot_vga" ] && vga=$(cat "$d/boot_vga")
+          driver=-; [ -L "$d/driver" ] && driver=$(basename "$(readlink "$d/driver")")
+          alias=-; [ -r "$d/modalias" ] && alias=$(cat "$d/modalias")
+          printf 'device\t%s\t%s\t%s\t%s\n' "${d##*/}" "$vga" "$driver" "$alias"
+        done
+      - sh
+      - "{{ proxmox_gpu_sysfs }}"
+  register: proxmox_gpu_sysfs_read
+  changed_when: false
+  check_mode: false
+  when: proxmox_gpu_looking
+
+- name: detect | Choose the GPU
+  ansible.builtin.set_fact:
+    proxmox_gpu_choice: >-
+      {{ proxmox_gpu_pci.stdout | from_json
+         | proxmox_gpu_choose(proxmox_gpu_sysfs_read.stdout, proxmox_gpu_select, proxmox_gpu_vendors,
+                              proxmox_gpu_select_name) }}
+  when: proxmox_gpu_looking
+
+- name: detect | Refuse a GPU that cannot be passed, or a choice between several
+  ansible.builtin.assert:
+    that: proxmox_gpu_choice.error | length == 0
+    fail_msg: "{{ proxmox_gpu_choice.error }}"
+    quiet: true
+  when: proxmox_gpu_looking
+
+# The kernel modules that claim each of the GPU's functions, whether or not one holds it now: what vfio-pci must load
+# before, and which driver the VM's own kernel binds (Intel's i915 or xe).
+- name: detect | Ask which drivers claim each of its functions
+  ansible.builtin.command:
+    argv: [modprobe, --resolve-alias, "{{ proxmox_gpu_choice.gpu.modaliases[item] }}"]
+  loop: "{{ proxmox_gpu_choice.gpu.functions | default([]) if proxmox_gpu_looking else [] }}"
+  register: proxmox_gpu_aliases
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: proxmox_gpu_choice.gpu.modaliases[item] | default('') | length > 0
+
+- name: detect | Keep the GPU chosen
+  ansible.builtin.set_fact:
+    proxmox_gpu_selected: >-
+      {{ _gpu | combine({'drivers': _drivers.get(_gpu.address, []), 'function_drivers': _drivers}) if _gpu else {} }}
+  when: proxmox_gpu_looking
+  vars:
+    _gpu: "{{ proxmox_gpu_choice.gpu }}"
+    _drivers: >-
+      {%- set out = {} -%}
+      {%- for r in proxmox_gpu_aliases.results | default([]) if r is not skipped -%}
+      {%-   set _ = out.update({r.item: r.stdout_lines | map('trim') | select | list}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: detect | Say which GPU a VM gets
+  ansible.builtin.debug:
+    msg: "{{ [_chosen] + proxmox_gpu_choice.notes }}"
+  when: proxmox_gpu_looking
+  vars:
+    _chosen: >-
+      {{ ('GPU for the VM: ' ~ proxmox_gpu_selected.name ~ ' at ' ~ proxmox_gpu_selected.address
+          ~ ', claimed by ' ~ (proxmox_gpu_selected.drivers | join(', ') or 'no driver the host knows'))
+         if proxmox_gpu_selected else 'No GPU for the VM.' }}

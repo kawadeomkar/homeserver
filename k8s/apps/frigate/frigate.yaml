@@ -33,8 +33,8 @@ spec:
 ---
 # Frigate (s6 as root, no USER in its image). /config holds config.yml, frigate.db and the model cache on a local
 # volume. Port 5000 is the internal API the probes use, 8971 the authenticated UI behind Traefik. Object detection on
-# the iGPU when the host passes one through, on the CPU otherwise; the first configuration is seeded with the device,
-# so adding a GPU later means changing it in Frigate's editor too. Its first start downloads and builds models: five
+# an Intel GPU the i915 driver runs when the host passes one through, on the CPU otherwise (FRIGATE_DETECTOR_DEVICE);
+# the first configuration is seeded with the device, so adding a GPU later means changing it in Frigate's editor too. Its first start downloads and builds models: five
 # minutes of startup probe.
 apiVersion: apps/v1
 kind: Deployment
@@ -116,9 +116,11 @@ spec:
               memory: 2Gi
             limits:
               cpu: "4"
-              # The iGPU when the host passes one through (GPU_I915 1), none otherwise: a limit of 0 asks for no
-              # device, so the pod schedules on a node without the plugin.
+              # An Intel GPU when the host passes one through, under the name of the driver the worker binds to it
+              # (GPU_I915 or GPU_XE 1), none otherwise: a limit of 0 asks for no device, so the pod schedules on a
+              # node without the plugin, or with the other driver's resource.
               gpu.intel.com/i915: "${GPU_I915}"
+              gpu.intel.com/xe: "${GPU_XE}"
               memory: 6Gi
           startupProbe:
             httpGet:

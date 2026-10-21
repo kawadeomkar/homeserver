@@ -12,8 +12,8 @@ by their variable in `group_vars/all/local.yml`; the real values live only there
 | One disk of the RAIDZ1 pool (`persistent`) | The pool, degraded | Nothing until the pool is healthy: the role only imports ONLINE pools | Replace the disk and resilver (see [Known limits](#known-limits)) |
 | The single disk of `ephemeral` | Nothing: that pool and the media on it are lost | A new, empty pool on a blank replacement disk, then its datasets and share | Allow pool creation and list the new disk |
 | NAS network card | Everything on disk | Everything, once the NAS is reachable | Update the router's DHCP reservation to the new MAC |
-| Proxmox boot drive | VM disks on the NAS, and the VMs' nightly backups | The no-subscription repository, the upgrade, Tailscale with its guard, the NFS storages, the start-on-boot delay and the wait for the NAS, and the backup job | Reinstall, root SSH key, the iGPU's host setup if it had one ([gpu.md](gpu.md)); with remote access, delete the old machine in Tailscale's admin console and put a new auth key in the vault; restore the VMs from their backups ([vm-restore.md](vm-restore.md)) |
-| Proxmox boot drive, in a setup without a NAS | The backups, if `vm_backup_storage` is a USB disk or a backup server | The repository, the upgrade, Tailscale with its guard, the check that `local-lvm` can hold VM disks, and the backup job | Reinstall, root SSH key, the iGPU's host setup if it had one ([gpu.md](gpu.md)); with remote access, the old machine and a new auth key as above; re-add the backup storage before `make proxmox`; restore the VMs ([vm-restore.md](vm-restore.md)) |
+| Proxmox boot drive | VM disks on the NAS, and the VMs' nightly backups | The no-subscription repository, the upgrade, Tailscale with its guard, the NFS storages, the start-on-boot delay and the wait for the NAS, and the backup job | Reinstall, root SSH key, the GPU's firmware setting if it had one ([gpu.md](gpu.md)); with remote access, delete the old machine in Tailscale's admin console and put a new auth key in the vault; restore the VMs from their backups ([vm-restore.md](vm-restore.md)) |
+| Proxmox boot drive, in a setup without a NAS | The backups, if `vm_backup_storage` is a USB disk or a backup server | The repository, the upgrade, Tailscale with its guard, the check that `local-lvm` can hold VM disks, and the backup job | Reinstall, root SSH key, the GPU's firmware setting if it had one ([gpu.md](gpu.md)); with remote access, the old machine and a new auth key as above; re-add the backup storage before `make proxmox`; restore the VMs ([vm-restore.md](vm-restore.md)) |
 | The controller (this Mac) | The repo on GitHub, with a NAS the vault (encrypted) | — | Restore `.vault_pass`, `local.yml`, the age key and `~/.talos/homeserver` from your password manager, and without a NAS your own vault too |
 
 ## 1. The controller
@@ -110,10 +110,10 @@ report no change, and `pvesm status` on the host should show every NFS storage a
    with a `Host` block in `~/.ssh/config` naming the key and `IdentitiesOnly yes`, so Ansible, which connects
    by address, offers the right one.
 3. **If the network card was replaced**, update the router's DHCP reservation. The bridge carries the card's MAC.
-4. **If the host passed its iGPU to the cluster** (`kubernetes_gpu_mapping` in `local.yml`), redo the host's part of
-   [gpu.md](gpu.md), the fallback address first, since the console goes dark once `vfio-pci` takes the iGPU: then
-   VT-d if the board was replaced, the `vfio-pci` binding and the PCI resource mapping, which lived on the old boot
-   drive. A restored VM that names the mapping does not start without it.
+4. **If the host passed a GPU to the cluster**, redo the host's part of [gpu.md](gpu.md): VT-d if the board was
+   replaced, and the fallback address first if `kubernetes_gpu` names the host's console, which goes dark once
+   `vfio-pci` takes it. `make proxmox` makes the `vfio-pci` binding and the PCI resource mapping again, which lived on
+   the old boot drive; a restored worker that names the mapping does not start until then.
 5. **With remote access** (`tailscale_advertise_routes` in `local.yml`), the host's tailnet identity was on the old
    boot drive. In Tailscale's admin console, delete the old machine, or the new one is named `<hostname>-1`. Then make
    a new one-off, pre-approved auth key tagged `tag:homeserver` and put it in the vault as `vault_tailscale_auth_key`

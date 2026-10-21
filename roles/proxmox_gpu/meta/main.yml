@@ -1,0 +1,14 @@
+---
+galaxy_info:
+  author: homeserver contributors
+  namespace: homeserver
+  role_name: proxmox_gpu
+  description: Find the GPU a Proxmox VE host can pass to a VM, keep its PCI resource mapping, and keep the host's drivers off it
+  # The repo has no licence file; the role is not published.
+  license: none
+  min_ansible_version: "2.21"
+  platforms:
+    - name: Debian
+      versions:
+        - all
+dependencies: []

@@ -16,7 +16,7 @@ spec:
 # Jellyfin streams the library from /data. Its configuration and metadata are on a local volume, never NFS (its
 # SQLite database). Transcoding writes to /transcode, an emptyDir on the node's system disk, so transcodes never land
 # on the backed-up, snapshotted data disk: set Dashboard -> Playback -> Transcoding's path to /transcode after the
-# first start. Hardware transcoding with the iGPU when the host passes one through (Dashboard -> Playback ->
+# first start. Hardware transcoding with an Intel GPU when the host passes one through (Dashboard -> Playback ->
 # Transcoding: Intel QuickSync), software otherwise. No DLNA or discovery ports: clients reach it through the ingress.
 apiVersion: apps/v1
 kind: Deployment
@@ -89,9 +89,11 @@ spec:
               memory: 512Mi
             limits:
               cpu: "4"
-              # The iGPU when the host passes one through (GPU_I915 1), none otherwise: a limit of 0 asks for no
-              # device, so the pod schedules on a node without the plugin.
+              # An Intel GPU when the host passes one through, under the name of the driver the worker binds to it
+              # (GPU_I915 or GPU_XE 1), none otherwise: a limit of 0 asks for no device, so the pod schedules on a
+              # node without the plugin, or with the other driver's resource.
               gpu.intel.com/i915: "${GPU_I915}"
+              gpu.intel.com/xe: "${GPU_XE}"
               memory: 4Gi
           # A first start, or an upgrade, migrates the database before it listens: up to ten minutes.
           startupProbe:

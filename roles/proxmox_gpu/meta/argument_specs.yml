@@ -1,0 +1,85 @@
+---
+argument_specs:
+  main:
+    short_description: Find the GPU a Proxmox VE host can pass to a VM, keep its PCI resource mapping, and keep the host's drivers off it
+    description:
+      - Reads the host's PCI devices, and from sysfs which one is its console, whether its IOMMU is on, and the driver
+        holding each, and chooses the GPU to pass (proxmox_gpu_select). auto takes the one GPU that can be passed alone
+        and is not the console; none found means no GPU, and more than one is refused. An address takes that GPU, and
+        one no longer in the host means no GPU, so a VM that had it can still start.
+      - Refuses a GPU it is asked for by address that is not a GPU, whose IOMMU group holds other devices (a VM would
+        take them from the host too), with the IOMMU off, or of a vendor not in proxmox_gpu_vendors.
+      - Creates or corrects the PCI resource mapping proxmox_gpu_mapping to the GPU's address, ids and IOMMU group,
+        keeping other nodes' entries, then has Proxmox check it. Never deletes one.
+      - With proxmox_gpu_vfio, writes a modprobe.d file that has vfio-pci claim the GPU's functions before any driver,
+        rebuilds the initramfs, and says while a host driver still holds the GPU that the host must reboot. Never reboots.
+      - Sets proxmox_gpu_selected to the GPU chosen ({} for none), its address, ids and the drivers that claim it.
+    options:
+      proxmox_gpu_select:
+        type: str
+        default: ""
+        description: auto, none (or empty), or the GPU's PCI address (0000:01:00.0, 01:00.0, or 01:00 for the slot).
+      proxmox_gpu_select_name:
+        type: str
+        default: proxmox_gpu_select
+        description: What messages call the setting proxmox_gpu_select comes from.
+      proxmox_gpu_vendors:
+        type: list
+        elements: str
+        default: []
+        description: PCI vendor ids (8086, 1002, 10de) auto may take and an address may name. Empty, any.
+      proxmox_gpu_mapping:
+        type: str
+        default: ""
+        description: The PCI resource mapping kept for the GPU. Empty, none.
+      proxmox_gpu_mapping_description:
+        type: str
+        default: ""
+        description: The mapping's description when the role creates it.
+      proxmox_gpu_vfio:
+        type: bool
+        default: false
+        description: Keep the host's drivers off the GPU from its next boot (vfio-pci by id, softdep, initramfs).
+      proxmox_gpu_modprobe_file:
+        type: str
+        default: /etc/modprobe.d/proxmox-gpu.conf
+        description: The modprobe.d file that does it, removed when off or with no GPU.
+      proxmox_gpu_sysfs:
+        type: str
+        default: /sys
+        description: Where the host's sysfs is.
+      proxmox_gpu_node:
+        type: str
+        default: ""
+        description: The node's name in Proxmox. Empty means the host's short hostname.
+  detect:
+    short_description: Find the GPU a Proxmox VE host can pass to a VM, changing nothing
+    description:
+      - What main does first, alone and read-only, for a play that only needs to know which GPU the VM has. It sets
+        proxmox_gpu_selected as main does, and refuses the same GPUs.
+    options:
+      proxmox_gpu_select:
+        type: str
+        default: ""
+        description: auto, none (or empty), or the GPU's PCI address.
+      proxmox_gpu_select_name:
+        type: str
+        default: proxmox_gpu_select
+        description: What messages call the setting proxmox_gpu_select comes from.
+      proxmox_gpu_vendors:
+        type: list
+        elements: str
+        default: []
+        description: PCI vendor ids auto may take and an address may name. Empty, any.
+      proxmox_gpu_mapping:
+        type: str
+        default: ""
+        description: The PCI resource mapping kept for the GPU, checked to be well formed.
+      proxmox_gpu_sysfs:
+        type: str
+        default: /sys
+        description: Where the host's sysfs is.
+      proxmox_gpu_node:
+        type: str
+        default: ""
+        description: The node's name in Proxmox. Empty means the host's short hostname.

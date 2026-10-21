@@ -1,6 +1,6 @@
 ---
-# kubernetes.yml's plays with this repo's own configuration, against the fakes: the VMs on the fake Proxmox host
-# (fake_pve_bin/). Each play loads what its host's groups would, by name: vars_files does not expand a glob.
+# kubernetes.yml's plays with this repo's own configuration, against the fakes: the GPU and the VMs on the fake
+# Proxmox host (fake_pve_bin/), its sysfs a tree the test writes. Each play loads what its host's groups would, by name: vars_files does not expand a glob.
 # Addresses, MACs and switches come from the test as extra vars; with or without a NAS by the NAS address alone.
 - name: Create the cluster's VMs on the fake Proxmox host
   hosts: proxmox
@@ -11,9 +11,11 @@
     - ../../group_vars/proxmox/storage.yml
     - ../../group_vars/proxmox/vms.yml
     - ../../group_vars/proxmox/backup.yml
+    - ../../group_vars/proxmox/gpu.yml
   environment:
     PATH: "{{ playbook_dir }}/fake_pve_bin:{{ lookup('ansible.builtin.env', 'PATH') }}"
     FAKE_PVE_STATE: "{{ fake_pve_state }}"
     FAKE_PVE_PYTHON: "{{ ansible_playbook_python }}"
   roles:
+    - role: proxmox_gpu
     - role: proxmox_vm

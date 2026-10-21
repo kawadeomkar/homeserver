@@ -147,9 +147,13 @@ reboot (`talosctl reboot -n <worker>`), keep its data, and come back from a VM b
       "TrueNAS CORE leftovers" item whether to delete it, through the role
 - [ ] After each app's first start, its own steps through a port forward (`scripts/runbooks/first-run.md`), then
       `kubernetes_ingress_allowed_range` to open the LAN; Frigate's cameras after
-- [ ] With an Intel iGPU in the host, pass it to the worker for Jellyfin and Frigate
-      (`scripts/runbooks/gpu.md`), and run that runbook's checks: the render node's group inside the pods, and
-      that without a GPU both apps still schedule
+- [ ] With an Intel GPU in the host, pass it to the worker for Jellyfin and Frigate
+      (`scripts/runbooks/gpu.md`), and run that runbook's checks: the host's `vfio-pci` binding, the render node's
+      group inside the pods, and that without a GPU both apps still schedule. The PCI mapping, binding and detection
+      (`roles/proxmox_gpu`) are tested against fakes only; no host here has a GPU it can pass but its console
+- [ ] AMD and NVIDIA GPUs for the worker (`scripts/runbooks/gpu.md`, "Other vendors"): their Talos drivers, device
+      plugins and Frigate images, when a host has such a card to test on; NVIDIA's after Talos 1.15, which moves it
+      to NVIDIA's GPU Operator
 - [ ] Check that LinuxServer.io's images start with `allowPrivilegeEscalation: false`, which their s6 init has not
       been seen to need. (Frigate 0.17's form under `go2rtc` is settled: it fills in `{FRIGATE_...}` only in streams
       and the RTSP user and password, and go2rtc expands `${...}` everywhere else, from its environment.)
