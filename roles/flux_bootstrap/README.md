@@ -10,7 +10,9 @@ nothing.
   readable by its owner alone, since the whole file goes into the cluster: never a keyring shared with other
   projects.
 - **`flux-system/cluster-settings`**: a ConfigMap of `flux_bootstrap_settings`, which Flux Kustomizations
-  substitute into their manifests (`postBuild.substituteFrom`). Strings only. A key removed here disappears.
+  substitute into their manifests (`postBuild.substituteFrom`). Strings only. A key removed here disappears. It is
+  labelled `reconcile.fluxcd.io/watch: Enabled`, so a change reconciles each Kustomization that reads it at once,
+  rather than at its next interval.
 - **The FluxInstance `flux`**: an exact Flux release, built from the operator's manifests artifact pinned by
   digest, and the Git repository, branch and path it syncs. From Flux 2.9,
   kustomize-controller substitutes strictly by default, so a manifest naming a setting that does not exist fails

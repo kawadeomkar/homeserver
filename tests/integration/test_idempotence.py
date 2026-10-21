@@ -2242,6 +2242,9 @@ def test_flux_bootstrap(tmp_path, operator_releases, nas):
     }
     assert "kustomize" not in instance, "no feature gate is set: strict substitution is Flux 2.9's default"
     settings = objects["ConfigMap/flux-system/cluster-settings"]["data"]
+    # Flux reconciles what reads the settings as soon as they change.
+    labels = objects["ConfigMap/flux-system/cluster-settings"]["metadata"]["labels"]
+    assert labels == {"reconcile.fluxcd.io/watch": "Enabled"}
     media = {"MEDIA_LOCAL_PATH": "/var/mnt/media/library", "FRIGATE_LOCAL_PATH": "/var/mnt/media/frigate"}
     assert settings["DOMAIN"] == "homeserver.internal" and settings["DATA_NODE"] == "homeserver-worker-1"
     assert all(isinstance(v, str) for v in settings.values())

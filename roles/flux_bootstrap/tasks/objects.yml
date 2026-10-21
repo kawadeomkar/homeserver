@@ -176,10 +176,15 @@
       - name: flux
         manifest: "{{ _instance | to_nice_yaml(indent=2) }}"
   vars:
+    # Labelled for kustomize-controller to watch: a change reconciles every Kustomization that substitutes from it at
+    # once, where Flux would otherwise read it only at each one's next interval (up to 10 minutes later).
     _settings:
       apiVersion: v1
       kind: ConfigMap
-      metadata: {name: cluster-settings, namespace: flux-system}
+      metadata:
+        name: cluster-settings
+        namespace: flux-system
+        labels: {reconcile.fluxcd.io/watch: Enabled}
       data: "{{ flux_bootstrap_settings }}"
     # Flux's strict substitution turns a manifest that names a missing setting into a failure rather than an empty
     # string: a misspelt ${DOMIAN} would otherwise give every app the host "sonarr.". kustomize-controller turns it on
