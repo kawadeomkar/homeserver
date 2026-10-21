@@ -58,7 +58,7 @@ SECURITY.md              how to report a vulnerability privately
 ```
 
 `inventory`, `group_vars/all/local.yml` and `./.vault_pass` are gitignored and must be created locally:
-`make init` copies `inventory` from its example and writes `local.yml` from its, every setting commented out, then
+`make init` copies `inventory` from its example and writes `local.yml` from its example, every setting commented out, then
 asks for every setting a deployment needs, one by one, and ends with what is still missing. Run it again whenever a setting changes: each shows its value, and Enter keeps
 it. A plain run asks for the required and the popular optional settings; `make init TYPE=full` for every one.
 No address is ever written in a tracked file: tasks and role defaults read them from variables whose real
@@ -80,7 +80,8 @@ virtualenv, since it removes every package there that `poetry.lock` does not lis
 ```bash
 make help                         # every target, the TYPEs each takes, and the other parameters
 make install                      # the tooling, from poetry.lock, into the project's virtualenv (Poetry: pipx install poetry)
-make init                         # git hooks, then each setting asked for, and what is still missing (TYPE=full: all)
+make init                         # git hooks, then each setting asked for, and what is still missing (TYPE=full: all);
+                                  # make install first when the virtualenv lacks the tooling
 make lock                         # update poetry.lock after editing pyproject.toml (UPDATE=<packages>: those too)
 make lint                         # every linter; TYPE=lock,yaml,ansible,python,docs,github,manifests,charts,talos
 make test                         # every test; TYPE=unit,policy,gitleaks,idempotence

@@ -56,7 +56,7 @@ privileged media pods); an old branch that does is dead weight. `docs/ISSUES.md`
 ```bash
 make help                         # the targets, the TYPEs each takes and the other parameters; TYPE narrows a target to part of its job, comma-separated (check and deploy: one)
 make install                      # the project's virtualenv synced to poetry.lock, with the Poetry on PATH (pipx install poetry); refuses a Python that is not a virtualenv
-make init                         # also installs the git hooks, copies inventory from its example and writes local.yml from its example with every setting commented out, then asks for each setting and secret (scripts/init/; TYPE=full: the less used ones too) and says what is still missing
+make init                         # make install first when the virtualenv lacks the tooling (so Poetry only for a new one); installs the git hooks, copies inventory from its example and writes local.yml from its example with every setting commented out, then asks for each setting and secret (scripts/init/; TYPE=full: the less used ones too) and says what is still missing
 make lock                         # update poetry.lock after editing pyproject.toml; UPDATE=<packages> moves those on too
 make vault                        # edit the secrets, then lint them; TYPE=new without a NAS: an empty vault of your own, and a .vault_pass if there is none
 make lint                         # every linter, each a TYPE (make -k lint reports every failure):

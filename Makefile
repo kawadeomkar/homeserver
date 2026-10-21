@@ -172,8 +172,11 @@ install: ## Install the locked tooling into the project's virtualenv (Poetry fro
 
 .PHONY: init
 # The settings are asked for by scripts/init/init.py, which says at the end what is still required. Run it again
-# whenever a setting changes: Enter keeps each one as it is. Without a terminal it only prints that summary.
-init: install ## The git hooks, then local.yml and the vault asked for one by one, and what is still missing
+# whenever a setting changes: Enter keeps each one as it is. Without a terminal it only prints that summary. A
+# virtualenv without the tooling gets make install first; one that has it is left as it is, so make init needs Poetry
+# only to fill a new virtualenv (make install keeps a filled one in step with poetry.lock).
+INIT_TOOLS := $(and $(wildcard $(BIN)/pre-commit),$(wildcard $(BIN)/ansible-playbook))
+init: $(if $(INIT_TOOLS),,install) ## The git hooks, then local.yml and the vault asked for one by one, and what is still missing
 	$(BIN)/pre-commit install
 	git config blame.ignoreRevsFile .git-blame-ignore-revs
 	@test -f inventory || cp inventory.example inventory
