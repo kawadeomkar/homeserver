@@ -1,0 +1,425 @@
+"""make vault's setups: each machine's local.yml, vault and vault password, kept together outside the checkout, and
+the one a checkout uses linked in.
+
+A setup is a directory of the store holding three files: local.yml, vault.yml and vault_pass. The store is $SETUPS
+(make's SETUPS=), else $XDG_CONFIG_HOME/homeserver/setups, ~/.config/homeserver/setups without it. The checkout links
+the files of the setup it uses in at the paths Ansible and make read, each a path no commit ever held, since a checkout
+of an older branch overwrites an ignored file at a path it tracks: group_vars/all/local.yml,
+group_vars/all/local.vault.yml and .vault_pass, which ansible.cfg names. Setups cannot sit side by side in
+group_vars/all/, where Ansible reads every .yml file, and a link to a missing file is skipped there without a word, as
+if there were no settings or no secrets: every playbook run first checks that the three links point into one setup and
+that each of its files is there (check). A checkout whose three paths are its own files, or missing, uses no setup and
+works as it always did.
+
+  list                    every setup, the checkout's marked: whether its vault opens, its number of keys (never a
+                          value), when each file last changed
+  switch NAME             link NAME's files in
+  new NAME                a setup: local.yml.example with every setting commented out, an empty vault and a random
+                          password, readable by their owner alone; then switch to it
+  new NAME --from current this checkout's own three files moved into a new setup, and links left in their place
+  check                   which setup a playbook run uses, or stop when its links are broken
+  edit NAME               ansible-vault edit on NAME's vault, with NAME's password, without switching
+
+Nothing here deletes a setup or replaces a file of the checkout's own: switch and new refuse one, which new --from
+current moves into a setup first.
+"""
+
+import argparse
+import os
+import re
+import secrets
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+# Each file of a setup, and the path in the checkout that links to it.
+FILES = {
+    "local.yml": Path("group_vars/all/local.yml"),
+    "vault.yml": Path("group_vars/all/local.vault.yml"),
+    "vault_pass": Path(".vault_pass"),
+}
+# What makes each file in a checkout that uses no setup.
+MAKES = {
+    "local.yml": "make init writes it",
+    "vault.yml": "make vault TYPE=new makes it and its password",
+    "vault_pass": "make vault TYPE=new makes it and the vault",
+}
+# Where the vault was committed until 2026-10-20: Ansible would read a vault there beside the setup's.
+OLD_VAULT = Path("group_vars/all/vault.yml")
+NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+NAME_RULE = "lower-case letters, digits and dashes, such as home or lab"
+EMPTY_VAULT = "---\n{}\n"
+_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\s*:", re.M)
+
+
+class Refused(Exception):
+    """What will not be done, and why. Nothing was changed."""
+
+
+def store() -> Path:
+    """Where the setups are kept."""
+    if os.environ.get("SETUPS"):
+        where = Path(os.environ["SETUPS"]).expanduser()
+    else:
+        where = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "homeserver" / "setups"
+    return Path(os.path.abspath(where))
+
+
+def shown(path: Path) -> str:
+    """A path as a person types it, with ~ for the home directory."""
+    home, text = str(Path.home()), str(path)
+    return "~" + text[len(home) :] if text == home or text.startswith(home + os.sep) else text
+
+
+def same(a: Path, b: Path) -> bool:
+    return os.path.realpath(a) == os.path.realpath(b)
+
+
+def names(where: Path) -> list[str]:
+    """The setups in the store; a directory that is no setup's name, such as one being written, is not one."""
+    if not where.is_dir():
+        return []
+    return sorted(p.name for p in where.iterdir() if p.is_dir() and NAME.fullmatch(p.name))
+
+
+def check_name(name: str) -> None:
+    if not NAME.fullmatch(name) or len(name) > 40:
+        raise Refused(f"{name!r} is no setup's name: a name is {NAME_RULE}, 40 at most")
+
+
+# ------------------------------------------------------------------------------------------------- the vault ---
+def vault_keys(vault: Path, password_file: Path) -> int | None:
+    """How many keys a vault holds, None when it does not open with the password. The keys are counted in the
+    decrypted text, never parsed or shown."""
+    from ansible.errors import AnsibleError
+    from ansible.parsing.vault import VaultLib, VaultSecret
+
+    try:
+        secret = VaultSecret(password_file.read_bytes().strip())
+        plain = VaultLib([("default", secret)]).decrypt(vault.read_bytes())
+    except (AnsibleError, OSError, ValueError):
+        return None
+    return len(_KEY.findall(plain.decode(errors="replace")))
+
+
+def encrypt(text: str, password: str) -> bytes:
+    from ansible.parsing.vault import VaultLib, VaultSecret
+
+    return VaultLib([("default", VaultSecret(password.encode()))]).encrypt(text.encode())
+
+
+def problems(setup: Path) -> list[str]:
+    """What keeps a setup from being used: a file missing, or a vault its password does not open."""
+    missing = [file for file in FILES if not (setup / file).is_file()]
+    if missing:
+        return [f"it has no {' and no '.join(missing)}"]
+    if vault_keys(setup / "vault.yml", setup / "vault_pass") is None:
+        return ["its vault does not open with its vault_pass"]
+    return []
+
+
+# ------------------------------------------------------------------------------------------- the checkout ---
+def target(link: Path) -> Path:
+    to = Path(os.readlink(link))
+    return to if to.is_absolute() else link.parent / to
+
+
+def active(root: Path) -> Path | None:
+    """The setup the checkout links to; None when none of its three paths is a link. Refused when the links are not
+    whole: a path missing or a file of the checkout's own beside the links, links into two setups, or a file a link
+    points to gone."""
+    paths = {file: root / rel for file, rel in FILES.items()}
+    links = [file for file, path in paths.items() if path.is_symlink()]
+    if not links:
+        return None
+    setup = target(paths[links[0]]).parent
+    found = []
+    for file, path in paths.items():
+        if file not in links:
+            what = "a file of this checkout's own" if os.path.lexists(path) else "missing"
+            found.append(f"{FILES[file]} is {what}, not a link")
+            continue
+        to = target(path)
+        if to.parent != setup or to.name != file:
+            found.append(f"{FILES[file]} links to {shown(to)}, not to {shown(setup / file)}")
+        elif not to.is_file():
+            found.append(f"{FILES[file]} links to {shown(to)}, which is missing")
+    if found:
+        raise Refused(
+            f"This checkout's setup, {setup.name}, is not whole, and Ansible would run without what is missing, "
+            f"without a word: {'; '.join(found)}. Restore the setup's files from your password manager, or switch to "
+            "a whole setup (make vault TYPE=list, then make vault TYPE=switch NAME=<setup>)."
+        )
+    return setup
+
+
+def own_files(root: Path) -> list[Path]:
+    """The three paths that hold a file of the checkout's own rather than a link."""
+    return [rel for rel in FILES.values() if os.path.lexists(root / rel) and not (root / rel).is_symlink()]
+
+
+def refuse_own_files(root: Path) -> None:
+    own = own_files(root)
+    if own:
+        listed = ", ".join(str(p) for p in own)
+        raise Refused(
+            f"{listed} {'is' if len(own) == 1 else 'are'} this checkout's own, and a setup's links would replace "
+            f"{'it' if len(own) == 1 else 'them'}: make this checkout's files a setup first, make vault TYPE=new "
+            "NAME=<name> FROM=current"
+        )
+
+
+def refuse_old_vault(root: Path) -> None:
+    if os.path.lexists(root / OLD_VAULT):
+        raise Refused(
+            f"{OLD_VAULT} is where the vault was committed until 2026-10-20, and Ansible would read it beside a "
+            "setup's vault: move it first (README.md, Setups and the vault)"
+        )
+
+
+def link(root: Path, setup: Path) -> None:
+    """Point each of the checkout's paths at the setup's file: a new link renamed over the path, so the path is never
+    missing on the way."""
+    for file, rel in FILES.items():
+        path = root / rel
+        tmp = path.with_name(f"{path.name}.setup-tmp")
+        if os.path.lexists(tmp):
+            tmp.unlink()
+        os.symlink(setup / file, tmp)
+        os.replace(tmp, path)
+
+
+# ---------------------------------------------------------------------------------------------- the store ---
+def existing(where: Path, name: str) -> Path:
+    check_name(name)
+    setup = where / name
+    if not setup.is_dir():
+        raise Refused(
+            f"There is no setup {name} in {shown(where)}: make vault TYPE=list lists them, and make vault TYPE=new "
+            f"NAME={name} makes it"
+        )
+    return setup
+
+
+def unused(where: Path, name: str) -> Path:
+    check_name(name)
+    setup = where / name
+    if os.path.lexists(setup):
+        raise Refused(f"Setup {name} exists already, in {shown(setup)}: make vault TYPE=switch NAME={name} uses it")
+    return setup
+
+
+def make_setup(where: Path, name: str, contents: dict[str, bytes]) -> Path:
+    """The setup's directory, written whole beside its place and renamed into it, readable by its owner alone."""
+    setup = unused(where, name)
+    where.mkdir(mode=0o700, parents=True, exist_ok=True)
+    scratch = Path(tempfile.mkdtemp(prefix=f".{name}.", dir=where))
+    try:
+        for file, data in contents.items():
+            fd = os.open(scratch / file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+        unused(where, name)
+        os.rename(scratch, setup)
+    except BaseException:
+        shutil.rmtree(scratch, ignore_errors=True)
+        raise
+    fd = os.open(where, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    return setup
+
+
+# ------------------------------------------------------------------------------------------------ commands ---
+def switch(root: Path, where: Path, name: str) -> bool:
+    """Link setup name in; False when the checkout uses it already."""
+    setup = existing(where, name)
+    found = problems(setup)
+    if found:
+        raise Refused(
+            f"Setup {name} is not whole: {'; '.join(found)}. A run would go without it, so this checkout keeps the "
+            f"setup it has. Restore {shown(setup)} from your password manager."
+        )
+    try:
+        current = active(root)
+    except Refused:
+        current = None
+    if current and same(current, setup):
+        return False
+    refuse_old_vault(root)
+    refuse_own_files(root)
+    link(root, setup)
+    return True
+
+
+def new(root: Path, where: Path, name: str, local_text: str) -> Path:
+    """A setup of local_text, an empty vault and a random password, which the checkout then uses."""
+    unused(where, name)
+    refuse_old_vault(root)
+    refuse_own_files(root)
+    password = secrets.token_hex(32)
+    setup = make_setup(
+        where,
+        name,
+        {
+            "local.yml": local_text.encode(),
+            "vault.yml": encrypt(EMPTY_VAULT, password),
+            "vault_pass": f"{password}\n".encode(),
+        },
+    )
+    link(root, setup)
+    return setup
+
+
+def adoptable(root: Path) -> None:
+    """Refused unless the checkout's three files are its own and whole, so they can become a setup."""
+    refuse_old_vault(root)
+    for file, rel in FILES.items():
+        path = root / rel
+        if path.is_symlink():
+            raise Refused(f"{rel} is a setup's link already: make vault TYPE=list says which setup this checkout uses")
+        if not path.is_file():
+            raise Refused(f"There is no {rel} to move into a setup: {MAKES[file]}")
+    if vault_keys(root / FILES["vault.yml"], root / FILES["vault_pass"]) is None:
+        raise Refused(
+            f"{FILES['vault.yml']} does not open with .vault_pass: restore the .vault_pass that opens it first, so "
+            "that the setup is whole"
+        )
+
+
+def adopt(root: Path, where: Path, name: str) -> Path:
+    """This checkout's own three files moved into a new setup, and links left in their place."""
+    unused(where, name)
+    adoptable(root)
+    setup = make_setup(where, name, {file: (root / rel).read_bytes() for file, rel in FILES.items()})
+    link(root, setup)
+    return setup
+
+
+def edit(where: Path, name: str) -> int:
+    """ansible-vault edit on another setup's vault, with that setup's password alone."""
+    setup = existing(where, name)
+    for file in ("vault.yml", "vault_pass"):
+        if not (setup / file).is_file():
+            raise Refused(f"Setup {name} has no {file}: restore {shown(setup)} from your password manager")
+    ansible_vault = Path(sys.executable).parent / "ansible-vault"
+    if not ansible_vault.is_file():
+        raise Refused(f"ansible-vault is not in {sys.prefix}: activate the project's virtualenv, or pass VENV=<path>")
+    env = {**os.environ, "ANSIBLE_VAULT_PASSWORD_FILE": str(setup / "vault_pass")}
+    return subprocess.call([str(ansible_vault), "edit", str(setup / "vault.yml")], env=env)
+
+
+def check(root: Path) -> str:
+    """The line a playbook run starts with; Refused when the links are broken."""
+    setup = active(root)
+    return f"Setup: {setup.name} ({shown(setup)})" if setup else "Setup: this checkout's own files"
+
+
+def changed(path: Path) -> str:
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(path.stat().st_mtime)) if path.is_file() else "-"
+
+
+def vault_state(setup: Path) -> str:
+    missing = [file for file in ("vault.yml", "vault_pass") if not (setup / file).is_file()]
+    if missing:
+        return f"no {' and no '.join(missing)}"
+    keys = vault_keys(setup / "vault.yml", setup / "vault_pass")
+    if keys is None:
+        return "does not open"
+    return f"opens, {keys} key{'' if keys == 1 else 's'}"
+
+
+def listing(root: Path, where: Path) -> str:
+    broken = None
+    try:
+        current = active(root)
+    except Refused as e:
+        current, broken = None, str(e)
+    found = names(where)
+    lines = []
+    if found:
+        rows = [("", "NAME", "VAULT", "LOCAL.YML", "VAULT.YML", "VAULT_PASS")]
+        for name in found:
+            setup = where / name
+            mark = "*" if current and same(current, setup) else ""
+            rows.append((mark, name, vault_state(setup), *(changed(setup / file) for file in FILES)))
+        widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
+        lines.append(f"Setups in {shown(where)}, * the one this checkout uses:")
+        for row in rows:
+            lines.append("  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip())
+    else:
+        lines.append(f"No setups in {shown(where)}: make vault TYPE=new NAME=<name> makes one.")
+    if broken:
+        lines.append(broken)
+    elif current and not any(same(current, where / name) for name in found):
+        lines.append(f"This checkout uses setup {current.name}, in {shown(current.parent)}.")
+    elif not current and own_files(root):
+        lines.append(
+            "This checkout uses its own local.yml, vault and .vault_pass, in no setup: make vault TYPE=new "
+            "NAME=<name> FROM=current makes them one."
+        )
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("list")
+    commands.add_parser("check")
+    for command in ("switch", "edit", "new"):
+        commands.add_parser(command).add_argument("name", nargs="?", default="")
+    commands.choices["new"].add_argument("--from", dest="source", default="")
+    args = parser.parse_args(argv)
+    where = store()
+    try:
+        if args.command == "list":
+            print(listing(root, where))
+        elif args.command == "check":
+            print(check(root))
+        elif args.command == "edit":
+            return edit(where, args.name)
+        elif args.command == "switch":
+            if not args.name:
+                raise Refused("make vault TYPE=switch needs NAME=<setup>: make vault TYPE=list lists them")
+            if switch(root, where, args.name):
+                print(f"This checkout uses setup {args.name} now ({shown(where / args.name)}).")
+            else:
+                print(f"This checkout uses setup {args.name} already: nothing to do.")
+        elif args.source not in ("", "current"):
+            raise Refused(f"FROM takes current alone, not {args.source}: make vault TYPE=new NAME=<name> FROM=current")
+        elif not args.name:
+            raise Refused(
+                "FROM=current makes this checkout's own files a setup, which needs a name: make vault TYPE=new "
+                "NAME=<name> FROM=current"
+            )
+        elif args.source:
+            setup = adopt(root, where, args.name)
+            print(
+                f"Moved this checkout's local.yml, vault and .vault_pass into setup {args.name} ({shown(setup)}), and "
+                "linked them back. Keep a copy of that directory in your password manager."
+            )
+        else:
+            import init
+
+            setup = new(root, where, args.name, init.commented_example(root))
+            print(
+                f"Made setup {args.name} ({shown(setup)}): local.yml with every setting commented out, an empty vault "
+                "and its password, readable by you alone. This checkout uses it now, and make init asks for its "
+                "settings. Keep a copy of the directory in your password manager."
+            )
+    except Refused as e:
+        print(e, file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

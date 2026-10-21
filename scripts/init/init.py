@@ -202,6 +202,15 @@ def write_file(path: Path, data: bytes, mode: int) -> None:
     os.replace(tmp, path)
 
 
+def commented_example(root: Path) -> str:
+    """local.yml.example with every setting commented out, as a new local.yml starts: the playbooks read nothing from
+    it until a setting is answered."""
+    doc = YamlKeys((root / EXAMPLE).read_text())
+    for key in doc.values():
+        doc.comment_out(key)
+    return doc.text
+
+
 def has_value(value: Any) -> bool:
     """Set to something, in some part: not empty."""
     if isinstance(value, dict):
