@@ -1,7 +1,8 @@
 ---
 # Copy to group_vars/all/local.yml (git-ignored) and fill in your environment, or run make init, which
-# copies it, asks for each value, writes it here and says what is still missing (make init TYPE=full asks
-# for the less used settings too). A setting added here is added to its list too: scripts/init/settings.py.
+# writes it from this file with every setting commented out, asks for each value, writes it there and says
+# what is still missing (make init TYPE=full asks for the less used settings too). A setting added here is
+# added to its list too: scripts/init/settings.py.
 #
 # This repo is public, so no address is ever written in a task, a role default
 # or any other tracked file. Roles read them from the variables below, and the

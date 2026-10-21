@@ -920,6 +920,12 @@ def without(settings, *names):
         ),
         pytest.param(
             None,
+            CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"cores": 0, "memory_mib": 0}}},
+            ["homeserver-worker-1: cores must be at least 1; homeserver-worker-1: memory_mib must be at least 1"],
+            id="no-cores-or-memory",
+        ),
+        pytest.param(
+            None,
             CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"data_disk_gib": 5}}},
             ["homeserver-worker-1: data_disk_gib must be 0 or at least 11: its Talos volume takes 10 GiB"],
             id="data-disk-under-the-volume-minimum",

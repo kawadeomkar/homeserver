@@ -104,10 +104,11 @@ kubernetes_data_storage: "{{ vm_storage_classes.persistent.proxmox_id if nas_pre
 #     over HTTPS, a branch other than main without flux_sync_ref_unprotected, MetalLB's addresses missing or not
 #     IPv4, a LoadBalancer address outside MetalLB's range or used twice, a node address inside that range, an
 #     allowed ingress range that is not an IPv4 CIDR, a proxmox_address that is not IPv4 (the apps'
-#     NetworkPolicies deny it), the API's extra names given as a string, sizes that are not whole numbers, a data
-#     or media disk under 11 GiB (its Talos volume takes 10, the partition table a little more), a system disk
-#     under the 10 GiB Talos installs on, a worker's under 32 GiB (every app's image), a control plane with a data
-#     or media disk or under 2 GiB of memory, and a worker without a data disk, where the apps' data lives;
+#     NetworkPolicies deny it), the API's extra names given as a string, sizes that are not whole numbers, a node
+#     without cores or memory, a data or media disk under 11 GiB (its Talos volume takes 10, the partition table a
+#     little more), a system disk under the 10 GiB Talos installs on, a worker's under 32 GiB (every app's image), a
+#     control plane with a data or media disk or under 2 GiB of memory, and a worker without a data disk, where the
+#     apps' data lives;
 #   - with a NAS, its bootstrap address alone (a DHCP lease the NAS play replaces), a worker data disk above three
 #     quarters of the persistent VM dataset's quota (vm_storage_persistent_quota_gib), which its snapshots share,
 #     and the settings for media without a NAS: a worker media disk, which would hold nothing, and
@@ -301,6 +302,8 @@ kubernetes_settings_error: >-
   {%-           set _ = badsizes.append(n ~ ': ' ~ k ~ ' is not a size (' ~ kubernetes_node_size_keys | join(', ') ~ ')') -%}
   {%-         elif v is not integer or v is boolean or v < 0 -%}
   {%-           set _ = badsizes.append(n ~ ': ' ~ k ~ ' must be a whole number') -%}
+  {%-         elif k in ['cores', 'memory_mib'] and v < 1 -%}
+  {%-           set _ = badsizes.append(n ~ ': ' ~ k ~ ' must be at least 1') -%}
   {%-         elif k in ['data_disk_gib', 'media_disk_gib'] and 0 < v < 11 -%}
   {%-           set _ = badsizes.append(n ~ ': ' ~ k ~ ' must be 0 or at least 11: its Talos volume takes 10 GiB, and '
                                     ~ 'the partition table a little more') -%}

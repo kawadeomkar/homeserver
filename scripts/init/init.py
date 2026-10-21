@@ -5,6 +5,10 @@ one top-level key at a time, so the rest of each file and its comments stay as t
 once: stopping halfway keeps what was answered. A setting already set is shown, and Enter keeps it, so make init can
 be run again to change a setting or fill in one that was skipped. Secrets are never shown, only whether they are set.
 
+A new local.yml is local.yml.example with every setting commented out, so the playbooks read nothing from it until
+a setting is answered. One an older make init copied from the example loses the example's own values the same way,
+and keeps whatever was changed.
+
 A plain run asks for the required and recommended settings and the popular optional ones; --full (make init
 TYPE=full) asks for every one. It ends with a summary: what is still required (settings left unset, what the
 playbooks' own checks would refuse, files the cluster needs, tools), then the steps only done by hand.
@@ -158,6 +162,20 @@ class YamlKeys:
             self.lines.append("")
         self.lines += new
 
+    def comment_out(self, key: str) -> bool:
+        """The key's lines as comments (# key: value), as local.yml.example shows a setting it leaves unset."""
+        span = self.block(key)
+        if span:
+
+            def comment() -> None:
+                self.lines[span[0] : span[1]] = [
+                    f"# {line}" if line.strip() and not line.startswith("#") else line
+                    for line in self.lines[span[0] : span[1]]
+                ]
+
+            self._edit(key, comment, {k: v for k, v in self.values().items() if k != key})
+        return bool(span)
+
     def unset(self, key: str) -> bool:
         span = self.block(key)
         if span:
@@ -180,18 +198,17 @@ def write_file(path: Path, data: bytes, mode: int) -> None:
 
 
 def has_value(value: Any) -> bool:
-    """Set to something real, in some part: not empty, not only local.yml.example's placeholders."""
-    return cfg.real_part(value) is not None
+    """Set to something, in some part: not empty."""
+    if isinstance(value, dict):
+        return any(has_value(v) for v in value.values())
+    if isinstance(value, list):
+        return any(has_value(v) for v in value)
+    return cfg.is_set(value)
 
 
 def show(value: Any) -> str:
     if value is None:
         return "not set"
-    if cfg.is_placeholder(value):
-        real = cfg.real_part(value)
-        if real is None:
-            return "local.yml.example's placeholder"
-        return f"{show(real)}, beside local.yml.example's placeholders, which go"
     if isinstance(value, bool):
         return "yes" if value else "no"
     if isinstance(value, dict):
@@ -311,8 +328,10 @@ class Init:
         self.interactive = interactive
         self.order = [s.key for s in cfg.SETTINGS]
         self.local_path = root / LOCAL
+        self.example = YamlKeys((root / EXAMPLE).read_text()).values()
         source = self.local_path if self.local_path.is_file() else root / EXAMPLE
         self.local = YamlKeys(source.read_text())
+        self.examples_left: list[str] = []  # local.yml.example's values local.yml still holds on disk
         self.vault = Vault(root)
         self.ssh: tuple[bool, str] | None = None
         self.offered_macs: set[str] = set()
@@ -363,13 +382,7 @@ class Init:
         write_file(self.local_path, self.local.text.encode(), mode)
 
     def apply(self, s: cfg.Setting, answer: Any) -> None:
-        if answer is KEEP:
-            if not cfg.is_placeholder(self.current(s)):
-                return
-            # A placeholder kept would be used as the real value: only the real part, if any, stays.
-            answer = cfg.real_part(self.current(s))
-            answer = CLEAR if answer is None else answer
-        elif answer is not CLEAR and answer == self.current(s):
+        if answer is KEEP or (answer is not CLEAR and answer == self.current(s)):
             return  # unchanged: the file keeps its own way of writing it
         try:
             if s.secret:
@@ -512,7 +525,7 @@ class Init:
                 out[node] = value
             elif answer not in (KEEP, CLEAR):
                 out[node] = answer
-        self.apply(s, cfg.real_part(out) or CLEAR)
+        self.apply(s, out or CLEAR)
 
     def ask_parts(
         self, s: cfg.Setting, parts: tuple[str, ...], defaults: dict, now: dict | None = None, node: str = ""
@@ -525,9 +538,10 @@ class Init:
             value = now.get(part)
             shown_default = defaults.get(part)
             label = f"{part} (default {shown_default})" if shown_default is not None else part
-            answer = self.ask_value(
-                s, value, None, cfg.PARSERS["positive_int"], part=f"{node}.{part}" if node else part, label=label
-            )
+            if part in cfg.OPTIONAL_DISKS:
+                label += ", 0 for none"
+            parse = cfg.PARSERS["size_or_none" if part in cfg.OPTIONAL_DISKS else "positive_int"]
+            answer = self.ask_value(s, value, None, parse, part=f"{node}.{part}" if node else part, label=label)
             if answer is KEEP and value is not None:
                 out[part] = value
             elif answer not in (KEEP, CLEAR):
@@ -564,7 +578,7 @@ class Init:
                 out[pool] = value
             elif answer not in (KEEP, CLEAR):
                 out[pool] = answer
-        self.apply(s, cfg.real_part(out) or CLEAR)  # the example's serials beside real ones go
+        self.apply(s, out or CLEAR)
 
     # ------------------------------------------------------------------------------------------ suggestions ---
     def taken_macs(self) -> set[str]:
@@ -680,11 +694,8 @@ class Init:
                 self.ask_setting(s)
                 if s.key == "proxmox_address" and has_value(self.current(s)):
                     self.offer_ssh()
-            elif not s.secret:  # a secret no setting reads does no harm in the vault, and is there when one does
-                if self.applies(s):
-                    self.drop_placeholders(s)
-                else:
-                    self.offer_removal(s)
+            elif not s.secret and not self.applies(s):  # a secret no setting reads does no harm in the vault
+                self.offer_removal(s)
         if section == "cluster":
             self.cluster_files()
 
@@ -708,15 +719,6 @@ class Init:
             return
         if self.unset_local(s.key):
             self.save_local()
-
-    def drop_placeholders(self, s: cfg.Setting) -> None:
-        """local.yml.example's value for a setting this run leaves out would pass for a real one: it goes, and
-        anything real beside it stays."""
-        value = self.values.get(s.key)
-        if not cfg.is_placeholder(value):
-            return
-        real = cfg.real_part(value)
-        self.apply(s, CLEAR if real is None else real)
 
     def offer_ssh(self) -> None:
         address = self.values["proxmox_address"]
@@ -817,8 +819,45 @@ class Init:
             self.vault.open()
 
     # ------------------------------------------------------------------------------------------------ run ---
+    def start_local(self) -> None:
+        """local.yml without local.yml.example's own values: written when it is new or a terminal runs make init;
+        otherwise only read so, and the summary says what the file still holds."""
+        new = not self.local_path.exists()
+        dropped = self.drop_example_values()
+        if new or (self.interactive and dropped):
+            self.save_local()
+            if dropped and not new:
+                self.console.say(
+                    f"local.yml held local.yml.example's own values for {', '.join(dropped)}: they are commented out "
+                    "now, and asked for below."
+                )
+        else:
+            self.examples_left = dropped
+
+    def drop_example_values(self) -> list[str]:
+        """Comment out each setting still at local.yml.example's value, and drop the example's entries from one that
+        holds real ones beside them; the settings changed so."""
+        dropped = []
+        for key, value in self.values.items():
+            if key not in self.example:
+                continue
+            kept = cfg.without_example(value, self.example[key])
+            if kept == value:
+                continue
+            try:
+                if kept is None:
+                    self.local.comment_out(key)
+                else:
+                    self.local.set(key, kept, self.order)
+            except EditError as e:
+                self.console.say(f"{key} holds local.yml.example's value, and {e}: change it by hand in {LOCAL}.")
+                continue
+            dropped.append(key)
+        return dropped
+
     def run(self) -> None:
         self.vault.open()
+        self.start_local()
         if self.interactive:
             self.console.say(
                 "Each setting shows its value: Enter keeps it, - clears it, ? explains it. Every answer is saved at "
@@ -900,7 +939,6 @@ class Init:
                 f"The vault {self.vault_problem()}: restore .vault_pass from your password manager, or "
                 "without the maintainer's NAS make one of your own with make vault-init (README.md)"
             )
-        flagged = set()
         for s in cfg.SETTINGS:
             if not on[s.section] or not self.applies(s):
                 continue
@@ -910,17 +948,15 @@ class Init:
             value = self.current(s)
             if has_value(value):
                 continue
-            flagged.add(s.key)
             text = f"{s.key}: {s.label}"
             if need == "required":
                 required.append(text)
             elif need == "recommended":
                 recommended.append(text)
-        left = [k for k, value in v.items() if k not in flagged and cfg.is_placeholder(value)]
-        if left:
+        if self.examples_left:
             required.append(
-                f"local.yml still holds local.yml.example's placeholders for {', '.join(left)}: make init asks for "
-                "them, and clears those of a part the setup does not have"
+                f"local.yml still holds local.yml.example's own values for {', '.join(self.examples_left)}, which the "
+                "playbooks would read as real ones: make init in a terminal comments them out and asks for them"
             )
 
         if on["cluster"]:
@@ -1013,8 +1049,11 @@ class Init:
                 "homeassistant (scripts/runbooks/haos.md)"
             )
             if not on["nas"]:
+                storage = v.get("haos_import_storage") or cfg.DEFAULTS["haos_import_storage"]
                 manual.append(
-                    "On the Proxmox host, once: pvesm set local --content backup,import,iso,vztmpl,images "
+                    f"On the Proxmox host, once: {storage} must hold import and images content, beside what it holds "
+                    f"now (--content replaces the whole list). Read the list with pvesh get /storage/{storage}, then "
+                    f"pvesm set {storage} --content <that list, plus whichever of import and images it lacks> "
                     "(scripts/runbooks/haos.md, step 5)"
                 )
         keep = ["local.yml", ".vault_pass"] + (

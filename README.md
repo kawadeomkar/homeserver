@@ -58,8 +58,8 @@ SECURITY.md              how to report a vulnerability privately
 ```
 
 `inventory`, `group_vars/all/local.yml` and `./.vault_pass` are gitignored and must be created locally:
-`make init` copies the first two from their examples, then asks for every setting a deployment needs, one by one,
-and ends with what is still missing. Run it again whenever a setting changes: each shows its value, and Enter keeps
+`make init` copies `inventory` from its example and writes `local.yml` from its, every setting commented out, then
+asks for every setting a deployment needs, one by one, and ends with what is still missing. Run it again whenever a setting changes: each shows its value, and Enter keeps
 it. A plain run asks for the required and the popular optional settings; `make init TYPE=full` for every one.
 No address is ever written in a tracked file: tasks and role defaults read them from variables whose real
 values live only in `local.yml`. Kubernetes Secrets are **not**

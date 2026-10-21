@@ -89,9 +89,15 @@ def repo(tmp_path, monkeypatch):
     shutil.copy(ROOT / "inventory.example", root / "inventory")
     (root / "scripts" / "init").mkdir(parents=True)
     shutil.copy(ROOT / "scripts" / "init" / "validate.yml", root / "scripts" / "init" / "validate.yml")
-    shutil.copy(root / "group_vars/all/local.yml.example", root / "group_vars/all/local.yml")
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     return root
+
+
+def legacy_copy(root: Path) -> Path:
+    """local.yml as an older make init left it: a copy of local.yml.example, its values in force."""
+    path = root / "group_vars/all/local.yml"
+    shutil.copy(root / "group_vars/all/local.yml.example", path)
+    return path
 
 
 def make_vault(root: Path, data: dict, text: str | None = None) -> None:
@@ -109,7 +115,7 @@ def read_vault(root: Path) -> dict:
 
 
 def local(root: Path) -> dict:
-    return yaml.safe_load((root / "group_vars/all/local.yml").read_text())
+    return yaml.safe_load((root / "group_vars/all/local.yml").read_text()) or {}
 
 
 def init_run(root: Path, console: Scripted, *, full: bool = False, interactive: bool = True, checks=None):
@@ -219,6 +225,7 @@ def fill(value):
         ("fingerprint", "ab" * 32, ":".join(["AB"] * 32)),
         ("mail_security", "tls", "TLS"),
         ("vmid_list", "320 330", [320, 330]),
+        ("size_or_none", "0", 0),
     ],
 )
 def test_answers_are_read_as_the_playbooks_want_them(kind, text, value):
@@ -237,6 +244,8 @@ def test_answers_are_read_as_the_playbooks_want_them(kind, text, value):
         ("owner_password", "short"),
         ("storage_id", "Local ZFS"),
         ("vmid", "99"),
+        ("positive_int", "0"),
+        ("size_or_none", "-1"),
     ],
 )
 def test_a_bad_answer_is_refused(kind, text):
@@ -255,27 +264,12 @@ def test_a_repository_address_with_credentials_is_refused():
         cfg.PARSERS["https_url"](url)
 
 
-@pytest.mark.parametrize(
-    ("value", "placeholder"),
-    [
-        ("smtp.example.org", True),
-        ("nas@example.org", True),
-        ("example.com", True),
-        ("smtp.myexample.com", False),
-        ("me@counterexample.org", False),
-        ("mail.example.org.elsewhere.net", False),
-    ],
-)
-def test_only_the_example_domains_are_placeholders(value, placeholder):
-    assert cfg.is_placeholder(value) is placeholder
-
-
-def test_the_real_part_of_a_value_is_what_is_not_a_placeholder():
-    assert cfg.real_part({"persistent": ["disk-1", "SERIAL-0002"], "ephemeral": ["SERIAL-0006"]}) == {
-        "persistent": ["disk-1"]
-    }
-    assert cfg.real_part({"a": "<mac>"}) is None
-    assert cfg.real_part([False, 0]) == [False, 0]
+def test_only_what_a_value_shares_with_the_example_goes():
+    example = {"persistent": ["SERIAL-0001", "SERIAL-0002"], "ephemeral": ["SERIAL-0006"]}
+    value = {"persistent": ["disk-1", "SERIAL-0002"], "ephemeral": ["SERIAL-0006"]}
+    assert cfg.without_example(value, example) == {"persistent": ["disk-1"]}
+    assert cfg.without_example(example, example) is None
+    assert cfg.without_example("smtp.example.org", "<server>") == "smtp.example.org", "never judged by its look"
 
 
 # ------------------------------------------------------------------------------------------------ runs ---
@@ -301,8 +295,6 @@ def first_run_answers() -> dict:
 
 
 def test_a_first_run_writes_each_answer_and_says_what_is_missing(repo):
-    (repo / "group_vars/all/local.yml").chmod(0o640)
-    mode = 0o640
     console = Scripted(first_run_answers())
     init_run(repo, console)
     v = local(repo)
@@ -333,7 +325,7 @@ def test_a_first_run_writes_each_answer_and_says_what_is_missing(repo):
     assert "make check-kubernetes && make kubernetes" in summary
     assert "vm_backup_storage" in summary.split("RECOMMENDED")[1]
     assert "TYPE=full also asks" in summary
-    assert stat.S_IMODE((repo / "group_vars/all/local.yml").stat().st_mode) == mode, "its mode is kept"
+    assert stat.S_IMODE((repo / "group_vars/all/local.yml").stat().st_mode) == 0o600, "readable by its owner alone"
 
 
 def test_a_second_run_of_enters_changes_nothing(repo):
@@ -406,11 +398,33 @@ def test_a_vault_password_that_does_not_open_the_vault_is_not_kept(repo):
     assert "That password does not open the vault." in console.text
 
 
-def test_without_a_terminal_it_asks_nothing_and_summarises(repo):
+def test_a_new_local_yml_is_the_example_with_every_setting_commented_out(repo):
     console = Silent()
     init_run(repo, console, interactive=False)
-    assert "local.yml.example's placeholder" in console.out[-1]
-    assert (repo / "group_vars/all/local.yml").read_text() == (repo / "group_vars/all/local.yml.example").read_text()
+    path = repo / "group_vars/all/local.yml"
+    assert local(repo) == {}, "the playbooks read nothing from it yet"
+    example = yaml.safe_load((repo / "group_vars/all/local.yml.example").read_text())
+    assert all(f"# {key}:" in path.read_text() for key in example)
+    assert "proxmox_address: The Proxmox host's address" in console.out[-1].split("STILL REQUIRED")[1]
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_without_a_terminal_it_asks_nothing_and_changes_nothing(repo):
+    path = legacy_copy(repo)
+    console = Silent()
+    init_run(repo, console, interactive=False)
+    assert path.read_text() == (repo / "group_vars/all/local.yml.example").read_text()
+    assert "local.yml still holds local.yml.example's own values for truenas_static_address" in console.out[-1]
+
+
+def test_an_older_copy_of_the_example_loses_its_values_and_keeps_its_changes(repo):
+    path = legacy_copy(repo)
+    path.write_text(path.read_text().replace("proxmox_address: 192.0.2.20", f"proxmox_address: {lan(10)}"))
+    console = Scripted({"switch:nas": "n", "switch:remote": "n", "switch:cluster": "n", "switch:homeassistant": "n"})
+    init_run(repo, console)
+    assert local(repo) == {"proxmox_address": lan(10)}
+    assert "# kubernetes_node_macs:" in path.read_text(), "commented out where it was"
+    assert "they are commented out now" in console.text
 
 
 def test_the_summary_carries_the_playbooks_own_refusals(repo):
@@ -447,7 +461,9 @@ def test_a_comment_inside_a_setting_never_mixes_two_settings(repo):
     path.write_text(
         path.read_text().replace("kubernetes_node_addresses:\n", "kubernetes_node_addresses:\n# The nodes.\n")
     )
+    path.chmod(0o640)
     init_run(repo, Scripted({"kubernetes_node_addresses/homeserver-cp-1": lan(32)}))
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640, "its mode is kept"
     v = local(repo)
     assert v["kubernetes_node_addresses"] == {"homeserver-cp-1": lan(32), "homeserver-worker-1": lan(31)}
     assert v["kubernetes_node_macs"] == macs
@@ -455,7 +471,7 @@ def test_a_comment_inside_a_setting_never_mixes_two_settings(repo):
 
 def test_a_change_that_cannot_be_made_in_place_leaves_the_file_as_it_was(repo):
     path = repo / "group_vars/all/local.yml"
-    path.write_text(path.read_text() + f"proxmox_address: {lan(11)}\n")  # written twice: YAML keeps this one
+    path.write_text(f"---\nproxmox_address: {lan(10)}\nproxmox_address: {lan(11)}\n")  # twice: YAML keeps the last
     before = path.read_text()
     console = Scripted({"switch:nas": "n", "switch:remote": "n", "switch:cluster": "n", "switch:homeassistant": "n"})
     console.answers["proxmox_address"] = lan(12)
@@ -496,8 +512,8 @@ def test_git_origin_is_shown_as_an_https_address(repo, monkeypatch, origin, show
     assert init.origin_url() == shown
 
 
-def test_the_examples_placeholders_go_and_the_real_values_beside_them_stay(repo):
-    path = repo / "group_vars/all/local.yml"
+def test_the_examples_values_go_and_the_real_values_beside_them_stay(repo):
+    path = legacy_copy(repo)
     text = path.read_text().replace("SERIAL-0001", "disk-1").replace("SERIAL-0002", "disk-2")
     path.write_text(text.replace("homeserver-cp-1: 192.0.2.30", f"homeserver-cp-1: {lan(30)}"))
     console = Scripted(
@@ -554,3 +570,26 @@ def test_a_setting_whose_lead_is_cleared_is_offered_for_removal(repo):
     init_run(repo, console)
     assert "remove:truenas_alert_email" in console.topics
     assert not [k for k in local(repo) if k.startswith(("truenas_mail_", "truenas_alert_"))]
+
+
+def test_the_home_assistant_step_names_its_storage_and_keeps_its_content(repo):
+    path = repo / "group_vars/all/local.yml"
+    path.write_text(f"---\nproxmox_address: {lan(10)}\nhaos_mac: '{mac(9)}'\nhaos_import_storage: local-btrfs\n")
+    console = Silent()
+    init_run(repo, console, interactive=False)
+    summary = " ".join(console.out[-1].split())
+    assert "pvesh get /storage/local-btrfs" in summary and "pvesm set local-btrfs --content" in summary
+    assert "--content replaces the whole list" in summary
+
+
+def test_a_size_is_never_zero_but_a_disk_may_be_none(repo):
+    answers = {
+        **first_run_answers(),
+        "kubernetes_node_sizes/homeserver-worker-1.cores": ["0", "4"],
+        "kubernetes_node_sizes/homeserver-worker-1.media_disk_gib": "0",
+    }
+    console = Scripted(answers)
+    init_run(repo, console)
+    assert "give a whole number of at least 1" in console.text
+    assert local(repo)["kubernetes_node_sizes"]["homeserver-worker-1"]["cores"] == 4
+    assert local(repo)["kubernetes_node_sizes"]["homeserver-worker-1"]["media_disk_gib"] == 0

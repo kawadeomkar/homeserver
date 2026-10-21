@@ -111,7 +111,6 @@ init: venv ## Setup, and again whenever a setting changes: the git hooks, then l
 	$(BIN)/pre-commit install
 	git config blame.ignoreRevsFile .git-blame-ignore-revs
 	@test -f inventory || cp inventory.example inventory
-	@test -f group_vars/all/local.yml || cp group_vars/all/local.yml.example group_vars/all/local.yml
 	@$(BIN)/python scripts/init/init.py $(if $(TYPE),--full)
 
 .PHONY: lint linters lint-lock lint-yaml lint-ansible lint-python lint-module-docs lint-github lint-docs test

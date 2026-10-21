@@ -203,6 +203,20 @@ def _int(text: str) -> int:
         raise ValueError(f"{text.strip()!r} is not a whole number") from None
 
 
+def _count(text: str) -> int:
+    value = _int(text)
+    if value < 1:
+        raise ValueError("give a whole number of at least 1")
+    return value
+
+
+def _size_or_none(text: str) -> int:
+    value = _int(text)
+    if value < 0:
+        raise ValueError("give a whole number, or 0 for none")
+    return value
+
+
 def _vmid(text: str) -> int:
     value = _int(text)
     if not 100 <= value <= 999_999_999:
@@ -313,7 +327,8 @@ PARSERS = {
     "usb": _usb,
     "secret": _secret,
     "owner_password": _owner_password,
-    "positive_int": _int,
+    "positive_int": _count,
+    "size_or_none": _size_or_none,
 }
 
 # Composite kinds, asked part by part: node_map (each node's value, of fields' kind), node_sizes, haos_size,
@@ -324,6 +339,8 @@ NODE_SIZE_FIELDS = {
     CONTROL_PLANE: ("cores", "memory_mib", "system_disk_gib"),
     WORKER: ("cores", "memory_mib", "system_disk_gib", "data_disk_gib", "media_disk_gib"),
 }
+# The sizes 0 may give: no such disk.
+OPTIONAL_DISKS = ("media_disk_gib",)
 
 S = Setting
 SETTINGS: tuple[Setting, ...] = (
@@ -341,7 +358,7 @@ SETTINGS: tuple[Setting, ...] = (
         "proxmox_local_vm_storage",
         "proxmox",
         "storage_id",
-        "The installer's VM storage, when it is not local-lvm",
+        f"The installer's VM storage, when it is not {DEFAULTS['proxmox_local_vm_storage']}",
         help="local-zfs on a ZFS install, local-btrfs on a BTRFS one. It holds every VM's disks without a NAS, and the "
         "cluster's system disks with one too.",
         popular=True,
@@ -400,8 +417,18 @@ SETTINGS: tuple[Setting, ...] = (
         need="recommended",
         help="Compare it with System -> Certificates in the TrueNAS web UI. Replace it whenever the certificate is.",
     ),
-    S("truenas_pool_persistent", "nas", "pool_name", "The redundant pool's name, when it is not persistent"),
-    S("truenas_pool_ephemeral", "nas", "pool_name", "The pool without redundancy's name, when it is not ephemeral"),
+    S(
+        "truenas_pool_persistent",
+        "nas",
+        "pool_name",
+        f"The redundant pool's name, when it is not {DEFAULTS['truenas_pool_persistent']}",
+    ),
+    S(
+        "truenas_pool_ephemeral",
+        "nas",
+        "pool_name",
+        f"The pool without redundancy's name, when it is not {DEFAULTS['truenas_pool_ephemeral']}",
+    ),
     S(
         "truenas_pool_disks",
         "nas",
@@ -523,7 +550,7 @@ SETTINGS: tuple[Setting, ...] = (
         "flux_sync_ref",
         "cluster",
         "git_ref",
-        "The branch Flux syncs, when not main",
+        f"The branch Flux syncs, when not {DEFAULTS['flux_sync_ref'].removeprefix('refs/heads/')}",
         help="Only main is protected; whoever can push to another branch owns the cluster "
         "(scripts/runbooks/talos.md, Syncing a branch other than main).",
     ),
@@ -581,7 +608,7 @@ SETTINGS: tuple[Setting, ...] = (
         "kubernetes_iso_storage",
         "cluster",
         "storage_id",
-        "The storage for the Talos ISO, when not local",
+        f"The storage for the Talos ISO, when not {DEFAULTS['kubernetes_iso_storage']}",
         help="local-btrfs on a BTRFS install, which disables local.",
     ),
     S(
@@ -596,14 +623,14 @@ SETTINGS: tuple[Setting, ...] = (
         "kubernetes_talos_config_dir",
         "cluster",
         "path",
-        "Where this machine keeps the cluster's credentials, when not ~/.talos/homeserver",
+        f"Where this machine keeps the cluster's credentials, when not {DEFAULTS['kubernetes_talos_config_dir']}",
         help="One directory per cluster, outside the repository: a test host's names its own.",
     ),
     S(
         "sops_age_key_file",
         "cluster",
         "path",
-        "The age key Flux decrypts the cluster's Secrets with, when not ~/.config/sops/age/homeserver.agekey",
+        f"The age key Flux decrypts the cluster's Secrets with, when not {DEFAULTS['sops_age_key_file']}",
     ),
     S(
         "haos_url",
@@ -641,15 +668,27 @@ SETTINGS: tuple[Setting, ...] = (
         "USB resource mapping, separated by commas.",
         popular=True,
     ),
-    S("haos_size", "homeassistant", "haos_size", "Its size, when not 2 cores, 4 GiB of memory and a 32 GiB disk"),
-    S("haos_owner_name", "homeassistant", "text", "The owner account's name, when not Owner"),
-    S("haos_owner_username", "homeassistant", "username", "The owner account's username, when not owner"),
-    S("haos_vmid", "homeassistant", "vmid", "Its VMID, when 310 is taken"),
+    S(
+        "haos_size",
+        "homeassistant",
+        "haos_size",
+        "Its size, when not {cores} cores, {memory_mib} MiB of memory and a {disk_gib} GiB disk".format(
+            **DEFAULTS["haos_size"]
+        ),
+    ),
+    S("haos_owner_name", "homeassistant", "text", f"The owner account's name, when not {DEFAULTS['haos_owner_name']}"),
+    S(
+        "haos_owner_username",
+        "homeassistant",
+        "username",
+        f"The owner account's username, when not {DEFAULTS['haos_owner_username']}",
+    ),
+    S("haos_vmid", "homeassistant", "vmid", f"Its VMID, when {DEFAULTS['haos_vmid']} is taken"),
     S(
         "haos_import_storage",
         "homeassistant",
         "storage_id",
-        "The storage the OVA is extracted on, when not local",
+        f"The storage the OVA is extracted on, when not {DEFAULTS['haos_import_storage']}",
         help="local-btrfs on a BTRFS install, which disables local.",
     ),
 )
@@ -657,43 +696,23 @@ del S
 
 BY_KEY = {s.key: s for s in SETTINGS}
 
-# Values local.yml.example carries as documentation, never real ones: RFC 5737 addresses, <...>, made-up serials,
-# the example domains (RFC 2606: the domain itself or a name under it, never a name that only contains it) and the
-# example fingerprint.
-_PLACEHOLDER = re.compile(
-    r"\b(192\.0\.2|198\.51\.100|203\.0\.113)\.\d+|<[^>]*>|^SERIAL-\d+$|(?<![\w-])example\.(org|com|net)(?![\w.-])"
-)
 
-
-# local.yml.example's certificate pin begins so.
-_EXAMPLE_PIN = "AA:BB:CC:DD:EE:FF:00:11:22:33"
-
-
-def is_placeholder(value: Any) -> bool:
-    """Whether the value holds a placeholder anywhere: a mapping or list may hold real values beside it (real_part)."""
-    if isinstance(value, str) and value.upper().startswith(_EXAMPLE_PIN):
-        return True
-    if isinstance(value, dict):
-        return any(is_placeholder(v) for v in value.values())
-    if isinstance(value, list):
-        return any(is_placeholder(v) for v in value)
-    return isinstance(value, str) and bool(_PLACEHOLDER.search(value))
-
-
-def real_part(value: Any) -> Any:
-    """The value without its placeholders and empty parts: a mapping or list keeps its real entries, and None is left
-    when nothing real is."""
-    if isinstance(value, dict):
-        kept = {k: r for k, v in value.items() if (r := real_part(v)) is not None}
+def without_example(value: Any, example: Any) -> Any:
+    """A setting's value without what it shares with local.yml.example's value for it, which an older make init
+    copied into local.yml: an entry of a mapping equal to the example's, an item of a list the example's list holds.
+    None when nothing else is left."""
+    if value == example:
+        return None
+    if isinstance(value, dict) and isinstance(example, dict):
+        kept = {k: r for k, v in value.items() if (r := without_example(v, example.get(k))) is not None}
         return kept or None
-    if isinstance(value, list):
-        kept = [r for v in value if (r := real_part(v)) is not None]
-        return kept or None
-    return value if is_set(value) else None
+    if isinstance(value, list) and isinstance(example, list):
+        return [v for v in value if v not in example] or None
+    return value
 
 
 def is_set(value: Any) -> bool:
-    if value is None or is_placeholder(value):
+    if value is None:
         return False
     if isinstance(value, str | list | dict):
         return bool(value.strip() if isinstance(value, str) else value)
