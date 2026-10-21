@@ -24,11 +24,11 @@ builds the VM and `roles/haos_onboard` gives a new Home Assistant its owner acco
 
 5. **Without a NAS, images on `local`, once.** Proxmox extracts the OVA's disk onto a directory storage that holds
    VM images before converting it onto `local-lvm`, and a fresh install's `local` holds none. On the Proxmox host:
-   `pvesm set local --content backup,import,iso,vztmpl,images` (keep whatever `pvesm status` lists there now). The
-   extracted copy is removed after the import. With a NAS, its storage serves, and nothing is needed. The run
-   refuses, naming the command, until it is done; no role changes the installer's storages. A BTRFS install disables
-   `local`: name `local-btrfs` in `local.yml` as `haos_import_storage`. It holds images already; the run refuses,
-   naming it, if it lacks `import` content.
+   `pvesm set local --content backup,import,iso,vztmpl,images`, keeping whatever else it holds now: `--content`
+   replaces the whole list, which `pvesh get /storage/local` shows. The extracted copy is removed after the import.
+   With a NAS, its storage serves, and nothing is needed. The run refuses, naming the command, until it is done; no
+   role changes the installer's storages. A BTRFS install disables `local`: name `local-btrfs` in `local.yml` as
+   `haos_import_storage`. It holds images already; the run refuses, naming it, if it lacks `import` content.
 
 `make proxmox` must have run, so the storage the disk goes on exists.
 

@@ -104,12 +104,14 @@ lock: $(BIN)/activate ## Update poetry.lock after editing pyproject.toml (UPDATE
 	$(POETRY_RUN) $(if $(UPDATE),update --lock $(UPDATE),lock)
 
 .PHONY: init
-init: venv ## One-time setup: venv, the git hooks, plus inventory and local.yml from their examples
+# The settings are asked for by scripts/init/init.py, which says at the end what is still required. Run it again
+# whenever a setting changes: Enter keeps each one as it is. Without a terminal it only prints that summary.
+init: venv ## Setup, and again whenever a setting changes: the git hooks, then local.yml and the vault asked for one by one (TYPE=full: every optional setting too)
+	@case "$(TYPE)" in ""|full) ;; *) echo "TYPE is full or nothing, not $(TYPE)"; exit 2;; esac
 	$(BIN)/pre-commit install
 	git config blame.ignoreRevsFile .git-blame-ignore-revs
 	@test -f inventory || cp inventory.example inventory
-	@test -f group_vars/all/local.yml || cp group_vars/all/local.yml.example group_vars/all/local.yml
-	@echo "Now fill in group_vars/all/local.yml (git-ignored) and make sure .vault_pass exists."
+	@$(BIN)/python scripts/init/init.py $(if $(TYPE),--full)
 
 .PHONY: lint linters lint-lock lint-yaml lint-ansible lint-python lint-module-docs lint-github lint-docs test
 lint: linters test ## Every linter, then the unit and policy tests

@@ -1,0 +1,16 @@
+---
+# make init's last step (scripts/init/init.py): the settings checks every playbook asserts first, evaluated on this
+# machine alone, so the summary says what the playbooks would refuse. It connects nowhere, and writes only the file
+# make init reads back (init_checks_file, in a directory of its own): the implicit localhost reads group_vars/all
+# like every host. Each message is empty when its check passes.
+- name: Evaluate the settings checks
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Write each check's message for make init
+      ansible.builtin.copy:
+        content: >-
+          {{ {'nas': nas_section_error, 'kubernetes': kubernetes_settings_error,
+              'homeassistant': haos_settings_error} | to_json }}
+        dest: "{{ init_checks_file }}"
+        mode: "0600"
