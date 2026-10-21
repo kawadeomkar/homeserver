@@ -112,13 +112,37 @@
       tailscaled does not answer on the node (tailscale status: {{ proxmox_tailscale_backend }}); see journalctl -u
       tailscaled.
 
+# The guard filters by interface name, and tailscale0 is the one tailscaled makes by default, before its backend
+# answers. Started with --tun naming another interface, tailscaled would forward past the guard; with
+# userspace-networking it makes none, and its connections come from the node itself, which the guard cannot see.
+# Checked before any login, so a node that would bypass the guard never advertises a route.
+- name: node | Read whether tailscaled has the interface the guard filters
+  ansible.builtin.command:
+    argv: [ip, -o, link, show, dev, tailscale0]
+  register: proxmox_tailscale_interface
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: proxmox_tailscale_status.rc == 0
+
+- name: node | Refuse a tailscaled the guard cannot see
+  ansible.builtin.assert:
+    that: proxmox_tailscale_interface.rc == 0
+    fail_msg: >-
+      tailscaled is running without the interface tailscale0, which the tailnet guard filters by name: it was started
+      with --tun naming another interface, or with --tun=userspace-networking, whose connections come from the node
+      itself. Remove --tun from FLAGS in /etc/default/tailscaled, and from any drop-in that changes tailscaled's
+      command line, then restart tailscaled at the console and run again.
+    quiet: true
+  when: proxmox_tailscale_interface is not skipped
+
 - name: node | Refuse to log in without an auth key
   ansible.builtin.assert:
     that: proxmox_tailscale_backend != 'NeedsLogin' or proxmox_tailscale_auth_key | length > 0
     fail_msg: >-
       The node is not logged in to a tailnet, and proxmox_tailscale_auth_key is empty. Make a one-off, pre-approved
       auth key tagged {{ proxmox_tailscale_tags | join(', ') }} in Tailscale's admin console, set it (in this repo:
-      vault_tailscale_auth_key in the vault, with make vault-edit; scripts/runbooks/tailscale.md), and run again.
+      vault_tailscale_auth_key in the vault, with make vault; scripts/runbooks/tailscale.md), and run again.
     quiet: true
 
 # The key goes to the node in a file only root can read, and to tailscale as --auth-key=file:<path>, so it never

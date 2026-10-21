@@ -3,7 +3,7 @@
 # secrets.yaml) by talosctl gen config: the patches for every node, then for its role, then its own, each passed
 # inline (--config-patch takes the YAML itself), so none is written to disk. Takes
 # talos_render: [{name, role, version, contract, kubernetes_version, install_image, patches}]. A local render, so it
-# runs in check mode too. tests/talos_validate.yml renders through this file as well, for make lint-talos.
+# runs in check mode too. tests/talos_validate.yml renders through this file as well, for make lint TYPE=talos.
 
 # The pod network talosctl gives a cluster, asked for rather than written out: the patches can use it as
 # talos_pod_subnets (this repository's firewall lets it reach the kubelet and the metrics on a node).

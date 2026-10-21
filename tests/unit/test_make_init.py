@@ -38,7 +38,7 @@ class Scripted(wizard.Console):
             "read-certificate": "n",
             "bundle": "n",
             "age-key": "n",
-            "vault-init": "n",
+            "vault-new": "n",
             "have-password": "n",
             **(answers or {}),
         }
@@ -82,7 +82,7 @@ def repo(tmp_path, monkeypatch):
     shutil.copytree(
         ROOT / "group_vars" / "all",
         root / "group_vars" / "all",
-        ignore=shutil.ignore_patterns("local.yml", "vault.yml"),
+        ignore=shutil.ignore_patterns("local.yml", "local.vault.yml", "vault.yml"),
     )
     for name in ("inventory.example", ".sops.yaml", "ansible.cfg"):
         shutil.copy(ROOT / name, root / name)
@@ -106,12 +106,12 @@ def make_vault(root: Path, data: dict, text: str | None = None) -> None:
     (root / ".vault_pass").chmod(0o600)
     lib = VaultLib([("default", VaultSecret(VAULT_PASSWORD.encode()))])
     plain = yaml.safe_dump(data) if text is None else text
-    (root / "group_vars/all/vault.yml").write_bytes(lib.encrypt(plain.encode()))
+    (root / wizard.VAULT).write_bytes(lib.encrypt(plain.encode()))
 
 
 def read_vault(root: Path) -> dict:
     lib = VaultLib([("default", VaultSecret(VAULT_PASSWORD.encode()))])
-    return yaml.safe_load(lib.decrypt((root / "group_vars/all/vault.yml").read_bytes()))
+    return yaml.safe_load(lib.decrypt((root / wizard.VAULT).read_bytes()))
 
 
 def local(root: Path) -> dict:
@@ -174,7 +174,7 @@ def test_a_comment_inside_a_mapping_is_part_of_it():
 
 
 def test_a_key_is_added_to_a_mapping_written_in_flow_style():
-    doc = wizard.YamlKeys("---\n{}\n")  # what make vault-init encrypts
+    doc = wizard.YamlKeys("---\n{}\n")  # what make vault TYPE=new encrypts
     doc.set("vault_key", "value", order=[])
     assert doc.values() == {"vault_key": "value"}
     doc = wizard.YamlKeys("---\n# A comment.\n{a: 1}\n")
@@ -351,7 +351,7 @@ def test_a_first_run_writes_each_answer_and_says_what_is_missing(repo):
     assert "The vault has no password" in summary
     assert "vault_haos_owner_password" not in summary, "a secret is not reported while the vault does not open"
     assert "secrets bundle" in summary and "age key" in summary
-    assert "make check-kubernetes && make kubernetes" in summary
+    assert "make check TYPE=kubernetes && make deploy TYPE=kubernetes" in summary
     assert "vm_backup_storage" in summary.split("RECOMMENDED")[1]
     assert "TYPE=full also asks" in summary
     assert stat.S_IMODE((repo / "group_vars/all/local.yml").stat().st_mode) == 0o600, "readable by its owner alone"
@@ -395,7 +395,7 @@ def test_secrets_go_to_the_vault_and_never_to_the_screen(repo):
     console = Scripted(answers)
     init_run(repo, console)
     assert read_vault(repo) == {"vault_other": "left-alone", "vault_truenas_api_key": api_key}
-    assert (repo / "group_vars/all/vault.yml").read_text().startswith("$ANSIBLE_VAULT;1.1;AES256")
+    assert (repo / wizard.VAULT).read_text().startswith("$ANSIBLE_VAULT;1.1;AES256")
     v = local(repo)
     assert v["truenas_gateway"] == lan(1) and v["truenas_nameservers"] == [lan(1)], "the gateway is offered"
     assert "truenas_bootstrap_address" not in v and "truenas_api_cert_sha256" not in v
@@ -424,6 +424,15 @@ def test_remote_access_requires_the_auth_key_for_the_hosts_first_login(repo):
     assert local(repo)["tailscale_advertise_routes"] == [f"{lan(0)}/24"]
     required = console.out[-1].split("STILL REQUIRED")[1].split("RECOMMENDED")[0]
     assert "vault_tailscale_auth_key" in required
+
+
+def test_a_vault_at_its_old_committed_path_is_moved_not_replaced(repo):
+    make_vault(repo, {"vault_other": "x"})
+    (repo / wizard.VAULT).rename(repo / wizard.OLD_VAULT)
+    console = Scripted({"switch:nas": "n", "switch:remote": "n", "switch:cluster": "n", "switch:homeassistant": "n"})
+    init_run(repo, console)
+    assert "vault-new" not in console.topics, "a new vault would be made beside the one to move"
+    assert f"is still at {wizard.OLD_VAULT}" in console.out[-1].split("STILL REQUIRED")[1]
 
 
 def test_a_vault_password_that_does_not_open_the_vault_is_not_kept(repo):

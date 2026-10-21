@@ -35,7 +35,7 @@ def test_make_init_asks_for_every_setting_in_the_example():
 def test_make_init_asks_for_every_secret_the_playbooks_read():
     read = set()
     for path in (ROOT / "group_vars").rglob("*.yml"):
-        if path.name not in ("vault.yml", "local.yml"):
+        if path.name not in ("local.vault.yml", "vault.yml", "local.yml"):
             read |= set(re.findall(r"\bvault_[a-z0-9_]+\b", path.read_text()))
     assert read - NEVER_ASKED == {s.key for s in cfg.SETTINGS if s.secret}
 

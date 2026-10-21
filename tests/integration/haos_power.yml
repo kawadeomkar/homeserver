@@ -1,5 +1,5 @@
 ---
-# down.yml's and up.yml's Home Assistant play: the proxmox_vm role's power entry point with this repo's own
+# suspend.yml's and resume.yml's Home Assistant play: the proxmox_vm role's power entry point with this repo's own
 # configuration, against the fake Proxmox host (fake_pve_bin/). haos_power stands for the state each playbook sets.
 - name: Shut the fake Home Assistant's VM down or start it
   hosts: proxmox

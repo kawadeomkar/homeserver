@@ -2,7 +2,7 @@
 # cert-manager issues the apps' certificate: a wildcard for *.${DOMAIN}, signed by the cluster's own CA
 # (k8s/infrastructure/tls/tls.yaml), renewed before it expires. Its CRDs come with the chart and stay when the
 # release goes (crds.keep), so the certificates do too. The chart's post-install API check is a Helm hook Job, left
-# out: Flux waits for the release to be ready instead. Every component requests CPU and memory (make lint-helm).
+# out: Flux waits for the release to be ready instead. Every component requests CPU and memory (make lint TYPE=charts).
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:

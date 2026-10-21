@@ -578,7 +578,7 @@ SETTINGS: tuple[Setting, ...] = (
         "cidr",
         "The clients Traefik serves (your LAN's prefix), once every app is set up",
         help="Leave it unset on a new cluster: several apps make their first visitor the admin. Set them up through "
-        "port forwards first (scripts/runbooks/first-run.md), then set this and run make kubernetes.",
+        "port forwards first (scripts/runbooks/first-run.md), then set this and run make deploy TYPE=kubernetes.",
         popular=True,
     ),
     S(

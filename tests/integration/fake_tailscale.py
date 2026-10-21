@@ -1,7 +1,7 @@
 """Stand-ins for the commands roles/proxmox_tailscale runs on a Proxmox host, for the idempotence tests.
 
-`apt-get update` and `apt-get install`, `nft`, `sysctl`, `systemctl` and `tailscale`, backed by a JSON file named by
-$FAKE_TAILSCALE_STATE. Every call is recorded in the state's `calls`, and every change counts in `mutations`, so a
+`apt-get update` and `apt-get install`, `ip`, `nft`, `sysctl`, `systemctl` and `tailscale`, backed by a JSON file named
+by $FAKE_TAILSCALE_STATE. Every call is recorded in the state's `calls`, and every change counts in `mutations`, so a
 test can check that a dry run changed nothing and that a secret never appeared in an argument list.
 
 apt-get reads `tailscale.sources` in $FAKE_TAILSCALE_SOURCES_DIR: `update` fails as apt does when its Signed-By key
@@ -16,8 +16,9 @@ tailscale follows Tailscale 1.104 on Linux: `status --json` with `BackendState`,
 with `advertise-routes` a comma-separated string as captured from a real client (1.102); `up`, which takes its key only
 as `--auth-key=file:<path>` here, and refuses, like the real one, a change of settings that does not mention every
 non-default one; `set`, with only the flags the real one takes (no `--advertise-tags`); and `serve status --json`.
-Routes are approved when the state's `auto_approve` is set, standing for the policy's auto-approver. The node's
-addresses are built at run time, never written here.
+Routes are approved when the state's `auto_approve` is set, standing for the policy's auto-approver. `ip link show`
+finds tailscaled's interface while tailscaled runs, named by the state's `tun` as tailscaled's --tun flag names it:
+tailscale0 by default, none with userspace-networking.
 
 nft checks a file only for the role's table (`-c`), and loads it when systemctl starts or reloads
 tailnet-guard.service, whose table file is $FAKE_TAILSCALE_GUARD_FILE. systemctl knows the units in
@@ -83,6 +84,7 @@ def fresh_state():
         "node": None,
         "auth_key": "",
         "auto_approve": True,
+        "tun": "tailscale0",
         "serve": {},
         "health": [],
         "restarts": 0,
@@ -216,6 +218,19 @@ def load_guard(state):
     state["mutations"] += 1
 
 
+# ------------------------------------------------------------------------------------------------ ip ---
+
+
+def ip(state, args):
+    if args[:4] == ["-o", "link", "show", "dev"] and len(args) == 5:
+        running = state["units"].get("tailscaled.service", {}).get("active")
+        if not (running and args[4] == state["tun"]):
+            fail(state, f'Device "{args[4]}" does not exist.')
+        print(f"5: {args[4]}: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1280 qdisc fq_codel state UNKNOWN")
+    else:
+        fail(state, f"fake ip: unsupported {args}")
+
+
 # -------------------------------------------------------------------------------------------- sysctl ---
 
 
@@ -314,16 +329,11 @@ def flags_of(state, args, allowed, command):
     return out
 
 
-def address():
-    """The node's tailnet address, built here so no address is written in this file."""
-    return ".".join(["100", "64", "0", "1"])
-
-
 def status(state):
     node = state["node"]
     prefs = node["prefs"]
     routes = [r for r in prefs["advertise-routes"].split(",") if r]
-    self = {"HostName": "pve", "OS": "linux", "Online": node["backend"] == "Running", "TailscaleIPs": [address()]}
+    self = {"HostName": "pve", "OS": "linux", "Online": node["backend"] == "Running"}
     if node["tags"]:
         self["Tags"] = node["tags"]
     else:
@@ -383,7 +393,7 @@ def main():
     tool, args = sys.argv[1], sys.argv[2:]
     state = load()
     state["calls"].append([tool, *args])
-    tools = {"apt-get": apt_get, "nft": nft, "sysctl": sysctl, "systemctl": systemctl, "tailscale": tailscale}
+    tools = {"apt-get": apt_get, "ip": ip, "nft": nft, "sysctl": sysctl, "systemctl": systemctl, "tailscale": tailscale}
     tools[tool](state, args)
     save(state)
 
