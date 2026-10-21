@@ -1255,7 +1255,24 @@ def test_proxmox_vm_with_a_nas(tmp_path):
     assert re.search(r'"301":\s*\[[^\]]*"boot"', result[2]), result[2][-3000:]
     expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="a system disk replaced, again")
 
+    # The iGPU passed to the running worker: the PCI device waits for a restart, and is reported until then.
+    s = read(state)
+    s["pci_mappings"] = ["igpu"]
+    write(state, s)
+    gpu = extra | {"kubernetes_gpu_mapping": "igpu"}
+    result = run("kubernetes.yml", gpu)
+    expect(result, "homeserver", changed=1, note="the iGPU for the running worker")
+    assert vms_of(state)["301"]["pending"]["hostpci0"] == "mapping=igpu,pcie=1" and "hostpci0" not in str(
+        vms_of(state)["300"]
+    )
+    assert re.search(r'"301":\s*\[[^\]]*"hostpci0"', result[2]), result[2][-3000:]
+    expect(run("kubernetes.yml", gpu), "homeserver", changed=0, note="the iGPU, again")
     restart_all(state)
+    # Taken away again: removed at the next restart too.
+    expect(run("kubernetes.yml", extra), "homeserver", changed=1, note="the iGPU taken away")
+    restart_all(state)
+    assert "hostpci0" not in vms_of(state)["301"]["config"]
+    expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="the iGPU taken away, again")
 
     # A disk configured larger is grown; one configured smaller is refused, before anything changes.
     grown = extra | {"kubernetes_node_sizes": {"homeserver-worker-1": {"system_disk_gib": 80}}}
@@ -1559,7 +1576,7 @@ def factory():
 
 
 # The schematics of group_vars/kubernetes/talos.yml, and the digest the tests pin every installer image to.
-SCHEMATICS = {"base": ["siderolabs/qemu-guest-agent"]}
+SCHEMATICS = {"base": ["siderolabs/qemu-guest-agent"], "gpu": ["siderolabs/qemu-guest-agent", "siderolabs/i915"]}
 INSTALLER_DIGEST = "sha256:" + "0" * 63 + "2"
 
 

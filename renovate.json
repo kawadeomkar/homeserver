@@ -26,6 +26,11 @@
       "enabled": false
     },
     {
+      "description": "Intel's GPU plugin is vendored whole and bumped by hand (k8s/infrastructure/gpu/README.md), its image with it",
+      "matchFileNames": ["k8s/infrastructure/gpu/**"],
+      "enabled": false
+    },
+    {
       "description": "LinuxServer.io tags x.y.z.build-lsN",
       "matchDatasources": ["docker"],
       "matchPackageNames": ["/linuxserver\\/(sonarr|radarr|prowlarr)$/"],

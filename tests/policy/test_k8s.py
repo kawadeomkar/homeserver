@@ -62,10 +62,10 @@ UNDECLARED_NAMESPACES = {"kube-system", "flux-system"}
 
 # The namespaces labelled pod-security.kubernetes.io/enforce: privileged. Changing the set needs a reason in
 # the pull request, and the label a comment saying why.
-PRIVILEGED_NAMESPACES = {"local-path-storage", "metallb-system", "monitoring"}
+PRIVILEGED_NAMESPACES = {"intel-gpu-plugin", "local-path-storage", "metallb-system", "monitoring"}
 # Of those, the ones whose privileged pods only a chart renders (MetalLB's speaker, node-exporter): checked against
-# what make lint-helm renders. The other's need shows in the repository's own manifests (the Job that makes the
-# static volumes' directories in local-path-storage).
+# what make lint-helm renders. The others' need shows in the repository's own manifests (Intel's GPU plugin, vendored;
+# the Job that makes the static volumes' directories in local-path-storage).
 CHART_PRIVILEGED = {"metallb-system", "monitoring"}
 
 # Every hostPath volume, as (object, path): the one Job that makes the local static volumes' directories without a
@@ -73,6 +73,12 @@ CHART_PRIVILEGED = {"metallb-system", "monitoring"}
 # and the local volumes are `local`, not hostPath. Adding one needs a reason in the pull request.
 HOST_PATHS = {
     ("Job local-path-storage/static-volume-directories", "/var/mnt"),
+    # Intel's GPU plugin, vendored (k8s/infrastructure/gpu): the device, its sysfs class, the kubelet's device-plugin
+    # sockets and the CDI specifications it writes, in the privileged namespace intel-gpu-plugin.
+    ("DaemonSet intel-gpu-plugin/intel-gpu-plugin", "/dev/dri"),
+    ("DaemonSet intel-gpu-plugin/intel-gpu-plugin", "/sys/class/drm"),
+    ("DaemonSet intel-gpu-plugin/intel-gpu-plugin", "/var/lib/kubelet/device-plugins"),
+    ("DaemonSet intel-gpu-plugin/intel-gpu-plugin", "/var/run/cdi"),
 }
 
 # The hostPath volumes in what the charts render (make lint-helm): a chart bump that adds one fails here before it

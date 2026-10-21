@@ -441,7 +441,7 @@ def test_vms_resolve_on_the_proxmox_host(tmp_path, local_yml, nodes, system):
             disks.get("scsi2", {}).get("size_gib"),
         )
         assert vm["net"]["mac"] == CLUSTER_VARS["kubernetes_node_macs"][vm["name"]]
-        assert vm["iso"] == "local:iso/talos-v1.14.2-ce4c9805-metal-amd64.iso"
+        assert vm["iso"] == "local:iso/talos-v1.14.2-ce4c9805-metal-amd64.iso" and vm["hostpci"] == []
         assert disks["scsi0"]["storage"] == system and vm["efidisk_storage"] == system
         assert vm["tags"] == ["talos", "k8s"]
         if "scsi1" in disks:
@@ -546,7 +546,7 @@ def test_flux_settings_resolve_on_the_kubernetes_host(tmp_path, local_yml, path,
         *CLUSTER_ARGS,
     )
     common = {"DOMAIN", "TZ", "LB_RANGE", "LB_TRAEFIK_IP", "LB_FRIGATE_IP", "DATA_NODE"}
-    common |= {"INGRESS_ALLOWED_RANGE"}
+    common |= {"GPU_I915", "FRIGATE_DETECTOR_DEVICE", "INGRESS_ALLOWED_RANGE"}
     common |= {"PROMETHEUS_RETENTION", "PROMETHEUS_RETENTION_SIZE"}
     storage = {"NAS_ADDRESS", "NAS_POOL_PERSISTENT", "NAS_POOL_EPHEMERAL", "MEDIA_DATASET"}
     assert set(settings) == common | (storage if media is None else {"MEDIA_LOCAL_PATH", "FRIGATE_LOCAL_PATH"})
@@ -1213,6 +1213,29 @@ def test_secret_options_are_no_log():
                 flagged.append(f"{owner}: {dotted}")
     assert flagged == [], "options that look like secrets but are not no_log"
     assert excepted == set(NOT_SECRET), "NOT_SECRET names an option that no longer exists or is now no_log"
+
+
+@pytest.mark.parametrize("local_yml", [None, PROXMOX_ONLY_CLUSTER_LOCAL_YML], ids=["nas", "proxmox-only"])
+@pytest.mark.parametrize("mapping", ["", "igpu"], ids=["no-gpu", "gpu"])
+def test_gpu_follows_local_yml(tmp_path, local_yml, mapping):
+    """Whether the host passes an iGPU through is per host: local.yml's kubernetes_gpu_mapping. The worker alone gets
+    the PCI device, the GPU schematic and its label, in both setups, and the apps' settings ask for the device or for
+    none; the manifests stay the same either way."""
+    tree = example_tree(tmp_path, local_yml)
+    given = json.dumps({**CLUSTER_VARS, "kubernetes_gpu_mapping": mapping})
+    vms = resolve_on(tree, "homeserver", "proxmox_vm_vms", "-e", given)
+    worker = "homeserver-worker-1"
+    assert {vm["name"]: vm["hostpci"] for vm in vms} == {
+        vm["name"]: ([{"mapping": "igpu", "pcie": True}] if mapping and vm["name"] == worker else []) for vm in vms
+    }
+    nodes = resolve_on(tree, "homeserver-k8s", "talos_nodes", "-e", given)
+    assert {n["name"]: n["schematic"] for n in nodes} == {
+        n["name"]: ("gpu" if mapping and n["name"] == worker else "base") for n in nodes
+    }
+    labelled = [n["name"] for n in nodes if any("homeserver.internal/gpu: intel" in p for p in n["patches"])]
+    assert labelled == ([worker] if mapping else [])
+    settings = resolve_on(tree, "homeserver-k8s", "flux_bootstrap_settings", "-e", given)
+    assert (settings["GPU_I915"], settings["FRIGATE_DETECTOR_DEVICE"]) == (("1", "GPU") if mapping else ("0", "CPU"))
 
 
 def test_flux_is_new_enough_to_substitute_strictly(tmp_path):

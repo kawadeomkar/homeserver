@@ -23,7 +23,7 @@ addresses and serial numbers), so it is absent from a fresh clone.
 
 ```
 k8s/clusters/            what Flux syncs per setup (nas, local): Flux Kustomizations, one per path below
-k8s/infrastructure/      the platform: controllers (MetalLB, Traefik, cert-manager, local-path, csi-driver-nfs), configs, static volumes, monitoring
+k8s/infrastructure/      the platform: controllers (MetalLB, Traefik, cert-manager, local-path, csi-driver-nfs), configs, static volumes, monitoring, the GPU plugin
 roles/truenas/           configures the NAS through its API: address, pools, datasets, NFS
 roles/proxmox_apt/       sets Proxmox's package repositories (no subscription), upgrades it on every run, and says when it needs a reboot
 roles/proxmox_storage/   adds the NAS's shares to Proxmox as qcow2 VM-disk storage, or checks its own storage
@@ -228,6 +228,14 @@ With a NAS, `make truenas` then creates the datasets the cluster mounts (`persis
 `persistent/photoprism`, `ephemeral/frigate`) and exports them, with the existing media dataset, to the worker
 alone. Whenever `local.yml` changes, update its copy in your password manager.
 
+### The iGPU
+
+If the Proxmox host has an Intel iGPU, Jellyfin can transcode and Frigate detect on it: pass it whole to the worker,
+following `scripts/runbooks/gpu.md` (VT-d, the host's `vfio-pci` binding and a PCI resource mapping, all by hand),
+then name the mapping in `local.yml` as `kubernetes_gpu_mapping`. `make kubernetes` gives the worker the device and
+Talos's i915 driver, and the apps ask for it; restarting that VM and `make talos-upgrade` are yours. Without it, the
+same manifests run both apps on the CPU.
+
 #### Switching setups
 
 Both setups build the same two VMs. What differs is where the worker's disks live: its data disk on the NAS
@@ -293,7 +301,8 @@ Flux applies them. `roles/flux_bootstrap` points the cluster at `k8s/clusters/na
 2. `k8s/infrastructure/configs/` (MetalLB's address pool, Traefik's allowlist and HSTS),
    `k8s/infrastructure/tls/` (the cluster's CA and the wildcard certificate it signs, which nothing waits for),
    `k8s/infrastructure/storage/` (the static volumes: the media library, Nextcloud's files, PhotoPrism's photos,
-   Frigate's recordings) and `k8s/infrastructure/monitoring/` (kube-prometheus-stack).
+   Frigate's recordings), `k8s/infrastructure/monitoring/` (kube-prometheus-stack) and `k8s/infrastructure/gpu/`
+   (Intel's GPU plugin, which runs only on a node with the iGPU).
 
 The apps come with a later change. Traefik answers at `https://<name>.<domain>`, once the router has a wildcard DNS
 record for `*.<domain>` pointing at `kubernetes_lb_traefik_ip` and `kubernetes_ingress_allowed_range` lets your

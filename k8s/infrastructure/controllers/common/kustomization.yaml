@@ -1,7 +1,8 @@
 ---
 # The controllers both setups run: MetalLB (LoadBalancer addresses), Traefik (the ingress), cert-manager (its
 # certificate) and local-path-provisioner (the default StorageClass, on each node's data volume). Each directory holds its controller
-# and its namespace, so the namespace and its Pod Security label arrive with the controller.
+# and its namespace, so the namespace and its Pod Security label arrive with the controller. Intel's GPU plugin is
+# applied by infra-gpu, from k8s/infrastructure/gpu.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
