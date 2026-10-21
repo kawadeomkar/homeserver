@@ -14,7 +14,7 @@ by their variable in `group_vars/all/local.yml`; the real values live only there
 | NAS network card | Everything on disk | Everything, once the NAS is reachable | Update the router's DHCP reservation to the new MAC |
 | Proxmox boot drive | VM disks on the NAS, and the VMs' nightly backups | The no-subscription repository, the upgrade, Tailscale with its guard, the NFS storages, the start-on-boot delay and the wait for the NAS, and the backup job | Reinstall, root SSH key, the iGPU's host setup if it had one ([gpu.md](gpu.md)); with remote access, delete the old machine in Tailscale's admin console and put a new auth key in the vault; restore the VMs from their backups ([vm-restore.md](vm-restore.md)) |
 | Proxmox boot drive, in a setup without a NAS | The backups, if `vm_backup_storage` is a USB disk or a backup server | The repository, the upgrade, Tailscale with its guard, the check that `local-lvm` can hold VM disks, and the backup job | Reinstall, root SSH key, the iGPU's host setup if it had one ([gpu.md](gpu.md)); with remote access, the old machine and a new auth key as above; re-add the backup storage before `make deploy TYPE=proxmox`; restore the VMs ([vm-restore.md](vm-restore.md)) |
-| The controller (this Mac) | The repo on GitHub, with a NAS the vault (encrypted) | — | Restore `.vault_pass`, `local.yml`, the age key and `~/.talos/homeserver` from your password manager, and without a NAS your own vault too |
+| The controller (this Mac) | The repo on GitHub | — | Restore the vault, `.vault_pass`, `local.yml`, the age key and `~/.talos/homeserver` from your password manager |
 
 ## 1. The controller
 
@@ -27,13 +27,11 @@ Everything runs from a checkout of this repo.
 2. `make init`, which creates `inventory` and `group_vars/all/local.yml` from their examples, asks for each setting
    and secret, and ends with what is still missing. With the files below restored first, it only shows each value
    for Enter to keep; run it again after restoring any of them.
-3. Restore the two files only you have:
-   - **`.vault_pass`**: the vault password, from your password manager, readable by you alone
-     (`chmod 600 .vault_pass`).
-   - **`group_vars/all/vault.yml`**, without a NAS, if you put secrets of your own in it: your own vault, in no
-     repository. Restore it from your password manager over the tracked one, then
-     `git update-index --skip-worktree group_vars/all/vault.yml` so it stays out of your commits; `make vault TYPE=new`
-     then says `nothing to do`. With nothing of yours in it, `make vault TYPE=new` makes both files (see `README.md`).
+3. Restore the files only you have, from your password manager:
+   - **`group_vars/all/local.vault.yml`**, the vault: the secrets, encrypted, in no repository.
+   - **`.vault_pass`**: the vault's password, readable by you alone (`chmod 600 .vault_pass`). `make vault TYPE=new`
+     then says `nothing to do`. With nothing in your vault, `make vault TYPE=new` makes both files instead
+     (`README.md`, The vault).
    - **`group_vars/all/local.yml`**: addresses, disk serials, the certificate pin, and the cluster's node
      addresses and MACs. Keep a copy of this file in your password manager. If it's lost, refill it from
      `local.yml.example`; the comments there say where each value comes from. The MACs must be the ones the

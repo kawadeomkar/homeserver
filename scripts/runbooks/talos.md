@@ -21,9 +21,9 @@ reboots a node and never moves one to another version; `make talos-upgrade` does
 
    It is every key of the cluster (its CAs, the service-account key, etcd's encryption key): whoever holds it holds
    the cluster, and without it the cluster can no longer be managed. Keep a copy in your password manager. Never
-   commit it, not even in the vault, which this public repository publishes as ciphertext no stronger than
-   `.vault_pass` (every playbook refuses `vault_talos_secrets`): a bundle that was ever committed is replaced, with a
-   new cluster, which costs least before the cluster holds anything.
+   commit it, and never put it in the vault either (every playbook refuses `vault_talos_secrets`): it has one place.
+   A bundle that was ever committed is replaced, with a new cluster, which costs least before the cluster holds
+   anything.
 3. **MACs and addresses.** Choose a locally administered MAC per node (lower case, the second hex digit 2, 6, a or
    e) and put it in `local.yml` as `kubernetes_node_macs`, with each node's address in
    `kubernetes_node_addresses`. In the router (OPNsense with a NAS), reserve each address for its MAC, outside the

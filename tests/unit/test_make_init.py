@@ -82,7 +82,7 @@ def repo(tmp_path, monkeypatch):
     shutil.copytree(
         ROOT / "group_vars" / "all",
         root / "group_vars" / "all",
-        ignore=shutil.ignore_patterns("local.yml", "vault.yml"),
+        ignore=shutil.ignore_patterns("local.yml", "local.vault.yml", "vault.yml"),
     )
     for name in ("inventory.example", ".sops.yaml", "ansible.cfg"):
         shutil.copy(ROOT / name, root / name)
@@ -106,12 +106,12 @@ def make_vault(root: Path, data: dict, text: str | None = None) -> None:
     (root / ".vault_pass").chmod(0o600)
     lib = VaultLib([("default", VaultSecret(VAULT_PASSWORD.encode()))])
     plain = yaml.safe_dump(data) if text is None else text
-    (root / "group_vars/all/vault.yml").write_bytes(lib.encrypt(plain.encode()))
+    (root / wizard.VAULT).write_bytes(lib.encrypt(plain.encode()))
 
 
 def read_vault(root: Path) -> dict:
     lib = VaultLib([("default", VaultSecret(VAULT_PASSWORD.encode()))])
-    return yaml.safe_load(lib.decrypt((root / "group_vars/all/vault.yml").read_bytes()))
+    return yaml.safe_load(lib.decrypt((root / wizard.VAULT).read_bytes()))
 
 
 def local(root: Path) -> dict:
@@ -366,7 +366,7 @@ def test_secrets_go_to_the_vault_and_never_to_the_screen(repo):
     console = Scripted(answers)
     init_run(repo, console)
     assert read_vault(repo) == {"vault_other": "left-alone", "vault_truenas_api_key": api_key}
-    assert (repo / "group_vars/all/vault.yml").read_text().startswith("$ANSIBLE_VAULT;1.1;AES256")
+    assert (repo / wizard.VAULT).read_text().startswith("$ANSIBLE_VAULT;1.1;AES256")
     v = local(repo)
     assert v["truenas_gateway"] == lan(1) and v["truenas_nameservers"] == [lan(1)], "the gateway is offered"
     assert "truenas_bootstrap_address" not in v and "truenas_api_cert_sha256" not in v
@@ -377,6 +377,15 @@ def test_secrets_go_to_the_vault_and_never_to_the_screen(repo):
     assert any("now set." in line for line in console.out)
     assert read_vault(repo) == {"vault_other": "left-alone"}
     assert "vault_truenas_api_key" in console.out[-1].split("STILL REQUIRED")[1]
+
+
+def test_a_vault_at_its_old_committed_path_is_moved_not_replaced(repo):
+    make_vault(repo, {"vault_other": "x"})
+    (repo / wizard.VAULT).rename(repo / wizard.OLD_VAULT)
+    console = Scripted({"switch:nas": "n", "switch:remote": "n", "switch:cluster": "n", "switch:homeassistant": "n"})
+    init_run(repo, console)
+    assert "vault-new" not in console.topics, "a new vault would be made beside the one to move"
+    assert f"is still at {wizard.OLD_VAULT}" in console.out[-1].split("STILL REQUIRED")[1]
 
 
 def test_a_vault_password_that_does_not_open_the_vault_is_not_kept(repo):

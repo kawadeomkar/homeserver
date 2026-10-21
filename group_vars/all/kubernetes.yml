@@ -115,8 +115,8 @@ kubernetes_data_storage: "{{ vm_storage_classes.persistent.proxmox_id if nas_pre
 #     kubernetes_media_on_data_volume;
 #   - without a NAS, a worker without every size, since the defaults fit the home host, or without a media disk
 #     (unless media goes on the data volume, when its size may be left out), or with both;
-#   - in any setup, the Talos secrets bundle in the vault (vault_talos_secrets), where this public repository
-#     would publish it: it lives in talos_config_dir.
+#   - in any setup, the Talos secrets bundle in the vault (vault_talos_secrets): it lives in talos_config_dir
+#     alone.
 kubernetes_settings_error: >-
   {%- set out = [] -%}
   {%- set given = {'kubernetes_node_macs': kubernetes_node_macs | default(''),
@@ -395,11 +395,11 @@ kubernetes_settings_error: >-
   {%- endif -%}
   {%- if vault_talos_secrets is defined -%}
   {%-   set _ = out.append('The vault holds vault_talos_secrets, the Talos secrets bundle: every key of the cluster, which '
-                           ~ 'a vault committed to this public repository would publish. It lives in secrets.yaml in the '
-                           ~ "cluster's credentials directory now (~/.talos/homeserver, or kubernetes_talos_config_dir). "
-                           ~ 'Move it there (ansible-vault view group_vars/all/vault.yml), mode 0600, and delete it from '
-                           ~ 'the vault with make vault; scripts/runbooks/talos.md says why a bundle that was ever '
-                           ~ 'committed is better replaced.') -%}
+                           ~ "has one place, secrets.yaml in the cluster's credentials directory (~/.talos/homeserver, or "
+                           ~ 'kubernetes_talos_config_dir). Move it there (ansible-vault view '
+                           ~ 'group_vars/all/local.vault.yml), mode 0600, and delete it from the vault with make '
+                           ~ 'vault; scripts/runbooks/talos.md says why a bundle that was ever committed is better '
+                           ~ 'replaced.') -%}
   {%- endif -%}
   {{ out }}
 
