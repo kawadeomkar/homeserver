@@ -26,7 +26,7 @@ metadata:
   namespace: nextcloud
   labels:
     app.kubernetes.io/name: nextcloud-db
-    # make down stops it after nextcloud, and make up starts it first (roles/app_scale).
+    # make suspend stops it after nextcloud, and make resume starts it first (roles/app_scale).
     app.kubernetes.io/component: database
 spec:
   replicas: 1

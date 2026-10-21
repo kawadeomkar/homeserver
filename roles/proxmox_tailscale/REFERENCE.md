@@ -74,7 +74,7 @@ Description: Make a Proxmox VE node its LAN's Tailscale subnet router, behind a 
     - **Type**: bool
     - **Default**: False
   
-    - **Description**: Upgrade Tailscale on every run. False only ever installs it.
+    - **Description**: Upgrade Tailscale on every run. False leaves an installed release alone, though an upgrade of the whole node still upgrades it.
   
   
   
@@ -188,16 +188,16 @@ Description: Make a Proxmox VE node its LAN's Tailscale subnet router, behind a 
 | [proxmox_tailscale_tags](defaults/main.yml#L8)   | list | `[]` |    
 | [proxmox_tailscale_auth_key](defaults/main.yml#L10)   | str |  |    
 | [proxmox_tailscale_settings](defaults/main.yml#L12)   | dict | `{}` |    
-| [proxmox_tailscale_upgrade](defaults/main.yml#L14)   | bool | `False` |    
-| [proxmox_tailscale_guard_hosts](defaults/main.yml#L17)   | list | `[]` |    
-| [proxmox_tailscale_guard_allow](defaults/main.yml#L19)   | list | `[]` |    
-| [proxmox_tailscale_suite](defaults/main.yml#L22)   | str |  |    
-| [proxmox_tailscale_repository](defaults/main.yml#L24)   | str | `https://pkgs.tailscale.com/stable/debian` |    
-| [proxmox_tailscale_keyring](defaults/main.yml#L26)   | str | `/usr/share/keyrings/tailscale-archive-keyring.gpg` |    
-| [proxmox_tailscale_sources_dir](defaults/main.yml#L28)   | str | `/etc/apt/sources.list.d` |    
-| [proxmox_tailscale_sysctl_file](defaults/main.yml#L30)   | str | `/etc/sysctl.d/99-tailscale.conf` |    
-| [proxmox_tailscale_guard_file](defaults/main.yml#L32)   | str | `/etc/nftables.d/tailnet-guard.nft` |    
-| [proxmox_tailscale_systemd_dir](defaults/main.yml#L34)   | str | `/etc/systemd/system` |    
+| [proxmox_tailscale_upgrade](defaults/main.yml#L15)   | bool | `False` |    
+| [proxmox_tailscale_guard_hosts](defaults/main.yml#L18)   | list | `[]` |    
+| [proxmox_tailscale_guard_allow](defaults/main.yml#L20)   | list | `[]` |    
+| [proxmox_tailscale_suite](defaults/main.yml#L23)   | str |  |    
+| [proxmox_tailscale_repository](defaults/main.yml#L25)   | str | `https://pkgs.tailscale.com/stable/debian` |    
+| [proxmox_tailscale_keyring](defaults/main.yml#L27)   | str | `/usr/share/keyrings/tailscale-archive-keyring.gpg` |    
+| [proxmox_tailscale_sources_dir](defaults/main.yml#L29)   | str | `/etc/apt/sources.list.d` |    
+| [proxmox_tailscale_sysctl_file](defaults/main.yml#L31)   | str | `/etc/sysctl.d/99-tailscale.conf` |    
+| [proxmox_tailscale_guard_file](defaults/main.yml#L33)   | str | `/etc/nftables.d/tailnet-guard.nft` |    
+| [proxmox_tailscale_systemd_dir](defaults/main.yml#L35)   | str | `/etc/systemd/system` |    
 
 
 
@@ -219,7 +219,7 @@ Description: Make a Proxmox VE node its LAN's Tailscale subnet router, behind a 
 
 | Name | Module | Has Conditions |
 | ---- | ------ | -------------- |
-| guard ¦ Read whether Debian's nftables service is enabled | ansible.builtin.command | False |
+| guard ¦ Read whether Debian's nftables service is enabled and running | ansible.builtin.command | False |
 | guard ¦ Refuse Debian's nftables service | ansible.builtin.assert | False |
 | guard ¦ Create the guard's directories | ansible.builtin.file | False |
 | guard ¦ Write the guard's table | ansible.builtin.template | False |
@@ -269,6 +269,8 @@ Description: Make a Proxmox VE node its LAN's Tailscale subnet router, behind a 
 | node ¦ Read the node's state | ansible.builtin.command | False |
 | node ¦ Keep the node's backend state | ansible.builtin.set_fact | False |
 | node ¦ Refuse a node Tailscale cannot log in or bring up | ansible.builtin.assert | False |
+| node ¦ Read whether tailscaled has the interface the guard filters | ansible.builtin.command | True |
+| node ¦ Refuse a tailscaled the guard cannot see | ansible.builtin.assert | True |
 | node ¦ Refuse to log in without an auth key | ansible.builtin.assert | False |
 | node ¦ Log in, or bring the node back up | block | True |
 | node ¦ Make a private file for the auth key | ansible.builtin.tempfile | True |
@@ -324,8 +326,8 @@ classDef importRole stroke:#699ba7,stroke-width:2px;
 classDef includeVars stroke:#8e44ad,stroke-width:2px;
 classDef rescue stroke:#665352,stroke-width:2px;
 
-  Start-->|Task| guard___Read_whether_Debian_s_nftables_service_is_enabled0[guard   read whether debian s nftables service is<br>enabled]:::task
-  guard___Read_whether_Debian_s_nftables_service_is_enabled0-->|Task| guard___Refuse_Debian_s_nftables_service1[guard   refuse debian s nftables service]:::task
+  Start-->|Task| guard___Read_whether_Debian_s_nftables_service_is_enabled_and_running0[guard   read whether debian s nftables service is<br>enabled and running]:::task
+  guard___Read_whether_Debian_s_nftables_service_is_enabled_and_running0-->|Task| guard___Refuse_Debian_s_nftables_service1[guard   refuse debian s nftables service]:::task
   guard___Refuse_Debian_s_nftables_service1-->|Task| guard___Create_the_guard_s_directories2[guard   create the guard s directories]:::task
   guard___Create_the_guard_s_directories2-->|Task| guard___Write_the_guard_s_table3[guard   write the guard s table]:::task
   guard___Write_the_guard_s_table3-->|Task| guard___Write_the_guard_s_unit__and_make_tailscaled_require_it4[guard   write the guard s unit  and make<br>tailscaled require it]:::task
@@ -413,21 +415,23 @@ classDef rescue stroke:#665352,stroke-width:2px;
   node___Say_what_tailscaled_needs5-->|Task| node___Read_the_node_s_state6[node   read the node s state]:::task
   node___Read_the_node_s_state6-->|Task| node___Keep_the_node_s_backend_state7[node   keep the node s backend state]:::task
   node___Keep_the_node_s_backend_state7-->|Task| node___Refuse_a_node_Tailscale_cannot_log_in_or_bring_up8[node   refuse a node tailscale cannot log in or<br>bring up]:::task
-  node___Refuse_a_node_Tailscale_cannot_log_in_or_bring_up8-->|Task| node___Refuse_to_log_in_without_an_auth_key9[node   refuse to log in without an auth key]:::task
-  node___Refuse_to_log_in_without_an_auth_key9-->|Block Start| node___Log_in__or_bring_the_node_back_up10_block_start_0[[node   log in  or bring the node back up<br>When: **proxmox tailscale backend in   needslogin   <br>stopped   and not ansible check mode**]]:::block
-  node___Log_in__or_bring_the_node_back_up10_block_start_0-->|Task| node___Make_a_private_file_for_the_auth_key0[node   make a private file for the auth key<br>When: **proxmox tailscale backend     needslogin**]:::task
+  node___Refuse_a_node_Tailscale_cannot_log_in_or_bring_up8-->|Task| node___Read_whether_tailscaled_has_the_interface_the_guard_filters9[node   read whether tailscaled has the interface<br>the guard filters<br>When: **proxmox tailscale status rc    0**]:::task
+  node___Read_whether_tailscaled_has_the_interface_the_guard_filters9-->|Task| node___Refuse_a_tailscaled_the_guard_cannot_see10[node   refuse a tailscaled the guard cannot see<br>When: **proxmox tailscale interface is not skipped**]:::task
+  node___Refuse_a_tailscaled_the_guard_cannot_see10-->|Task| node___Refuse_to_log_in_without_an_auth_key11[node   refuse to log in without an auth key]:::task
+  node___Refuse_to_log_in_without_an_auth_key11-->|Block Start| node___Log_in__or_bring_the_node_back_up12_block_start_0[[node   log in  or bring the node back up<br>When: **proxmox tailscale backend in   needslogin   <br>stopped   and not ansible check mode**]]:::block
+  node___Log_in__or_bring_the_node_back_up12_block_start_0-->|Task| node___Make_a_private_file_for_the_auth_key0[node   make a private file for the auth key<br>When: **proxmox tailscale backend     needslogin**]:::task
   node___Make_a_private_file_for_the_auth_key0-->|Task| node___Write_the_auth_key_into_it1[node   write the auth key into it<br>When: **proxmox tailscale backend     needslogin**]:::task
   node___Write_the_auth_key_into_it1-->|Task| node___Run_tailscale_up2[node   run tailscale up]:::task
-  node___Run_tailscale_up2-.->|End of Block| node___Log_in__or_bring_the_node_back_up10_block_start_0
-  node___Run_tailscale_up2-->|Task| node___Say_what_logging_in_would_do11[node   say what logging in would do<br>When: **ansible check mode and proxmox tailscale backend<br>in   needslogin    stopped**]:::task
-  node___Say_what_logging_in_would_do11-->|Task| node___Read_the_node_s_preferences12[node   read the node s preferences<br>When: **not ansible check mode or proxmox tailscale<br>backend     running**]:::task
-  node___Read_the_node_s_preferences12-->|Task| node___Work_out_which_preferences_differ13[node   work out which preferences differ<br>When: **proxmox tailscale prefs is not skipped**]:::task
-  node___Work_out_which_preferences_differ13-->|Task| node___Set_the_node_s_routes_and_preferences14[node   set the node s routes and preferences<br>When: **proxmox tailscale differ   default       length  <br>0**]:::task
-  node___Set_the_node_s_routes_and_preferences14-->|Task| node___Say_which_preferences_differ15[node   say which preferences differ<br>When: **proxmox tailscale differ   default       length  <br>0**]:::task
-  node___Say_which_preferences_differ15-->|Task| node___Read_the_node_s_state_after_the_changes16[node   read the node s state after the changes<br>When: **proxmox tailscale status rc    0**]:::task
-  node___Read_the_node_s_state_after_the_changes16-->|Task| node___Read_Tailscale_Serve_s_configuration17[node   read tailscale serve s configuration<br>When: **proxmox tailscale status rc    0**]:::task
-  node___Read_Tailscale_Serve_s_configuration17-->|Task| node___Report_what_the_admin_console_must_fix18[node   report what the admin console must fix<br>When: **proxmox tailscale status after is not skipped**]:::task
-  node___Report_what_the_admin_console_must_fix18-->End
+  node___Run_tailscale_up2-.->|End of Block| node___Log_in__or_bring_the_node_back_up12_block_start_0
+  node___Run_tailscale_up2-->|Task| node___Say_what_logging_in_would_do13[node   say what logging in would do<br>When: **ansible check mode and proxmox tailscale backend<br>in   needslogin    stopped**]:::task
+  node___Say_what_logging_in_would_do13-->|Task| node___Read_the_node_s_preferences14[node   read the node s preferences<br>When: **not ansible check mode or proxmox tailscale<br>backend     running**]:::task
+  node___Read_the_node_s_preferences14-->|Task| node___Work_out_which_preferences_differ15[node   work out which preferences differ<br>When: **proxmox tailscale prefs is not skipped**]:::task
+  node___Work_out_which_preferences_differ15-->|Task| node___Set_the_node_s_routes_and_preferences16[node   set the node s routes and preferences<br>When: **proxmox tailscale differ   default       length  <br>0**]:::task
+  node___Set_the_node_s_routes_and_preferences16-->|Task| node___Say_which_preferences_differ17[node   say which preferences differ<br>When: **proxmox tailscale differ   default       length  <br>0**]:::task
+  node___Say_which_preferences_differ17-->|Task| node___Read_the_node_s_state_after_the_changes18[node   read the node s state after the changes<br>When: **proxmox tailscale status rc    0**]:::task
+  node___Read_the_node_s_state_after_the_changes18-->|Task| node___Read_Tailscale_Serve_s_configuration19[node   read tailscale serve s configuration<br>When: **proxmox tailscale status rc    0**]:::task
+  node___Read_Tailscale_Serve_s_configuration19-->|Task| node___Report_what_the_admin_console_must_fix20[node   report what the admin console must fix<br>When: **proxmox tailscale status after is not skipped**]:::task
+  node___Report_what_the_admin_console_must_fix20-->End
 ```
 
 

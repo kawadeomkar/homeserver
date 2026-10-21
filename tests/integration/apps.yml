@@ -1,5 +1,5 @@
 ---
-# down.yml's and up.yml's play: roles/app_scale with this repo's own configuration, against fake_talos_bin/'s
+# suspend.yml's and resume.yml's play: roles/app_scale with this repo's own configuration, against fake_talos_bin/'s
 # kubectl. Loads what the kubernetes host's groups would, by name; apps_state stands for the state each playbook sets.
 - name: Spin the fake cluster's apps down or up
   hosts: kubernetes

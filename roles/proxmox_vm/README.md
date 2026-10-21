@@ -123,7 +123,7 @@ The `power` entry point (`tasks_from: power`) does only this: with `proxmox_vm_p
 stop, and fails the run, the VM still running, when that takes more than `proxmox_vm_power_timeout` seconds; with
 `running` it starts each with `qm start`. A VM already as asked is left alone, a VMID that does not exist is refused,
 and a dry run says what it would do. The main entry point starts again a VM marked `start`, and the host one marked
-`onboot` when it boots. This repository's `down.yml` and `up.yml` use it for Home Assistant's VM.
+`onboot` when it boots. This repository's `suspend.yml` and `resume.yml` use it for Home Assistant's VM.
 
 ```yaml
 - ansible.builtin.import_role:
@@ -141,5 +141,5 @@ This repository's configuration, `group_vars/proxmox/vms.yml`, maps the Kubernet
 
 ## Reference
 
-[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make docs` from the role itself:
+[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make fix TYPE=docs` from the role itself:
 its argument specs, defaults and vars, and each tasks file as a table and a flow graph. Never edit it by hand.

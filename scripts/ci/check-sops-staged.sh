@@ -4,7 +4,7 @@
 # every *.sops.yaml, so an encryption that silently did not happen (a forgotten `sops --encrypt`, a path .sops.yaml
 # does not match) would pass it. tests/policy/test_k8s.py would catch it too, but only in CI, after a push has
 # published it. Needs only bash, git and awk.
-#   no RANGE    the staged files (the pre-commit hook: make secrets-staged)
+#   no RANGE    the staged files (check-staged.sh: the pre-commit hook)
 #   RANGE=a..b  every version of such a file in those commits (check-range.sh: the pre-push hook and CI)
 # Written for bash 3.2 as well (macOS).
 set -euo pipefail

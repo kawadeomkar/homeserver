@@ -1,10 +1,12 @@
 ---
-# Brings back what make down stopped, every app or those ONLY names, handing each back to Flux, and starts Home
-# Assistant's VM:
-#   make check-up
-#   make up ONLY=jellyfin,homeassistant
-# ALL=1 starts the cluster's VMs first, the control plane before the worker, and the apps wait for every node.
-# Without a cluster, or without Home Assistant, its play ends by itself.
+# Spins the deployments down until make resume: every app scaled to zero, with Flux told to leave it there, then Home
+# Assistant's VM shut down. Check first, and narrow it with ONLY (comma-separated: an app such as jellyfin, a group
+# such as media, or homeassistant):
+#   make check TYPE=suspend
+#   make suspend ONLY=jellyfin,nextcloud
+# The data stays, and so do the platform (Flux, Traefik, monitoring) and the cluster's VMs, unless ALL=1 shuts those
+# VMs down too, after everything else: the worker, then the control plane, so the whole cluster with them. Without a
+# cluster, or without Home Assistant, its play ends by itself.
 # An inventory made before the cluster has no kubernetes group, and the apps' play would match no host and end
 # without a word: refused here instead, as kubernetes.yml refuses it.
 - name: Refuse a cluster without the kubernetes inventory group
@@ -20,8 +22,8 @@
         quiet: true
       tags: [always]
 
-- name: Start the cluster's VMs
-  hosts: proxmox
+- name: Spin the apps down
+  hosts: kubernetes
   gather_facts: false
   vars:
     # make's ONLY, comma-separated names, passed as -e '{"only": "<names>"}', and its ALL, as {"cluster_vms": true}.
@@ -30,39 +32,9 @@
     - name: Refuse ALL with ONLY
       ansible.builtin.assert:
         that: not (cluster_vms | default(false) | bool) or only_names | length == 0
-        fail_msg: ALL=1 starts everything, the cluster's VMs first, so it takes no ONLY.
+        fail_msg: ALL=1 stops everything, the cluster's VMs last, so it takes no ONLY.
         quiet: true
       tags: [always]
-    - name: Leave the cluster's VMs alone without ALL=1
-      ansible.builtin.meta: end_host
-      when: not (cluster_vms | default(false) | bool)
-      tags: [always]
-    - name: Refuse an incomplete Kubernetes section
-      ansible.builtin.assert:
-        that: kubernetes_settings_error | length == 0
-        fail_msg: "{{ kubernetes_settings_error | join(' ') }}"
-        quiet: true
-      tags: [always]
-    - name: Skip them when local.yml names no nodes
-      ansible.builtin.meta: end_host
-      when: not kubernetes_present
-      tags: [always]
-  tasks:
-    - name: Start the cluster's VMs, the control plane first
-      ansible.builtin.import_role:
-        name: proxmox_vm
-        tasks_from: power
-      vars:
-        proxmox_vm_power: running
-        proxmox_vm_power_vmids: "{{ kubernetes_power_order | reverse | list }}"
-
-- name: Bring the apps back up
-  hosts: kubernetes
-  gather_facts: false
-  vars:
-    # make's ONLY, comma-separated names, passed as -e '{"only": "<names>"}'.
-    only_names: "{{ (only | default('')).split(',') | map('trim') | select | list }}"
-  pre_tasks:
     - name: Refuse NAS settings that come without a NAS address
       ansible.builtin.assert:
         that: nas_section_error | length == 0
@@ -84,32 +56,7 @@
       ansible.builtin.meta: end_host
       when: not kubernetes_present
       tags: [always]
-    # With ALL=1 the VMs were only just started: the apps wait until every node is Ready. A dry run asks once.
-    - name: Wait for the cluster's nodes
-      ansible.builtin.command:
-        argv: [kubectl, --kubeconfig, "{{ app_scale_kubeconfig }}", wait, --for=condition=Ready, nodes, --all, --timeout=20s]
-      register: up_nodes
-      changed_when: false
-      check_mode: false
-      failed_when: false
-      until: up_nodes.rc == 0
-      retries: "{{ 0 if ansible_check_mode else 45 }}"
-      delay: 10
-      when: cluster_vms | default(false) | bool
-    - name: Refuse to go on without the cluster
-      ansible.builtin.assert:
-        that: up_nodes.rc == 0
-        fail_msg: "The cluster's nodes were not all Ready within ten minutes: {{ up_nodes.stderr | default('') | trim }}"
-        quiet: true
-      when: (cluster_vms | default(false) | bool) and not ansible_check_mode
-    - name: Say the apps come back once the cluster is up
-      ansible.builtin.debug:
-        msg: The cluster is not up yet; a real run starts its VMs, waits for every node, then brings the apps back.
-      when: (cluster_vms | default(false) | bool) and ansible_check_mode and up_nodes.rc != 0
-    - name: Leave the apps for the real run
-      ansible.builtin.meta: end_host
-      when: (cluster_vms | default(false) | bool) and ansible_check_mode and up_nodes.rc != 0
-    # So that make down ONLY=homeassistant needs no answer from the cluster.
+    # So that make suspend ONLY=homeassistant needs no answer from the cluster.
     - name: Leave the apps alone when ONLY names Home Assistant alone
       ansible.builtin.meta: end_host
       when: only_names == ['homeassistant'] and haos_present
@@ -117,7 +64,7 @@
   roles:
     - role: app_scale
       vars:
-        app_scale_state: up
+        app_scale_state: down
         # Accepted in ONLY besides the apps and groups: Home Assistant, which the next play takes.
         app_scale_other_names: "{{ ['homeassistant'] if haos_present else [] }}"
         # What local.yml's kubernetes_apps leaves out, which a refused name is said to be.
@@ -126,7 +73,7 @@
 
 # A play of its own on the Proxmox host. The apps' play, whose failure ends the run before this one, has refused any
 # name it does not know; without a cluster, this play does. The shutdown is the guest's own, never a forced stop.
-- name: Start Home Assistant's VM
+- name: Shut Home Assistant's VM down
   hosts: proxmox
   gather_facts: false
   vars:
@@ -155,7 +102,7 @@
       ansible.builtin.assert:
         that: kubernetes_present or _unknown | length == 0
         fail_msg: >-
-          This setup has no cluster, so make up knows no {{ _unknown | join(', ') }}{{
+          This setup has no cluster, so make suspend knows no {{ _unknown | join(', ') }}{{
           ': only homeassistant' if haos_present else ', nor any other name: it has no Home Assistant either' }}.
         quiet: true
       tags: [always]
@@ -175,10 +122,42 @@
       when: only_names | length > 0 and 'homeassistant' not in only_names
       tags: [always]
   tasks:
-    - name: Start Home Assistant's VM
+    - name: Shut Home Assistant's VM down
       ansible.builtin.import_role:
         name: proxmox_vm
         tasks_from: power
       vars:
-        proxmox_vm_power: running
+        proxmox_vm_power: stopped
         proxmox_vm_power_vmids: ["{{ haos_vm_vmid | int }}"]
+
+# ALL=1 alone: the cluster's VMs, once the apps are down and Home Assistant's VM with them. Each shutdown is the
+# guest's own, which Talos takes as an orderly one, never a forced stop; the worker goes first and the control plane
+# last, each in turn (kubernetes_power_order). A VM is started again only by make resume ALL=1, make deploy
+# TYPE=kubernetes, or the host's own boot, for one marked onboot.
+- name: Shut the cluster's VMs down
+  hosts: proxmox
+  gather_facts: false
+  pre_tasks:
+    - name: Leave the cluster's VMs alone without ALL=1
+      ansible.builtin.meta: end_host
+      when: not (cluster_vms | default(false) | bool)
+      tags: [always]
+    - name: Say why the cluster's VMs are skipped
+      ansible.builtin.debug:
+        msg: No kubernetes_node_addresses in group_vars/all/local.yml, so this setup has no cluster.
+      when: not kubernetes_present
+      tags: [always]
+    - name: Skip them when local.yml names no nodes
+      ansible.builtin.meta: end_host
+      when: not kubernetes_present
+      tags: [always]
+  tasks:
+    - name: Shut the cluster's VMs down, the control plane last
+      ansible.builtin.import_role:
+        name: proxmox_vm
+        tasks_from: power
+      vars:
+        proxmox_vm_power: stopped
+        proxmox_vm_power_vmids: "{{ kubernetes_power_order }}"
+        # A worker stops its pods first.
+        proxmox_vm_power_timeout: 600

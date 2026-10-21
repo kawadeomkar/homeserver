@@ -12,13 +12,18 @@ In order, on every run:
    instructions do. The `tailscale-archive-keyring` package then owns the same file and brings a new key through
    apt. The repository is written as a deb822 `tailscale.sources` file, for the node's Debian release.
 2. **The packages.** `tailscale`, `tailscale-archive-keyring` and `nftables` are installed and, with
-   `proxmox_tailscale_upgrade`, upgraded, through `apt-get install`. Tailscale's own updater is meant to stay off:
-   on Debian it runs apt on its own schedule, and works only with a `tailscale.list` file.
+   `proxmox_tailscale_upgrade`, upgraded, through `apt-get install`. Without it, an upgrade of the whole node, such as
+   `roles/proxmox_apt`'s, still upgrades them with the rest. Tailscale's own updater is meant to stay off: on Debian
+   it runs apt on its own schedule, and works only with a `tailscale.list` file.
 3. **The guard** (below), loaded before anything is forwarded.
 4. **IPv4 forwarding**, written to `/etc/sysctl.d` and turned on. IPv6 forwarding stays off: it would stop the node
-   accepting router advertisements on its bridge. IPv6 routes are refused for the same reason.
+   accepting router advertisements on its bridge. IPv6 routes are refused for the same reason. Forwarding is the
+   whole node's: with a second interface that has an address, such as a VLAN or a storage network, the node also
+   routes between it and the LAN, which the guard does not filter. Bridged VM traffic is switched and needs none.
 5. **The login.** `tailscaled` is enabled and started if it is not running: stopped by hand, or never started at
-   boot because the guard it requires failed to load. A logged-out node is logged in once with
+   boot because the guard it requires failed to load. A `tailscaled` without the interface `tailscale0`, which the
+   guard filters by name, is refused before any login: one started with `--tun` naming another interface, or with
+   userspace networking, whose connections come from the node itself. A logged-out node is logged in once with
    `proxmox_tailscale_auth_key`, a one-off, pre-approved key tagged with `proxmox_tailscale_tags`. The key reaches
    tailscale only as `--auth-key=file:<path>`, from a private temporary file removed afterwards, so it never appears
    in an argument list or in Ansible's output. A node stopped by hand (`tailscale down`) is brought back up without
@@ -51,7 +56,8 @@ at priority `filter - 10`. A drop in any nftables base chain is final, so the gu
 rules (iptables or nftables) and Proxmox's firewalls accept. It:
 
 - drops everything from `tailscale0` to `proxmox_tailscale_guard_hosts`, except `proxmox_tailscale_guard_allow`. It
-  is an allow-list because an NFS server's mountd, statd and lock manager listen on random ports;
+  is an allow-list because an NFS server's mountd, statd and lock manager listen on random ports. A host is guarded
+  at the addresses listed, so list every address it answers on;
 - drops everything from `tailscale0` outside the advertised prefixes, and IPv6, as Tailscale advises a subnet
   router's firewall to deny forwarding by default;
 - drops new connections from the LAN into the tailnet, the host-side equivalent of `--stateful-filtering`.
@@ -59,7 +65,9 @@ rules (iptables or nftables) and Proxmox's firewalls accept. It:
 **How it is loaded.** Its unit, `tailnet-guard.service`, loads it before `network-pre.target` and before
 `tailscaled`. A drop-in makes `tailscaled` require it, which makes the guard **fail-closed**: if the table cannot
 load, Tailscale does not start and nothing is forwarded, at the cost of remote access until someone fixes it at the
-console. The next run then loads the guard and starts `tailscaled` again.
+console. The next run then loads the guard and starts `tailscaled` again. Fail-closed covers starting: a table
+removed while both run, with `nft flush ruleset` or `nft delete table`, leaves `tailscaled` forwarding unguarded until
+the next run, which loads it again.
 
 **How the role changes it.**
 
@@ -68,12 +76,15 @@ console. The next run then loads the guard and starts `tailscaled` again.
   unlike a restart, does not reach `tailscaled` through its `Requires=`.
 - The unit has no stop command, so stopping it never removes the table; it stops `tailscaled` instead.
 
-**The run refuses an enabled `nftables.service`.** That service loads `/etc/nftables.conf`, which on Debian begins
-with `flush ruleset` and would remove the guard at every boot.
+**Debian's `nftables.service` is refused, enabled or running.** It loads `/etc/nftables.conf`, which on Debian begins
+with `flush ruleset` and would remove the guard at every boot, and its stop command flushes every table. The guard's
+unit conflicts with it, so starting it later stops the guard, and `tailscaled` with it, before the flush.
 
 **What it cannot see.** It sees only forwarded packets. A proxy running on the node itself connects from the node's
 own address, which the guarded hosts trust: Tailscale Serve with a non-local target (which the report names), `ssh
--L`, socat, or Proxmox SDN's Simple-zone SNAT.
+-L`, socat, or Proxmox SDN's Simple-zone SNAT. So does `tailscaled` itself with the debug setting
+`TS_DEBUG_NETSTACK_SUBNETS=1` in its environment (`/etc/default/tailscaled`), which makes it carry the advertised
+routes' traffic in userspace although it has `tailscale0`, so the role's interface check passes. Never set it.
 
 **Proxmox's own firewall cannot do this job.** Tailscale accepts tailnet traffic at the top of iptables' INPUT and
 FORWARD, so the PVE firewall never filters it. If the datacenter firewall is enabled later, proxmox-firewall's input
@@ -87,7 +98,7 @@ chain drops by default, and the tailnet's traffic to the node and Tailscale's ow
 | `proxmox_tailscale_tags` | `[]` | The tags the node joins with, each `tag:<name>`; at least one with routes, since an untagged node's key expires |
 | `proxmox_tailscale_auth_key` | `""` | A one-off auth key, read only while the node is logged out (`no_log`) |
 | `proxmox_tailscale_settings` | `{}` | Preferences kept with `tailscale set`, by its flag names, each a boolean or a string; not `advertise-routes` or `advertise-tags` |
-| `proxmox_tailscale_upgrade` | `false` | Upgrade Tailscale on every run; false only ever installs it |
+| `proxmox_tailscale_upgrade` | `false` | Upgrade Tailscale on every run; false leaves an installed release alone, though an upgrade of the whole node, such as `roles/proxmox_apt`'s, still upgrades it |
 | `proxmox_tailscale_guard_hosts` | `[]` | IPv4 addresses that tailnet clients may reach only on `proxmox_tailscale_guard_allow` |
 | `proxmox_tailscale_guard_allow` | `[]` | The ports still reachable on them, each `tcp/<port>` or `udp/<port>` |
 | `proxmox_tailscale_suite` | `""` | The Debian release for Tailscale's repository; empty reads it from the node's `/etc/os-release` |
@@ -99,7 +110,7 @@ chain drops by default, and the tailnet's traffic to the node and Tailscale's ow
 | `proxmox_tailscale_systemd_dir` | `/etc/systemd/system` | Where the guard's unit and `tailscaled`'s drop-in go |
 
 The paths are there for the idempotence tests, which point them at scratch directories. Every command runs through
-`command`, not a module, so the tests can stand in for apt-get, nft, sysctl, systemctl and tailscale with fakes on
+`command`, not a module, so the tests can stand in for apt-get, ip, nft, sysctl, systemctl and tailscale with fakes on
 `PATH`.
 
 ## Example
@@ -126,5 +137,5 @@ auto-approver, the grants), split DNS and the auth key. In this repo, `scripts/r
 
 ## Reference
 
-[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make docs` from the role itself:
+[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make fix TYPE=docs` from the role itself:
 its argument specs, defaults and vars, and each tasks file as a table and a flow graph. Never edit it by hand.
