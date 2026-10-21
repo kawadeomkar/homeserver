@@ -1,0 +1,156 @@
+---
+# Homepage, the start page at the domain's apex. The one app with two replicas, rolled one at a time and spread
+# across nodes when there are two, since it holds nothing. Homepage writes into /app/config (its logs, and a skeleton
+# file for any its configuration lacks) and exits when it cannot, so /app/config is an emptyDir the ConfigMap is
+# copied into at each start: a release that adds a skeleton file then starts too. The ConfigMap is generated
+# (kustomization.yaml), so a change to its files rolls the pods. Kustomize takes its hash before Flux fills in the
+# settings, so the pod template carries those too: the domain in HOMEPAGE_ALLOWED_HOSTS, Home Assistant's address in
+# an annotation, and a change to either rolls the pods as well.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homepage
+  namespace: homepage
+  labels:
+    app.kubernetes.io/name: homepage
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: homepage
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: homepage
+      annotations:
+        homeserver.internal/haos-url: "${HAOS_URL:=}"
+    spec:
+      # Named, not left out: a Deployment that once named another account keeps its deprecated serviceAccount field,
+      # which would bring that name back.
+      serviceAccountName: default
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: homepage
+          matchLabelKeys: [pod-template-hash]
+      # kube-linter's no-anti-affinity check reads affinity, not spread constraints.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: homepage
+      initContainers:
+        - name: copy-config
+          image: ghcr.io/gethomepage/homepage:v1.13.2@sha256:a0b71c8e757298d02560186bab9fbe3fc2d375c523a62cc1019177b37e48aa28
+          command: [sh, -c, 'cp /seed/* /app/config/']
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+          volumeMounts:
+            - name: seed
+              mountPath: /seed
+            - name: config
+              mountPath: /app/config
+      containers:
+        - name: homepage
+          image: ghcr.io/gethomepage/homepage:v1.13.2@sha256:a0b71c8e757298d02560186bab9fbe3fc2d375c523a62cc1019177b37e48aa28
+          env:
+            - name: MY_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            # The hosts it answers: its own address (the probes) and the domain. $(MY_POD_IP) is Kubernetes's own
+            # expansion, which Flux leaves alone.
+            - name: HOMEPAGE_ALLOWED_HOSTS
+              value: "$(MY_POD_IP):3000,${DOMAIN}"
+          ports:
+            - name: http
+              containerPort: 3000
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /api/healthcheck
+              port: http
+            periodSeconds: 30
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /api/healthcheck
+              port: http
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+      volumes:
+        - name: seed
+          configMap:
+            name: homepage
+        - name: config
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: homepage
+  namespace: homepage
+  labels:
+    app.kubernetes.io/name: homepage
+spec:
+  selector:
+    app.kubernetes.io/name: homepage
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: homepage
+  namespace: homepage
+  labels:
+    app.kubernetes.io/name: homepage
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: "${DOMAIN}"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: homepage
+                port:
+                  name: http

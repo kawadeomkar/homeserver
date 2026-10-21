@@ -1,0 +1,65 @@
+---
+# Home Assistant OS as a VM of its own on the Proxmox host (group_vars/proxmox/haos.yml): created from the pinned OVA,
+# checked against its sha256, started, and given its owner account before anyone else on the network can claim it.
+# Home Assistant then updates itself; this playbook only ever keeps the VM's settings. Check first:
+#   make check-homeassistant      (or: ansible-playbook homeassistant.yml --check --diff)
+# Without haos_mac in group_vars/all/local.yml nothing happens. Run proxmox.yml first, so the storage its disk goes on
+# exists. Independent of the cluster: home automation keeps working while the cluster is down.
+- name: Create Home Assistant's VM and give it its owner
+  hosts: proxmox
+  gather_facts: false
+  # What the two roles do here, from this host's group_vars: the same names kubernetes.yml's VMs use, so they are set
+  # for this play alone. tests/integration/homeassistant.yml runs these roles with these same vars.
+  vars:
+    proxmox_vm_vms: "{{ haos_vms }}"
+    proxmox_vm_isos: []
+    proxmox_vm_imports: "{{ haos_imports }}"
+    proxmox_vm_pending_storages: "{{ haos_pending_storages }}"
+    proxmox_vm_rebuild_command: "make homeassistant ANSIBLE_ARGS='-e proxmox_vm_ignore_existing_volumes=true'"
+    haos_onboard_vmid: "{{ haos_vm_vmid | int if haos_present else 0 }}"
+    haos_onboard_mac: "{{ haos_mac | default('', true) | string | trim }}"
+    haos_onboard_name: "{{ haos_owner.name }}"
+    haos_onboard_username: "{{ haos_owner.username }}"
+    haos_onboard_password: "{{ haos_owner_password }}"
+  pre_tasks:
+    - name: Refuse NAS settings that come without a NAS address
+      ansible.builtin.assert:
+        that: nas_section_error | length == 0
+        fail_msg: "{{ nas_section_error }}"
+        quiet: true
+      tags: [always]
+    - name: Refuse an incomplete Kubernetes section
+      ansible.builtin.assert:
+        that: kubernetes_settings_error | length == 0
+        fail_msg: "{{ kubernetes_settings_error | join(' ') }}"
+        quiet: true
+      tags: [always]
+    - name: Refuse an incomplete Home Assistant section
+      ansible.builtin.assert:
+        that: haos_settings_error | length == 0
+        fail_msg: "{{ haos_settings_error | join(' ') }}"
+        quiet: true
+      tags: [always]
+    # Checked before the VM exists: a Home Assistant started without its owner account waits for whoever reaches
+    # it first.
+    - name: Refuse a Home Assistant without its owner's password
+      ansible.builtin.assert:
+        that: not haos_present or haos_owner_password | length >= 12
+        fail_msg: >-
+          The vault has no vault_haos_owner_password of at least 12 characters: the owner account homeassistant.yml
+          gives a new Home Assistant before anyone else can claim it. Add one with make vault-edit (a long random one,
+          kept in your password manager), then run again.
+        quiet: true
+      tags: [always]
+    - name: Say why Home Assistant is skipped
+      ansible.builtin.debug:
+        msg: No haos_mac in group_vars/all/local.yml, so this setup has no Home Assistant VM.
+      when: not haos_present
+      tags: [always]
+    - name: Skip Home Assistant when local.yml names no MAC for it
+      ansible.builtin.meta: end_host
+      when: not haos_present
+      tags: [always]
+  roles:
+    - role: proxmox_vm
+    - role: haos_onboard

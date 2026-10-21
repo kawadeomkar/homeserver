@@ -3,10 +3,11 @@ argument_specs:
   main:
     short_description: Create Proxmox VE VMs and keep the settings it manages as configured
     description:
-      - Downloads the ISOs of proxmox_vm_isos, creates each VM of proxmox_vm_vms with qm, every option given, and
-        on later runs corrects its cores, memory, CPU type, ballooning, start-on-boot, startup order, watchdog,
-        agent, tags, PCI devices and CD-ROM, adds a configured disk it lacks and grows a disk configured larger.
-        Starts a stopped VM marked start.
+      - Downloads the ISOs of proxmox_vm_isos and the images of proxmox_vm_imports (checking each file's sha256),
+        creates each VM of proxmox_vm_vms with qm, every option given, a disk with import_from imported from its
+        image and grown to its size, and on later runs corrects its cores, memory, CPU type, ballooning,
+        start-on-boot, startup order, watchdog, agent, tags, PCI and USB devices and CD-ROM, adds a configured disk
+        it lacks and grows a disk configured larger. Starts a stopped VM marked start.
       - Never moves, shrinks or detaches a disk, never deletes a VM or an ISO, and never restarts a VM; a setting
         that waits for a restart is reported.
       - Refuses a VMID that belongs to another VM, a missing VM whose VMID still has disks or backups, a disk
@@ -20,9 +21,9 @@ argument_specs:
         elements: dict
         default: []
         description: >-
-          VMs, each with vmid, name, cores, memory_mib, disks ({slot, storage, size_gib, serial, format, backup})
-          and net ({bridge, mac}); optional machine, bios, efidisk_storage, cpu, scsihw, iso, boot, watchdog,
-          onboot, startup, tags, hostpci and start.
+          VMs, each with vmid, name, cores, memory_mib, disks ({slot, storage, size_gib, serial, format, backup,
+          import_from}) and net ({bridge, mac}); optional machine, bios, efidisk_storage, cpu, scsihw, iso, boot,
+          watchdog, onboot, startup, tags, hostpci, usb, import_working_storage and start.
       proxmox_vm_isos:
         type: list
         elements: dict
@@ -30,6 +31,13 @@ argument_specs:
         description: >-
           ISOs to download, each with storage, filename, url and sha256 (the file's SHA-256, which Proxmox checks
           before keeping the download). Never deleted.
+      proxmox_vm_imports:
+        type: list
+        elements: dict
+        default: []
+        description: >-
+          Images a disk is imported from, downloaded as import content, each with storage, filename, url and
+          sha256 (checked the same way). Never deleted.
       proxmox_vm_pending_storages:
         type: list
         elements: str
@@ -55,7 +63,37 @@ argument_specs:
         type: bool
         default: false
         description: Create a missing VM even though its VMID still has disks or backups.
+      proxmox_vm_rebuild_command:
+        type: str
+        default: ""
+        description: >-
+          How to run the role again with proxmox_vm_ignore_existing_volumes, named when a missing VM is refused over
+          its old volumes. Empty means the play again with -e proxmox_vm_ignore_existing_volumes=true.
       proxmox_vm_node:
         type: str
         default: ""
         description: The node's name in Proxmox. Empty means the host's short hostname.
+      proxmox_vm_power: &proxmox_vm_power
+        type: str
+        choices: ["", stopped, running]
+        default: ""
+        description: For the power entry point, stopped or running; empty does nothing.
+      proxmox_vm_power_vmids: &proxmox_vm_power_vmids
+        type: list
+        elements: int
+        default: []
+        description: For the power entry point, the VMs to shut down or start.
+      proxmox_vm_power_timeout: &proxmox_vm_power_timeout
+        type: int
+        default: 180
+        description: For the power entry point, how many seconds a VM's own shutdown may take before the run fails.
+  power:
+    short_description: Shut Proxmox VE VMs down or start them
+    description:
+      - Shuts each VM of proxmox_vm_power_vmids down with qm shutdown (the guest's own shutdown, never a forced
+        stop), or starts it with qm start; a VM already as asked is left alone. Refuses a VMID that does not exist.
+      - Changes nothing else. The main entry point starts a stopped VM marked start, and the host one marked onboot.
+    options:
+      proxmox_vm_power: *proxmox_vm_power
+      proxmox_vm_power_vmids: *proxmox_vm_power_vmids
+      proxmox_vm_power_timeout: *proxmox_vm_power_timeout

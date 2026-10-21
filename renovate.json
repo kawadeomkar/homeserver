@@ -17,12 +17,17 @@
     },
     {
       "description": "A chart and the images its release pins by digest move in one pull request",
-      "matchFileNames": ["k8s/infrastructure/controllers/*/*/**"],
+      "matchFileNames": ["k8s/infrastructure/controllers/*/*/**", "k8s/infrastructure/monitoring/**"],
       "groupName": "{{parentDir}}"
     },
     {
       "description": "local-path-provisioner is vendored whole and bumped by hand (its README.md): an image bump alone would leave its RBAC and configuration old",
       "matchFileNames": ["k8s/infrastructure/controllers/common/local-path/**"],
+      "enabled": false
+    },
+    {
+      "description": "Intel's GPU plugin is vendored whole and bumped by hand (k8s/infrastructure/gpu/README.md), its image with it",
+      "matchFileNames": ["k8s/infrastructure/gpu/**"],
       "enabled": false
     },
     {

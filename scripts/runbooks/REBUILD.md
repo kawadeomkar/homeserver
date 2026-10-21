@@ -12,8 +12,8 @@ by their variable in `group_vars/all/local.yml`; the real values live only there
 | One disk of the RAIDZ1 pool (`persistent`) | The pool, degraded | Nothing until the pool is healthy: the role only imports ONLINE pools | Replace the disk and resilver (see [Known limits](#known-limits)) |
 | The single disk of `ephemeral` | Nothing: that pool and the media on it are lost | A new, empty pool on a blank replacement disk, then its datasets and share | Allow pool creation and list the new disk |
 | NAS network card | Everything on disk | Everything, once the NAS is reachable | Update the router's DHCP reservation to the new MAC |
-| Proxmox boot drive | VM disks on the NAS, and the VMs' nightly backups | The no-subscription repository, the upgrade, Tailscale with its guard, the NFS storages, the start-on-boot delay and the wait for the NAS, and the backup job | Reinstall, root SSH key; with remote access, delete the old machine in Tailscale's admin console and put a new auth key in the vault; restore the VMs from their backups ([vm-restore.md](vm-restore.md)) |
-| Proxmox boot drive, in a setup without a NAS | The backups, if `vm_backup_storage` is a USB disk or a backup server | The repository, the upgrade, Tailscale with its guard, the check that `local-lvm` can hold VM disks, and the backup job | Reinstall, root SSH key; with remote access, the old machine and a new auth key as above; re-add the backup storage before `make proxmox`; restore the VMs ([vm-restore.md](vm-restore.md)) |
+| Proxmox boot drive | VM disks on the NAS, and the VMs' nightly backups | The no-subscription repository, the upgrade, Tailscale with its guard, the NFS storages, the start-on-boot delay and the wait for the NAS, and the backup job | Reinstall, root SSH key, the iGPU's host setup if it had one ([gpu.md](gpu.md)); with remote access, delete the old machine in Tailscale's admin console and put a new auth key in the vault; restore the VMs from their backups ([vm-restore.md](vm-restore.md)) |
+| Proxmox boot drive, in a setup without a NAS | The backups, if `vm_backup_storage` is a USB disk or a backup server | The repository, the upgrade, Tailscale with its guard, the check that `local-lvm` can hold VM disks, and the backup job | Reinstall, root SSH key, the iGPU's host setup if it had one ([gpu.md](gpu.md)); with remote access, the old machine and a new auth key as above; re-add the backup storage before `make proxmox`; restore the VMs ([vm-restore.md](vm-restore.md)) |
 | The controller (this Mac) | The repo on GitHub, with a NAS the vault (encrypted) | — | Restore `.vault_pass`, `local.yml`, the age key and `~/.talos/homeserver` from your password manager, and without a NAS your own vault too |
 
 ## 1. The controller
@@ -110,13 +110,17 @@ report no change, and `pvesm status` on the host should show every NFS storage a
    with a `Host` block in `~/.ssh/config` naming the key and `IdentitiesOnly yes`, so Ansible, which connects
    by address, offers the right one.
 3. **If the network card was replaced**, update the router's DHCP reservation. The bridge carries the card's MAC.
-4. **With remote access** (`tailscale_advertise_routes` in `local.yml`), the host's tailnet identity was on the old
+4. **If the host passed its iGPU to the cluster** (`kubernetes_gpu_mapping` in `local.yml`), redo the host's part of
+   [gpu.md](gpu.md), the fallback address first, since the console goes dark once `vfio-pci` takes the iGPU: then
+   VT-d if the board was replaced, the `vfio-pci` binding and the PCI resource mapping, which lived on the old boot
+   drive. A restored VM that names the mapping does not start without it.
+5. **With remote access** (`tailscale_advertise_routes` in `local.yml`), the host's tailnet identity was on the old
    boot drive. In Tailscale's admin console, delete the old machine, or the new one is named `<hostname>-1`. Then make
    a new one-off, pre-approved auth key tagged `tag:homeserver` and put it in the vault as `vault_tailscale_auth_key`
    (`make vault-edit`). The tailnet's policy, with its route auto-approver, and split DNS live in the console and
    survive. Until this run is done, remote access is down, so do it from home.
    [tailscale.md](tailscale.md) has the details.
-5. **Without a NAS, with `vm_backup_storage`**: re-add that storage by hand, under the same id, before
+6. **Without a NAS, with `vm_backup_storage`**: re-add that storage by hand, under the same id, before
    `make check-proxmox`, which refuses a backup storage that does not exist. A USB disk goes back as a checked
    mount point, as `scripts/runbooks/vm-restore.md` (step 1 of a real restore) shows; the backups on it are what
    the VMs come back from.
@@ -138,7 +142,22 @@ backups, which `scripts/runbooks/vm-restore.md` describes, before anything creat
 backups are on it; without one, the backups are wherever `vm_backup_storage` pointed.
 VMs that other projects create on the host (claude-on-proxmox's) are theirs to recreate.
 
-## 4. The Kubernetes cluster
+## 4. Home Assistant
+
+Only after the Proxmox host is back, independent of the cluster. Its VM's definition went with the boot drive; its
+disk survives on the NAS with one, and its backups in either setup.
+
+1. **Restore VM 310 from its backup first** (`scripts/runbooks/vm-restore.md`). `make homeassistant` refuses to
+   create a VM whose VMID still has disks or backups, so a restore skipped here fails safe instead of a new, empty
+   Home Assistant over the old one's history.
+2. `make check-homeassistant`, then `make homeassistant`: it finds the restored VM, corrects nothing that matches,
+   starts it, and leaves its Home Assistant alone, since it has its owner. The OVA it would make a new VM from is
+   downloaded again; nothing uses it until a VM is made anew.
+
+Prerequisites: `haos_mac` in `local.yml` (section 1) with its DHCP reservation, and `vault_haos_owner_password` in
+the vault. A Home Assistant that is built new instead gets its owner account from the run (`scripts/runbooks/haos.md`).
+
+## 5. The Kubernetes cluster
 
 Only after the Proxmox host is back. The cluster's two VMs lived on the Proxmox host, so their definitions went with
 its boot drive. With a NAS the worker's data disk survives on it; without one, it comes back from last night's

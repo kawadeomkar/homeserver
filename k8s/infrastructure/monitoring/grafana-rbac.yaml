@@ -1,0 +1,15 @@
+---
+# What Grafana's sidecars may read: ConfigMaps in this namespace, where the chart puts its dashboards and the
+# Prometheus datasource. The chart's own role would grant every Secret in the cluster (or, namespaced, every Secret
+# here), and Grafana answers the LAN: one bug in it, or a re-pointed sidecar tag, would hand over flux-system's age
+# key, which decrypts every SOPS file in this public repository's history. The HelmRelease binds this Role instead
+# (rbac.useExistingRole), and tests/policy/test_k8s.py refuses a workload that can read Secrets cluster-wide.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: grafana-sidecar
+  namespace: monitoring
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, watch]

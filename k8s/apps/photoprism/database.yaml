@@ -1,0 +1,104 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: photoprism-db
+  namespace: photoprism
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local
+  resources:
+    requests:
+      storage: 10Gi
+---
+# PhotoPrism's database, the official MariaDB image pinned by digest (its tags are rebuilt). Its entrypoint starts as
+# root and switches to mysql itself. Its first start initialises the data directory with networking off, so the probe
+# fails then on purpose; ten minutes of startup probe keep a restart from finding a half-made directory. Its
+# credentials come from the SOPS Secret photoprism-db.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: photoprism-db
+  namespace: photoprism
+  labels:
+    app.kubernetes.io/name: photoprism-db
+    # make down stops it after photoprism, and make up starts it first (roles/app_scale).
+    app.kubernetes.io/component: database
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: photoprism-db
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: photoprism-db
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: mariadb
+          image: docker.io/library/mariadb:11.4.12@sha256:4f1d8d202fcf7bcb3902f63af09f9c1a050c2922a89652f22abaec0d4f015e83
+          args:
+            - --transaction-isolation=READ-COMMITTED
+            - --binlog-format=ROW
+            - --max-connections=1000
+          envFrom:
+            - secretRef:
+                name: photoprism-db
+          ports:
+            - name: mysql
+              containerPort: 3306
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [NET_RAW]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          startupProbe:
+            exec:
+              command: [healthcheck.sh, --connect, --innodb_initialized]
+            periodSeconds: 10
+            failureThreshold: 60
+          livenessProbe:
+            exec:
+              command: [healthcheck.sh, --connect, --innodb_initialized]
+            periodSeconds: 30
+            failureThreshold: 5
+          readinessProbe:
+            exec:
+              command: [healthcheck.sh, --connect, --innodb_initialized]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: photoprism-db
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: photoprism-db
+  namespace: photoprism
+  labels:
+    app.kubernetes.io/name: photoprism-db
+spec:
+  selector:
+    app.kubernetes.io/name: photoprism-db
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql

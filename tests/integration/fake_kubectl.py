@@ -1,15 +1,22 @@
-"""The kubectl verbs roles/flux_bootstrap uses, for fake_talos.py's kubectl (its docstring has the state).
+"""The kubectl verbs roles/flux_bootstrap and roles/app_scale use, for fake_talos.py's kubectl (its docstring has
+the state).
 
 `apply --server-side --field-manager M -f -|<file>`, `diff --server-side --field-manager M -f -`, `get <kind> <name>
--n <namespace> -o json`, `get kustomizations -A`, `create secret generic ... --dry-run=client -o yaml`, `wait
---for=condition=<Available|Ready> <kind>/<name> -n <namespace> --timeout=<d>` and `wait --for=condition=Ready
-kustomizations --all -A --timeout=<d>`, which times out on the state's `kustomizations_not_ready`. Objects live in
-the state's `objects`, keyed "<kind>/<namespace>/<name>". As on a real cluster, every verb but the client-side render
-needs a reachable cluster, and apply and diff fail for a namespace that does not exist or a kind no CRD defines. A
-diff prints the whole new object, values included, as kubectl diff prints them, so a test proves the role never
-shows a Secret's. `apply -f <file>` takes a Flux Operator release, which its Deployment flux-system/flux-operator
-marks (operator_objects, as the tests' release server serves it): applied in order, as kubectl applies a file, its
-operator's image recorded in `operator_installs`.
+-n <namespace> -o json`, `get kustomizations -A`, `get <kustomizations|deployments> -A -o json`, `create secret
+generic ... --dry-run=client -o yaml`, `wait --for=condition=<Available|Ready> <kind>/<name> -n <namespace>
+--timeout=<d>`, `wait --for=condition=Ready kustomizations --all -A --timeout=<d>`, which times out on the state's
+`kustomizations_not_ready`, `patch deployment <name> -n <namespace> --type=merge --field-manager=M -p <json>`, `wait
+--for=delete pod -l <selector> -n <namespace> --timeout=<d>` and `rollout status deployment/<name> -n <namespace>
+--timeout=<d>`. Objects live in the state's `objects`, keyed "<kind>/<namespace>/<name>". As on a real cluster, every
+verb but the client-side render needs a reachable cluster, and apply and diff fail for a namespace that does not exist
+or a kind no CRD defines. A diff prints the whole new object, values included, as kubectl diff prints them, so a test
+proves the role never shows a Secret's. `apply -f <file>` takes a Flux Operator release, which its Deployment
+flux-system/flux-operator marks (operator_objects, as the tests' release server serves it): applied in order, as
+kubectl applies a file, its operator's image recorded in `operator_installs`.
+
+A Deployment has pods while its replicas are above zero: they go the moment it is scaled to zero, unless the state's
+`pods_linger` names it, and it is available once scaled up, unless `never_available` names it; either makes the
+wait time out. Every patch and wait is appended to the state's `events`, so a test sees their order.
 """
 
 import base64
@@ -115,6 +122,26 @@ def operator_objects(version):
     ]
 
 
+def merge_patch(target, patch):
+    """RFC 7386: a null removes a key, an object merges, anything else replaces."""
+    if not isinstance(patch, dict):
+        return patch
+    out = dict(target) if isinstance(target, dict) else {}
+    for name, value in patch.items():
+        if value is None:
+            out.pop(name, None)
+        else:
+            out[name] = merge_patch(out.get(name), value)
+    return out
+
+
+def selects(deployment, selector):
+    """Whether -l <selector> (k=v,...) picks the Deployment's pods, which carry its matchLabels."""
+    labels = ((deployment.get("spec") or {}).get("selector") or {}).get("matchLabels") or {}
+    wanted = dict(part.split("=", 1) for part in selector.split(",") if part)
+    return bool(wanted) and all(labels.get(k) == v for k, v in wanted.items())
+
+
 def documents(source, fail):
     if source == "-":
         return [doc for doc in yaml.safe_load_all(sys.stdin.read()) if doc]
@@ -177,6 +204,14 @@ def run(state, kubeconfig, args, reach, fail):
         return
     if verb == "get":
         flags, positional = flags_of(rest, {"-n", "-o"}, {"-A"}, fail)
+        listed = {"kustomizations": "Kustomization", "deployments": "Deployment"}
+        if len(positional) == 1 and positional[0] in listed and flags.get("-A") and flags.get("-o") == "json":
+            kind = listed[positional[0]]
+            if kind not in kinds(state):
+                fail(f'error: the server doesn\'t have a resource type "{positional[0]}"')
+            items = [obj for k, obj in sorted(objects.items()) if k.startswith(kind + "/")]
+            print(json.dumps({"apiVersion": "v1", "kind": "List", "items": items}))
+            return
         if positional == ["kustomizations"] and flags.get("-A"):
             if "Kustomization" not in kinds(state):
                 fail('error: the server doesn\'t have a resource type "kustomizations"')
@@ -187,6 +222,50 @@ def run(state, kubeconfig, args, reach, fail):
         if obj is None:
             fail(f'Error from server (NotFound): {positional[0]}s "{positional[1]}" not found')
         print(json.dumps(obj))
+        return
+    if verb == "patch":
+        flags, positional = flags_of(rest, {"-n", "--type", "--field-manager", "-p"}, set(), fail)
+        if positional[:1] != ["deployment"] or flags.get("--type") != "merge":
+            fail("the fake merge-patches a deployment only")
+        if flags.get("--field-manager") != "homeserver-ansible":
+            fail("the fake patches under the field manager homeserver-ansible only")
+        name, namespace = positional[1], flags.get("-n", "")
+        obj = objects.get(f"Deployment/{namespace}/{name}")
+        if obj is None:
+            fail(f'Error from server (NotFound): deployments.apps "{name}" not found')
+        objects[f"Deployment/{namespace}/{name}"] = merge_patch(obj, json.loads(flags["-p"]))
+        replicas = objects[f"Deployment/{namespace}/{name}"]["spec"].get("replicas", 1)
+        state.setdefault("events", []).append(f"patch {namespace}/{name} {replicas}")
+        state["mutations"] = state.get("mutations", 0) + 1
+        print(f"deployment.apps/{name} patched")
+        return
+    if verb == "rollout":
+        flags, positional = flags_of(rest, {"-n", "--timeout"}, set(), fail)
+        if positional[:1] != ["status"]:
+            fail("the fake reads a rollout's status only")
+        name, namespace = positional[1].removeprefix("deployment/"), flags.get("-n", "")
+        if f"Deployment/{namespace}/{name}" not in objects:
+            fail(f'Error from server (NotFound): deployments.apps "{name}" not found')
+        state.setdefault("events", []).append(f"rollout {namespace}/{name}")
+        if name in state.get("never_available", []):
+            fail("error: timed out waiting for the condition")
+        print(f'deployment "{name}" successfully rolled out')
+        return
+    if verb == "wait" and "--for=delete" in rest:
+        flags, positional = flags_of(rest, {"--for", "-n", "--timeout", "-l"}, set(), fail)
+        if positional != ["pod"]:
+            fail("the fake waits for pods to be deleted only")
+        namespace = flags.get("-n", "")
+        state.setdefault("events", []).append(f"wait {namespace} {flags['-l']}")
+        running = [
+            obj["metadata"]["name"]
+            for k, obj in sorted(objects.items())
+            if k.startswith(f"Deployment/{namespace}/")
+            and selects(obj, flags["-l"])
+            and (obj["spec"].get("replicas", 1) > 0 or obj["metadata"]["name"] in state.get("pods_linger", []))
+        ]
+        if running:
+            fail(f"error: timed out waiting for the condition on pods/{running[0]}-5d8c7b9f4-x2kqz")
         return
     if verb == "wait":
         flags, positional = flags_of(rest, {"--for", "-n", "--timeout"}, {"--all", "-A"}, fail)

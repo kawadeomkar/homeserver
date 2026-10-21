@@ -1,0 +1,59 @@
+---
+argument_specs:
+  main:
+    short_description: Give a new Home Assistant its owner account before anyone else on the network can
+    description:
+      - Runs on the Proxmox host. Finds the Home Assistant OS VM's address through the QEMU guest agent, waits for
+        Home Assistant itself to answer its onboarding API (the landing page Home Assistant OS shows while it
+        prepares refuses it), and, while onboarding is still open, creates the owner account through it.
+      - Until then, whoever first reaches port 8123 could create that account, or upload and restore a backup
+        without logging in. Both close once the account exists.
+      - Never prints the password. Does nothing once the account exists, so it never touches a Home Assistant
+        restored from a backup or already set up.
+      - The defaults do nothing.
+    options:
+      haos_onboard_vmid:
+        type: int
+        default: 0
+        description: The Home Assistant OS VM's VMID; 0 means none.
+      haos_onboard_mac:
+        type: str
+        default: ""
+        description: Its MAC, which picks its address out of the guest agent's report.
+      haos_onboard_address:
+        type: str
+        default: ""
+        description: Its address, when known; then the guest agent is not asked.
+      haos_onboard_port:
+        type: int
+        default: 8123
+        description: Home Assistant's port; a redirect from it is followed, and the account is created where Home Assistant answered.
+      haos_onboard_name:
+        type: str
+        default: ""
+        description: The owner's display name.
+      haos_onboard_username:
+        type: str
+        default: ""
+        description: The owner's username, lower case.
+      haos_onboard_password:
+        type: str
+        default: ""
+        no_log: true
+        description: The owner's password, at least 12 characters.
+      haos_onboard_language:
+        type: str
+        default: en
+        description: The language Home Assistant names its default areas in.
+      haos_onboard_agent_retries:
+        type: int
+        default: 40
+        description: How many times a real run asks the guest agent for the VM's address.
+      haos_onboard_retries:
+        type: int
+        default: 120
+        description: How many times a real run asks Home Assistant's onboarding API before giving up.
+      haos_onboard_delay:
+        type: int
+        default: 15
+        description: Seconds between those questions.
