@@ -9,7 +9,7 @@ protects the NAS's address with a NAS and nothing without one, is reloaded and n
 nftables service. The role runs with this repo's own configuration (group_vars/proxmox/tailscale.yml) and RFC 5737
 addresses.
 
-Run: make test-idempotence
+Run: make test TYPE=idempotence
 """
 
 import json

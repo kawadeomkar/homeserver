@@ -109,8 +109,8 @@ class YamlKeys:
         return None
 
     def _to_block_style(self) -> None:
-        """A mapping written in flow style, such as the {} make vault-init encrypts, as one line per key: a key added
-        after a flow mapping would not parse."""
+        """A mapping written in flow style, such as the {} make vault TYPE=new encrypts, as one line per key: a key
+        added after a flow mapping would not parse."""
         start = next(
             (i for i, line in enumerate(self.lines) if line.strip() and not line.startswith(("#", "---"))), None
         )
@@ -398,7 +398,7 @@ class Init:
                 self.local.set(s.key, answer, self.order)
                 self.save_local()
         except EditError as e:
-            where = "the vault: make vault-edit" if s.secret else str(LOCAL)
+            where = "the vault: make vault" if s.secret else str(LOCAL)
             self.console.say(f"  Not saved: {e}. Change it by hand in {where}.")
 
     def unset_local(self, key: str) -> bool:
@@ -810,11 +810,12 @@ class Init:
                     return
                 self.console.say("  That password does not open the vault.")
         if self.yes_no(
-            "Make a vault of your own instead (make vault-init: for a setup without the maintainer's NAS, or a fork)?",
+            "Make a vault of your own instead (make vault TYPE=new: for a setup without the maintainer's NAS, "
+            "or a fork)?",
             False,
-            "vault-init",
+            "vault-new",
         ):
-            result = run(["make", "vault-init", f"VENV={sys.prefix}"], cwd=self.root)
+            result = run(["make", "vault", "TYPE=new", f"VENV={sys.prefix}"], cwd=self.root)
             self.console.say(textwrap.indent((result.stdout + result.stderr).strip(), "  "))
             self.vault.open()
 
@@ -937,7 +938,7 @@ class Init:
         if not self.vault.is_open:
             required.append(
                 f"The vault {self.vault_problem()}: restore .vault_pass from your password manager, or "
-                "without the maintainer's NAS make one of your own with make vault-init (README.md)"
+                "without the maintainer's NAS make one of your own with make vault TYPE=new (README.md)"
             )
         for s in cfg.SETTINGS:
             if not on[s.section] or not self.applies(s):
@@ -1035,7 +1036,7 @@ class Init:
             if not has_value(v.get("kubernetes_ingress_allowed_range")):
                 manual.append(
                     "After the first build, each app's first visit through a port forward, then "
-                    "kubernetes_ingress_allowed_range and make kubernetes (scripts/runbooks/first-run.md)"
+                    "kubernetes_ingress_allowed_range and make deploy TYPE=kubernetes (scripts/runbooks/first-run.md)"
                 )
             manual.append("Trust the cluster's CA on each device (scripts/runbooks/tls.md)")
             if has_value(v.get("kubernetes_gpu_mapping")):
@@ -1075,12 +1076,12 @@ class Init:
 
         nexts = []
         if on["nas"]:
-            nexts.append("make check-truenas && make truenas")
-        nexts.append("make check-proxmox && make proxmox")
+            nexts.append("make check TYPE=truenas && make deploy TYPE=truenas")
+        nexts.append("make check TYPE=proxmox && make deploy TYPE=proxmox")
         if on["homeassistant"]:
-            nexts.append("make check-homeassistant && make homeassistant")
+            nexts.append("make check TYPE=homeassistant && make deploy TYPE=homeassistant")
         if on["cluster"]:
-            nexts.append("make check-kubernetes && make kubernetes")
+            nexts.append("make check TYPE=kubernetes && make deploy TYPE=kubernetes")
 
         parts = [cfg.SECTIONS[s] for s in cfg.SECTIONS if on[s]]
         title = "Setup: " + ", ".join(parts[:-1]) + (" and " if len(parts) > 1 else "") + parts[-1]

@@ -1,9 +1,9 @@
 ---
-# Spins the deployments down until make up: every app scaled to zero, with Flux told to leave it there, then Home
+# Spins the deployments down until make resume: every app scaled to zero, with Flux told to leave it there, then Home
 # Assistant's VM shut down. Check first, and narrow it with ONLY (comma-separated: an app such as jellyfin, a group
 # such as media, or homeassistant):
-#   make check-down
-#   make down ONLY=jellyfin,nextcloud
+#   make check TYPE=suspend
+#   make suspend ONLY=jellyfin,nextcloud
 # The data stays, and so do the platform (Flux, Traefik, monitoring) and the cluster's VMs, unless ALL=1 shuts those
 # VMs down too, after everything else: the worker, then the control plane, so the whole cluster with them. Without a
 # cluster, or without Home Assistant, its play ends by itself.
@@ -56,7 +56,7 @@
       ansible.builtin.meta: end_host
       when: not kubernetes_present
       tags: [always]
-    # So that make down ONLY=homeassistant needs no answer from the cluster.
+    # So that make suspend ONLY=homeassistant needs no answer from the cluster.
     - name: Leave the apps alone when ONLY names Home Assistant alone
       ansible.builtin.meta: end_host
       when: only_names == ['homeassistant'] and haos_present
@@ -100,7 +100,7 @@
       ansible.builtin.assert:
         that: kubernetes_present or _unknown | length == 0
         fail_msg: >-
-          This setup has no cluster, so make down knows no {{ _unknown | join(', ') }}{{
+          This setup has no cluster, so make suspend knows no {{ _unknown | join(', ') }}{{
           ': only homeassistant' if haos_present else ', nor any other name: it has no Home Assistant either' }}.
         quiet: true
       tags: [always]
@@ -130,8 +130,8 @@
 
 # ALL=1 alone: the cluster's VMs, once the apps are down and Home Assistant's VM with them. Each shutdown is the
 # guest's own, which Talos takes as an orderly one, never a forced stop; the worker goes first and the control plane
-# last, each in turn (kubernetes_power_order). A VM is started again only by make up ALL=1, make kubernetes, or the
-# host's own boot, for one marked onboot.
+# last, each in turn (kubernetes_power_order). A VM is started again only by make resume ALL=1, make deploy
+# TYPE=kubernetes, or the host's own boot, for one marked onboot.
 - name: Shut the cluster's VMs down
   hosts: proxmox
   gather_facts: false

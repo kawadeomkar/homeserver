@@ -1,8 +1,8 @@
 ---
-# Brings back what make down stopped, every app or those ONLY names, handing each back to Flux, and starts Home
+# Brings back what make suspend stopped, every app or those ONLY names, handing each back to Flux, and starts Home
 # Assistant's VM:
-#   make check-up
-#   make up ONLY=jellyfin,homeassistant
+#   make check TYPE=resume
+#   make resume ONLY=jellyfin,homeassistant
 # ALL=1 starts the cluster's VMs first, the control plane before the worker, and the apps wait for every node.
 # Without a cluster, or without Home Assistant, its play ends by itself.
 # An inventory made before the cluster has no kubernetes group, and the apps' play would match no host and end
@@ -109,7 +109,7 @@
     - name: Leave the apps for the real run
       ansible.builtin.meta: end_host
       when: (cluster_vms | default(false) | bool) and ansible_check_mode and up_nodes.rc != 0
-    # So that make down ONLY=homeassistant needs no answer from the cluster.
+    # So that make suspend ONLY=homeassistant needs no answer from the cluster.
     - name: Leave the apps alone when ONLY names Home Assistant alone
       ansible.builtin.meta: end_host
       when: only_names == ['homeassistant'] and haos_present
@@ -153,7 +153,7 @@
       ansible.builtin.assert:
         that: kubernetes_present or _unknown | length == 0
         fail_msg: >-
-          This setup has no cluster, so make up knows no {{ _unknown | join(', ') }}{{
+          This setup has no cluster, so make resume knows no {{ _unknown | join(', ') }}{{
           ': only homeassistant' if haos_present else ', nor any other name: it has no Home Assistant either' }}.
         quiet: true
       tags: [always]

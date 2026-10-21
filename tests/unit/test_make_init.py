@@ -38,7 +38,7 @@ class Scripted(wizard.Console):
             "read-certificate": "n",
             "bundle": "n",
             "age-key": "n",
-            "vault-init": "n",
+            "vault-new": "n",
             "have-password": "n",
             **(answers or {}),
         }
@@ -174,7 +174,7 @@ def test_a_comment_inside_a_mapping_is_part_of_it():
 
 
 def test_a_key_is_added_to_a_mapping_written_in_flow_style():
-    doc = wizard.YamlKeys("---\n{}\n")  # what make vault-init encrypts
+    doc = wizard.YamlKeys("---\n{}\n")  # what make vault TYPE=new encrypts
     doc.set("vault_key", "value", order=[])
     assert doc.values() == {"vault_key": "value"}
     doc = wizard.YamlKeys("---\n# A comment.\n{a: 1}\n")
@@ -322,7 +322,7 @@ def test_a_first_run_writes_each_answer_and_says_what_is_missing(repo):
     assert "The vault has no password" in summary
     assert "vault_haos_owner_password" not in summary, "a secret is not reported while the vault does not open"
     assert "secrets bundle" in summary and "age key" in summary
-    assert "make check-kubernetes && make kubernetes" in summary
+    assert "make check TYPE=kubernetes && make deploy TYPE=kubernetes" in summary
     assert "vm_backup_storage" in summary.split("RECOMMENDED")[1]
     assert "TYPE=full also asks" in summary
     assert stat.S_IMODE((repo / "group_vars/all/local.yml").stat().st_mode) == 0o600, "readable by its owner alone"

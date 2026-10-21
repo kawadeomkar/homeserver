@@ -1,8 +1,8 @@
 ---
 # Move the running cluster to the pins in group_vars/all/kubernetes.yml: an etcd snapshot, then each node whose
 # Talos release or schematic differs, control plane first, then Kubernetes. The only way a running node changes
-# version: make kubernetes leaves versions alone and reports what the pins wait for. Read the plan first:
-#   make check-talos-upgrade     (the per-node plan and the Kubernetes upgrade's own dry run)
+# version: make deploy TYPE=kubernetes leaves versions alone and reports what the pins wait for. Read the plan first:
+#   make check TYPE=talos-upgrade     (the per-node plan and the Kubernetes upgrade's own dry run)
 #   make talos-upgrade
 # Bump to adjacent minor releases only, to the latest patch of each (scripts/runbooks/talos.md).
 # An inventory made before the cluster has no kubernetes group, and the play below would match no host and end
