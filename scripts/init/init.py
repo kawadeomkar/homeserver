@@ -191,7 +191,9 @@ class YamlKeys:
 
 
 def write_file(path: Path, data: bytes, mode: int) -> None:
-    """Written whole or not at all, readable by its owner alone unless it already was by more."""
+    """Written whole or not at all, readable by its owner alone unless it already was by more. A link is followed, so
+    a setup's file is written, never the checkout's link to it replaced."""
+    path = Path(os.path.realpath(path))
     tmp = path.with_name(f".{path.name}.init-tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
     with os.fdopen(fd, "wb") as f:

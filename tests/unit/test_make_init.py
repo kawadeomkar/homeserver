@@ -602,3 +602,15 @@ def test_a_size_is_never_zero_but_a_disk_may_be_none(repo):
     assert "give a whole number of at least 1" in console.text
     assert local(repo)["kubernetes_node_sizes"]["homeserver-worker-1"]["cores"] == 4
     assert local(repo)["kubernetes_node_sizes"]["homeserver-worker-1"]["media_disk_gib"] == 0
+
+
+# --------------------------------------------------------------------------------------------- setups ---
+def test_a_write_through_a_link_changes_the_file_it_links_to(tmp_path):
+    stored = tmp_path / "setup" / "local.yml"
+    stored.parent.mkdir()
+    stored.write_text("---\n")
+    link = tmp_path / "local.yml"
+    link.symlink_to(stored)
+    wizard.write_file(link, b"---\nproxmox_address: x\n", 0o600)
+    assert link.is_symlink(), "the link stays"
+    assert stored.read_text() == "---\nproxmox_address: x\n"
