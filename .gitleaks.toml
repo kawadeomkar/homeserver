@@ -84,8 +84,7 @@ path = '''(?i)^k8s/.*\.(ya?ml|json)$'''
 regex = '''(?m)^[ \t]*(?:-[ \t]+)?kind:[ \t]*["']?Secret["']?[ \t]*(?:#.*)?$|"kind"[ \t]*:[ \t]*"Secret"'''
 keywords = ["kind"]
   [[rules.allowlists]]
-  # The homepage file is a service-account-token stub with no data (tests/policy checks that shape).
-  paths = ['''\.sops\.ya?ml$''', '''\.(example|template)\.ya?ml$''', '''^k8s/homepage/secret\.yaml$''']
+  paths = ['''\.sops\.ya?ml$''', '''\.(example|template)\.ya?ml$''']
 
 [[rules]]
 id = "sensitive-file"

@@ -494,6 +494,8 @@ def test_talos_nodes_resolve_on_the_kubernetes_host(tmp_path, local_yml, nodes):
     assert {n["name"]: (n["role"], len(n["patches"])) for n in found["nodes"]} == nodes
     assert found["endpoint"] == "https://192.0.2.30:6443" and found["version"] == "v1.14.2"
     assert "$patch: delete" not in found["cp"] and "KubeNodeConfig" not in found["cp"]
+    # Without its policy agent, Flannel would let every NetworkPolicy through unenforced.
+    assert "kind: KubeFlannelCNIConfig\nkubeNetworkPoliciesEnabled: true" in found["cp"]
     # The firewall: the two APIs open, the rest to the nodes (and the pod network), etcd to the control plane alone.
     docs = [yaml.safe_load(patch) for patch in found["patches"]]
     rules = {doc["name"]: doc for doc in docs if doc.get("kind") == "NetworkRuleConfig"}
@@ -531,9 +533,10 @@ MEDIA_ON_THE_DATA_VOLUME = (
     ],
 )
 def test_flux_settings_resolve_on_the_kubernetes_host(tmp_path, local_yml, path, media):
-    """Flux's settings resolve on the kubernetes host through the real inventory layout. Each setup syncs its own
-    cluster directory, which exists and builds, and every value is a string, since Flux substitutes text. Without a
-    NAS the media paths follow the Talos volume that holds the media: the media disk's, or the data volume's."""
+    """Flux's settings resolve on the kubernetes host through the real inventory layout: the NAS's address is in
+    group_vars/all, since this host never sees group_vars/proxmox. Each setup syncs its own cluster directory, which
+    exists and builds, and every value is a string, since Flux substitutes text. Without a NAS the media paths follow
+    the Talos volume that holds the media: the media disk's, or the data volume's."""
     tree = example_tree(tmp_path, local_yml)
     settings, instance, volumes = resolve_on(
         tree,
@@ -542,9 +545,15 @@ def test_flux_settings_resolve_on_the_kubernetes_host(tmp_path, local_yml, path,
         " | select('search', 'kind: UserVolumeConfig') | map('regex_search', 'name: (\\S+)', '\\1') | flatten]",
         *CLUSTER_ARGS,
     )
-    base = {"DOMAIN", "TZ", "DATA_NODE", "CONTROL_PLANE_ADDRESS"}
-    assert set(settings) == (base if media is None else base | {"MEDIA_LOCAL_PATH", "FRIGATE_LOCAL_PATH"})
+    common = {"DOMAIN", "TZ", "LB_RANGE", "LB_TRAEFIK_IP", "LB_FRIGATE_IP", "DATA_NODE", "CONTROL_PLANE_ADDRESS"}
+    common |= {"INGRESS_ALLOWED_RANGE"}
+    storage = {"NAS_ADDRESS", "NAS_POOL_PERSISTENT", "NAS_POOL_EPHEMERAL", "MEDIA_DATASET"}
+    assert set(settings) == common | (storage if media is None else {"MEDIA_LOCAL_PATH", "FRIGATE_LOCAL_PATH"})
     assert settings["CONTROL_PLANE_ADDRESS"] == "192.0.2.30"
+    # Nobody until local.yml names the range: a new cluster's apps are set up through port forwards first.
+    assert settings["INGRESS_ALLOWED_RANGE"] == "127.0.0.1/32"
+    if media is None:
+        assert settings["NAS_ADDRESS"] == "192.0.2.10" and settings["MEDIA_DATASET"] == "/mnt/ephemeral/jellyfin"
     assert all(isinstance(value, str) and value for value in settings.values()), settings
     assert instance["path"] == path and instance["url"] == CLUSTER_VARS["flux_sync_url"]
     assert settings["DATA_NODE"] == "homeserver-worker-1"
@@ -589,6 +598,34 @@ def test_nas_gets_a_dataset_and_share_per_vm_storage(tmp_path):
     ]
 
 
+def test_nas_gets_a_dataset_and_share_per_cluster_volume(tmp_path):
+    """With a NAS and a cluster, the datasets the cluster mounts are created with their properties, apart from
+    the media dataset, which exists already and is created only when missing (a lost pool made anew), and each is
+    exported to the worker alone."""
+    tree = example_tree(tmp_path)
+    nas = resolve_on(
+        tree,
+        "truenas",
+        "{'datasets': truenas_datasets_kubernetes, 'shares': truenas_nfs_shares_kubernetes,"
+        " 'all': truenas_datasets | map(attribute='name') | list}",
+    )
+    common = {"compression": "LZ4", "atime": "OFF", "acltype": "POSIX", "aclmode": "DISCARD", "recordsize": "1M"}
+    assert nas["datasets"] == [
+        {"name": "persistent/nextcloud", "properties": {**common, "sync": "STANDARD", "quota": 0}},
+        {"name": "persistent/photoprism", "properties": {**common, "sync": "STANDARD", "quota": 0}},
+        {"name": "ephemeral/frigate", "properties": {**common, "sync": "DISABLED", "quota": "500G"}},
+        {"name": "ephemeral/jellyfin", "properties": {**common, "sync": "DISABLED", "quota": 0}, "create_only": True},
+    ]
+    assert "ephemeral/jellyfin" in nas["all"]
+    worker = example()["kubernetes_node_addresses"]["homeserver-worker-1"]
+    assert [(s["path"], s["hosts"]) for s in nas["shares"]] == [
+        ("/mnt/persistent/nextcloud", [worker]),
+        ("/mnt/persistent/photoprism", [worker]),
+        ("/mnt/ephemeral/frigate", [worker]),
+        ("/mnt/ephemeral/jellyfin", [worker]),
+    ]
+
+
 def test_vm_reservation_on_the_ephemeral_pool(tmp_path):
     """The VMs' dataset on the ephemeral pool gets a reservation when one is set, so the media dataset beside it
     cannot fill the pool under them; a reservation counts the descendants, where the VMs' disks are. Unset, it is
@@ -620,6 +657,10 @@ def test_pool_names_follow_local_yml(tmp_path):
             "scratch/proxmox",
             "scratch/proxmox/vm",
             "scratch/proxmox/claude-on-proxmox",
+            "tank/nextcloud",
+            "tank/photoprism",
+            "scratch/frigate",
+            "scratch/jellyfin",
         ],
     }
     exports = resolve_on(tree, "homeserver", "proxmox_storage_nfs | map(attribute='export') | list")
@@ -644,21 +685,32 @@ def test_nas_settings_given_without_an_address_are_refused(tmp_path, setting):
     assert setting.split(":")[0] in out, out[-3000:]
 
 
-def test_snapshot_tasks(tmp_path):
-    """The persistent VMs' disks are snapshotted hourly and daily; nothing on the ephemeral pool, ever. The daily
-    task allows empty snapshots: it fires with an hourly one, and TrueNAS destroys a batch whose snapshots are all
-    empty unless one of its tasks allows them, so an idle dataset would keep none."""
-    tasks = resolve_on(example_tree(tmp_path), "truenas", "truenas_snapshot_tasks")
+@pytest.mark.parametrize(
+    ("local_yml", "datasets"),
+    [
+        pytest.param(None, ["persistent/proxmox/vm", "persistent/nextcloud", "persistent/photoprism"], id="cluster"),
+        pytest.param(example_without_kubernetes(), ["persistent/proxmox/vm"], id="no-cluster"),
+    ],
+)
+def test_snapshot_tasks_per_setup(tmp_path, local_yml, datasets):
+    """The persistent VMs' disks are snapshotted hourly and daily; with a cluster, its irreplaceable datasets
+    hourly, daily and weekly; nothing on the ephemeral pool, ever. Every task that keeps snapshots longer than the
+    hourly ones allows empty snapshots: the daily and weekly tasks fire with an hourly one, and TrueNAS destroys a
+    batch whose snapshots are all empty unless one of its tasks allows them, so an idle dataset would keep none."""
+    tasks = resolve_on(example_tree(tmp_path, local_yml), "truenas", "truenas_snapshot_tasks")
     found = sorted(
         {
             (t["dataset"], t["naming_schema"].split("-")[0], t["lifetime_value"], t["lifetime_unit"], t["allow_empty"])
             for t in tasks
         }
     )
-    assert found == [
+    expected = [
         ("persistent/proxmox/vm", "daily", 7, "DAY", True),
         ("persistent/proxmox/vm", "hourly", 1, "DAY", False),
     ]
+    for d in datasets[1:]:
+        expected += [(d, "daily", 30, "DAY", True), (d, "hourly", 2, "DAY", False), (d, "weekly", 12, "WEEK", True)]
+    assert found == sorted(expected)
     assert not [t for t in tasks if t["dataset"].startswith("ephemeral/")]
 
 
@@ -769,6 +821,12 @@ def without(settings, *names):
             ["flux_sync_url must name the Git repository this cluster syncs"],
             id="flux-url-placeholder",
         ),
+        pytest.param(
+            as_local_yml(without(example(), "flux_sync_url", "kubernetes_lb_frigate_ip")),
+            without(CLUSTER_VARS, "flux_sync_url"),
+            ["flux_sync_url must name the Git repository", "set kubernetes_lb_frigate_ip in group_vars/all/local.yml"],
+            id="flux-url-and-an-lb-address-missing",
+        ),
         pytest.param(PROXMOX_ONLY_CLUSTER_LOCAL_YML, CLUSTER_VARS, [], id="proxmox-only-sized"),
         pytest.param(
             PROXMOX_ONLY_CLUSTER_LOCAL_YML.replace("kubernetes_node_sizes:", "unused_sizes:"),
@@ -837,7 +895,7 @@ def without(settings, *names):
         pytest.param(
             None,
             CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"data_disk_gib": 5}}},
-            ["homeserver-worker-1: data_disk_gib must be 0 or at least 10, the least its Talos volume takes"],
+            ["homeserver-worker-1: data_disk_gib must be 0 or at least 11: its Talos volume takes 10 GiB"],
             id="data-disk-under-the-volume-minimum",
         ),
         pytest.param(
@@ -851,7 +909,7 @@ def without(settings, *names):
             CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"data_disk_gib": 0}}},
             [
                 "homeserver-worker-1 runs the apps, and their data lives on its data disk: its data_disk_gib in "
-                "kubernetes_node_sizes must be at least 10, not 0."
+                "kubernetes_node_sizes must be at least 11, not 0."
             ],
             id="nas-worker-without-a-data-disk",
         ),
@@ -880,9 +938,9 @@ def without(settings, *names):
                     "homeserver-worker-1": {
                         "cores": 2,
                         "memory_mib": 6144,
-                        "system_disk_gib": 10,
-                        "data_disk_gib": 10,
-                        "media_disk_gib": 10,
+                        "system_disk_gib": 32,
+                        "data_disk_gib": 11,
+                        "media_disk_gib": 11,
                     },
                 }
             },
@@ -972,6 +1030,19 @@ def without(settings, *names):
             [],
             id="flux-ref-unprotected-said-so",
         ),
+        pytest.param(None, CLUSTER_VARS | {"kubernetes_ingress_allowed_range": "192.0.2.0/24"}, [], id="ingress-range"),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_ingress_allowed_range": "192.0.2.0"},
+            ["kubernetes_ingress_allowed_range must be one IPv4 range in CIDR form"],
+            id="ingress-range-an-address",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_ingress_allowed_range": "192.0.256.0/24"},
+            ["kubernetes_ingress_allowed_range must be one IPv4 range in CIDR form"],
+            id="ingress-range-out-of-bounds",
+        ),
         pytest.param(
             None,
             CLUSTER_VARS | {"vault_talos_secrets": "certs: {}\n"},
@@ -983,6 +1054,84 @@ def without(settings, *names):
             CLUSTER_VARS | {"flux_sync_url": "git@github.com:someone/homeserver.git"},
             ["flux_sync_url must name the Git repository this cluster syncs, over HTTPS"],
             id="flux-url-over-ssh",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"truenas_static_address": ""},
+            ["gives only truenas_bootstrap_address, a DHCP lease the NAS play replaces"],
+            id="nas-bootstrap-address-only",
+        ),
+        pytest.param(
+            PROXMOX_ONLY_CLUSTER_LOCAL_YML,
+            CLUSTER_VARS | {"proxmox_address": "pve.home.arpa"},
+            ["proxmox_address in group_vars/all/local.yml is pve.home.arpa: give the host's IPv4 address there"],
+            id="proxmox-only-host-name",
+        ),
+        pytest.param(
+            PROXMOX_ONLY_CLUSTER_LOCAL_YML,
+            CLUSTER_VARS | {"proxmox_address": "192.0.2.256"},
+            ["proxmox_address in group_vars/all/local.yml is 192.0.2.256"],
+            id="proxmox-only-address-out-of-bounds",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"proxmox_address": "pve.home.arpa"},
+            ["proxmox_address in group_vars/all/local.yml is pve.home.arpa"],
+            id="nas-proxmox-host-name",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"system_disk_gib": 20}}},
+            ["homeserver-worker-1's system_disk_gib in kubernetes_node_sizes must be at least 32"],
+            id="worker-system-disk-too-small",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_lb_traefik_ip": "192.0.2.50"},
+            ["kubernetes_lb_traefik_ip 192.0.2.50 is outside kubernetes_lb_range 192.0.2.40-192.0.2.49"],
+            id="lb-address-outside-the-range",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_lb_frigate_ip": "192.0.2.40"},
+            ["kubernetes_lb_traefik_ip and kubernetes_lb_frigate_ip must differ"],
+            id="lb-address-twice",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_lb_range": "192.0.2.24/28"},
+            ["kubernetes_lb_range 192.0.2.24/28 includes node addresses 192.0.2.30"],
+            id="lb-range-over-a-node-cidr",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_lb_range": "192.0.2.40/29"},
+            [],
+            id="lb-range-a-cidr",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_lb_range": "pool-a"},
+            ["kubernetes_lb_range must be IPv4 addresses as first-last"],
+            id="lb-range-not-addresses",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_lb_range": "192.0.2.40-192.0.2.400"},
+            ["kubernetes_lb_range must be IPv4 addresses as first-last"],
+            id="lb-range-address-out-of-bounds",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_lb_range": "192.0.2.40/33"},
+            ["kubernetes_lb_range must be IPv4 addresses as first-last"],
+            id="lb-range-prefix-out-of-bounds",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_lb_traefik_ip": "192.0.2.400"},
+            ["kubernetes_lb_traefik_ip must be an IPv4 address, such as 192.0.2.40, not 192.0.2.400."],
+            id="lb-address-out-of-bounds",
         ),
     ],
 )

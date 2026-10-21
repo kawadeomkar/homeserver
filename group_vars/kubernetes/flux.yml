@@ -24,18 +24,25 @@ flux_bootstrap_instance:
 flux_bootstrap_age_key_file: "{{ sops_age_key_file | default('~/.config/sops/age/homeserver.agekey', true) | expanduser }}"
 
 # The settings every Flux Kustomization substitutes (${NAME}): strings only. Addresses come from local.yml and never
-# appear in a manifest: the apps' domain and time zone, the node whose data volume holds the apps' local volumes, and
-# the control plane's address (never tracked). Without a NAS, also where the media and the camera recordings live
-# on the worker: on its media disk (Talos's media volume, /var/mnt/media), or on its data volume when local.yml keeps
-# them there (kubernetes_media_on_data_volume), so one set of manifests serves both. With a NAS they live on the NAS,
-# whose address and datasets come with the NFS exports to the nodes, in the change that adds the manifests.
+# appear in a manifest. With a NAS, its address, pools and the media dataset; without one, where the media and
+# camera recordings live on the worker: its media disk (Talos's media volume, /var/mnt/media), or its data volume when
+# local.yml keeps them there (kubernetes_media_on_data_volume), so one set of manifests serves both. The control
+# plane's address is never tracked either.
+# INGRESS_ALLOWED_RANGE is who Traefik serves: local.yml's kubernetes_ingress_allowed_range, set once every app's
+# first-run setup is done, and until then the loopback address, which no client has.
 flux_bootstrap_settings: >-
   {{ {'DOMAIN': kubernetes_domain | default(kubernetes_domain_default, true),
       'TZ': kubernetes_timezone,
-      'DATA_NODE': kubernetes_data_node,
-      'CONTROL_PLANE_ADDRESS': kubernetes_node_addresses[kubernetes_controlplane.name] | trim}
-     | combine({} if nas_present else
+      'LB_RANGE': kubernetes_lb_range | string,
+      'LB_TRAEFIK_IP': kubernetes_lb_traefik_ip | string,
+      'LB_FRIGATE_IP': kubernetes_lb_frigate_ip | string,
+      'DATA_NODE': kubernetes_data_node}
+     | combine({'NAS_ADDRESS': nas_address, 'NAS_POOL_PERSISTENT': nas_pools.persistent,
+                'NAS_POOL_EPHEMERAL': nas_pools.ephemeral,
+                'MEDIA_DATASET': vm_storage_mount_root ~ '/' ~ nas_pools.ephemeral ~ '/jellyfin'} if nas_present else
                {'MEDIA_LOCAL_PATH': '/var/mnt/media/library' if kubernetes_media_disk
                                     else '/var/mnt/local-path-provisioner/static/media',
                 'FRIGATE_LOCAL_PATH': '/var/mnt/media/frigate' if kubernetes_media_disk
-                                      else '/var/mnt/local-path-provisioner/static/frigate-media'}) }}
+                                      else '/var/mnt/local-path-provisioner/static/frigate-media'})
+     | combine({'CONTROL_PLANE_ADDRESS': kubernetes_node_addresses[kubernetes_controlplane.name] | trim,
+                'INGRESS_ALLOWED_RANGE': kubernetes_ingress_allowed_range | default('127.0.0.1/32', true) | string | trim}) }}

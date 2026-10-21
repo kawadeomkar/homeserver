@@ -502,15 +502,15 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 | [truenas_ui_restart_wait](defaults/main.yml#L68)   | int | `10` |    
 | [truenas_ntp_servers](defaults/main.yml#L70)   | list | `[]` |    
 | [truenas_ntp_server_defaults](defaults/main.yml#L71)   | dict | `{}` |    
-| [truenas_datasets](defaults/main.yml#L76)   | list | `[]` |    
-| [truenas_snapshot_tasks](defaults/main.yml#L82)   | list | `[]` |    
-| [truenas_nfs_settings](defaults/main.yml#L86)   | dict | `{}` |    
-| [truenas_nfs_shares](defaults/main.yml#L89)   | list | `[]` |    
-| [truenas_nfs_share_defaults](defaults/main.yml#L91)   | dict | `{}` |    
-| [truenas_mail](defaults/main.yml#L96)   | dict | `{}` |    
-| [truenas_mail_password](defaults/main.yml#L98)   | str |  |    
-| [truenas_alert_services](defaults/main.yml#L101)   | list | `[]` |    
-| [truenas_services](defaults/main.yml#L105)   | dict | `{}` |    
+| [truenas_datasets](defaults/main.yml#L77)   | list | `[]` |    
+| [truenas_snapshot_tasks](defaults/main.yml#L83)   | list | `[]` |    
+| [truenas_nfs_settings](defaults/main.yml#L87)   | dict | `{}` |    
+| [truenas_nfs_shares](defaults/main.yml#L90)   | list | `[]` |    
+| [truenas_nfs_share_defaults](defaults/main.yml#L92)   | dict | `{}` |    
+| [truenas_mail](defaults/main.yml#L97)   | dict | `{}` |    
+| [truenas_mail_password](defaults/main.yml#L99)   | str |  |    
+| [truenas_alert_services](defaults/main.yml#L102)   | list | `[]` |    
+| [truenas_services](defaults/main.yml#L106)   | dict | `{}` |    
 
 
 

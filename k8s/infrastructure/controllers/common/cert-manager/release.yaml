@@ -1,0 +1,49 @@
+---
+# cert-manager issues the apps' certificate: a wildcard for *.${DOMAIN}, signed by the cluster's own CA
+# (k8s/infrastructure/tls/tls.yaml), renewed before it expires. Its CRDs come with the chart and stay when the
+# release goes (crds.keep), so the certificates do too. The chart's post-install API check is a Helm hook Job, left
+# out: Flux waits for the release to be ready instead. Every component requests CPU and memory (make lint-helm).
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cert-manager
+  namespace: cert-manager
+spec:
+  interval: 1h
+  chartRef:
+    kind: OCIRepository
+    name: cert-manager
+  values:
+    crds:
+      enabled: true
+      keep: true
+    # Each image by its version and digest (CLAUDE.md): a chart bump changes both here too.
+    image:
+      tag: v1.21.2
+      digest: sha256:70f532fd9cfde0b09d55687200942399d89838bc2d5d5b45152eb799a15912b8
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+    webhook:
+      image:
+        tag: v1.21.2
+        digest: sha256:a60e2dac46dbb8a7f3df95c54ce941012f54c2fe022f0ee55aaa1ab40ed957ae
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+    acmesolver:
+      image:
+        tag: v1.21.2
+        digest: sha256:699b40d622211ab7accad8a21b04c5fbaa1841ef7a12621e8de492dbe27b2503
+    cainjector:
+      image:
+        tag: v1.21.2
+        digest: sha256:c85268c64f2e0e76684bf5fe8906caff34b82523561c6affe0fae3546bd87562
+      resources:
+        requests:
+          cpu: 10m
+          memory: 64Mi
+    startupapicheck:
+      enabled: false

@@ -1,18 +1,23 @@
 ### TODO list
 
-Ordered by whether the Proxmox + Talos migration makes the item moot. `docs/ISSUES.md` (gitignored) holds
-the full audit with file/line references; the finding ids below refer to it.
+The running backlog: TLS, the network, CI follow-ups, the NAS and the Proxmox host, remote access, and the steps
+that bring the cluster's apps up once it is built. Finding ids such as K8S-14 refer to `docs/ISSUES.md` (gitignored), the
+audit of the tree before the cluster was built.
 
-## Do before migrating — these survive it
+## TLS
 
-- [ ] Delete the placeholder alerting rule that always fires at a nonexistent Alertmanager (K8S-26)
-- [ ] Add Renovate for the 21 container image tags, which are pinned and bumped by hand. Wait until the
-      cluster exists, and split the ruleset first so an app with write access cannot merge on its own
-      (REPO-3). Dependabot covers the SHA-pinned actions and the Python lock, not image tags
-- [ ] Write nextcloud's and photoprism's Secrets as `*.sops.yaml` files (`k8s/README-secrets.md`, which also says
-      where the age key lives and how it is backed up). Until then neither can deploy
-- [ ] Real domain instead of `*.homeserver.internal`, which public ACME cannot validate. Prerequisite for
-      any TLS at all (K8S-14)
+- [ ] Trust the cluster's CA on each device (`scripts/runbooks/tls.md`): every app is HTTPS with a wildcard that
+      cert-manager signs with it, Jellyfin also plain HTTP for TV apps
+- [ ] Optionally, a real domain and a DNS provider with an API for cert-manager's DNS-01 challenge: publicly trusted
+      certificates, nothing to install on devices, and Jellyfin's TV apps on HTTPS too (K8S-14)
+
+## The network
+
+- [ ] Reserve every node's address in the router's DHCP, for its MAC (`kubernetes_node_macs`): the NAS's exports
+      trust the worker's address, so a device that leases it reads the cluster's shares as root
+- [ ] A servers VLAN for the NAS, the Proxmox host and the nodes, which the IoT and Wi-Fi devices cannot reach: NFS
+      with sec=sys trusts addresses, and the nightly VM backups on the NAS hold the cluster's keys and etcd
+      (CLAUDE.md, Landmines). Then narrow `kubernetes_ingress_allowed_range` to the clients' VLAN
 
 ## CI
 
@@ -31,7 +36,7 @@ the full audit with file/line references; the finding ids below refer to it.
       CII-Best-Practices and Packaging are expected to score low. Add its badge to `README.md` if wanted
 - [ ] docsible 0.8.0 leaves a block's `always` tasks out of each role's `REFERENCE.md`, so proxmox_apt's
       page never shows it recording a reboot, and shows no tags for a task inside a block, so truenas's
-      page leaves its six stage tags blank. Both are reported upstream (docsible#137, docsible#138) and still
+      page leaves its eight stage tags blank. Both are reported upstream (docsible#137, docsible#138) and still
       on its main branch, which fixes multi-line comments in tables (docsible#135) and `!unsafe` tags
       (docsible#134), unreleased. With a release that has them, bump the pin, think again about `--comments`,
       check whether #137 and #138 are fixed too, and run `make docs`
@@ -80,11 +85,6 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 - [ ] Give the NAS a mail server for its alerts: the `truenas_mail_*` settings and `truenas_alert_email` in
       `local.yml` (`local.yml.example` lists them), and `vault_truenas_mail_password` in the vault. Until
       then nothing is mailed, so a degraded pool shows only in the web UI
-- [ ] With a NAS, give the cluster its media: export the `ephemeral/jellyfin` media dataset to the worker
-      alone, install an NFS CSI driver, and pass Flux the NAS's settings (`NAS_ADDRESS`, the pools,
-      `MEDIA_DATASET`) in `flux_bootstrap_settings`, together with the manifests that mount it. Until then the
-      NAS exports only the Proxmox host's storages, to the host alone, and the cluster with a NAS has nowhere
-      for media; without a NAS the media paths already reach Flux (`MEDIA_LOCAL_PATH`, `FRIGATE_LOCAL_PATH`)
 - [ ] Before upgrading the NAS to TrueNAS 26, replace the role's hand-written WebSocket client
       (`roles/truenas/module_utils/truenas_api.py`) with iXsystems' official library,
       [`truenas/api_client`](https://github.com/truenas/api_client). Its README says TrueNAS 26 changes
@@ -130,23 +130,6 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       Then compare `tailscale status --json` and `tailscale get --json` on the host with `fake_tailscale.py`, which
       was written from a 1.102 client, and fix the fake where they differ
 
-## Manifest defects found in review
-
-From a review of the change stack in October 2026. Read from the manifests and the upstream images; none
-was reproduced on a cluster, because there is none.
-
-- [ ] `grafana` runs as uid 472 and relies on `fsGroup` to make its hostPath PV writable, which Kubernetes
-      does not apply to hostPath volumes, so it cannot write `/var/lib/grafana`. `prometheus` depends the
-      same way on `/opt/prometheus` being owned by uid 1000. Both go away with the hostPath→PVC conversion
-- [ ] `filebrowser`: `FileOrCreate` makes `filebrowser.db` a root-owned 0644 file, but the pinned image
-      runs as uid 1000 and needs to write it
-- [ ] `dashy` is pinned to 4.4.12, which listens on 8080 and reads `/app/user-data/conf.yml`; the manifest
-      still uses containerPort and targetPort 80 and mounts `/app/public/conf.yml`
-- [ ] `homepage` is pinned to v1.13.2, which rejects requests unless `HOMEPAGE_ALLOWED_HOSTS` names the
-      host it is reached by; the Deployment sets no env at all
-- [ ] `prometheus` Deployment has no `strategy: Recreate` although it now holds a hostPath PV, so a rollout
-      starts a second pod against the same TSDB and hangs
-
 ## Removed with the Ubuntu host layer
 
 The Ansible that configured the single Ubuntu host (`roles/main`, `roles/k8s`, the playbooks, the Vagrant
@@ -154,28 +137,10 @@ setup and the helper scripts) was deleted, and its backlog went with it: fail2ba
 `usernames` list, `package` instead of `apt`, the defaults/vars split, and pinning `k3s_version`. The code
 is in the git history.
 
-## Migration decisions still open
+## Renovate
 
-Blocked on the per-server hardware inventory.
-
-- [ ] NAS address and export layout for the cluster — two different addresses and two export roots appear
-      across the manifests, and one root is on a pool that no longer exists. The NAS now has one address
-      (`truenas_static_address`) but exports only the two Proxmox VM datasets (K8S-9)
-- [ ] LoadBalancer implementation and VIP range. k3s's ServiceLB does not exist on Talos, so jellyfin's
-      DLNA/discovery Services need MetalLB or Cilium LB IPAM there (K8S-5)
-- [ ] Ingress controller. Talos bundles none, so every class-less Ingress in this repo routes nowhere
-      until one is installed (K8S-6)
-- [ ] CSI driver / StorageClass. Talos ships neither, and the `/opt` hostPath model does not survive an
-      immutable root — this is also what the outstanding PSA violations really need (K8S-4)
-- [ ] GPU passthrough: jellyfin and frigate both want `/dev/dri`, and one Intel iGPU cannot easily be
-      shared between two VMs
-- [ ] Home Assistant's placement — it needs device access and host networking, and is the workload least
-      suited to Talos
-- [ ] Control-plane count, and where etcd snapshots go
-- [ ] Replace `k8s/prometheus`, `k8s/grafana`, `k8s/node-exporter` and `k8s/kube-state-metrics` with
-      `kube-prometheus-stack` once the cluster is built. Decided in October 2026; until then the
-      hand-written tree is left as it is, including its two open defects listed above
-- [ ] dashdot's placement — inside a VM it reports the VM's virtual disk, not real hardware (K8S-10)
+- [ ] Install the Mend Renovate app on the repository once the ruleset is split (REPO-3, `docs/CI-PLAN.md` §7.3):
+      `renovate.json` is ready. Until then the images and charts under `k8s/` are bumped by hand
 
 ## The cluster's secrets
 

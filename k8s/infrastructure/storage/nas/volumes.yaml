@@ -1,0 +1,95 @@
+---
+# The NAS datasets the apps mount, as static volumes through csi-driver-nfs, each bound to one claim. Retained when
+# the claim goes, and never pruned: the data outlives the cluster. A PersistentVolume's csi section cannot change, so
+# a new NAS address means deleting and recreating the volume, never the data.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: media
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  capacity:
+    storage: 1Ti
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions: [nfsvers=4.2]
+  claimRef:
+    namespace: media
+    name: media
+  csi:
+    driver: nfs.csi.k8s.io
+    volumeHandle: "${NAS_ADDRESS}#${MEDIA_DATASET}##"
+    volumeAttributes:
+      server: "${NAS_ADDRESS}"
+      share: "${MEDIA_DATASET}"
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nextcloud-data
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  capacity:
+    storage: 1Ti
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions: [nfsvers=4.2]
+  claimRef:
+    namespace: nextcloud
+    name: nextcloud-data
+  csi:
+    driver: nfs.csi.k8s.io
+    volumeHandle: "${NAS_ADDRESS}#/mnt/${NAS_POOL_PERSISTENT}/nextcloud##"
+    volumeAttributes:
+      server: "${NAS_ADDRESS}"
+      share: "/mnt/${NAS_POOL_PERSISTENT}/nextcloud"
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: photoprism-media
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  capacity:
+    storage: 1Ti
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions: [nfsvers=4.2]
+  claimRef:
+    namespace: photoprism
+    name: photoprism-media
+  csi:
+    driver: nfs.csi.k8s.io
+    volumeHandle: "${NAS_ADDRESS}#/mnt/${NAS_POOL_PERSISTENT}/photoprism##"
+    volumeAttributes:
+      server: "${NAS_ADDRESS}"
+      share: "/mnt/${NAS_POOL_PERSISTENT}/photoprism"
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: frigate-media
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  capacity:
+    storage: 500Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions: [nfsvers=4.2]
+  claimRef:
+    namespace: frigate
+    name: frigate-media
+  csi:
+    driver: nfs.csi.k8s.io
+    volumeHandle: "${NAS_ADDRESS}#/mnt/${NAS_POOL_EPHEMERAL}/frigate##"
+    volumeAttributes:
+      server: "${NAS_ADDRESS}"
+      share: "/mnt/${NAS_POOL_EPHEMERAL}/frigate"

@@ -1,0 +1,6 @@
+---
+# The static PersistentVolumes the apps mount, under the same names in both setups (k8s/apps/ claims them by name).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - volumes.yaml

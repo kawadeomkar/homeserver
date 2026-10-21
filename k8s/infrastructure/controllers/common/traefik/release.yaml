@@ -1,0 +1,112 @@
+---
+# The cluster's ingress, the default IngressClass, on one LoadBalancer address (LB_TRAEFIK_IP, from the cluster's
+# settings), answering only the clients local.yml allows (INGRESS_ALLOWED_RANGE), over HTTPS with the cluster's own
+# CA, Jellyfin also over plain HTTP. Gateway API later, with its CRDs.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: traefik
+  namespace: traefik
+spec:
+  interval: 1h
+  chartRef:
+    kind: OCIRepository
+    name: traefik
+  install:
+    crds: CreateReplace
+  upgrade:
+    crds: CreateReplace
+  values:
+    # The image by its version and digest (CLAUDE.md): a chart bump changes both here too. The chart takes the pair
+    # in tag, pulls by the digest and reads the version for its own checks.
+    image:
+      tag: v3.7.14@sha256:575fa15b135078fe5e50aa847987d96dbddd7b093c172429618404df73f3fa7c
+    ingressClass:
+      enabled: true
+      isDefaultClass: true
+      name: traefik
+    providers:
+      kubernetesIngress:
+        enabled: true
+        publishedService:
+          enabled: true
+      kubernetesCRD:
+        enabled: true
+      kubernetesGateway:
+        enabled: false
+    # The legacy names for what the CRD provider generates, set rather than left to the default: the entrypoints
+    # below name their Middlewares that way (<namespace>-<name>@kubernetescrd), while collision-safe naming spells a
+    # reference <namespace>_<name>, which would leave every route naming a Middleware that does not exist. Unset,
+    # Traefik warns about it at every start. The chart passes the option only when true, hence the argument.
+    additionalArguments:
+      - --providers.kubernetescrd.safeNaming=false
+    service:
+      annotations:
+        metallb.io/loadBalancerIPs: "${LB_TRAEFIK_IP}"
+      spec:
+        type: LoadBalancer
+        # Keeps clients' addresses; MetalLB announces from the node the pod runs on.
+        externalTrafficPolicy: Local
+        allocateLoadBalancerNodePorts: false
+    ports:
+      # Header names that alias another (X_Forwarded_For or X.Forwarded.For for X-Forwarded-For) are deleted on every
+      # entrypoint: Go counts them as other headers, so Traefik never overwrites them, while PHP and Python backends
+      # (Nextcloud, SABnzbd) read them as the header they alias, those Traefik sets included (CVE-2026-88011). Browsers
+      # and these apps' clients send none. Left unset, Traefik warns about it for each entrypoint at every start.
+      traefik:
+        http:
+          aliasHeadersStrategy: delete
+      metrics:
+        http:
+          aliasHeadersStrategy: delete
+      # Every route on both entrypoints answers only the allowed range (k8s/infrastructure/configs/traefik.yaml).
+      # Until infra-configs applies that Middleware, Traefik refuses the routes that name it: closed, not open. Traefik
+      # also builds web's redirect before its CRD provider has read the Middleware, so a start can log that it does not
+      # exist for web-to-443@internal: a known race (github.com/traefik/traefik/issues/9779), closed too, and gone a
+      # moment later. Upstream's way round it, the allowlist on websecure alone, would open Jellyfin's plain HTTP.
+      # Both refuse an encoded NUL in a path, which no file name or route holds. The other encoded characters Traefik
+      # can refuse stay allowed: Nextcloud's and FileBrowser's file names hold %, #, ? and ;, and with every rule
+      # matching on the host alone, a path Traefik and an app read differently sidesteps no route or Middleware. One
+      # refusal also tells Traefik the choice was made, which it otherwise warns about at every start.
+      web:
+        http:
+          # Plain HTTP only redirects to HTTPS, through a router Traefik generates at this priority, above every
+          # Ingress's own (the length of its rule). Jellyfin's Ingress outranks it, since TV and streaming-box apps
+          # cannot trust a private CA: Jellyfin alone still answers plain HTTP.
+          redirections:
+            entryPoint:
+              to: websecure
+              scheme: https
+              permanent: true
+              priority: 1000
+          middlewares:
+            - traefik-lan-allowlist@kubernetescrd
+          aliasHeadersStrategy: delete
+          encodedCharacters:
+            allowEncodedNullCharacter: false
+        transport:
+          respondingTimeouts:
+            # How long a client may take to send its whole request, body included. Longer than the 60-second
+            # default, for what Jellyfin's apps send over plain HTTP, and finite: Traefik reads a request before
+            # any Middleware judges it, so without a limit any device on the LAN could hold connections open for
+            # ever by sending slowly.
+            readTimeout: 10m
+      # TLS with the cluster's wildcard certificate (the default TLSStore, k8s/infrastructure/tls/tls.yaml), and
+      # HSTS on every response.
+      websecure:
+        http:
+          middlewares:
+            - traefik-lan-allowlist@kubernetescrd
+            - traefik-hsts@kubernetescrd
+          aliasHeadersStrategy: delete
+          encodedCharacters:
+            allowEncodedNullCharacter: false
+        transport:
+          respondingTimeouts:
+            # Large uploads (Nextcloud, PhotoPrism, FileBrowser) take longer than the 60-second default; an hour
+            # carries a file of tens of gigabytes over the LAN, and still ends a request sent slowly on purpose.
+            readTimeout: 1h
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi

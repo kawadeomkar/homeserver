@@ -87,9 +87,9 @@ proxmox_address: 192.0.2.20
 
 # --------------------------------------------------------------- Kubernetes ---
 # No cluster? Delete this whole section. With no node addresses the Kubernetes
-# play ends by itself and the Proxmox play creates no VM. A section that keeps
-# other values but no address is refused: that is what a misspelt address
-# looks like.
+# play ends by itself, the Proxmox play creates no VM and the NAS play exports
+# nothing to a cluster. A section that keeps other values but no address is
+# refused: that is what a misspelt address looks like.
 #
 # Each node's address, reserved in the router's DHCP outside its dynamic range.
 # Both setups have the same two nodes: a control plane, and a worker that runs
@@ -103,6 +103,11 @@ kubernetes_node_addresses:
 kubernetes_node_macs:
   homeserver-cp-1: "<mac>"
   homeserver-worker-1: "<mac>"
+# MetalLB's addresses, outside the DHCP range: a range, and the two the
+# ingress (Traefik) and the cameras' streams (Frigate) keep.
+kubernetes_lb_range: 192.0.2.40-192.0.2.49
+kubernetes_lb_traefik_ip: 192.0.2.40
+kubernetes_lb_frigate_ip: 192.0.2.41
 # The repository the cluster syncs, which Flux applies with cluster-admin
 # rights. There is no default: name your own.
 flux_sync_url: https://github.com/<you>/homeserver.git
@@ -122,8 +127,15 @@ flux_sync_url: https://github.com/<you>/homeserver.git
 # 0600 (k8s/README-secrets.md). A test host's copy names its own key, never the
 # home cluster's (scripts/runbooks/talos.md).
 # sops_age_key_file: ~/.config/sops/age/homeserver.agekey
-# The apps answer at <app>.<domain>.
+# The apps answer at <app>.<domain>; point a wildcard DNS record for
+# *.<domain> at kubernetes_lb_traefik_ip.
 # kubernetes_domain: homeserver.internal
+# The clients Traefik serves: one IPv4 range, your LAN's or, with VLANs, your
+# own devices'. Leave it unset on a new cluster: Traefik then answers everyone
+# with 403 while you set each app up through kubectl port-forward, since several
+# make their first visitor the admin. Set it once they are all set up, and run
+# make kubernetes.
+# kubernetes_ingress_allowed_range: 192.0.2.0/24
 # Extra names for the Kubernetes API's certificate, set before the first build,
 # so the API can later be reached by name.
 # kubernetes_api_sans: [k8s-api.home.arpa]
@@ -135,6 +147,9 @@ flux_sync_url: https://github.com/<you>/homeserver.git
 #   homeserver-cp-1: {cores: 2, memory_mib: 4096, system_disk_gib: 32}
 # Without a NAS and with no room for a media disk: keep the media and camera
 # recordings on the data volume, where they are backed up and share its space.
+# Nothing caps them there: a growing library, SABnzbd's downloads or Frigate's
+# recordings can fill the volume under every app's database and Prometheus, so
+# prefer a media disk when the host has room for one.
 # kubernetes_media_on_data_volume: true
 # On a BTRFS install, which disables local, the Talos ISO goes on local-btrfs.
 # kubernetes_iso_storage: local-btrfs

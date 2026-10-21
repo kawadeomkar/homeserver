@@ -1,2 +1,0 @@
-# Deprecated: this PVC was a kompose artifact used to mount /etc/localtime.
-# Replaced by a hostPath volume in deployment.yaml.

@@ -45,7 +45,16 @@ RUN      = @test -x $(PLAYBOOK) || { echo "$(PLAYBOOK) not found: activate the p
 KUBERNETES_VERSION ?= 1.37.1
 KUBE_SCHEMA_REF    ?= 8df8a883b68a24a104b4a9e43c1288090ae60b3b
 KUBE_SCHEMAS := https://raw.githubusercontent.com/yannh/kubernetes-json-schema/$(KUBE_SCHEMA_REF)/{{.NormalizedKubernetesVersion}}-standalone{{.StrictSuffix}}/{{.ResourceKind}}{{.KindSuffix}}.json
+# Custom resources (Flux's, MetalLB's, cert-manager's...) are validated against the CRD schemas of
+# datreeio/CRDs-catalog, pinned to one commit like the Kubernetes schemas.
+KUBE_CRD_SCHEMA_REF ?= 63669a570e231d4f1f8396d229a1de512bcf0a34
+KUBE_CRD_SCHEMAS := https://raw.githubusercontent.com/datreeio/CRDs-catalog/$(KUBE_CRD_SCHEMA_REF)/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
 KUBE_CACHE   ?= .cache/kubeconform
+KUBECONFORM   = kubeconform -strict -summary -cache $(KUBE_CACHE) -kubernetes-version $(KUBERNETES_VERSION) \
+                -schema-location '$(KUBE_SCHEMAS)' -schema-location '$(KUBE_CRD_SCHEMAS)'
+# What make lint-helm renders the charts into, and make lint-kube-linter each setup's manifests.
+HELM_RENDERED ?= .cache/helm-rendered
+K8S_RENDERED  ?= .cache/k8s-rendered
 # Every role's custom modules, as paths.
 MODULES := $(wildcard roles/*/library/*.py)
 # Each role's REFERENCE.md is docsible's page for it, generated whole from the role as it is: meta/main.yml,
@@ -128,8 +137,9 @@ lint-module-docs: ## Every custom module's DOCUMENTATION parses (each failure is
 	  $(BIN)/ansible-doc -t module -M $$(dirname $$m) --json $$(basename $$m .py) </dev/null >/dev/null || rc=1; \
 	done; exit $$rc
 
-lint-github: ## dependabot.yml and the workflows against their published schemas (bundled, so offline)
+lint-github: ## dependabot.yml, renovate.json and the workflows against their published schemas (bundled, so offline)
 	$(BIN)/check-jsonschema --builtin-schema vendor.dependabot .github/dependabot.yml
+	$(BIN)/check-jsonschema --builtin-schema vendor.renovate renovate.json
 	$(BIN)/check-jsonschema --builtin-schema vendor.github-workflows .github/workflows/*.yml
 
 # Generates the pages again from a copy of roles/, so the tree is left as it is, and compares them.
@@ -179,16 +189,41 @@ test-idempotence: ## Run each role repeatedly against local fakes (PYTEST_ARGS n
 
 .PHONY: lint-kubeconform
 # kubeconform retries each schema download itself (twice, with backoff), so an invalid manifest fails
-# at once and nothing here retries. A kustomization.yaml is kustomize's own file, not an object for the cluster,
-# and no schema describes it.
-lint-kubeconform: ## kubeconform, strict, against Talos's Kubernetes version (kubeconform from PATH)
+# at once and nothing here retries. Every file as it is, before kustomize and Flux's substitution: kustomization.yaml
+# files are kustomize's, not objects, and SOPS files carry their own top-level sops: key.
+lint-kubeconform: ## kubeconform, strict, against Talos's Kubernetes version and the pinned CRD schemas (kubeconform from PATH)
 	@mkdir -p $(KUBE_CACHE)
-	kubeconform -strict -summary -cache $(KUBE_CACHE) -kubernetes-version $(KUBERNETES_VERSION) \
-	  -schema-location '$(KUBE_SCHEMAS)' -ignore-filename-pattern 'kustomization\.yaml$$' k8s
+	$(KUBECONFORM) -ignore-filename-pattern 'kustomization\.yaml$$' -ignore-filename-pattern '\.sops\.yaml$$' k8s
+
+# Each kustomize directory as Flux builds it, so a patch that no longer applies, or a resource listed and missing,
+# fails here. The SOPS-encrypted Secrets are skipped: their sops: key is not a Secret's (test_k8s.py checks them).
+.PHONY: lint-kustomize
+lint-kustomize: ## kustomize build of every directory under k8s/ with a kustomization.yaml, then kubeconform (kustomize from PATH)
+	@command -v kustomize >/dev/null || { echo "kustomize is not on PATH (brew install kustomize)"; exit 1; }
+	@mkdir -p $(KUBE_CACHE)
+	@rc=0; for k in $$(find k8s -name kustomization.yaml | sort); do d=$$(dirname "$$k"); \
+	  echo "$$d"; kustomize build --load-restrictor=LoadRestrictionsNone "$$d" > $(KUBE_CACHE)/build.yaml \
+	  && $(KUBECONFORM) -skip=Secret $(KUBE_CACHE)/build.yaml || rc=1; done; exit $$rc
+
+# The charts the HelmReleases install, rendered at their pins with each setup's placeholder settings, then checked as
+# the repo's own manifests are: kubeconform (a chart's own CRD definitions aside), kube-linter's request and image
+# checks, and test_k8s.py's host paths and privilege rules. A chart bump that adds a hostPath or a privileged pod, or a
+# misspelt values key a chart's schema refuses, fails before it merges.
+.PHONY: lint-helm
+lint-helm: ## Render every HelmRelease's chart and check what it renders (helm from PATH)
+	@command -v helm >/dev/null || { echo "helm is not on PATH (brew install helm)"; exit 1; }
+	$(BIN)/python scripts/ci/render_helm.py --out $(HELM_RENDERED) --kube-version $(KUBERNETES_VERSION)
+	$(KUBECONFORM) -skip=CustomResourceDefinition $(HELM_RENDERED)
+	kube-linter lint --config .kube-linter-charts.yaml --fail-if-no-objects-found $(HELM_RENDERED)
+	HELM_RENDERED=$(HELM_RENDERED) $(BIN)/pytest -q -p no:cacheprovider tests/policy/test_k8s.py -k chart
 
 .PHONY: lint-kube-linter lint-k8s
-lint-kube-linter: ## kube-linter with the repo's checks, .kube-linter.yaml (kube-linter from PATH)
-	kube-linter lint --config .kube-linter.yaml --fail-if-no-objects-found k8s
+# On each setup's manifests as Flux applies them, built and with the settings substituted: kube-linter silently skips
+# an object it cannot decode, such as a resource limit of "${GPU_I915}" (scripts/ci/render_manifests.py).
+lint-kube-linter: ## kube-linter with the repo's checks, .kube-linter.yaml, on each setup's built manifests (kube-linter and kustomize from PATH)
+	$(BIN)/python scripts/ci/render_manifests.py --out $(K8S_RENDERED)
+	@rc=0; for d in $(K8S_RENDERED)/*/; do echo "$$d"; \
+	  kube-linter lint --config .kube-linter.yaml --fail-if-no-objects-found "$$d" || rc=1; done; exit $$rc
 
 # The Talos machine configurations of every setup, rendered by roles/talos's own render tasks and validated by
 # talosctl, which catches what rendering lets through (a misspelt field). Needs no cluster and no vault. talosctl
@@ -200,7 +235,7 @@ lint-talos: ## Render every node's Talos configuration and validate it (talosctl
 	  echo "talosctl is not on PATH: lint-talos skipped (CI runs it)"; exit 0; }; \
 	  ANSIBLE_CONFIG=tests/integration/ansible.cfg ANSIBLE_NOCOLOR=1 $(PLAYBOOK) tests/talos_validate.yml </dev/null
 
-lint-k8s: lint-kubeconform lint-kube-linter lint-talos ## Both manifest checks, and the Talos configurations
+lint-k8s: lint-kubeconform lint-kustomize lint-kube-linter lint-helm lint-talos ## Every manifest check, the charts, and the Talos configurations
 
 .PHONY: ci
 ci: lint test-idempotence lint-k8s ## Everything the CI gate runs, apart from linting the workflows

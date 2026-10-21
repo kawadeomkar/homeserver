@@ -1,0 +1,20 @@
+---
+# The addresses MetalLB hands to LoadBalancer Services, outside the router's DHCP range (local.yml's
+# kubernetes_lb_range, through the cluster's settings), announced on the LAN by ARP.
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: lan
+  namespace: metallb-system
+spec:
+  addresses:
+    - "${LB_RANGE}"
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: lan
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - lan

@@ -24,6 +24,8 @@ options:
         to C(properties).
       - C(acltype) and C(aclmode) are only changed on an existing dataset when it sets
         C(allow_acl_change), since that changes who can read the files already in it.
+      - C(create_only) creates the dataset with its C(properties) when it is missing and otherwise leaves it
+        exactly as it is, for a dataset this role did not make but must exist, such as one a share exports.
     type: list
     elements: dict
     required: true
@@ -124,6 +126,8 @@ def ensure(api, module, spec):
     dataset = found[0]
     if dataset.get("type") != "FILESYSTEM":
         module.fail_json(msg=f"{name} exists but is a {dataset.get('type')}, not a filesystem")
+    if spec.get("create_only"):
+        return None, {}, {}
     before = {key: (dataset.get(key) or {}).get("rawvalue") for key in wanted}
     changes = {key: payload[key] for key, want in wanted.items() if not matches(key, dataset.get(key), want)}
     acl = sorted(set(changes) & {"acltype", "aclmode"})
