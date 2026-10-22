@@ -116,11 +116,11 @@ report no change, and `pvesm status` on the host should show every NFS storage a
    [gpu.md](gpu.md), the fallback address first, since the console goes dark once `vfio-pci` takes the iGPU: then
    VT-d if the board was replaced, the `vfio-pci` binding and the PCI resource mapping, which lived on the old boot
    drive. A restored VM that names the mapping does not start without it.
-5. **With remote access** (`tailscale_advertise_routes` in `local.yml`), the host's tailnet identity was on the old
-   boot drive. In Tailscale's admin console, delete the old machine, or the new one is named `<hostname>-1`. Then make
-   a new one-off, pre-approved auth key tagged `tag:homeserver` and put it in the vault as `vault_tailscale_auth_key`
-   (`make vault`). The tailnet's policy, with its route auto-approver, and split DNS live in the console and
-   survive. Until this run is done, remote access is down, so do it from home.
+5. **With remote access** (`tailscale_enabled` or `tailscale_advertise_routes` in `local.yml`), the host's tailnet
+   identity was on the old boot drive. In Tailscale's admin console, delete the old machine, or the new one is named
+   `<hostname>-1`. Then make a new one-off, pre-approved auth key tagged `tag:homeserver` and put it in the vault as
+   `vault_tailscale_auth_key` (`make vault`). The tailnet's policy, and with routes its auto-approver and split
+   DNS, live in the console and survive. Until this run is done, remote access is down, so do it from home.
    [tailscale.md](tailscale.md) has the details.
 6. **Without a NAS, with `vm_backup_storage`**: re-add that storage by hand, under the same id, before
    `make check TYPE=proxmox`, which refuses a backup storage that does not exist. A USB disk goes back as a checked
@@ -131,8 +131,8 @@ report no change, and `pvesm status` on the host should show every NFS storage a
 
 | Step | Command | Expect |
 | --- | --- | --- |
-| 1 | `make check TYPE=proxmox` | A `proxmox.sources` file to write, `Enabled: false` for `pve-enterprise` and `ceph`, and no pending upgrade yet (the package lists are refreshed only for real). The plan shows `add` for the NFS storages (`homeserver-persistent`, `homeserver-ephemeral`, `claude-on-proxmox-ephemeral`, `homeserver-backup`) and, when `local.yml` names VMs to back up, `create` for the `vm-nightly` backup job, its storage pending. Without a NAS: `local-lvm: present` and nothing to add, and the backup job on `vm_backup_storage`, re-added in step 5 above. With remote access: Tailscale to install, the guard to load, forwarding to turn on, and "Would log the node in with the auth key" |
-| 2 | `make deploy TYPE=proxmox` | Repositories written, package lists refreshed, packages upgraded, and, since that brings a newer kernel, "Reboot the node when it is safe to": reboot the host by hand. With remote access: Tailscale installed, the guard loaded, the host logged in and its route approved ("Nothing for the admin console to fix"). The storages added and active, start-on-boot delay set, backup job created. Without a NAS: no storage change |
+| 1 | `make check TYPE=proxmox` | A `proxmox.sources` file to write, `Enabled: false` for `pve-enterprise` and `ceph`, and no pending upgrade yet (the package lists are refreshed only for real). The plan shows `add` for the NFS storages (`homeserver-persistent`, `homeserver-ephemeral`, `claude-on-proxmox-ephemeral`, `homeserver-backup`) and, when `local.yml` names VMs to back up, `create` for the `vm-nightly` backup job, its storage pending. Without a NAS: `local-lvm: present` and nothing to add, and the backup job on `vm_backup_storage`, re-added in step 5 above. With remote access: Tailscale to install, the guard to load, with routes forwarding to turn on, and "Would log the node in with the auth key" |
+| 2 | `make deploy TYPE=proxmox` | Repositories written, package lists refreshed, packages upgraded, and, since that brings a newer kernel, "Reboot the node when it is safe to": reboot the host by hand. With remote access: Tailscale installed, the guard loaded, the host logged in and, with routes, its route approved ("Nothing for the admin console to fix"). The storages added and active, start-on-boot delay set, backup job created. Without a NAS: no storage change |
 | 3 | `make deploy TYPE=proxmox` | `changed=0` |
 | 4 | `pveum aclmod /storage/claude-on-proxmox-ephemeral -user <user> -role <role>` | With a NAS: the grant for each project pool, with the user and role from that project's README, which also creates them on a fresh host |
 

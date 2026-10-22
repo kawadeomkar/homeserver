@@ -1,9 +1,9 @@
 """Every setting make init asks for: group_vars/all/local.yml's, and the secrets that go in the vault.
 
 Each section of local.yml is switched on by a setting of its own (the NAS's addresses, the cluster's node addresses,
-Home Assistant's MAC, the routes Tailscale advertises), as the playbooks work it out; the others are asked only when
-it is on. tests/policy/test_make_init_settings.py checks this list against local.yml.example and against the vault
-variables the group_vars read, so a setting added to one and not the other fails.
+Home Assistant's MAC, tailscale_enabled), as the playbooks work it out; the others are asked only when it is on.
+tests/policy/test_make_init_settings.py checks this list against local.yml.example and against the vault variables
+the group_vars read, so a setting added to one and not the other fails.
 
 Pure data and parsing, no input or output: init.py asks the questions.
 """
@@ -23,13 +23,10 @@ SECTIONS = {
 }
 
 # The question that switches each optional section on, and the setting whose value decides it (as nas_present,
-# kubernetes_present and haos_present do).
+# kubernetes_present, haos_present and proxmox_tailscale_enabled do). A yes/no setting takes the answer itself.
 SWITCHES = {
     "nas": ("Is there a TrueNAS NAS, for the VMs' disks, the backups and the apps' data?", "truenas_static_address"),
-    "remote": (
-        "Should the Proxmox host give remote access to the LAN through Tailscale?",
-        "tailscale_advertise_routes",
-    ),
+    "remote": ("Should the Proxmox host join your tailnet through Tailscale, for remote access?", "tailscale_enabled"),
     "cluster": ("Should the Proxmox host run the Kubernetes cluster (Talos and Flux)?", "kubernetes_node_addresses"),
     "homeassistant": ("Should the Proxmox host run Home Assistant OS in a VM of its own?", "haos_mac"),
 }
@@ -481,13 +478,20 @@ SETTINGS: tuple[Setting, ...] = (
     S("truenas_alert_email", "nas", "email", "Where the alerts go", after="truenas_mail_server", need="recommended"),
     # -------------------------------------------------------------------------------------------------- Remote ---
     S(
+        "tailscale_enabled",
+        "remote",
+        "bool",
+        "Join the Proxmox host to your tailnet, as a device of its own",
+        help="The answer to the question that switches remote access on.",
+    ),
+    S(
         "tailscale_advertise_routes",
         "remote",
         "cidr_list",
-        "The LAN's IPv4 prefix, which the host advertises",
-        need="required",
-        help="Write the tailnet's policy in Tailscale's admin console first: a new tailnet allows everything "
-        "(scripts/runbooks/tailscale.md, section 1).",
+        "The LAN's IPv4 prefix, for the host to advertise as the LAN's subnet router",
+        popular=True,
+        help="Unset, the host joins the tailnet alone and forwards nothing. Write the tailnet's policy in Tailscale's "
+        "admin console first: a new tailnet allows everything (scripts/runbooks/tailscale.md, section 1).",
     ),
     S(
         "vault_tailscale_auth_key",
@@ -495,8 +499,8 @@ SETTINGS: tuple[Setting, ...] = (
         "secret",
         "A one-off Tailscale auth key, for the host's first login",
         secret=True,
-        # proxmox.yml refuses a host that is not logged in without it, after installing Tailscale, loading the guard
-        # and turning forwarding on, and a dry run cannot tell beforehand.
+        # proxmox.yml refuses a host that is not logged in without it, routes or not, after installing Tailscale,
+        # loading the guard and, with routes, turning forwarding on, and a dry run cannot tell beforehand.
         need="required",
         help="Pre-approved and tagged tag:homeserver (scripts/runbooks/tailscale.md, section 4). Spent at the first "
         "login; a spent one does nothing, so leave it in the vault.",

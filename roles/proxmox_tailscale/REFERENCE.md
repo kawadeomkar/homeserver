@@ -6,7 +6,7 @@
 
 
 
-Description: Make a Proxmox VE node its LAN's Tailscale subnet router, behind a forwarding guard
+Description: Join a Proxmox VE node to a tailnet, and with routes make it the LAN's subnet router, behind a guard
 
 
 
@@ -20,8 +20,8 @@ Description: Make a Proxmox VE node its LAN's Tailscale subnet router, behind a 
 
 **Description**: 
 - Installs Tailscale from its own Debian repository, and with proxmox_tailscale_upgrade upgrades it on every run. Tailscale's own updater is meant to be turned off in proxmox_tailscale_settings.
-- Loads a fail-closed nftables guard, its own table in its own unit, which tailscaled requires. Tailnet clients reach the guarded hosts only on the allowed ports, nothing outside the advertised prefixes, and the LAN starts no connection into the tailnet, whatever the tailnet's policy says.
-- Turns on IPv4 forwarding, logs the node in once with a tagged one-off auth key, advertises the LAN's prefixes, and keeps the given preferences with tailscale set.
+- Loads a fail-closed nftables guard, its own table in its own unit, which tailscaled requires. Tailnet clients reach the guarded hosts only on the allowed ports, and nothing else outside the advertised prefixes, of which a node without routes has none; the LAN starts no connection into the tailnet, whatever the tailnet's policy says.
+- Logs the node in once with a tagged one-off auth key and keeps the given preferences with tailscale set. With routes, it also turns on IPv4 forwarding and advertises them; without, the node is a tailnet device of its own.
 - Reports what only the tailnet's admin console can fix, such as a route not yet approved. It never logs the node out, changes its tags or restarts tailscaled itself.
 - The defaults change nothing.
 
@@ -29,12 +29,22 @@ Description: Make a Proxmox VE node its LAN's Tailscale subnet router, behind a 
 **Options**:
 
 
+  - **proxmox_tailscale_enabled**
+    - **Required**: false
+    - **Type**: bool
+    - **Default**: False
+  
+    - **Description**: Run Tailscale on the node. False, the role does nothing; true without routes, the node joins the tailnet alone.
+  
+  
+  
+
   - **proxmox_tailscale_advertise_routes**
     - **Required**: false
     - **Type**: list
     - **Default**: []
   
-    - **Description**: The LAN prefixes to advertise, IPv4, in CIDR form. Empty, the role does nothing.
+    - **Description**: The LAN prefixes to advertise, IPv4, in CIDR form, which need proxmox_tailscale_enabled. Empty, the node advertises none.
   
   
   
@@ -44,7 +54,7 @@ Description: Make a Proxmox VE node its LAN's Tailscale subnet router, behind a 
     - **Type**: list
     - **Default**: []
   
-    - **Description**: The tags the node joins with, each tag:<name>. At least one is required with routes.
+    - **Description**: The tags the node joins with, each tag:<name>. At least one is required once the role is enabled.
   
   
   
@@ -184,20 +194,21 @@ Description: Make a Proxmox VE node its LAN's Tailscale subnet router, behind a 
 
 | Var          | Type         | Value       |
 |--------------|--------------|-------------|
-| [proxmox_tailscale_advertise_routes](defaults/main.yml#L6)   | list | `[]` |    
-| [proxmox_tailscale_tags](defaults/main.yml#L8)   | list | `[]` |    
-| [proxmox_tailscale_auth_key](defaults/main.yml#L10)   | str |  |    
-| [proxmox_tailscale_settings](defaults/main.yml#L12)   | dict | `{}` |    
-| [proxmox_tailscale_upgrade](defaults/main.yml#L15)   | bool | `False` |    
-| [proxmox_tailscale_guard_hosts](defaults/main.yml#L18)   | list | `[]` |    
-| [proxmox_tailscale_guard_allow](defaults/main.yml#L20)   | list | `[]` |    
-| [proxmox_tailscale_suite](defaults/main.yml#L23)   | str |  |    
-| [proxmox_tailscale_repository](defaults/main.yml#L25)   | str | `https://pkgs.tailscale.com/stable/debian` |    
-| [proxmox_tailscale_keyring](defaults/main.yml#L27)   | str | `/usr/share/keyrings/tailscale-archive-keyring.gpg` |    
-| [proxmox_tailscale_sources_dir](defaults/main.yml#L29)   | str | `/etc/apt/sources.list.d` |    
-| [proxmox_tailscale_sysctl_file](defaults/main.yml#L31)   | str | `/etc/sysctl.d/99-tailscale.conf` |    
-| [proxmox_tailscale_guard_file](defaults/main.yml#L33)   | str | `/etc/nftables.d/tailnet-guard.nft` |    
-| [proxmox_tailscale_systemd_dir](defaults/main.yml#L35)   | str | `/etc/systemd/system` |    
+| [proxmox_tailscale_enabled](defaults/main.yml#L7)   | bool | `False` |    
+| [proxmox_tailscale_advertise_routes](defaults/main.yml#L10)   | list | `[]` |    
+| [proxmox_tailscale_tags](defaults/main.yml#L12)   | list | `[]` |    
+| [proxmox_tailscale_auth_key](defaults/main.yml#L14)   | str |  |    
+| [proxmox_tailscale_settings](defaults/main.yml#L16)   | dict | `{}` |    
+| [proxmox_tailscale_upgrade](defaults/main.yml#L19)   | bool | `False` |    
+| [proxmox_tailscale_guard_hosts](defaults/main.yml#L22)   | list | `[]` |    
+| [proxmox_tailscale_guard_allow](defaults/main.yml#L24)   | list | `[]` |    
+| [proxmox_tailscale_suite](defaults/main.yml#L27)   | str |  |    
+| [proxmox_tailscale_repository](defaults/main.yml#L29)   | str | `https://pkgs.tailscale.com/stable/debian` |    
+| [proxmox_tailscale_keyring](defaults/main.yml#L31)   | str | `/usr/share/keyrings/tailscale-archive-keyring.gpg` |    
+| [proxmox_tailscale_sources_dir](defaults/main.yml#L33)   | str | `/etc/apt/sources.list.d` |    
+| [proxmox_tailscale_sysctl_file](defaults/main.yml#L35)   | str | `/etc/sysctl.d/99-tailscale.conf` |    
+| [proxmox_tailscale_guard_file](defaults/main.yml#L37)   | str | `/etc/nftables.d/tailnet-guard.nft` |    
+| [proxmox_tailscale_systemd_dir](defaults/main.yml#L39)   | str | `/etc/systemd/system` |    
 
 
 
@@ -250,10 +261,10 @@ Description: Make a Proxmox VE node its LAN's Tailscale subnet router, behind a 
 | Name | Module | Has Conditions | Tags |
 | ---- | ------ | -------------- | -----|
 | Check the role's inputs | ansible.builtin.assert | False | always |
-| Do nothing without routes to advertise | ansible.builtin.meta | True |  |
+| Do nothing unless Tailscale is enabled | ansible.builtin.meta | True |  |
 | Install or upgrade Tailscale | ansible.builtin.import_tasks | False |  |
 | Load the forwarding guard | ansible.builtin.import_tasks | False |  |
-| Turn on IPv4 forwarding | ansible.builtin.import_tasks | False |  |
+| Turn on IPv4 forwarding, for a subnet router | ansible.builtin.import_tasks | True |  |
 | Log the node in, and keep its routes and preferences | ansible.builtin.import_tasks | False |  |
 
 #### File: tasks/node.yml
@@ -383,11 +394,11 @@ classDef includeVars stroke:#8e44ad,stroke-width:2px;
 classDef rescue stroke:#665352,stroke-width:2px;
 
   Start-->|Task| Check_the_role_s_inputs0[check the role s inputs]:::task
-  Check_the_role_s_inputs0-->|Task| Do_nothing_without_routes_to_advertise1[do nothing without routes to advertise<br>When: **proxmox tailscale advertise routes   length    0**]:::task
-  Do_nothing_without_routes_to_advertise1-->|Import task| Install_or_upgrade_Tailscale_install_yml_2[/install or upgrade tailscale<br>import_task: install yml/]:::importTasks
+  Check_the_role_s_inputs0-->|Task| Do_nothing_unless_Tailscale_is_enabled1[do nothing unless tailscale is enabled<br>When: **not proxmox tailscale enabled**]:::task
+  Do_nothing_unless_Tailscale_is_enabled1-->|Import task| Install_or_upgrade_Tailscale_install_yml_2[/install or upgrade tailscale<br>import_task: install yml/]:::importTasks
   Install_or_upgrade_Tailscale_install_yml_2-->|Import task| Load_the_forwarding_guard_guard_yml_3[/load the forwarding guard<br>import_task: guard yml/]:::importTasks
-  Load_the_forwarding_guard_guard_yml_3-->|Import task| Turn_on_IPv4_forwarding_forwarding_yml_4[/turn on ipv4 forwarding<br>import_task: forwarding yml/]:::importTasks
-  Turn_on_IPv4_forwarding_forwarding_yml_4-->|Import task| Log_the_node_in__and_keep_its_routes_and_preferences_node_yml_5[/log the node in  and keep its routes and<br>preferences<br>import_task: node yml/]:::importTasks
+  Load_the_forwarding_guard_guard_yml_3-->|Import task| Turn_on_IPv4_forwarding__for_a_subnet_router_forwarding_yml_4[/turn on ipv4 forwarding  for a subnet router<br>When: **proxmox tailscale advertise routes   length   0**<br>import_task: forwarding yml/]:::importTasks
+  Turn_on_IPv4_forwarding__for_a_subnet_router_forwarding_yml_4-->|Import task| Log_the_node_in__and_keep_its_routes_and_preferences_node_yml_5[/log the node in  and keep its routes and<br>preferences<br>import_task: node yml/]:::importTasks
   Log_the_node_in__and_keep_its_routes_and_preferences_node_yml_5-->End
 ```
 

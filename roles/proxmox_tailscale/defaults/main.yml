@@ -2,7 +2,11 @@
 # Neutral defaults: with nothing else set, the role changes nothing. What the node advertises, how it joins and
 # what the guard protects are configuration, set in inventory group_vars; see README.md.
 
-# The LAN prefixes the node advertises to the tailnet, IPv4, in CIDR form. Empty, the role does nothing at all.
+# Run Tailscale on the node at all. False, the role does nothing. True without routes, the node joins the tailnet as a
+# device of its own; with routes, it is also the LAN's subnet router.
+proxmox_tailscale_enabled: false
+# The LAN prefixes the node advertises to the tailnet, IPv4, in CIDR form, which need proxmox_tailscale_enabled. Empty,
+# the node advertises none and forwards nothing from the tailnet.
 proxmox_tailscale_advertise_routes: []
 # The tags the node joins with, each tag:<name>. A tagged node's key never expires.
 proxmox_tailscale_tags: []
