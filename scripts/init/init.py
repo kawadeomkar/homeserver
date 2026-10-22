@@ -947,17 +947,24 @@ class Init:
             dropped.append(key)
         return dropped
 
-    def run(self) -> None:
-        if self.interactive:
-            self.choose_setup()
+    def read(self) -> bool:
+        """The setup the checkout uses, then local.yml and the vault read; False when its links are not whole, which
+        stops everything else."""
         try:
             self.setup = setups.active(self.root)
         except setups.Refused as e:
             self.broken = str(e)
-            self.console.say(self.summary())
-            return
+            return False
         self.load()
         self.vault.open()
+        return True
+
+    def run(self) -> None:
+        if self.interactive:
+            self.choose_setup()
+        if not self.read():
+            self.console.say(self.summary())
+            return
         self.start_local()
         if self.interactive:
             self.console.say(
@@ -1026,6 +1033,8 @@ class Init:
         return missing
 
     def summary(self) -> str:
+        if self.vault.state == "unread" and not self.broken:
+            self.read()  # stopped at the setup question, before anything was read
         if self.broken:
             return banner(
                 "Setup: its links are not whole",

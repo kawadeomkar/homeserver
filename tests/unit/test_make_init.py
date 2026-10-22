@@ -687,6 +687,22 @@ def test_a_setup_restored_after_the_first_make_init_is_taken_at_its_first_questi
     assert "This checkout uses setup home now" in console.text
 
 
+def test_stopped_at_the_setup_question_the_summary_says_what_is_there(repo):
+    setup = setups.new(repo, setups.store(), "home", wizard.commented_example(repo))
+
+    class Stopped(Scripted):
+        def ask(self, prompt: str, topic: str) -> str:
+            raise EOFError
+
+    init = wizard.Init(repo, Stopped(), full=False, interactive=True)
+    init.checks = list
+    with pytest.raises(EOFError):
+        init.run()
+    summary = flat(init.summary())
+    assert "Setup home: " in summary and "unread" not in summary and "make vault TYPE=new" not in summary
+    assert f"Keep copies of the setup's directory, {setup} in your password manager" in summary
+
+
 def test_a_setup_whose_links_are_not_whole_stops_make_init_before_it_writes(repo):
     setup = setups.new(repo, setups.store(), "home", wizard.commented_example(repo))
     (setup / "local.yml").unlink()
