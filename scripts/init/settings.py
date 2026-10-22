@@ -495,9 +495,11 @@ SETTINGS: tuple[Setting, ...] = (
         "secret",
         "A one-off Tailscale auth key, for the host's first login",
         secret=True,
-        need="recommended",
+        # proxmox.yml refuses a host that is not logged in without it, after installing Tailscale, loading the guard
+        # and turning forwarding on, and a dry run cannot tell beforehand.
+        need="required",
         help="Pre-approved and tagged tag:homeserver (scripts/runbooks/tailscale.md, section 4). Spent at the first "
-        "login; a spent one does nothing.",
+        "login; a spent one does nothing, so leave it in the vault.",
     ),
     # ------------------------------------------------------------------------------------------------- Cluster ---
     S(
