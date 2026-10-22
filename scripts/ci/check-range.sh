@@ -25,12 +25,25 @@ base=$(git merge-base "$target" "$head") || { echo "::error::$target and $head s
 first_parent=""
 if [ "${FIRST_PARENT:-0}" = 1 ]; then first_parent="--first-parent"; fi
 # shellcheck disable=SC2086  # $first_parent is empty or a single word
-expected=$(git rev-list --count $first_parent "$base..$head")
-if [ "$expected" -eq 0 ]; then
+commits=$(git rev-list $first_parent "$base..$head")
+total=$(printf '%s' "$commits" | grep -c . || true)
+if [ "$total" -eq 0 ]; then
   if [ "${REQUIRE_COMMITS:-0}" = 1 ]; then echo "::error::no commits between $base and $head"; exit 1; fi
   echo "Nothing new between $base and $head."; exit 0
 fi
-echo "Checking $expected commit(s): $base..$head"
+echo "Checking $total commit(s): $base..$head"
+# gitleaks counts a commit only when its diff from its first parent has something in it. A commit whose tree is its
+# first parent's has nothing to scan: a merge that brings a branch what it already has, as updating a pull request
+# stacked on one that merged does. Such commits are left out of the count, never out of the scan.
+expected=0
+for commit in $commits; do
+  if [ "$(git rev-parse "$commit^{tree}")" != "$(git rev-parse -q --verify "$commit^1^{tree}" || true)" ]; then
+    expected=$((expected + 1))
+  fi
+done
+if [ "$expected" -ne "$total" ]; then
+  echo "Unchanged from their first parent, so not counted: $((total - expected)). gitleaks counts $expected."
+fi
 
 cfg=$(mktemp); log=$(mktemp); trap 'rm -f "$cfg" "$log"' EXIT
 # The target's rules; only the change that adds .gitleaks.toml is checked with its own.

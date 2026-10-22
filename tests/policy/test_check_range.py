@@ -159,6 +159,29 @@ def test_a_branch_behind_its_target_is_checked_from_the_merge_base(repo):
     assert "Checking 1 commit(s)" in result.stdout
 
 
+@pytest.mark.parametrize(("text", "passes"), [("nothing to see\n", True), (f"nas {ADDRESS}\n", False)])
+def test_a_merge_that_changes_nothing_is_not_expected_to_be_scanned(repo, text, passes):
+    """A pull request stacked on another is brought up to date, once the one below it merges, with a merge whose tree
+    is its first parent's: it adds nothing, so gitleaks has nothing in it to scan and does not count it. The check
+    passes it, and still scans the branch's own commit."""
+    branch_with(repo, {"clean.md": "nothing to see\n"})
+    repo.git("switch", "-q", "-c", "stacked")
+    repo.write("stacked.md", text)
+    repo.commit("stacked change")
+    repo.git("switch", "-q", "main")
+    repo.git("merge", "-q", "--no-ff", "-m", "Merge feature", "feature")
+    merged = repo.sha("main")
+    repo.git("switch", "-q", "stacked")
+    repo.git("merge", "-q", "--no-ff", "-m", "Merge main", "main")
+    assert repo.sha("HEAD^{tree}") == repo.sha("HEAD^1^{tree}"), "the update brought nothing new"
+    result = repo.check(merged)
+    if passes:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "Checking 2 commit(s)" in result.stdout and "not counted: 1. gitleaks counts 1." in result.stdout
+    else:
+        assert caught(result)
+
+
 def test_an_empty_range_fails_only_when_commits_are_required(repo):
     main = repo.sha("main")
     assert repo.check(main).returncode != 0
