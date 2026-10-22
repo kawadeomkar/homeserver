@@ -463,8 +463,10 @@ def test_secrets_go_to_the_vault_and_never_to_the_screen(repo):
     assert "vault_truenas_api_key" in console.out[-1].split("STILL REQUIRED")[1]
 
 
-def test_remote_access_requires_the_auth_key_for_the_hosts_first_login(repo):
-    # proxmox.yml refuses a host that is not logged in without the key, after changing it, and a dry run cannot tell.
+@pytest.mark.parametrize("routes", [True, False], ids=["subnet-router", "host-only"])
+def test_remote_access_requires_the_auth_key_for_the_hosts_first_login(repo, routes):
+    # proxmox.yml refuses a host that is not logged in without the key, after changing it, and a dry run cannot tell;
+    # a host that joins without routes logs in all the same.
     make_vault(repo, {})
     answers = {
         "switch:nas": "n",
@@ -472,11 +474,11 @@ def test_remote_access_requires_the_auth_key_for_the_hosts_first_login(repo):
         "switch:cluster": "n",
         "switch:homeassistant": "n",
         "proxmox_address": lan(10),
-        "tailscale_advertise_routes": f"{lan(0)}/24",
+        "tailscale_advertise_routes": f"{lan(0)}/24" if routes else "-",
     }
     console = Scripted(answers)
     init_run(repo, console)
-    assert local(repo)["tailscale_advertise_routes"] == [f"{lan(0)}/24"]
+    assert local(repo).get("tailscale_advertise_routes") == ([f"{lan(0)}/24"] if routes else None)
     required = console.out[-1].split("STILL REQUIRED")[1].split("RECOMMENDED")[0]
     assert "vault_tailscale_auth_key" in required
 
