@@ -803,7 +803,8 @@ class Init:
     def choose_setup(self) -> None:
         """The setup the answers go into, asked before anything is read: Enter keeps the one the checkout uses, a name
         switches to that setup or makes it. A checkout with files of its own is offered to keep them as a setup; one
-        with neither files nor setups is asked nothing."""
+        with neither files nor setups is asked nothing. A local.yml that sets nothing, as the first make init writes it,
+        gives way to a setup; files that hold more are refused by name, and Enter keeps them."""
         where = setups.store()
         found = setups.names(where)
         broken = False
@@ -813,7 +814,7 @@ class Init:
             current, broken = None, True
             self.console.say(f"\n{e}")
         if current is None and not broken:
-            if setups.own_files(self.root):
+            if self.adoptable():
                 self.offer_setup(where, found)
                 return
             if not found:
@@ -855,8 +856,6 @@ class Init:
 
     def offer_setup(self, where: Path, found: list[str]) -> None:
         """This checkout's own three files kept as a setup, if the person agrees, and linked back."""
-        if not self.adoptable():
-            return
         self.console.say(
             "\nThis checkout keeps its own local.yml, vault and .vault_pass. Kept as a named setup instead, in "
             f"{setups.shown(where)}, they can be switched with another machine's"

@@ -180,7 +180,7 @@ def test_a_checkouts_own_files_move_into_a_setup_and_are_linked_back(root, where
         assert (setup / file).read_bytes() == before[rel], "moved as it was"
         assert stat.S_IMODE((setup / file).stat().st_mode) == 0o600
     assert setups.active(root) == setup
-    with pytest.raises(setups.Refused, match="link already"):
+    with pytest.raises(setups.Refused, match="links to setup home already"):
         setups.adopt(root, where, "again")
 
 
@@ -193,6 +193,63 @@ def test_files_that_are_not_whole_are_never_adopted(root, where):
         setups.adopt(root, where, "home")
     assert not (where / "home").exists() and not links(root)
     assert (root / VAULT).is_file() and not (root / VAULT).is_symlink(), "the files stay where they were"
+
+
+def test_a_local_yml_that_sets_nothing_gives_way_to_a_setup(root, where):
+    """make init's first run writes local.yml with every setting commented out, and a setup restored after it still
+    links in, since nothing is lost; a local.yml that sets anything is refused by name."""
+    (root / LOCAL).write_text(wizard.commented_example(root))
+    lab = setups.new(root, where, "lab", "---\n")
+    assert setups.active(root) == lab
+    (root / LOCAL).unlink()
+    (root / LOCAL).write_text(wizard.commented_example(root))
+    home = stored(where, "home")
+    assert setups.switch(root, where, "home") is True and setups.active(root) == home
+    (root / LOCAL).unlink()
+    (root / LOCAL).write_text("---\nkubernetes_domain: home.internal\n")
+    with pytest.raises(setups.Refused, match=r"local\.yml is this checkout's own.*move it out of the checkout"):
+        setups.switch(root, where, "lab")
+    assert (root / LOCAL).read_text() == "---\nkubernetes_domain: home.internal\n"
+
+
+def test_a_link_of_the_persons_own_is_no_setup(root, where, tmp_path):
+    """A .vault_pass linked to a password file kept elsewhere, or a worktree whose three paths link to its main
+    checkout's, uses its own files as before. Adopting them reads through the link and leaves the file it leads to."""
+    own_files(root)
+    kept = tmp_path / "secrets" / "pw"
+    kept.parent.mkdir()
+    (root / VAULT_PASS).rename(kept)
+    (root / VAULT_PASS).symlink_to(kept)
+    assert setups.check(root) == "Setup: this checkout's own files"
+    worktree = tmp_path / "worktree"
+    (worktree / "group_vars" / "all").mkdir(parents=True)
+    for rel in setups.FILES.values():
+        (worktree / rel).symlink_to(root / rel)
+    assert setups.check(worktree) == "Setup: this checkout's own files"
+    setup = setups.adopt(root, where, "home")
+    assert setups.active(root) == setup and kept.read_text() == PASSWORD + "\n", "the file it linked to stays"
+    assert setups.check(worktree) == f"Setup: home ({setup})", "followed through its main checkout's links"
+
+
+def test_relative_links_into_a_whole_setup_are_whole(root, where):
+    home = stored(where, "home")
+    for file, rel in setups.FILES.items():
+        (root / rel).symlink_to(os.path.relpath(home / file, (root / rel).parent))
+    assert setups.active(root) == home
+
+
+def test_a_move_cut_short_is_finished_by_switching_to_its_setup(root, where):
+    """new --from current stopped between two links: runs are refused, saying how to finish, and a switch to the
+    setup replaces the files left, which are the same as the setup's."""
+    own_files(root)
+    setup = setups.make_setup(where, "home", {f: (root / rel).read_bytes() for f, rel in setups.FILES.items()})
+    for file in ("local.yml", "vault.yml"):
+        (root / setups.FILES[file]).unlink()
+        (root / setups.FILES[file]).symlink_to(setup / file)
+    with pytest.raises(setups.Refused, match=r"\.vault_pass is a file of this checkout's own.*NAME=home finishes"):
+        setups.check(root)
+    assert setups.switch(root, where, "home") is True
+    assert setups.active(root) == setup
 
 
 # ---------------------------------------------------------------------------------------------------- check ---

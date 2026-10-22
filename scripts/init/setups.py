@@ -20,8 +20,9 @@ works as it always did.
   check                   which setup a playbook run uses, or stop when its links are broken
   edit NAME               ansible-vault edit on NAME's vault, with NAME's password, without switching
 
-Nothing here deletes a setup or replaces a file of the checkout's own: switch and new refuse one, which new --from
-current moves into a setup first.
+Nothing here deletes a setup or replaces a file of the checkout's own that holds anything: switch and new refuse one,
+which new --from current moves into a setup first. A local.yml that sets nothing, as make init first writes it, gives
+way, and so does a file the same as the setup's, as a switch cut short leaves it.
 """
 
 import argparse
@@ -34,6 +35,8 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 # Each file of a setup, and the path in the checkout that links to it.
@@ -75,8 +78,9 @@ def shown(path: Path) -> str:
     return "~" + text[len(home) :] if text == home or text.startswith(home + os.sep) else text
 
 
-def same(a: Path, b: Path) -> bool:
-    return os.path.realpath(a) == os.path.realpath(b)
+def resolved(path: Path) -> Path:
+    """Where a path leads, through every link, whether a file is there or not."""
+    return Path(os.path.realpath(path))
 
 
 def names(where: Path) -> list[str]:
@@ -129,47 +133,80 @@ def target(link: Path) -> Path:
 
 
 def active(root: Path) -> Path | None:
-    """The setup the checkout links to; None when none of its three paths is a link. Refused when the links are not
-    whole: a path missing or a file of the checkout's own beside the links, links into two setups, or a file a link
-    points to gone."""
+    """The setup the checkout links to; None when it uses files of its own. A setup is known by its own names: the
+    vault's or .vault_pass's link leads to a file named vault.yml or vault_pass, as nothing but a setup names them, so a
+    link of the person's own, such as .vault_pass to a password file kept elsewhere, is one of the checkout's own files.
+    Links are followed to the end and compared there, however they are spelt. Refused when the links are not whole: a
+    path missing or a file of the checkout's own beside a setup's links, links into two setups, or a link to a file
+    that is gone, which Ansible would pass over without a word."""
     paths = {file: root / rel for file, rel in FILES.items()}
-    links = [file for file, path in paths.items() if path.is_symlink()]
-    if not links:
+    links = [(f, resolved(paths[f])) for f in ("vault.yml", "vault_pass") if paths[f].is_symlink()]
+    marks = [to for f, to in links if to.name == f]
+    if not marks:
+        gone = [rel for rel in FILES.values() if (root / rel).is_symlink() and not (root / rel).exists()]
+        if gone:
+            raise Refused(
+                "Ansible would run without what is missing, without a word: "
+                + "; ".join(f"{rel} links to {shown(resolved(root / rel))}, which is missing" for rel in gone)
+                + ". Restore the file it links to, or remove the link."
+            )
         return None
-    setup = target(paths[links[0]]).parent
+    setup = marks[0].parent
     found = []
     for file, path in paths.items():
-        if file not in links:
+        if not path.is_symlink():
             what = "a file of this checkout's own" if os.path.lexists(path) else "missing"
             found.append(f"{FILES[file]} is {what}, not a link")
             continue
-        to = target(path)
-        if to.parent != setup or to.name != file:
+        to = resolved(path)
+        if to != setup / file:
             found.append(f"{FILES[file]} links to {shown(to)}, not to {shown(setup / file)}")
         elif not to.is_file():
             found.append(f"{FILES[file]} links to {shown(to)}, which is missing")
     if found:
         raise Refused(
             f"This checkout's setup, {setup.name}, is not whole, and Ansible would run without what is missing, "
-            f"without a word: {'; '.join(found)}. Restore the setup's files from your password manager, or switch to "
-            "a whole setup (make vault TYPE=list, then make vault TYPE=switch NAME=<setup>)."
+            f"without a word: {'; '.join(found)}. Restore the setup's files from your password manager, or link a "
+            f"whole setup in: make vault TYPE=switch NAME=<setup> (make vault TYPE=list lists them; NAME={setup.name} "
+            "finishes a switch that was cut short)."
         )
     return setup
 
 
-def own_files(root: Path) -> list[Path]:
-    """The three paths that hold a file of the checkout's own rather than a link."""
-    return [rel for rel in FILES.values() if os.path.lexists(root / rel) and not (root / rel).is_symlink()]
+def sets_nothing(path: Path) -> bool:
+    """A local.yml with no setting, as make init first writes it: the example with every setting commented out. Nothing
+    is lost when a setup's link replaces it."""
+    try:
+        return yaml.safe_load(path.read_text()) in (None, {})
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return False
 
 
-def refuse_own_files(root: Path) -> None:
-    own = own_files(root)
+def own_files(root: Path, setup: Path | None = None) -> list[Path]:
+    """The checkout's own files at the three paths that a setup's link would lose: every one but a local.yml that sets
+    nothing, and, with setup, one the same as setup's file. A link is not one: replacing it loses nothing."""
+    own = []
+    for file, rel in FILES.items():
+        path = root / rel
+        if not os.path.lexists(path) or path.is_symlink():
+            continue
+        if file == "local.yml" and sets_nothing(path):
+            continue
+        if setup is not None and (setup / file).is_file() and path.read_bytes() == (setup / file).read_bytes():
+            continue
+        own.append(rel)
+    return own
+
+
+def refuse_own_files(root: Path, setup: Path | None = None) -> None:
+    own = own_files(root, setup)
     if own:
         listed = ", ".join(str(p) for p in own)
+        one = len(own) == 1
         raise Refused(
-            f"{listed} {'is' if len(own) == 1 else 'are'} this checkout's own, and a setup's links would replace "
-            f"{'it' if len(own) == 1 else 'them'}: make this checkout's files a setup first, make vault TYPE=new "
-            "NAME=<name> FROM=current"
+            f"{listed} {'is' if one else 'are'} this checkout's own, and a setup's links would replace "
+            f"{'it' if one else 'them'}: make this checkout's files a setup first, make vault TYPE=new NAME=<name> "
+            f"FROM=current, or move {'it' if one else 'them'} out of the checkout"
         )
 
 
@@ -183,7 +220,8 @@ def refuse_old_vault(root: Path) -> None:
 
 def link(root: Path, setup: Path) -> None:
     """Point each of the checkout's paths at the setup's file: a new link renamed over the path, so the path is never
-    missing on the way."""
+    missing on the way. Stopped half way, the paths it reached link to the setup and the others keep what they held, the
+    same as the setup's files for new --from current: a switch to the same setup finishes it."""
     for file, rel in FILES.items():
         path = root / rel
         tmp = path.with_name(f"{path.name}.setup-tmp")
@@ -252,10 +290,10 @@ def switch(root: Path, where: Path, name: str) -> bool:
         current = active(root)
     except Refused:
         current = None
-    if current and same(current, setup):
+    if current == resolved(setup):
         return False
     refuse_old_vault(root)
-    refuse_own_files(root)
+    refuse_own_files(root, setup)
     link(root, setup)
     return True
 
@@ -282,11 +320,11 @@ def new(root: Path, where: Path, name: str, local_text: str) -> Path:
 def adoptable(root: Path) -> None:
     """Refused unless the checkout's three files are its own and whole, so they can become a setup."""
     refuse_old_vault(root)
+    current = active(root)
+    if current is not None:
+        raise Refused(f"This checkout links to setup {current.name} already: make vault TYPE=list lists the setups")
     for file, rel in FILES.items():
-        path = root / rel
-        if path.is_symlink():
-            raise Refused(f"{rel} is a setup's link already: make vault TYPE=list says which setup this checkout uses")
-        if not path.is_file():
+        if not (root / rel).is_file():
             raise Refused(f"There is no {rel} to move into a setup: {MAKES[file]}")
     if vault_keys(root / FILES["vault.yml"], root / FILES["vault_pass"]) is None:
         raise Refused(
@@ -296,7 +334,8 @@ def adoptable(root: Path) -> None:
 
 
 def adopt(root: Path, where: Path, name: str) -> Path:
-    """This checkout's own three files moved into a new setup, and links left in their place."""
+    """This checkout's own three files moved into a new setup, and links left in their place. A link of the person's
+    own is read through, and the file it leads to is left where it is."""
     unused(where, name)
     adoptable(root)
     setup = make_setup(where, name, {file: (root / rel).read_bytes() for file, rel in FILES.items()})
@@ -349,7 +388,7 @@ def listing(root: Path, where: Path) -> str:
         rows = [("", "NAME", "VAULT", "LOCAL.YML", "VAULT.YML", "VAULT_PASS")]
         for name in found:
             setup = where / name
-            mark = "*" if current and same(current, setup) else ""
+            mark = "*" if current == resolved(setup) else ""
             rows.append((mark, name, vault_state(setup), *(changed(setup / file) for file in FILES)))
         widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
         lines.append(f"Setups in {shown(where)}, * the one this checkout uses:")
@@ -359,7 +398,7 @@ def listing(root: Path, where: Path) -> str:
         lines.append(f"No setups in {shown(where)}: make vault TYPE=new NAME=<name> makes one.")
     if broken:
         lines.append(broken)
-    elif current and not any(same(current, where / name) for name in found):
+    elif current and not any(current == resolved(where / name) for name in found):
         lines.append(f"This checkout uses setup {current.name}, in {shown(current.parent)}.")
     elif not current and own_files(root):
         lines.append(
@@ -372,8 +411,8 @@ def listing(root: Path, where: Path) -> str:
 def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("list")
-    commands.add_parser("check")
+    for command in ("list", "check"):
+        commands.add_parser(command)
     for command in ("switch", "edit", "new"):
         commands.add_parser(command).add_argument("name", nargs="?", default="")
     commands.choices["new"].add_argument("--from", dest="source", default="")

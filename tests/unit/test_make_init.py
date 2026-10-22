@@ -667,6 +667,26 @@ def test_a_checkout_with_its_own_files_is_offered_to_keep_them_as_a_setup(repo):
     assert read_vault(repo) == {"vault_haos_owner_password": "kept"}, "read through its link"
 
 
+def test_a_setup_restored_after_the_first_make_init_is_taken_at_its_first_question(repo):
+    """A first run before the setups came back leaves local.yml setting nothing, which gives way to the setup."""
+    init_run(repo, Silent(), interactive=False)
+    password = b"a-password-of-the-restored-setup"
+    home = setups.make_setup(
+        setups.store(),
+        "home",
+        {
+            "local.yml": b"---\n",
+            "vault.yml": VaultLib([("default", VaultSecret(password))]).encrypt(b"---\n{}\n"),
+            "vault_pass": password + b"\n",
+        },
+    )
+    answers = {"switch:nas": "n", "switch:remote": "n", "switch:cluster": "n", "switch:homeassistant": "n"}
+    console = Scripted({"setup": "home", **answers})
+    init_run(repo, console)
+    assert console.topics[0] == "setup" and setups.active(repo) == home
+    assert "This checkout uses setup home now" in console.text
+
+
 def test_a_setup_whose_links_are_not_whole_stops_make_init_before_it_writes(repo):
     setup = setups.new(repo, setups.store(), "home", wizard.commented_example(repo))
     (setup / "local.yml").unlink()
