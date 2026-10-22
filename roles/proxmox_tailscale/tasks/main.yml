@@ -1,9 +1,10 @@
 ---
-# Makes a Proxmox VE node its LAN's Tailscale subnet router: every VM on its bridge, and every other host on the
-# advertised prefixes, answers from the tailnet without Tailscale of its own. In order: Tailscale's repository and
-# packages (install.yml), the forwarding guard (guard.yml), IPv4 forwarding once the guard is loaded
-# (forwarding.yml), then the node's login, routes and preferences (node.yml). Every command runs through `command`,
-# not a module, so the idempotence tests can stand in for it with a fake on PATH.
+# Joins a Proxmox VE node to a tailnet, and with routes makes it the LAN's Tailscale subnet router: every VM on its
+# bridge, and every other host on the advertised prefixes, answers from the tailnet without Tailscale of its own.
+# Without routes the node is a tailnet device of its own, reachable at its tailnet address. In order: Tailscale's
+# repository and packages (install.yml), the forwarding guard (guard.yml), IPv4 forwarding once the guard is loaded,
+# with routes only (forwarding.yml), then the node's login, routes and preferences (node.yml). Every command runs
+# through `command`, not a module, so the idempotence tests can stand in for it with a fake on PATH.
 
 # Each problem gets its own sentence, naming the variable to change. Argument validation accepts a string for a
 # list (it would split it on commas) but leaves the variable as it was, so the string is refused here before
@@ -28,8 +29,16 @@
     _hosts: "{{ [] if proxmox_tailscale_guard_hosts is string else proxmox_tailscale_guard_hosts | map('string') | list }}"
     _allow: "{{ [] if proxmox_tailscale_guard_allow is string else proxmox_tailscale_guard_allow | map('string') | list }}"
     _settings: "{{ proxmox_tailscale_settings if proxmox_tailscale_settings is mapping else {} }}"
+    _enabled: "{{ proxmox_tailscale_enabled is boolean and proxmox_tailscale_enabled }}"
     _errors: >-
       {%- set out = [] -%}
+      {%- if proxmox_tailscale_enabled is not boolean -%}
+      {%-   set _ = out.append('proxmox_tailscale_enabled must be true or false, not ' ~ proxmox_tailscale_enabled | to_json
+                               ~ ': a string would count as true, even "false".') -%}
+      {%- elif not proxmox_tailscale_enabled and _routes -%}
+      {%-   set _ = out.append('proxmox_tailscale_advertise_routes lists routes, but proxmox_tailscale_enabled is false: '
+                               ~ 'set it to true, or empty the routes.') -%}
+      {%- endif -%}
       {%- for name, value in _lists.items() if value is string -%}
       {%-   set _ = out.append(name ~ ' must be a list, not a string.') -%}
       {%- endfor -%}
@@ -44,7 +53,7 @@
       {%-   set _ = out.append('proxmox_tailscale_advertise_routes takes IPv4 networks in CIDR form (network/prefix '
                                ~ 'length); these are not: ' ~ malformed | join(', ') ~ '.') -%}
       {%- endif -%}
-      {%- if _routes and not _tags -%}
+      {%- if _enabled and not _tags -%}
       {%-   set _ = out.append('proxmox_tailscale_tags must name at least one tag (tag:<name>): an untagged node '
                                ~ 'belongs to a user, and its key expires, taking remote access with it.') -%}
       {%- endif -%}
@@ -86,18 +95,23 @@
       {%- endif -%}
       {{ out }}
 
-- name: Do nothing without routes to advertise
+- name: Do nothing unless Tailscale is enabled
   ansible.builtin.meta: end_role
-  when: proxmox_tailscale_advertise_routes | length == 0
+  when: not proxmox_tailscale_enabled
 
 - name: Install or upgrade Tailscale
   ansible.builtin.import_tasks: install.yml
 
+# Without routes too: it is what makes tailscaled fail-closed, and with no routes it drops everything from the
+# tailnet but the guarded hosts' allowed ports, which tailscaled itself never delivers without a route to them.
 - name: Load the forwarding guard
   ansible.builtin.import_tasks: guard.yml
 
-- name: Turn on IPv4 forwarding
+# Only a subnet router needs forwarding. Without routes it is left as it is, on if routes were once advertised, since
+# nothing from the tailnet is then forwarded (README.md, The guard).
+- name: Turn on IPv4 forwarding, for a subnet router
   ansible.builtin.import_tasks: forwarding.yml
+  when: proxmox_tailscale_advertise_routes | length > 0
 
 - name: Log the node in, and keep its routes and preferences
   ansible.builtin.import_tasks: node.yml

@@ -1,7 +1,8 @@
 # Remote access through Tailscale
 
-The Proxmox host is the LAN's Tailscale subnet router (`roles/proxmox_tailscale`). Every VM on its bridge, the
-NAS, the router and every app behind Traefik answer from your tailnet at their LAN addresses. None of them runs
+The Proxmox host joins your tailnet (`roles/proxmox_tailscale`, with `tailscale_enabled`), reachable at its tailnet
+address. With `tailscale_advertise_routes` it is also the LAN's Tailscale subnet router: every VM on its bridge, the
+NAS, the router and every app behind Traefik answer from your tailnet at their LAN addresses, and none of them runs
 Tailscale. The role installs and keeps Tailscale on the host. This runbook covers what only Tailscale's admin
 console can do (the policy, DNS and the auth key), the run itself, and how to check it all from outside.
 
@@ -14,9 +15,9 @@ Values are named by their variable in `group_vars/all/local.yml`; examples use R
 
 ## Why the NAS needs care
 
-The host masquerades every tailnet client to its own LAN address, and the NAS exports the VM disks and backups to
-that address alone, with root kept as root. Any tailnet client allowed to reach the NAS's NFS ports would be trusted
-like the host.
+With routes only: without them, nothing on the LAN is reachable from the tailnet. As the subnet router, the host
+masquerades every tailnet client to its own LAN address, and the NAS exports the VM disks and backups to that address
+alone, with root kept as root. Any tailnet client allowed to reach the NAS's NFS ports would be trusted like the host.
 
 Two controls stop that, each enough alone:
 
@@ -29,8 +30,8 @@ would miss them.
 
 ## 1. The policy, before anything else
 
-A new tailnet lets every device reach every other on every port, subnet routes included. **Write this policy before
-the host advertises anything.**
+A new tailnet lets every device reach every other on every port, subnet routes included, and the host would reach
+every device of yours. **Write this policy before the host's first run.**
 
 In the admin console, open Access controls:
 
@@ -78,7 +79,14 @@ In the admin console, open Access controls:
 Without a NAS, leave out the `ipsets` entry, the NAS's grant and the NAS's lines in `tests` (keeping
 `192.0.2.20:8006` and no `deny`), and give the first grant `"dst": ["192.0.2.0/24"]`.
 
+**The host alone** (`tailscale_enabled` without routes): keep `tagOwners`, the host's grant and your devices'
+grant. Leave out `autoApprovers`, the `ipsets` entry, the LAN's and the NAS's grants, and make the test reach the host
+at its tailnet address, which is all the tailnet reaches: `"accept": ["tag:homeserver:8006", "tag:homeserver:22"]`,
+no `deny`. Add the rest when you add the routes.
+
 ## 2. DNS
+
+With routes only. Without them the router is out of the tailnet's reach, and MagicDNS already names the host.
 
 In the admin console's DNS settings, add a nameserver: the router's LAN address, restricted to two domains:
 
@@ -108,12 +116,13 @@ left there does nothing.
 
 ## 5. The run, from home
 
-1. In `group_vars/all/local.yml`, set `tailscale_advertise_routes: [<the LAN's prefix>]`. Update the
+1. In `group_vars/all/local.yml`, set `tailscale_enabled: true`, and for the subnet router
+   `tailscale_advertise_routes: [<the LAN's prefix>]`. Update the
    password-manager copy of `local.yml`.
 2. Run `make check TYPE=proxmox`. Expect:
-   - the keyring, `tailscale.sources`, the packages, the guard's three files and the sysctl file;
+   - the keyring, `tailscale.sources`, the packages, the guard's three files and, with routes, the sysctl file;
    - "Would enable the guard at boot and load the guard";
-   - "IPv4 forwarding is off";
+   - with routes, "IPv4 forwarding is off" (without, forwarding is left alone);
    - "Would log the node in with the auth key".
 3. Run `make deploy TYPE=proxmox`, **from home**. `make deploy TYPE=proxmox` upgrades Tailscale with the rest of the
    host whenever a new release is out, which restarts it. Run from away, that drops the connection the run itself uses.
@@ -132,7 +141,7 @@ In the admin console, the host must show three things:
 
 - tagged `tag:homeserver`;
 - key expiry disabled (tagged machines have it so by default);
-- the route approved.
+- with routes, the route approved.
 
 If Tailnet Lock is on, sign the node from a signing device: `tailscale lock sign`.
 
@@ -148,6 +157,8 @@ only slower. For direct connections:
 
 ## 8. Your devices
 
+Without routes, a device needs nothing more than Tailscale. With them:
+
 - **Phones and laptops:** macOS, iOS, Windows and Android use subnet routes by default. Linux needs
   `tailscale set --accept-routes`.
 - **At home:** such a device sends LAN traffic through the tunnel to the host rather than straight to the target. That
@@ -159,7 +170,10 @@ only slower. For direct connections:
 The policy's tests check the policy alone on every save (step 1). These check both controls together, then the guard
 alone. From a phone on mobile data:
 
-- **The hosts:**
+- **The host**, at its tailnet name (MagicDNS) or address: `https://<name>:8006` loads the Proxmox UI, and
+  `ssh root@<name>` connects. Without routes, that is all there is to check, with the reboot at the end; the
+  rest needs routes.
+- **The LAN:**
   - `ssh` into a VM at its LAN address;
   - `https://<proxmox_address>:8006` loads the Proxmox UI;
   - Home Assistant answers by its name;
@@ -170,7 +184,7 @@ alone. From a phone on mobile data:
   - `nc -vzu <nas> 2049`
   - `nc -vz <nas> 111`
   - `showmount -e <nas>`
-- **The guard alone.** Widen the policy for one test device to every port on the NAS for a few minutes:
+- **The guard alone**, with a NAS. Widen the policy for one test device to every port on the NAS for a few minutes:
   1. The commands above must still time out.
   2. On the host, `nft list counters table inet tailnet_guard` shows `guarded_dropped` rising, and
      `journalctl -k -g tailnet-guard` shows the drops.
@@ -196,11 +210,12 @@ The node's identity lived on the old boot drive.
 1. In the admin console, delete the old machine first, or the new one is named `<hostname>-1`.
 2. Make a new key (step 4) and run `make deploy TYPE=proxmox`.
 
-The auto-approver approves the route again.
+With routes, the auto-approver approves the route again.
 
 ## Removing it
 
-1. Remove `tailscale_advertise_routes` from `local.yml`. The role then does nothing, and removes nothing.
+1. Remove `tailscale_enabled` and `tailscale_advertise_routes` from `local.yml`. The role then does nothing, and
+   removes nothing. (Removing only the routes keeps the host on the tailnet: the next run withdraws them.)
 2. On the host:
 
    ```bash
