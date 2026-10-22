@@ -87,12 +87,11 @@ spec:
             requests:
               cpu: 250m
               memory: 512Mi
+            # The device alone: no CPU or memory limit, so a spike is neither throttled nor killed (CLAUDE.md).
             limits:
-              cpu: "4"
               # The iGPU when the host passes one through (GPU_I915 1), none otherwise: a limit of 0 asks for no
               # device, so the pod schedules on a node without the plugin.
               gpu.intel.com/i915: "${GPU_I915}"
-              memory: 4Gi
           # A first start, or an upgrade, migrates the database before it listens: up to ten minutes.
           startupProbe:
             httpGet:

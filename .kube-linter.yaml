@@ -13,7 +13,7 @@ checks:
     - no-read-only-root-fs
     # LinuxServer images start as root and drop to PUID 1000.
     - run-as-non-root
-    # It requires memory limits, which are set only where a runaway can starve the node (CLAUDE.md).
+    # It requires memory limits, which the apps do not set: a spike is never OOM-killed (CLAUDE.md).
     # unset-memory-request below requires the requests instead. The default unset-cpu-requirements
     # already requires CPU requests, and only those.
     - unset-memory-requirements
