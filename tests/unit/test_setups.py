@@ -283,6 +283,16 @@ def test_a_run_stops_on_links_into_two_setups_or_beside_a_file_of_its_own(root, 
         setups.check(root)
 
 
+def test_a_run_stops_when_the_old_vault_is_back_beside_the_vault(root, where):
+    """A branch from before 2026-10-20 brings the committed vault back, and Ansible would read it after the
+    setup's."""
+    stored(where, "home")
+    setups.switch(root, where, "home")
+    (root / setups.OLD_VAULT).write_text("$ANSIBLE_VAULT;1.1;AES256\n6162\n")
+    with pytest.raises(setups.Refused, match="its keys would win over the vault's"):
+        setups.check(root)
+
+
 # ----------------------------------------------------------------------------------------------------- list ---
 def test_list_marks_the_setup_in_use_and_shows_no_secret(root, where):
     secret = "a-secret-the-list-never-shows"
@@ -324,6 +334,13 @@ def test_the_command_line_makes_a_setup_of_the_example(root, capsys):
     assert setups.main(["new", "home"], root=root) == 0
     assert "Made setup home" in capsys.readouterr().out
     assert (root / LOCAL).read_text() == wizard.commented_example(root)
+
+
+def test_the_store_is_never_inside_the_checkout(root, monkeypatch, capsys):
+    monkeypatch.setenv("SETUPS", str(root / "setups"))
+    assert setups.main(["new", "lab"], root=root) == 1
+    assert "inside this checkout" in capsys.readouterr().err
+    assert not (root / "setups").exists() and not links(root)
 
 
 # ----------------------------------------------------------------------------------------------------- make ---
@@ -403,3 +420,17 @@ def test_a_playbook_run_names_its_setup_and_stops_on_a_broken_one(tmp_path):
     stopped = make(checkout, "check", "TYPE=proxmox")
     assert stopped.returncode != 0 and "home, is not whole" in stopped.stderr, stopped.stdout + stopped.stderr
     assert not (checkout / "logs").exists(), "stopped before anything ran"
+
+
+def test_make_takes_name_from_its_command_line_alone_and_for_make_vault_alone(tmp_path):
+    """A NAME the shell exports (WSL sets it to the machine's name) is not make vault's; and make deploy NAME=lab
+    would deploy the setup the checkout links to, whichever it is, so it is refused."""
+    checkout = tree(tmp_path)
+    store = tmp_path / "setups"
+    made = make(checkout, "vault", "TYPE=new", f"SETUPS={store}", NAME="mybox")
+    assert made.returncode == 0, made.stdout + made.stderr
+    assert not store.exists() and (checkout / VAULT).is_file() and not links(checkout), "the checkout's own vault"
+    refused = make(checkout, "-n", "deploy", "TYPE=proxmox", "NAME=lab")
+    assert refused.returncode != 0 and "NAME and FROM are make vault's" in refused.stderr, refused.stderr
+    stray = make(checkout, "vault", "FROM=current")
+    assert stray.returncode != 0 and "FROM=current is make vault TYPE=new's alone" in stray.stderr, stray.stderr

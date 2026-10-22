@@ -2,14 +2,14 @@
 the one a checkout uses linked in.
 
 A setup is a directory of the store holding three files: local.yml, vault.yml and vault_pass. The store is $SETUPS
-(make's SETUPS=), else $XDG_CONFIG_HOME/homeserver/setups, ~/.config/homeserver/setups without it. The checkout links
-the files of the setup it uses in at the paths Ansible and make read, each a path no commit ever held, since a checkout
-of an older branch overwrites an ignored file at a path it tracks: group_vars/all/local.yml,
-group_vars/all/local.vault.yml and .vault_pass, which ansible.cfg names. Setups cannot sit side by side in
-group_vars/all/, where Ansible reads every .yml file, and a link to a missing file is skipped there without a word, as
-if there were no settings or no secrets: every playbook run first checks that the three links point into one setup and
-that each of its files is there (check). A checkout whose three paths are its own files, or missing, uses no setup and
-works as it always did.
+(make's SETUPS=), else $XDG_CONFIG_HOME/homeserver/setups, ~/.config/homeserver/setups without it, and never inside the
+checkout, where git would offer a setup's password to a commit. The checkout links the files of the setup it uses in at
+the paths Ansible and make read, each a path no commit ever held, since a checkout of an older branch overwrites an
+ignored file at a path it tracks: group_vars/all/local.yml, group_vars/all/local.vault.yml and .vault_pass, which
+ansible.cfg names. Setups cannot sit side by side in group_vars/all/, where Ansible reads every .yml file, and a link to
+a missing file is skipped there without a word, as if there were no settings or no secrets: every playbook run first
+checks that the three links point into one setup and that each of its files is there (check). A checkout whose three
+paths are its own files, or missing, uses no setup and works as it always did.
 
   list                    every setup, the checkout's marked: whether its vault opens, its number of keys (never a
                           value), when each file last changed
@@ -63,13 +63,22 @@ class Refused(Exception):
     """What will not be done, and why. Nothing was changed."""
 
 
-def store() -> Path:
-    """Where the setups are kept."""
+def store(root: Path | None = None) -> Path:
+    """Where the setups are kept; with root, refused when that is inside the checkout."""
     if os.environ.get("SETUPS"):
         where = Path(os.environ["SETUPS"]).expanduser()
     else:
         where = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "homeserver" / "setups"
-    return Path(os.path.abspath(where))
+    where = Path(os.path.abspath(where))
+    if root is not None:
+        real, top = resolved(where), resolved(root)
+        if real == top or top in real.parents:
+            raise Refused(
+                f"The setups' store, {shown(where)}, is inside this checkout, where git add would take a setup's "
+                "vault_pass, its password in clear, into this public repository: keep it outside, in the default "
+                "~/.config/homeserver/setups or SETUPS=<dir>"
+            )
+    return where
 
 
 def shown(path: Path) -> str:
@@ -357,8 +366,16 @@ def edit(where: Path, name: str) -> int:
 
 
 def check(root: Path) -> str:
-    """The line a playbook run starts with; Refused when the links are broken."""
+    """The line a playbook run starts with; Refused when the links are broken, or when the vault's old, committed copy
+    is back beside the vault."""
     setup = active(root)
+    if os.path.lexists(root / OLD_VAULT) and os.path.lexists(root / FILES["vault.yml"]):
+        raise Refused(
+            f"{OLD_VAULT}, where the vault was committed until 2026-10-20, is back beside {FILES['vault.yml']}: a "
+            "branch from before then is checked out, and its commits hold that copy. Ansible reads group_vars/all in "
+            "name order, so its keys would win over the vault's. Check out a branch from after then, which takes it "
+            "away again, or move it out of the checkout (README.md, Setups and the vault)."
+        )
     return f"Setup: {setup.name} ({shown(setup)})" if setup else "Setup: this checkout's own files"
 
 
@@ -417,12 +434,13 @@ def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
         commands.add_parser(command).add_argument("name", nargs="?", default="")
     commands.choices["new"].add_argument("--from", dest="source", default="")
     args = parser.parse_args(argv)
-    where = store()
     try:
+        if args.command == "check":
+            print(check(root))
+            return 0
+        where = store(root)
         if args.command == "list":
             print(listing(root, where))
-        elif args.command == "check":
-            print(check(root))
         elif args.command == "edit":
             return edit(where, args.name)
         elif args.command == "switch":

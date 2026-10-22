@@ -805,7 +805,11 @@ class Init:
         switches to that setup or makes it. A checkout with files of its own is offered to keep them as a setup; one
         with neither files nor setups is asked nothing. A local.yml that sets nothing, as the first make init writes it,
         gives way to a setup; files that hold more are refused by name, and Enter keeps them."""
-        where = setups.store()
+        try:
+            where = setups.store(self.root)
+        except setups.Refused as e:
+            self.console.say(f"\n{e}")
+            return
         found = setups.names(where)
         broken = False
         try:

@@ -98,12 +98,20 @@ PLAYBOOK := $(BIN)/ansible-playbook
 # Setups (scripts/init/setups.py): each machine's local.yml, vault and .vault_pass, kept together in a store outside the
 # checkout, SETUPS or $XDG_CONFIG_HOME/homeserver/setups (~/.config/homeserver/setups without it), and the one the
 # checkout uses linked in at LOCAL, VAULT and .vault_pass. NAME names a setup for make vault, and FROM=current makes
-# this checkout's own files one. SETUP_NAME is the setup the checkout links to, for the log's name.
-NAME   ?=
-FROM   ?=
+# this checkout's own files one, with TYPE=new alone. Both come from make's command line alone, never the environment,
+# where a shell may have put a NAME of its own (WSL sets it to the machine's name); and both are make vault's alone:
+# any other target runs with the setup the checkout links to, so make deploy NAME=lab is refused rather than run with
+# another setup. SETUP_NAME is the setup the checkout links to, for the log's name.
+NAME   :=
+FROM   :=
 SETUPS ?=
 ifneq ($(SETUPS),)
 export SETUPS
+endif
+ifneq ($(NAME)$(FROM),)
+NOT_VAULT := $(filter-out vault vault/% help,$(MAKECMDGOALS))
+$(if $(NOT_VAULT),$(error NAME and FROM are make vault's: make $(firstword $(NOT_VAULT)) runs with the setup this checkout links to, so link the one you mean in first, make vault TYPE=switch NAME=<setup>))
+$(if $(and $(FROM),$(filter-out new,$(or $(TYPES),edit))),$(error FROM=current is make vault TYPE=new's alone: make vault TYPE=new NAME=<name> FROM=current))
 endif
 LOCAL      := group_vars/all/local.yml
 SETUPS_PY   = $(BIN)/python scripts/init/setups.py
