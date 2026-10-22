@@ -2327,14 +2327,14 @@ def test_flux_bootstrap_leaves_groups_out(tmp_path, operator_releases):
     assert "patches" not in objects["Kustomization/flux-system/flux-system"]["spec"]
     assert kustomizations_in(objects) == {"flux-system", *GROUPS}
 
-    # The apps as Flux applied them, PhotoPrism held by make suspend.
+    # The apps as Flux applied them, PhotoPrism held at zero by make suspend.
     s = read(state)
-    for namespace, name, group in [
-        ("media", "jellyfin", "apps-media"),
-        ("photoprism", "photoprism", "apps-photoprism"),
-        ("photoprism", "photoprism-db", "apps-photoprism"),
+    for namespace, name, group, replicas in [
+        ("media", "jellyfin", "apps-media", 1),
+        ("photoprism", "photoprism", "apps-photoprism", 0),
+        ("photoprism", "photoprism-db", "apps-photoprism", 1),
     ]:
-        s["objects"][f"Deployment/{namespace}/{name}"] = deployment(namespace, name, group)
+        s["objects"][f"Deployment/{namespace}/{name}"] = deployment(namespace, name, group, replicas)
     s["objects"]["Deployment/photoprism/photoprism"]["metadata"]["annotations"] = {RECONCILE: "disabled", RECORDED: "1"}
     write(state, s)
 
