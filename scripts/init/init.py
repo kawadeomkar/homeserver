@@ -360,6 +360,9 @@ class Init:
             return True
         if section == "nas":
             return has_value(v.get("truenas_static_address")) or has_value(v.get("truenas_bootstrap_address"))
+        if section == "remote":
+            enabled = v.get("tailscale_enabled")
+            return enabled is True if enabled is not None else has_value(v.get("tailscale_advertise_routes"))
         return has_value(v.get(cfg.SWITCHES[section][1]))
 
     def on(self, section: str) -> bool:
@@ -675,9 +678,11 @@ class Init:
 
     # ---------------------------------------------------------------------------------------------- sections ---
     def switch(self, section: str) -> bool:
-        question, _ = cfg.SWITCHES[section]
+        question, key = cfg.SWITCHES[section]
         on = self.yes_no(f"\n{question}", self.present(section), f"switch:{section}")
         if on:
+            if cfg.BY_KEY[key].kind == "bool":
+                self.apply(cfg.BY_KEY[key], True)
             return True
         keys = [s.key for s in cfg.SETTINGS if s.section == section and not s.secret and s.key in self.values]
         real = [k for k in keys if has_value(self.values[k])]
@@ -696,8 +701,8 @@ class Init:
     def ask_section(self, section: str) -> None:
         self.console.say(f"\n{'-' * 8} {cfg.SECTIONS[section]} {'-' * (100 - len(cfg.SECTIONS[section]))}")
         for s in cfg.SETTINGS:
-            if s.section != section:
-                continue
+            if s.section != section or (s.kind == "bool" and s.key == cfg.SWITCHES.get(section, ("", ""))[1]):
+                continue  # a yes/no switch was answered already
             if self.applies(s) and self.asked(s):
                 self.ask_setting(s)
                 if s.key == "proxmox_address" and has_value(self.current(s)):
@@ -1026,9 +1031,12 @@ class Init:
                 "~/.ssh/config (scripts/runbooks/REBUILD.md, section 3)"
             )
         if on["remote"]:
+            routes = has_value(v.get("tailscale_advertise_routes"))
             manual.append(
-                "The tailnet's policy and DNS in Tailscale's admin console, before the first run "
-                "(scripts/runbooks/tailscale.md, sections 1 and 2)"
+                "The tailnet's policy"
+                + (" and DNS" if routes else "")
+                + " in Tailscale's admin console, before the first run (scripts/runbooks/tailscale.md, "
+                + ("sections 1 and 2)" if routes else "section 1)")
             )
         if on["cluster"]:
             macs = v.get("kubernetes_node_macs") if isinstance(v.get("kubernetes_node_macs"), dict) else {}

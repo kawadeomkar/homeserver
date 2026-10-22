@@ -10,9 +10,9 @@
   ansible.builtin.copy:
     dest: "{{ proxmox_tailscale_sysctl_file }}"
     content: |
-      # Written by roles/proxmox_tailscale. The node forwards IPv4 between all of its interfaces, as the tailnet's
-      # subnet router; the tailnet guard (tailnet-guard.service) filters what comes from or goes to the tailnet.
-      # IPv6 forwarding stays off.
+      # Written by roles/proxmox_tailscale for the tailnet's subnet router, and left in place if its routes are taken
+      # out. The node forwards IPv4 between all of its interfaces; the tailnet guard (tailnet-guard.service) filters
+      # what comes from or goes to the tailnet. IPv6 forwarding stays off.
       net.ipv4.ip_forward = 1
     mode: "0644"
   register: proxmox_tailscale_sysctl_written

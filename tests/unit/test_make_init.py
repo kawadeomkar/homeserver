@@ -376,6 +376,61 @@ def test_a_section_turned_off_loses_its_settings_only_when_the_person_agrees(rep
     assert "haos_mac" in local(repo), "another section is left alone"
 
 
+@pytest.mark.parametrize(
+    ("text", "on"),
+    [
+        pytest.param("tailscale_enabled: true\n", True, id="enabled"),
+        pytest.param("tailscale_enabled: false\n", False, id="disabled"),
+        pytest.param("tailscale_advertise_routes: [{prefix}]\n", True, id="routes-alone"),
+        pytest.param("", False, id="neither"),
+    ],
+)
+def test_remote_access_is_on_as_the_playbooks_work_it_out(repo, text, on):
+    """As proxmox_tailscale_enabled: tailscale_enabled when it is set, otherwise any routes, which a local.yml from
+    before the switch lists alone."""
+    (repo / "group_vars/all/local.yml").write_text("---\n" + text.format(prefix=f"{lan(0)}/24"))
+    assert wizard.Init(repo, Silent(), full=False, interactive=False).present("remote") is on
+
+
+def test_remote_access_is_switched_on_by_its_question_and_the_routes_are_an_option(repo):
+    """The answer to the switch is tailscale_enabled itself, never asked again. The routes are optional: without them
+    the host joins the tailnet alone, and only the tailnet's policy is left to do by hand."""
+    console = Scripted(
+        {
+            "switch:nas": "n",
+            "switch:remote": "y",
+            "switch:cluster": "n",
+            "switch:homeassistant": "n",
+            "proxmox_address": lan(10),
+            "tailscale_advertise_routes": "-",
+        }
+    )
+    init_run(repo, console)
+    v = local(repo)
+    assert v["tailscale_enabled"] is True and "tailscale_advertise_routes" not in v
+    assert "tailscale_enabled" not in console.topics and "tailscale_advertise_routes" in console.topics
+    summary = console.out[-1]
+    assert "tailscale_advertise_routes" not in summary, "neither required nor recommended"
+    assert "The tailnet's policy in Tailscale's admin console, before the first run" in summary
+    assert "(scripts/runbooks/tailscale.md, section 1)" in summary
+
+
+def test_routes_alone_keep_remote_access_on_until_it_is_turned_off(repo):
+    """A subnet router set up before the switch: Enter keeps it on and writes the switch beside its routes; turned
+    off, and agreed to, both go, so the playbooks see no remote access."""
+    prefix = f"{lan(0)}/24"
+    (repo / "group_vars/all/local.yml").write_text(
+        f"---\nproxmox_address: {lan(10)}\ntailscale_advertise_routes: [{prefix}]\n"
+    )
+    console = Scripted()
+    init_run(repo, console)
+    assert any("join your tailnet" in line and "[Y/n]" in line for line in console.out)
+    assert (local(repo)["tailscale_enabled"], local(repo)["tailscale_advertise_routes"]) == (True, [prefix])
+    assert "sections 1 and 2" in console.out[-1], "with routes, the tailnet's DNS too"
+    init_run(repo, Scripted({"switch:remote": "n", "clear:remote": "y"}))
+    assert not [k for k in local(repo) if k.startswith("tailscale_")]
+
+
 def test_secrets_go_to_the_vault_and_never_to_the_screen(repo):
     make_vault(repo, {"vault_other": "left-alone"})
     api_key = "-".join(["made", "up", "for", "the", "test"])  # built: gitleaks flags a key written out
@@ -408,8 +463,10 @@ def test_secrets_go_to_the_vault_and_never_to_the_screen(repo):
     assert "vault_truenas_api_key" in console.out[-1].split("STILL REQUIRED")[1]
 
 
-def test_remote_access_requires_the_auth_key_for_the_hosts_first_login(repo):
-    # proxmox.yml refuses a host that is not logged in without the key, after changing it, and a dry run cannot tell.
+@pytest.mark.parametrize("routes", [True, False], ids=["subnet-router", "host-only"])
+def test_remote_access_requires_the_auth_key_for_the_hosts_first_login(repo, routes):
+    # proxmox.yml refuses a host that is not logged in without the key, after changing it, and a dry run cannot tell;
+    # a host that joins without routes logs in all the same.
     make_vault(repo, {})
     answers = {
         "switch:nas": "n",
@@ -417,11 +474,11 @@ def test_remote_access_requires_the_auth_key_for_the_hosts_first_login(repo):
         "switch:cluster": "n",
         "switch:homeassistant": "n",
         "proxmox_address": lan(10),
-        "tailscale_advertise_routes": f"{lan(0)}/24",
+        "tailscale_advertise_routes": f"{lan(0)}/24" if routes else "-",
     }
     console = Scripted(answers)
     init_run(repo, console)
-    assert local(repo)["tailscale_advertise_routes"] == [f"{lan(0)}/24"]
+    assert local(repo).get("tailscale_advertise_routes") == ([f"{lan(0)}/24"] if routes else None)
     required = console.out[-1].split("STILL REQUIRED")[1].split("RECOMMENDED")[0]
     assert "vault_tailscale_auth_key" in required
 
