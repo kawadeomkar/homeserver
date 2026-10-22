@@ -358,7 +358,8 @@ def tree(tmp_path: Path) -> Path:
     checkout = tmp_path / "tree"
     (checkout / "scripts" / "init").mkdir(parents=True)
     (checkout / "group_vars" / "all").mkdir(parents=True)
-    for name in ("Makefile", "ansible.cfg", str(wizard.EXAMPLE)):
+    (checkout / "vars_plugins").mkdir()
+    for name in ("Makefile", "ansible.cfg", str(wizard.EXAMPLE), "vars_plugins/setup_links.py"):
         shutil.copy(ROOT / name, checkout / name)
     for script in ("init.py", "settings.py", "setups.py"):
         shutil.copy(ROOT / "scripts" / "init" / script, checkout / "scripts" / "init" / script)
@@ -443,3 +444,31 @@ def test_make_takes_name_from_its_command_line_alone_and_for_make_vault_alone(tm
     assert refused.returncode != 0 and "NAME and FROM are make vault's" in refused.stderr, refused.stderr
     stray = make(checkout, "vault", "FROM=current")
     assert stray.returncode != 0 and "FROM=current is make vault TYPE=new's alone" in stray.stderr, stray.stderr
+
+
+def test_ansible_playbook_started_without_make_stops_on_a_broken_setup(tmp_path):
+    """vars_plugins/setup_links.py, beside the playbooks, which Ansible loads by itself."""
+    checkout = tree(tmp_path)
+    store = tmp_path / "setups"
+    assert make(checkout, "vault", "TYPE=new", "NAME=home", f"SETUPS={store}").returncode == 0
+    (checkout / "play.yml").write_text(
+        "- hosts: localhost\n  gather_facts: false\n  tasks:\n    - ansible.builtin.debug:\n        msg: ran\n"
+    )
+    inherited = {k: v for k, v in os.environ.items() if k not in OUTER_MAKE}
+
+    def play() -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [str(Path(sys.prefix) / "bin" / "ansible-playbook"), "-i", "localhost,", "-c", "local", "play.yml"],
+            cwd=checkout,
+            env={**inherited, "ANSIBLE_CONFIG": str(checkout / "ansible.cfg")},
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+        )
+
+    ran = play()
+    assert ran.returncode == 0 and "msg: ran" in ran.stdout, ran.stdout + ran.stderr
+    (store / "home" / "local.yml").unlink()
+    stopped = play()
+    output = stopped.stdout + stopped.stderr
+    assert stopped.returncode != 0 and "home, is not whole" in output and "msg: ran" not in output, output
