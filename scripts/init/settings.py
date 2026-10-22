@@ -619,8 +619,7 @@ SETTINGS: tuple[Setting, ...] = (
         "app_list",
         "The apps this host runs, when not every one: group=<group> or app=<app> entries, or none",
         popular=True,
-        help="Unset, every app runs. A small worker runs a few: the settings check refuses a choice whose requests "
-        "its memory or cores cannot hold, before anything changes (local.yml.example has each group's needs).",
+        help="Unset, every app runs. A small worker can run a few: a pod that does not fit it stays Pending.",
     ),
     S(
         "kubernetes_media_on_data_volume",

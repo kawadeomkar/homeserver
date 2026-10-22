@@ -230,6 +230,5 @@ Never set `proxmox_vm_allow_overcommit` on a host whose thin pool other VMs shar
 errors. Once Flux is up, Homepage is the one app that starts there, since every other group holds a Secret
 (FileBrowser's, in media). To test a group, encrypt its Secrets for the test key as above. Choose what the host runs
 in its `local.yml` rather than stopping apps once they start: `kubernetes_apps` takes whole groups and single apps,
-`[group=homepage, app=jellyfin]` say, and the settings check refuses a choice whose requests the worker cannot hold,
-before anything changes (`group_vars/all/local.yml.example` has the numbers). Afterwards: `qm stop 300 301`, then `qm destroy 300 --purge` and
+`[group=homepage, app=jellyfin]` say. Afterwards: `qm stop 300 301`, then `qm destroy 300 --purge` and
 `qm destroy 301 --purge`, delete their backups and the ISO, the clone, and its `kubernetes_talos_config_dir`.

@@ -152,10 +152,7 @@ flux_sync_url: https://github.com/<you>/homeserver.git
 # (group=media, nextcloud, photoprism, frigate or homepage) or one app
 # (app=jellyfin, seerr, sonarr, radarr, prowlarr, sabnzbd or filebrowser, or
 # the one app of each other group); an app's database comes with it. Leaving one
-# out stops it and keeps its data. A choice the worker cannot hold is refused:
-# with the platform's 2.5 GiB, the media group requests 2.25 GiB, Nextcloud 1,
-# PhotoPrism 2, Frigate 2 and Homepage 0.25, and a worker gives pods about its
-# memory less 0.8 GiB. On a 16 GB host, say:
+# out stops it and keeps its data. A small worker can run a few, say:
 # kubernetes_apps: [group=media, group=nextcloud, group=homepage]
 # Without a NAS and with no room for a media disk: keep the media and camera
 # recordings on the data volume, where they are backed up and share its space.

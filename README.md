@@ -221,8 +221,7 @@ checks the section and names any setting it lacks. Fill in, from `local.yml.exam
   at least 4 cores, 12 GiB and a 32 GiB system disk, with a media disk or `kubernetes_media_on_data_volume: true`
   when a media app or Frigate runs; on a small host, size the control plane down too;
 - on a host too small for every app, the apps it runs (`kubernetes_apps`): whole groups (`group=media`) or single
-  apps (`app=jellyfin`). The rest are left out of what Flux applies, their data kept, and a choice whose requests the
-  worker cannot hold is refused before anything changes; `local.yml.example` has the numbers;
+  apps (`app=jellyfin`). The rest are left out of what Flux applies, their data kept;
 - on a ZFS install, `proxmox_local_vm_storage: local-zfs`, with a NAS too: the nodes' system disks go on the
   installer's storage in both setups, and `make deploy TYPE=proxmox` checks that storage whenever there is a cluster.
 

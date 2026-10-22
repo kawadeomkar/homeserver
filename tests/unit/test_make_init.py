@@ -324,8 +324,6 @@ def first_run_answers() -> dict:
         "kubernetes_node_sizes/homeserver-worker-1.data_disk_gib": "100",
         "kubernetes_node_sizes/homeserver-worker-1.media_disk_gib": "0",
         "kubernetes_media_on_data_volume": "y",
-        # What an 8 GiB worker holds beside the platform; Frigate, so its address is still read.
-        "kubernetes_apps": "group=frigate, group=homepage",
     }
 
 

@@ -1195,36 +1195,13 @@ def without(settings, *names):
             ],
             id="apps-that-do-not-exist",
         ),
-        # A 16 GB host's worker: the media apps, Nextcloud and Homepage fit it, and every app does not.
+        # The apps' requests are not added up against the worker: every app on a 16 GB host's worker passes, and a
+        # pod that does not fit stays Pending, for the owner to see.
         pytest.param(
             None,
-            CLUSTER_VARS
-            | {"kubernetes_node_sizes": {"homeserver-worker-1": {"cores": 4, "memory_mib": 7680}}}
-            | {"kubernetes_apps": ["group=media", "group=nextcloud", "group=homepage"]},
+            CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"cores": 2, "memory_mib": 7680}}},
             [],
-            id="apps-that-fit",
-        ),
-        pytest.param(
-            None,
-            CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"cores": 4, "memory_mib": 7680}}},
-            [
-                "Every app and the platform request 10.0 GiB of memory, and homeserver-worker-1's 7.5 GiB leaves "
-                "about 6.7 GiB for pods, which Kubernetes places by their requests. Give it memory_mib: 11264 or "
-                "more in kubernetes_node_sizes, or run fewer apps (kubernetes_apps)."
-            ],
-            id="apps-too-many-for-the-memory",
-        ),
-        pytest.param(
-            None,
-            CLUSTER_VARS
-            | {"kubernetes_node_sizes": {"homeserver-worker-1": {"cores": 2, "memory_mib": 7680}}}
-            | {"kubernetes_apps": ["group=media", "app=nextcloud", "app=homepage"]},
-            [
-                "The apps chosen in kubernetes_apps (9 of 11) and the platform request 2.65 CPU, and "
-                "homeserver-worker-1's 2 cores leave 1.95 for pods",
-                "Give it cores: 3 or more in kubernetes_node_sizes",
-            ],
-            id="apps-too-many-for-the-cores",
+            id="apps-are-not-sized-against-the-worker",
         ),
         pytest.param(
             as_local_yml(without(example(), "kubernetes_lb_frigate_ip")),

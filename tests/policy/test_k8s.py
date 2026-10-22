@@ -1084,16 +1084,6 @@ def group_objects(group):
     return found
 
 
-def quantity_mib(value):
-    number, unit = re.fullmatch(r"(\d+)(Mi|Gi)", str(value)).groups()
-    return int(number) * (1024 if unit == "Gi" else 1)
-
-
-def quantity_m(value):
-    value = str(value)
-    return int(value[:-1]) if value.endswith("m") else int(float(value) * 1000)
-
-
 def test_app_catalogue_names_the_groups_flux_applies():
     """Each group of the catalogue is one Flux Kustomization, apps-<group>, applying k8s/apps/<group>, in both setups,
     and no other Flux Kustomization applies an app; each app's name is its own across groups."""
@@ -1104,34 +1094,21 @@ def test_app_catalogue_names_the_groups_flux_applies():
     assert len(names) == len(set(names)), names
 
 
-def test_app_catalogue_requests_match_the_deployments():
-    """Each app's requests in the catalogue are what its Deployments request, replicas counted, a pod's being the more
-    of its containers' sum and its largest init container's: the settings check sizes the worker by them. Every
-    Deployment belongs to one app."""
+def test_every_deployment_belongs_to_one_app():
+    """Every Deployment of a group carries the name of one of its catalogued apps, and every catalogued app has one:
+    a group's apps are left out by those names."""
     wrong = []
     for group in catalogue():
         owners = app_objects(group)
-        totals = defaultdict(lambda: [0, 0])
+        found = set()
         for obj in group_objects(group):
             if obj["kind"] != "Deployment":
                 continue
             app = owners.get((obj["metadata"].get("labels") or {}).get(APP_LABEL))
             if app is None:
                 wrong.append(f"{label(obj)} belongs to no app of {group}")
-                continue
-            spec = pod_spec(obj)
-            pod = [0, 0]
-            for kind, combine in (("containers", sum), ("initContainers", max)):
-                requests = [(c.get("resources") or {}).get("requests") or {} for c in spec.get(kind) or []]
-                memory = combine([quantity_mib(r.get("memory", "0Mi")) for r in requests] or [0])
-                cpu = combine([quantity_m(r.get("cpu", "0m")) for r in requests] or [0])
-                pod = [max(pod[0], memory), max(pod[1], cpu)]
-            replicas = obj["spec"].get("replicas", 1)
-            totals[app][0] += pod[0] * replicas
-            totals[app][1] += pod[1] * replicas
-        for app, spec in catalogue()[group].items():
-            if totals[app] != [spec["memory_mib"], spec["cpu_m"]]:
-                wrong.append(f"{group}/{app}: the catalogue says {spec}, the Deployments request {totals[app]}")
+            found.add(app)
+        wrong += [f"{group}/{app} has no Deployment" for app in catalogue()[group] if app not in found]
     assert wrong == [], "keep kubernetes_app_catalogue (group_vars/all/kubernetes.yml) equal to the manifests"
 
 

@@ -82,32 +82,27 @@ kubernetes_power_order: >-
   {{ kubernetes_nodes | rejectattr('role', 'equalto', 'controlplane') | map(attribute='vmid') | list
      + kubernetes_nodes | selectattr('role', 'equalto', 'controlplane') | map(attribute='vmid') | list }}
 
-# Each app group (a namespace, applied by the Flux Kustomization apps-<group>), its apps in the order Homepage lists
-# their tiles (group_vars/kubernetes/flux.yml), and what each app's
-# Deployments request, replicas counted. An app's objects carry app.kubernetes.io/name: the app's own name, or one of
-# its `objects` (its database's), which is how a single app is left out of its group. tests/policy/test_k8s.py checks
-# all of it against k8s/apps and k8s/clusters/*/apps.yaml, so a change to an app's requests changes this too.
+# Each app group (a namespace, applied by the Flux Kustomization apps-<group>) and its apps, in the order Homepage
+# lists their tiles (group_vars/kubernetes/flux.yml). An app's objects carry app.kubernetes.io/name: the app's own
+# name, or one of its `objects` (its database's), which is how a single app is left out of its group.
+# tests/policy/test_k8s.py checks all of it against k8s/apps and k8s/clusters/*/apps.yaml.
 kubernetes_app_catalogue:
   media:
-    jellyfin: {memory_mib: 512, cpu_m: 250}
-    seerr: {memory_mib: 256, cpu_m: 100}
-    sonarr: {memory_mib: 256, cpu_m: 100}
-    radarr: {memory_mib: 256, cpu_m: 100}
-    prowlarr: {memory_mib: 256, cpu_m: 100}
-    sabnzbd: {memory_mib: 512, cpu_m: 200}
-    filebrowser: {memory_mib: 256, cpu_m: 50}
+    jellyfin: {}
+    seerr: {}
+    sonarr: {}
+    radarr: {}
+    prowlarr: {}
+    sabnzbd: {}
+    filebrowser: {}
   nextcloud:
-    nextcloud: {memory_mib: 1024, cpu_m: 350, objects: [nextcloud, nextcloud-db]}
+    nextcloud: {objects: [nextcloud, nextcloud-db]}
   photoprism:
-    photoprism: {memory_mib: 2048, cpu_m: 600, objects: [photoprism, photoprism-db]}
+    photoprism: {objects: [photoprism, photoprism-db]}
   frigate:
-    frigate: {memory_mib: 2048, cpu_m: 500}
+    frigate: {}
   homepage:
-    homepage: {memory_mib: 256, cpu_m: 100}
-# What the platform requests on the worker (the charts, the controllers, the DaemonSets, Talos's CoreDNS and
-# Flannel), measured on both clusters on 2026-10-20: 2,546 MiB and 1.27 CPU with a NAS, 2,486 MiB and 1.24 without,
-# rounded up. A chart bump that raises its requests raises this too.
-kubernetes_platform_requests: {memory_mib: 2560, cpu_m: 1300}
+    homepage: {}
 # The apps this host runs, by name, in the catalogue's order: every app, unless local.yml's kubernetes_apps chooses
 # some, each entry group=<group> (all of a group's apps) or app=<app> (that one). An empty list runs the platform
 # alone. An entry that names nothing is left out here and refused by kubernetes_settings_error.
@@ -163,9 +158,9 @@ kubernetes_data_storage: "{{ vm_storage_classes.persistent.proxmox_id if nas_pre
 #   - with a cluster, node addresses that are not a mapping or not the cluster's two nodes, two nodes with one
 #     address or one MAC, a node without a locally administered MAC, no repository for Flux to sync or one not
 #     over HTTPS, a branch other than main without flux_sync_ref_unprotected, kubernetes_apps entries that are not
-#     group=<group> or app=<app> or name nothing, apps and a platform whose requests the worker's memory or cores
-#     cannot hold, MetalLB's addresses missing or not IPv4 (Frigate's only when Frigate runs, and checked whenever
-#     given), a LoadBalancer address outside MetalLB's range or used twice, a node address inside that range, an
+#     group=<group> or app=<app> or name nothing, MetalLB's addresses missing or not IPv4 (Frigate's only when
+#     Frigate runs, and checked whenever given), a LoadBalancer address outside MetalLB's range or used twice, a
+#     node address inside that range, an
 #     allowed ingress range that is not an IPv4 CIDR, a proxmox_address that is not IPv4 (the apps'
 #     NetworkPolicies deny it), the API's extra names given as a string, sizes that are not whole numbers, a node
 #     without cores or memory, a data or media disk under 11 GiB (its Talos volume takes 10, the partition table a
@@ -413,23 +408,6 @@ kubernetes_settings_error: >-
   {%-   if badsizes -%}
   {%-     set _ = out.append('kubernetes_node_sizes: ' ~ badsizes | join('; ') ~ '.') -%}
   {%-   endif -%}
-  {#-   What the apps this host runs and the platform request, which Kubernetes places pods by: the worker must give
-        pods that much, or they stay Pending and make deploy TYPE=kubernetes fails at its last wait, after changing
-        the cluster. -#}
-  {%-   set req = namespace(mem=kubernetes_platform_requests.memory_mib, cpu=kubernetes_platform_requests.cpu_m) -%}
-  {%-   for apps in kubernetes_app_catalogue.values() -%}
-  {%-     for app, r in apps.items() if app in kubernetes_apps_enabled -%}
-  {%-       set req.mem = req.mem + r.memory_mib -%}
-  {%-       set req.cpu = req.cpu + r.cpu_m -%}
-  {%-     endfor -%}
-  {%-   endfor -%}
-  {%-   set which = ('The apps chosen in kubernetes_apps (' ~ kubernetes_apps_enabled | length ~ ' of '
-                     ~ app_names | length ~ ')') if kubernetes_apps | default(none) is not none else 'Every app' -%}
-  {#-   A worker gives pods its memory less what Talos keeps, about 2 percent for the kernel and 484 MiB for the
-        kubelet's reservations (0.98 x memory - 700 comes out 31 to 79 MiB under what three workers measured), and
-        its cores less 50m. -#}
-  {%-   set need_mib = (((req.mem + 700) / 0.98) | round(0, 'ceil') | int + 255) // 256 * 256 -%}
-  {%-   set need_cores = ((req.cpu + 50) / 1000) | round(0, 'ceil') | int -%}
   {#- The control plane runs Talos, etcd and the API alone, and the worker every app, whose data lives on its data
       disk: without one, the apps would write to its system disk, which a reinstall wipes. -#}
   {%-   set cp_shape = kubernetes_node_shape | selectattr('role', 'equalto', 'controlplane') | first -%}
@@ -457,21 +435,6 @@ kubernetes_settings_error: >-
                                ~ "every app's image and Jellyfin's transcoding scratch, and a smaller one fills until "
                                ~ 'the node evicts pods.') -%}
   {%-     endif -%}
-  {%-     set pods_mib = (worker.memory_mib | int) * 0.98 - 700 -%}
-  {%-     set pods_cpu = (worker.cores | int) * 1000 - 50 -%}
-  {%-     if req.mem > pods_mib -%}
-  {%-       set _ = out.append(which ~ ' and the platform request ' ~ '%.1f' | format(req.mem / 1024) ~ ' GiB of memory, '
-                               ~ 'and ' ~ worker.name ~ "'s " ~ '%.1f' | format((worker.memory_mib | int) / 1024)
-                               ~ ' GiB leaves about ' ~ '%.1f' | format(pods_mib / 1024) ~ ' GiB for pods, which '
-                               ~ 'Kubernetes places by their requests. Give it memory_mib: ' ~ need_mib ~ ' or more in '
-                               ~ 'kubernetes_node_sizes, or run fewer apps (kubernetes_apps).') -%}
-  {%-     endif -%}
-  {%-     if req.cpu > pods_cpu -%}
-  {%-       set _ = out.append(which ~ ' and the platform request ' ~ '%.2f' | format(req.cpu / 1000) ~ ' CPU, and '
-                               ~ worker.name ~ "'s " ~ worker.cores ~ ' cores leave ' ~ '%.2f' | format(pods_cpu / 1000)
-                               ~ ' for pods, which Kubernetes places by their requests. Give it cores: ' ~ need_cores
-                               ~ ' or more in kubernetes_node_sizes, or run fewer apps (kubernetes_apps).') -%}
-  {%-     endif -%}
   {%-     set quota = vm_storage_persistent_quota_gib | int -%}
   {%-     if (worker.data_disk_gib | int) < 11 -%}
   {%-       set _ = out.append(worker.name ~ ' runs the apps, and their data lives on its data disk: its data_disk_gib in '
@@ -498,12 +461,11 @@ kubernetes_settings_error: >-
   {%-     if unsized -%}
   {%-       set _ = out.append('Without a NAS, the cluster runs on a host the default sizes were not chosen for: '
                                ~ 'kubernetes_node_sizes must give ' ~ worker_shape.name ~ ', which runs the apps, '
-                               ~ unsized | join(', ') ~ '. ' ~ which ~ ' and the platform request about '
-                               ~ '%.1f' | format(req.cpu / 1000) ~ ' CPU and ' ~ '%.1f' | format(req.mem / 1024)
-                               ~ ' GiB together, so give it at least ' ~ need_cores ~ ' cores, ' ~ need_mib
-                               ~ ' MiB and a 32 GiB system disk, more for transcoding and photo indexing. '
-                               ~ cp_shape.name ~ ' keeps 2 cores, 4 GiB and a 32 GiB system disk unless sized too; '
-                               ~ 'scripts/runbooks/talos.md shows both nodes sized for a small test host.') -%}
+                               ~ unsized | join(', ') ~ '. The apps and the platform request about 4 vCPU and 10 GiB '
+                               ~ 'together, so give it at least 4 cores, 12 GiB and a 32 GiB system disk, more for transcoding and photo '
+                               ~ 'indexing. ' ~ cp_shape.name ~ ' keeps 2 cores, 4 GiB and a 32 GiB system disk '
+                               ~ 'unless sized too; scripts/runbooks/talos.md shows both nodes sized for a small test '
+                               ~ 'host.') -%}
   {%-     elif not media_optional and (own.media_disk_gib | default(0) | int) < 1 -%}
   {%-       set _ = out.append('Without a NAS, the media and the camera recordings go on a media disk of their own, '
                                ~ 'never backed up: set media_disk_gib for ' ~ worker_shape.name ~ ' in '
