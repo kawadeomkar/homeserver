@@ -444,7 +444,8 @@ with or without a NAS, whatever the router.
 **Setting it up.** Set `tailscale_advertise_routes` in `group_vars/all/local.yml` to the LAN's prefix, and put a
 one-off, tagged auth key in the vault as `vault_tailscale_auth_key`. Then `make deploy TYPE=proxmox`:
 
-- installs Tailscale from its own repository, and upgrades it on every run (Tailscale's own updater stays off);
+- installs Tailscale from its own repository, which the host's upgrade then keeps current (Tailscale's own updater
+  stays off);
 - loads a forwarding guard;
 - turns on IPv4 forwarding;
 - logs the host in once, and advertises the route.
@@ -467,6 +468,8 @@ enough alone:
   come back, from a kernel that does not boot to a network link that does not come up. Reboot it from home, or where
   someone can reach it.
 - `make deploy TYPE=proxmox` restarts Tailscale when it upgrades it, so run it from home.
+- IPv4 forwarding is the whole host's. With a second interface that has an address, such as a VLAN or a storage
+  network, the host also routes between it and the LAN, which the guard does not filter.
 - Traffic between the tailnet and the LAN is encrypted by Tailscale, so plain HTTP to the apps stays private on the
   way; on the LAN itself it is still plain until there is TLS.
 

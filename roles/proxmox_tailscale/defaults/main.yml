@@ -10,7 +10,8 @@ proxmox_tailscale_tags: []
 proxmox_tailscale_auth_key: ""
 # Preferences kept on every run with `tailscale set`, by its flag names, such as accept-dns: false.
 proxmox_tailscale_settings: {}
-# Upgrade Tailscale to the repository's latest release on every run. False only ever installs it.
+# Upgrade Tailscale to the repository's latest release on every run. False leaves an installed release alone, though an
+# upgrade of the whole node, such as roles/proxmox_apt's, still upgrades it.
 proxmox_tailscale_upgrade: false
 # LAN hosts that trust this node by its address, which tailnet clients may reach only on
 # proxmox_tailscale_guard_allow, whatever the tailnet's policy says.

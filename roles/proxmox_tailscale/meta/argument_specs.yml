@@ -36,7 +36,7 @@ argument_specs:
       proxmox_tailscale_upgrade:
         type: bool
         default: false
-        description: Upgrade Tailscale on every run. False only ever installs it.
+        description: Upgrade Tailscale on every run. False leaves an installed release alone, though an upgrade of the whole node still upgrades it.
       proxmox_tailscale_guard_hosts:
         type: list
         elements: str
