@@ -198,7 +198,9 @@ def temp_copy(path: Path) -> Path:
 
 def write_file(path: Path, data: bytes, mode: int) -> None:
     """Written whole or not at all, readable by its owner alone unless it already was by more. The copy is made anew,
-    so it never takes an older one's mode, and removed when the write fails or is interrupted."""
+    so it never takes an older one's mode, and removed when the write fails or is interrupted. A link is followed, so
+    a setup's file is written, beside it, never the checkout's link to it replaced."""
+    path = Path(os.path.realpath(path))
     tmp = temp_copy(path)
     tmp.unlink(missing_ok=True)
     try:
@@ -210,6 +212,15 @@ def write_file(path: Path, data: bytes, mode: int) -> None:
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+
+
+def commented_example(root: Path) -> str:
+    """local.yml.example with every setting commented out, as a new local.yml starts: the playbooks read nothing from
+    it until a setting is answered."""
+    doc = YamlKeys((root / EXAMPLE).read_text())
+    for key in doc.values():
+        doc.comment_out(key)
+    return doc.text
 
 
 def has_value(value: Any) -> bool:
