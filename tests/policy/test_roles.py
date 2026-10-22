@@ -1666,8 +1666,16 @@ def test_status_refuses_a_section_it_does_not_have(tmp_path):
     types = json.dumps({"types": "vms,disks"})
     rc, out = argspec_pass(example_tree(tmp_path), "status.yml", *CLUSTER_ARGS, "-e", types)
     assert rc != 0, out[-3000:]
-    message = "make status has no section disks: TYPE takes apps, admin, vms, storage, cluster, nas, comma-separated."
+    message = "make status has no section disks: TYPE takes apps, admin, vms, storage, backups, cluster, nas, "
+    message += "comma-separated."
     assert message in out, out[-3000:]
+
+
+def test_status_refuses_a_backup_job_it_cannot_check(tmp_path):
+    """A backup job without its schedule would end the reading play with a template error and no report."""
+    jobs = json.dumps({"status_backup_jobs": [{"id": "vm-nightly", "storage": "homeserver-backup", "vmid": [300]}]})
+    rc, out = argspec_pass(example_tree(tmp_path), "status.yml", *CLUSTER_ARGS, "-e", jobs)
+    assert rc != 0 and "status_backup_jobs must each have an id, a schedule and a storage." in out, out[-3000:]
 
 
 @pytest.mark.parametrize(("local_yml", "source"), [(None, "nas"), (PROXMOX_ONLY_LOCAL_YML, "")])
@@ -1688,6 +1696,27 @@ def test_status_reads_the_nas_as_its_play_reaches_it(tmp_path, local_yml, source
     nas_vars = yaml.safe_load((ROOT / "group_vars" / "nas" / "status.yml").read_text())
     assert "truenas_status" in nas_vars["status_nas_state"]
     assert "truenas_supported_version" in nas_vars["status_nas_release"]
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "storage"),
+    [(None, "homeserver-backup"), (PROXMOX_ONLY_CLUSTER_LOCAL_YML, None)],
+    ids=["nas", "proxmox-only"],
+)
+def test_status_checks_the_backup_job_the_proxmox_play_makes(tmp_path, local_yml, storage):
+    """make status checks the host's backup job against roles/proxmox_backup's own (none without a NAS and without
+    vm_backup_storage, which it reports), and finds the etcd snapshots where roles/talos takes them."""
+    tree = example_tree(tmp_path, local_yml)
+    jobs = resolve_on(tree, "homeserver", "status_backup_jobs == proxmox_backup_jobs", *CLUSTER_ARGS)
+    assert jobs is True
+    found = resolve_on(tree, "homeserver", "status_backup_jobs", *CLUSTER_ARGS)
+    assert [j["storage"] for j in found] == ([storage] if storage else [])
+    if storage:
+        assert found[0]["vmid"] == [300, 301, 310] and found[0]["schedule"] == "02:00"
+    snapshots = resolve_on(
+        tree, "homeserver-k8s", "status_cluster_snapshot_dir == talos_config_dir ~ '/etcd'", *CLUSTER_ARGS
+    )
+    assert snapshots is True
 
 
 def test_status_reads_the_cluster_as_it_is_built(tmp_path):

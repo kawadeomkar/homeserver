@@ -11,13 +11,17 @@ Two entry points:
     filesystem), each of `status_vms` (state, uptime, CPU over the last day, memory, settings waiting for a restart,
     and, where its guest agent reports them, its filesystems, OS and address), every other VM counted in one line,
     each storage's use, the disk budget of `status_budget_storages`, the upgrades apt would make and whether an
-    upgrade asked for a reboot. A host that does not answer is recorded as such, not a failure.
+    upgrade asked for a reboot, and the backups: each of `status_backup_jobs` against the host's job of that id
+    (there, enabled, writing to its storage, covering its VMs, and when it runs next), each VM's newest backup on its
+    job's storage, and, from the logs of the newest runs that failed, which VMs failed and why. A host that does not
+    answer is recorded as such, not a failure.
   - For the cluster (`cluster`), from this machine: the nodes (Ready, pressure, Talos and Kubernetes against
     `status_cluster_pins`, and from kubelet's statistics their memory and disks: `/var` and each Talos user volume of
     `status_cluster_volumes`), the apps, Flux (its version, the commit it applied against the one the branch points
     at now, every Kustomization and HelmRelease that is not ready), etcd's state, the LoadBalancers' addresses, the
-    GPUs and who uses them, the Certificates, Traefik's allowed range, the credentials' expiry and Alertmanager's
-    firing alerts. The credentials are read under `no_log`, keeping only the server the kubeconfig names and when
+    GPUs and who uses them, the Certificates, Traefik's allowed range, the credentials' expiry, Alertmanager's
+    firing alerts, and the etcd snapshots in `status_cluster_snapshot_dir`, whose names say when each was taken,
+    whether the cluster answers or not. The credentials are read under `no_log`, keeping only the server the kubeconfig names and when
     each client certificate expires; one naming another server than `status_cluster_server`, such as the home
     cluster's on a test host, is reported and never used. No Secret is ever read.
   - On the NAS (`nas`) it reads nothing itself: the play reads the NAS first, through roles/truenas's `status` entry
@@ -42,7 +46,8 @@ before anything ran). Home Assistant, a VM of its own, is an app too, through `s
 
 Every command goes through the role's module `status_read`, which runs a list of them at once and refuses the whole
 task if any is not on its read list: exact forms of `pvesh get`, `qm guest cmd` (`get-fsinfo`, `get-osinfo`,
-`network-get-interfaces`), `apt-get -s dist-upgrade`, `hostname -s`, `test -e`, `kubectl get` of kinds that hold no
+`network-get-interfaces`), `apt-get -s dist-upgrade`, the backup jobs, the backup runs (`vzdump` tasks) and their
+logs alone, a storage's backups, when a schedule fires next (`schedule-analyze`), `hostname -s`, `test -e`, `kubectl get` of kinds that hold no
 secret (never `secrets`), `kubectl get --raw` of a node's kubelet statistics alone, `kubectl exec` of `amtool alert
 query` in Alertmanager's container alone, `talosctl service etcd` (never `talosctl get`, which reads the machine
 configuration) and `git ls-remote` over HTTPS or SSH. None of them writes or returns a secret. On a Proxmox host each
@@ -56,6 +61,14 @@ it reads the served certificate's issuer and expiry, which the report matches wi
 `http` twin is listed too when it answers by itself rather than redirecting to `https` (Jellyfin's, for TV apps).
 Without DNS for the apps, the text gives the `/etc/hosts` lines that reach them meanwhile.
 
+**A VM's backup** is ok, failed (a run since its newest backup failed it, with the reason its log gives, or the
+run's own error when it failed before any VM, as a storage that cannot be activated does), missed (its newest backup
+is older than the run its job was due to make, worked out from the job's next run and the period between its next
+two, which Proxmox's `schedule-analyze` gives, so no calendar format is read here; never while a run is going), none
+yet, left out of its job, or not read. A failed or missed backup is a problem; a job that is not on the host, is
+disabled, writes elsewhere or leaves a VM out, a VM with no backup yet, and no job at all with VMs to back up are
+things to do.
+
 Memory is Proxmox's view, the host's, for a VM that is no cluster node: with ballooning off, as on every VM here, it
 counts every page the guest has touched, and the text marks it. A node's memory and disks are the guest's own, from
 kubelet, since Talos's guest agent lists no filesystem.
@@ -65,13 +78,14 @@ kubelet, since Talos's guest agent lists no filesystem.
 | Variable | Default | Meaning |
 |---|---|---|
 | `status_source` | `""` | What the host is: `proxmox`, `cluster`, `nas`; empty reads nothing |
-| `status_types` | `[]` | The report's sections to show (`apps`, `admin`, `vms`, `storage`, `cluster`, `nas`); empty means every one |
+| `status_types` | `[]` | The report's sections to show (`apps`, `admin`, `vms`, `storage`, `backups`, `cluster`, `nas`); empty means every one |
 | `status_vms` | `[]` | This setup's VMs, each `{vmid, name, made_by, start, guest_agent, node, app}`; every other VM is only counted |
 | `status_setup` | `{}` | What the setup has, `{nas, cluster, home_assistant}`, for the report's first line |
 | `status_proxmox_node` | `""` | The Proxmox node's name; empty takes the host's short hostname |
 | `status_budget_storages` | `[]` | Storages whose disk budget the report shows |
 | `status_storage_headroom_gib` | `0` | GiB of a ZFS, directory or BTRFS storage kept out of its budget for the host |
 | `status_reboot_required_file` | `""` | The file that says the host waits for a reboot; empty does not look |
+| `status_backup_jobs` | `[]` | This setup's backup jobs, as roles/proxmox_backup takes them (`{id, schedule, storage, vmid}`), checked against the host's |
 | `status_cluster_kubeconfig`, `status_cluster_talosconfig` | `""` | The credentials the cluster is read with |
 | `status_cluster_server` | `""` | The API server the kubeconfig must name; empty checks nothing |
 | `status_cluster_nodes` | `[]` | The nodes, each `{name, role}`, whose kubelet statistics are read |
@@ -84,6 +98,7 @@ kubelet, since Talos's guest agent lists no filesystem.
 | `status_cluster_flux_url`, `status_cluster_flux_ref` | `""` | The repository and branch Flux syncs |
 | `status_cluster_pins` | `{}` | The versions pinned, `{talos, kubernetes}` |
 | `status_cluster_request_timeout` | `10` | Seconds kubectl waits for the API server |
+| `status_cluster_snapshot_dir` | `""` | The directory of the etcd snapshots, each `<anything>-<UTC time>.db`; empty shows none |
 | `status_nas_state` | `{}` | What `truenas_info` returned with its `status` option, or its failure |
 | `status_nas_release` | `""` | The TrueNAS release (major.minor) the NAS's configuration is written for; empty compares none |
 | `status_parallel` | `8` | How many reads run at once on a host |
@@ -95,17 +110,17 @@ kubelet, since Talos's guest agent lists no filesystem.
 | `status_probe_apps` | `true` | report: whether it asks each app's addresses from this machine |
 | `status_probe_timeout` | `5` | report: seconds each lookup and request may take |
 | `status_admin` | `[]` | report: the admin pages it lists, each `{name, url}` |
-| `status_commands` | `{}` | report: the commands it suggests, by purpose (`upgrade`, `resume` with `{names}`, `talos_upgrade`, `credentials`, `allowlist`, `secrets`, `nas`, `nas_release`, `nas_network`) |
+| `status_commands` | `{}` | report: the commands it suggests, by purpose (`upgrade`, `resume` with `{names}`, `talos_upgrade`, `credentials`, `allowlist`, `secrets`, `nas`, `nas_release`, `nas_network`, `backup`, `backup_target`, `etcd_snapshot`) |
 
 This repository's `status.yml` reads the Proxmox host, the cluster and the NAS at once (`strategy: free`), then
 reports, with `group_vars/all/status.yml` (the VMs this repo makes, the same the nightly backup covers; the admin
-pages; the commands), `group_vars/proxmox/status.yml` (the installer's storage, its headroom, Debian's reboot flag),
-`group_vars/kubernetes/status.yml` (the credentials roles/talos writes, the apps as roles/app_scale finds them, the
-worker's user volumes, the settings roles/flux_bootstrap keeps, Alertmanager's pod, the pins) and
-`group_vars/nas/status.yml` (what roles/truenas's `status` entry point read, and the release that role is written
-for). `make status` runs it
-as a dry run with the stdout callback `callback_plugins/homeserver_status.py`, which prints one line on what was read
-and how long the probes took, then the report.
+pages; the commands), `group_vars/proxmox/status.yml` (the installer's storage, its headroom, Debian's reboot flag,
+the nightly backup job roles/proxmox_backup keeps), `group_vars/kubernetes/status.yml` (the credentials roles/talos
+writes, the apps as roles/app_scale finds them, the worker's user volumes, the settings roles/flux_bootstrap keeps,
+Alertmanager's pod, the pins, where roles/talos keeps the etcd snapshots) and `group_vars/nas/status.yml` (what
+roles/truenas's `status` entry point read, and the release that role is written for). `make status` runs it as a dry
+run with the stdout callback `callback_plugins/homeserver_status.py`, which prints one line on what was read and how
+long the probes took, then the report.
 
 ## Example
 

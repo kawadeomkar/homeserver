@@ -98,6 +98,13 @@ argument_specs:
         type: str
         default: ""
         description: The file that says the host waits for a reboot; empty does not look.
+      status_backup_jobs:
+        type: list
+        elements: dict
+        default: []
+        description: >-
+          The backup jobs this setup has, as roles/proxmox_backup takes them ({id, schedule, storage, vmid}), checked
+          against the host's; empty with VMs to back up says nothing is backed up.
       status_cluster_kubeconfig:
         type: str
         default: ""
@@ -166,6 +173,12 @@ argument_specs:
         type: int
         default: 10
         description: Seconds kubectl waits for the API server on each read.
+      status_cluster_snapshot_dir:
+        type: str
+        default: ""
+        description: >-
+          The directory of the cluster's etcd snapshots, each named <anything>-<UTC time>.db
+          (etcd-20261021T093000Z.db), whose newest the backups section shows; empty shows none.
       status_nas_state:
         type: dict
         default: {}
@@ -217,7 +230,8 @@ argument_specs:
         default: {}
         description: >-
           The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials,
-          allowlist, secrets, nas, nas_release, nas_network. One left out is suggested by text alone.
+          allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot. One left out is
+          suggested by text alone.
   report:
     short_description: Put make status's findings together, write the report and show it
     description:
@@ -271,4 +285,5 @@ argument_specs:
         default: {}
         description: >-
           The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials,
-          allowlist, secrets, nas, nas_release, nas_network. One left out is suggested by text alone.
+          allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot. One left out is
+          suggested by text alone.

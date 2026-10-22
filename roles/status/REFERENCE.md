@@ -124,6 +124,18 @@ Description: Read the homeserver's machines without changing them, and report wh
   
   
 
+  - **status_backup_jobs**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: The backup jobs this setup has, as roles/proxmox_backup takes them ({id, schedule, storage, vmid}), checked against the host's; empty with VMs to back up says nothing is backed up.
+  
+  
+  
+    
+  
+
   - **status_cluster_kubeconfig**
     - **Required**: false
     - **Type**: str
@@ -266,6 +278,16 @@ Description: Read the homeserver's machines without changing them, and report wh
   
   
 
+  - **status_cluster_snapshot_dir**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The directory of the cluster's etcd snapshots, each named <anything>-<UTC time>.db (etcd-20261021T093000Z.db), whose newest the backups section shows; empty shows none.
+  
+  
+  
+
   - **status_nas_state**
     - **Required**: false
     - **Type**: dict
@@ -383,7 +405,7 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Type**: dict
     - **Default**: {}
   
-    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network. One left out is suggested by text alone.
+    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot. One left out is suggested by text alone.
   
   
   
@@ -498,7 +520,7 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Type**: dict
     - **Default**: {}
   
-    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network. One left out is suggested by text alone.
+    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot. One left out is suggested by text alone.
   
   
   
@@ -526,32 +548,34 @@ Description: Read the homeserver's machines without changing them, and report wh
 | [status_budget_storages](defaults/main.yml#L20)   | list | `[]` |    
 | [status_storage_headroom_gib](defaults/main.yml#L22)   | int | `0` |    
 | [status_reboot_required_file](defaults/main.yml#L24)   | str |  |    
-| [status_cluster_kubeconfig](defaults/main.yml#L27)   | str |  |    
-| [status_cluster_talosconfig](defaults/main.yml#L28)   | str |  |    
-| [status_cluster_server](defaults/main.yml#L29)   | str |  |    
-| [status_cluster_nodes](defaults/main.yml#L31)   | list | `[]` |    
-| [status_cluster_apps_path](defaults/main.yml#L34)   | str |  |    
-| [status_cluster_annotation](defaults/main.yml#L35)   | str |  |    
-| [status_cluster_database_label](defaults/main.yml#L36)   | str |  |    
-| [status_cluster_volumes](defaults/main.yml#L38)   | dict | `{}` |    
-| [status_cluster_settings](defaults/main.yml#L41)   | dict | `{}` |    
-| [status_cluster_alertmanager](defaults/main.yml#L43)   | dict | `{}` |    
-| [status_cluster_flux_url](defaults/main.yml#L45)   | str |  |    
-| [status_cluster_flux_ref](defaults/main.yml#L46)   | str |  |    
-| [status_cluster_pins](defaults/main.yml#L48)   | dict | `{}` |    
-| [status_cluster_request_timeout](defaults/main.yml#L50)   | int | `10` |    
-| [status_nas_state](defaults/main.yml#L53)   | dict | `{}` |    
-| [status_nas_release](defaults/main.yml#L54)   | str |  |    
-| [status_parallel](defaults/main.yml#L56)   | int | `8` |    
-| [status_timeout](defaults/main.yml#L57)   | int | `30` |    
-| [status_hosts](defaults/main.yml#L60)   | list | `[]` |    
-| [status_report_file](defaults/main.yml#L61)   | str |  |    
-| [status_color](defaults/main.yml#L62)   | bool | `False` |    
-| [status_quiet](defaults/main.yml#L63)   | bool | `False` |    
-| [status_probe_apps](defaults/main.yml#L66)   | bool | `True` |    
-| [status_probe_timeout](defaults/main.yml#L67)   | int | `5` |    
-| [status_admin](defaults/main.yml#L69)   | list | `[]` |    
-| [status_commands](defaults/main.yml#L74)   | dict | `{}` |    
+| [status_backup_jobs](defaults/main.yml#L28)   | list | `[]` |    
+| [status_cluster_kubeconfig](defaults/main.yml#L31)   | str |  |    
+| [status_cluster_talosconfig](defaults/main.yml#L32)   | str |  |    
+| [status_cluster_server](defaults/main.yml#L33)   | str |  |    
+| [status_cluster_nodes](defaults/main.yml#L35)   | list | `[]` |    
+| [status_cluster_apps_path](defaults/main.yml#L38)   | str |  |    
+| [status_cluster_annotation](defaults/main.yml#L39)   | str |  |    
+| [status_cluster_database_label](defaults/main.yml#L40)   | str |  |    
+| [status_cluster_volumes](defaults/main.yml#L42)   | dict | `{}` |    
+| [status_cluster_settings](defaults/main.yml#L45)   | dict | `{}` |    
+| [status_cluster_alertmanager](defaults/main.yml#L47)   | dict | `{}` |    
+| [status_cluster_flux_url](defaults/main.yml#L49)   | str |  |    
+| [status_cluster_flux_ref](defaults/main.yml#L50)   | str |  |    
+| [status_cluster_pins](defaults/main.yml#L52)   | dict | `{}` |    
+| [status_cluster_request_timeout](defaults/main.yml#L54)   | int | `10` |    
+| [status_cluster_snapshot_dir](defaults/main.yml#L57)   | str |  |    
+| [status_nas_state](defaults/main.yml#L60)   | dict | `{}` |    
+| [status_nas_release](defaults/main.yml#L61)   | str |  |    
+| [status_parallel](defaults/main.yml#L63)   | int | `8` |    
+| [status_timeout](defaults/main.yml#L64)   | int | `30` |    
+| [status_hosts](defaults/main.yml#L67)   | list | `[]` |    
+| [status_report_file](defaults/main.yml#L68)   | str |  |    
+| [status_color](defaults/main.yml#L69)   | bool | `False` |    
+| [status_quiet](defaults/main.yml#L70)   | bool | `False` |    
+| [status_probe_apps](defaults/main.yml#L73)   | bool | `True` |    
+| [status_probe_timeout](defaults/main.yml#L74)   | int | `5` |    
+| [status_admin](defaults/main.yml#L76)   | list | `[]` |    
+| [status_commands](defaults/main.yml#L82)   | dict | `{}` |    
 
 
 
@@ -586,6 +610,7 @@ Description: Read the homeserver's machines without changing them, and report wh
 | proxmox ¦ Read the node's name | status_read | True |
 | proxmox ¦ Use the node's name | ansible.builtin.set_fact | False |
 | proxmox ¦ Read the host, its storages and its VMs, at once | status_read | True |
+| proxmox ¦ Read the logs of the backup runs that failed | status_read | True |
 | proxmox ¦ Work out what the host says | ansible.builtin.set_fact | False |
 
 #### File: tasks/report.yml
@@ -667,8 +692,9 @@ classDef rescue stroke:#665352,stroke-width:2px;
   Start-->|Task| proxmox___Read_the_node_s_name0[proxmox   read the node s name<br>When: **status proxmox node   length    0**]:::task
   proxmox___Read_the_node_s_name0-->|Task| proxmox___Use_the_node_s_name1[proxmox   use the node s name]:::task
   proxmox___Use_the_node_s_name1-->|Task| proxmox___Read_the_host__its_storages_and_its_VMs__at_once2[proxmox   read the host  its storages and its vms <br>at once<br>When: **not  status proxmox name unreachable   default<br>false**]:::task
-  proxmox___Read_the_host__its_storages_and_its_VMs__at_once2-->|Task| proxmox___Work_out_what_the_host_says3[proxmox   work out what the host says]:::task
-  proxmox___Work_out_what_the_host_says3-->End
+  proxmox___Read_the_host__its_storages_and_its_VMs__at_once2-->|Task| proxmox___Read_the_logs_of_the_backup_runs_that_failed3[proxmox   read the logs of the backup runs that<br>failed<br>When: **runs   length   0**]:::task
+  proxmox___Read_the_logs_of_the_backup_runs_that_failed3-->|Task| proxmox___Work_out_what_the_host_says4[proxmox   work out what the host says]:::task
+  proxmox___Work_out_what_the_host_says4-->End
 ```
 
 

@@ -22,6 +22,10 @@ status_budget_storages: []
 status_storage_headroom_gib: 0
 # The file that says the host waits for a reboot; empty does not look.
 status_reboot_required_file: ""
+# The backup jobs this setup has, as roles/proxmox_backup takes them ({id, schedule, storage, vmid}), checked against
+# the host's: each VM's newest backup on its job's storage, the runs that failed and why. Empty with VMs to back up
+# says nothing is backed up.
+status_backup_jobs: []
 # The cluster: the kubeconfig and talosconfig to read it with, and the API server the kubeconfig must name (another
 # cluster's credentials are reported, never used; empty checks nothing).
 status_cluster_kubeconfig: ""
@@ -48,6 +52,9 @@ status_cluster_flux_ref: ""
 status_cluster_pins: {}
 # Seconds kubectl waits for the API server on each read.
 status_cluster_request_timeout: 10
+# The directory of the cluster's etcd snapshots, each named <anything>-<UTC time as 20261021T093000Z>.db, whose
+# newest the backups section shows; empty shows none.
+status_cluster_snapshot_dir: ""
 # The NAS: what truenas_info returned with its status option, or its failure, and the TrueNAS release (major.minor)
 # its configuration is written for, which a NAS on another is told; empty compares none.
 status_nas_state: {}
@@ -70,5 +77,6 @@ status_admin: []
 # The commands the report suggests, by purpose: upgrade (the Proxmox host's packages), resume (suspended apps, with
 # {names} for theirs), talos_upgrade, credentials (renewed), allowlist (Traefik's still closed), secrets (an app's
 # missing Secret), nas (the NAS's settings applied again), nas_release (a TrueNAS release its configuration is not
-# written for), nas_network (interface changes never committed). One left out is suggested by text alone.
+# written for), nas_network (interface changes never committed), backup (a backup job applied again), backup_target
+# (where backups could go, when there is no job), etcd_snapshot (taking one). One left out is suggested by text alone.
 status_commands: {}

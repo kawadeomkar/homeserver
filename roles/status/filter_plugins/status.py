@@ -1,12 +1,13 @@
 """What make status reports, worked out from what roles/status read, and the report as text.
 
-The role's tasks read each host through status_read and pass the results here: status_proxmox for the Proxmox host,
-status_cluster for the cluster (with status_credentials for its credentials' expiry, read under no_log), status_nas
-for what truenas_info read of the NAS with its status option. The report play asks the apps' addresses
-(status_probe_targets, then the module status_probe), passes what every host found and what the probes saw to
-status_report, then the report to status_text. Everything here is pure: it runs on the controller, never connects
-anywhere, and is unit-tested in tests/unit/test_status_filters.py, with the shapes captured from a Proxmox VE 9.2 host
-and from the cluster on it, and the NAS's as TrueNAS 25.10's API reference documents them.
+The role's tasks read each host through status_read and pass the results here: status_proxmox for the Proxmox host
+(with status_backup_failed_runs naming the failed backup runs whose logs are read next), status_cluster for the
+cluster (with status_credentials for its credentials' expiry, read under no_log), status_nas for what truenas_info
+read of the NAS with its status option. The report play asks the apps' addresses (status_probe_targets, then the
+module status_probe), passes what every host found and what the probes saw to status_report, then the report to
+status_text. Everything here is pure: it runs on the controller, never connects anywhere, and is unit-tested in
+tests/unit/test_status_filters.py, with the shapes captured from Proxmox VE 9.2 hosts and from the cluster on one,
+and the NAS's as TrueNAS 25.10's API reference documents them.
 
 The report is a mapping that JSON=1 prints as it is: every source's findings, the attention list (problems, things
 to do, and sources that could not be read, each with the command that deals with it), and the exit code make status
@@ -41,7 +42,7 @@ SMALL_FILESYSTEM = GIB
 # A storage this full is a thing to do, and this full a problem.
 STORAGE_TODO, STORAGE_PROBLEM = 0.8, 0.9
 # The sections make status knows, in the order it shows them.
-TYPES = ("apps", "admin", "vms", "storage", "cluster", "nas")
+TYPES = ("apps", "admin", "vms", "storage", "backups", "cluster", "nas")
 # A guest's interfaces that are never the address it is reached at: loopback, container bridges, tunnels.
 INNER_INTERFACES = ("lo", "docker", "hassio", "veth", "br-", "cni", "flannel", "tailscale", "virbr")
 
@@ -148,15 +149,17 @@ def upgrades(text):
     return out
 
 
-def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file=""):
+def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file="", backup_jobs=()):
     """What the Proxmox host's reads say, as the report needs it.
 
     `found` is {unread, node, results}: why the host could not be read at all (else ""), the node's name, and
     status_read's results by name (resources, node, rrd-node, rrd-<vmid>, pending-<vmid>, fsinfo-<vmid>,
-    osinfo-<vmid>, network-<vmid>, content-<storage>, updates, reboot). `vms` is this repo's VMs, each {vmid, name,
+    osinfo-<vmid>, network-<vmid>, content-<storage>, updates, reboot, and for the backups backup-jobs,
+    backup-tasks, backups-<storage>, schedule-<job> and log-<upid>). `vms` is this repo's VMs, each {vmid, name,
     made_by, start, guest_agent, node, app}: `node` the cluster node it is, `app` {name, url, port} the app it serves
     (its address from its guest agent when `url` is empty); every other VM on the host is only counted. Storages in
-    `budget_storages` show their disk budget.
+    `budget_storages` show their disk budget. `backup_jobs` is the backup jobs this setup has, as roles/proxmox_backup
+    takes them ({id, schedule, storage, vmid, enabled}), checked against the host's.
     """
     found = found or {}
     if found.get("unread"):
@@ -281,6 +284,7 @@ def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file=""):
     if reboot_file:
         result = results.get("reboot") or {}
         reboot = result.get("rc") == 0 if result.get("rc") in (0, 1) else None
+    backed_up = backups(results, out_vms, backup_jobs, errors)
     return {
         "unread": "",
         "node": node,
@@ -293,8 +297,170 @@ def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file=""):
         "upgrades": upgrades(text) if text is not None else None,
         "reboot": reboot,
         "reboot_file": reboot_file,
+        "backups": backed_up,
         "errors": errors,
     }
+
+
+# ------------------------------------------------------------------------------------------------- backups ---
+
+# A vzdump run's log: the VMs it was asked to back up, on its first line, and each that failed, with why.
+VZDUMP_JOB = re.compile(r"starting new backup job: vzdump((?: \d+)+)")
+VZDUMP_STARTED = re.compile(r"Starting Backup of VM \d+")
+VZDUMP_FAILED = re.compile(r"ERROR: Backup of VM (\d+) failed - (.+)")
+TASK_ERROR = re.compile(r"TASK ERROR: (.+)")
+# A backup run's id as status_read reads its log, and how many of the newest failed runs' logs are read.
+UPID = re.compile(
+    r"UPID:[A-Za-z0-9][A-Za-z0-9.-]*:[0-9A-F]{8,}:[0-9A-F]{8,}:[0-9A-F]{8,}:vzdump:[0-9]*:[A-Za-z0-9@._!-]+:"
+)
+FAILED_RUNS_READ = 3
+KEEP_KINDS = ("last", "hourly", "daily", "weekly", "monthly", "yearly")
+
+
+def _vmids(text):
+    return sorted({int(v) for v in re.split(r"[,\s]+", str(text or "")) if v.isdigit()})
+
+
+def _keep(prune):
+    """A job's retention as {kind: count}, from pvesh's object or its text (keep-daily=7,keep-weekly=4)."""
+    if isinstance(prune, str):
+        prune = dict(item.split("=", 1) for item in prune.split(",") if "=" in item)
+    out = {}
+    for key, value in (prune or {}).items():
+        kind = str(key).strip().removeprefix("keep-")
+        if kind in (*KEEP_KINDS, "all") and str(value).strip().isdigit():
+            out[kind] = int(value)
+    return out
+
+
+def _running(task):
+    return not task.get("endtime") or str(task.get("status") or "RUNNING") == "RUNNING"
+
+
+def _failed(task):
+    """A run that finished with an error; one with warnings made its backups."""
+    status = str(task.get("status") or "")
+    return not _running(task) and status != "OK" and not status.startswith("WARNINGS")
+
+
+def backup_failed_runs(results):
+    """The ids of the newest backup runs that failed, at most FAILED_RUNS_READ: their logs say which VMs failed and
+    why, and are read next."""
+    tasks, _ = _json(results, "backup-tasks")
+    runs = sorted((t for t in tasks or [] if isinstance(t, dict)), key=lambda t: -int(t.get("starttime") or 0))
+    return [t["upid"] for t in runs if _failed(t) and UPID.fullmatch(str(t.get("upid") or ""))][:FAILED_RUNS_READ]
+
+
+def _run_failures(task, log, vmids):
+    """{vmid: why} for one failed run: the VMs its log says failed, or every VM it was to back up when it failed
+    before any (a storage that could not be activated), with the run's own error. `vmids` are those of the jobs."""
+    lines = [str(entry.get("t", "")) for entry in log or [] if isinstance(entry, dict)]
+    failed = {}
+    for line in lines:
+        match = VZDUMP_FAILED.search(line)
+        if match:
+            failed[int(match.group(1))] = match.group(2).strip()
+    if failed or any(VZDUMP_STARTED.search(line) for line in lines):
+        return failed
+    asked = next((VZDUMP_JOB.search(line) for line in lines if VZDUMP_JOB.search(line)), None)
+    if asked:
+        vmids = _vmids(asked.group(1))
+    elif str(task.get("id") or "").isdigit():
+        vmids = [int(task["id"])]
+    why = next((m.group(1) for m in map(TASK_ERROR.search, reversed(lines)) if m), "") or str(task.get("status"))
+    return {vmid: why for vmid in vmids}
+
+
+def backups(results, vms, jobs, errors):
+    """The backups of this repo's VMs: each of `jobs` (this setup's) against the host's, each VM's newest backup on its
+    job's storage, and the latest failure a run's log names for it. None when the backups were not asked for. Read
+    errors are added to `errors`."""
+    if "backup-jobs" not in results:
+        return None
+    wanted = [j for j in jobs or [] if isinstance(j, dict) and j.get("id")]
+    live, why = _json(results, "backup-jobs")
+    if live is None:
+        errors.append(f"the backup jobs: {why}")
+        live = None
+    hosted = {j.get("id"): j for j in live or [] if isinstance(j, dict) and j.get("type", "vzdump") == "vzdump"}
+    ours = [int(vm["vmid"]) for vm in vms or []]
+
+    def covered(job):
+        if job.get("all"):
+            return sorted(set(ours) - set(_vmids(job.get("exclude"))))
+        return _vmids(job.get("vmid"))
+
+    out_jobs = []
+    for job in wanted:
+        host = hosted.get(job["id"])
+        events, _ = _json(results, f"schedule-{job['id']}")
+        times = [int(e["timestamp"]) for e in events or [] if isinstance(e, dict) and "timestamp" in e]
+        out_jobs.append(
+            {
+                "id": job["id"],
+                "on_host": None if live is None else host is not None,
+                "enabled": bool(int((host or {}).get("enabled", 1) or 0)) if host else False,
+                "schedule": str((host or {}).get("schedule") or job.get("schedule") or ""),
+                "storage": str((host or {}).get("storage") or ""),
+                "wanted_storage": str(job.get("storage") or ""),
+                "keep": _keep((host or {}).get("prune-backups")),
+                "next_run": int(host["next-run"]) if host and host.get("next-run") else None,
+                "period": times[1] - times[0] if len(times) >= 2 and times[1] > times[0] else None,
+                "vmids": covered(host) if host else [],
+                "wanted_vmids": sorted({int(v) for v in job.get("vmid") or []}),
+            }
+        )
+
+    archives, read = {}, set()
+    for storage in sorted({j["wanted_storage"] for j in out_jobs if j["wanted_storage"]}):
+        content, why = _json(results, f"backups-{storage}")
+        if content is None:
+            if f"backups-{storage}" in results:
+                errors.append(f"the backups on {storage}: {why}")
+            continue
+        read.add(storage)
+        for volume in content:
+            if isinstance(volume, dict) and volume.get("content") == "backup" and str(volume.get("vmid", "")).isdigit():
+                archives.setdefault((storage, int(volume["vmid"])), []).append(volume)
+
+    tasks, why = _json(results, "backup-tasks")
+    if tasks is None and "backup-tasks" in results:
+        errors.append(f"the backup runs: {why}")
+    tasks = [t for t in tasks or [] if isinstance(t, dict)]
+    running = [int(t.get("starttime") or 0) for t in tasks if _running(t)]
+    asked = sorted({v for j in out_jobs for v in j["vmids"]})
+    failures = {}
+    for task in sorted(tasks, key=lambda t: int(t.get("starttime") or 0)):
+        name = f"log-{task.get('upid')}"
+        if not _failed(task) or name not in results:
+            continue
+        log, why = _json(results, name)
+        if log is None:
+            errors.append(f"the log of the backup run at {task.get('starttime')}: {why}")
+        for vmid, reason in _run_failures(task, log, asked).items():
+            failures[vmid] = {"time": int(task.get("starttime") or 0), "reason": reason}
+
+    out_vms = []
+    for vm in vms or []:
+        vmid = int(vm["vmid"])
+        job = next((j for j in out_jobs if j["on_host"] and j["enabled"] and vmid in j["vmids"]), None)
+        storage = (job or next((j for j in out_jobs if vmid in j["wanted_vmids"]), {})).get("wanted_storage", "")
+        kept = sorted(archives.get((storage, vmid), []), key=lambda v: int(v.get("ctime") or 0))
+        out_vms.append(
+            {
+                "vmid": vmid,
+                "name": vm.get("name", ""),
+                "status": vm.get("status", ""),
+                "job": job["id"] if job else "",
+                "wanted": any(vmid in j["wanted_vmids"] for j in out_jobs),
+                "read": storage in read,
+                "newest": int(kept[-1].get("ctime") or 0) if kept else None,
+                "size": int(kept[-1].get("size") or 0) if kept else None,
+                "kept": len(kept),
+                "failure": failures.get(vmid),
+            }
+        )
+    return {"jobs": out_jobs, "vms": out_vms, "running": min(running) if running else None}
 
 
 # ---------------------------------------------------------------------------------------------- the cluster ---
@@ -583,7 +749,9 @@ def apps(deployments, pods, services, ingresses, kustomizations, apps_path, anno
                 for port in spec.get("ports") or []:
                     scheme = port.get("name") if port.get("name") in STREAM_SCHEMES else ""
                     stream = f"{scheme}://{address}:{port['port']}" if scheme else f"{address}:{port['port']}"
-                    found[key]["streams"].append(stream)
+                    # A port open over TCP and UDP (Frigate's WebRTC) is one address.
+                    if stream not in found[key]["streams"]:
+                        found[key]["streams"].append(stream)
     out = sorted(found.values(), key=lambda a: (a["group"], a["name"]))
     applied = {a["kustomization"] for a in out}
     for (_, name), k in sorted(owners.items()):
@@ -1161,6 +1329,129 @@ def _host_attention(found, commands):
     return out
 
 
+# A VM's newest backup may be this much older than the run that was due, which starts at its time: a daylight-saving
+# change between the next two runs moves the time worked out for the last one by an hour.
+BACKUP_SLACK = 7200
+ETCD_SNAPSHOT = re.compile(r"-(\d{8}T\d{6}Z)\.db$")
+
+
+def _due(job, now):
+    """When the job's last run was due: its next run less its period, or its next run when that has passed."""
+    if not job or not job.get("next_run") or not job.get("period"):
+        return None
+    return job["next_run"] - job["period"] if job["next_run"] > now else job["next_run"]
+
+
+def _backup_state(vm, job, unknown, running, now):
+    if vm["status"] == "missing":
+        return "missing"
+    if unknown or (vm["job"] and not vm["read"]):
+        return "unknown"
+    if not vm["job"]:
+        return "left out"
+    if vm["failure"]:
+        return "failed"
+    if vm["newest"] is None:
+        return "none"
+    due = _due(job, now)
+    if due and running is None and vm["newest"] < due - min(BACKUP_SLACK, job["period"] // 2):
+        return "missed"
+    return "ok"
+
+
+def _backups_model(prox, snapshots, now, commands):
+    """The backups section: each job with when it runs next, each VM's state (ok, failed, missed, none yet, left out
+    of its job, missing, unknown) and ages, and the cluster's etcd snapshots. None when they were not read."""
+    found = prox.get("backups")
+    if found is None:
+        return None
+    jobs = [j | {"next_in": j["next_run"] - now if j["next_run"] else None} for j in found["jobs"]]
+    by_id = {j["id"]: j for j in jobs}
+    unknown = any(j["on_host"] is None for j in jobs)
+    vms = []
+    for vm in found["vms"]:
+        failure = vm["failure"]
+        if failure and vm["newest"] is not None and vm["newest"] >= failure["time"]:
+            failure = None  # a backup made since
+        vm = vm | {"failure": failure}
+        state = _backup_state(vm, by_id.get(vm["job"]), unknown, found["running"], now)
+        vms.append(
+            vm
+            | {
+                "state": state,
+                "age": now - vm["newest"] if vm["newest"] is not None else None,
+                "failed_ago": now - failure["time"] if failure else None,
+                "due_ago": now - _due(by_id.get(vm["job"]), now) if state == "missed" else None,
+            }
+        )
+    etcd = None
+    if snapshots is not None:
+        times = []
+        for name in snapshots.get("files") or []:
+            match = ETCD_SNAPSHOT.search(str(name))
+            if match:
+                times.append(int(datetime.strptime(match.group(1), "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC).timestamp()))
+        etcd = {
+            "dir": snapshots.get("dir", ""),
+            "count": len(times),
+            "age": now - max(times) if times else None,
+            "command": commands.get("etcd_snapshot", ""),
+        }
+    running = found["running"]
+    return {"jobs": jobs, "vms": vms, "running": now - running if running is not None else None, "etcd": etcd}
+
+
+def _labels(vms):
+    return _and(f"{vm['vmid']} {vm['name']}".strip() for vm in vms)
+
+
+def _backup_attention(model, commands):
+    out = []
+    jobs, vms = model["jobs"], [vm for vm in model["vms"] if vm["state"] != "missing"]
+    if not jobs:
+        if vms:
+            text = f"nothing is backed up: no backup job covers {_labels(vms)}"
+            out.append(_item("todo", "backup", text, commands.get("backup_target", "")))
+        return out
+    for job in jobs:
+        if job["on_host"] is None:
+            continue
+        if not job["on_host"]:
+            text = f"the backup job {job['id']} is not on the host"
+        elif not job["enabled"]:
+            text = f"the backup job {job['id']} is disabled"
+        elif job["storage"] != job["wanted_storage"]:
+            text = f"the backup job {job['id']} writes to {job['storage']}, not {job['wanted_storage']}"
+        else:
+            left = [vm for vm in vms if vm["state"] == "left out" and vm["vmid"] in job["wanted_vmids"]]
+            text = f"the backup job {job['id']} leaves out {_labels(left)}" if left else ""
+        if text:
+            out.append(_item("todo", "backup", text, commands.get("backup", "")))
+    failed = {}
+    for vm in vms:
+        if vm["state"] == "failed":
+            failed.setdefault((vm["failure"]["reason"], vm["failed_ago"]), []).append(vm)
+    for (reason, ago), group in failed.items():
+        text = f"the backup{'s' if len(group) > 1 else ''} of {_labels(group)} failed {_ago(ago)} ago: {reason}"
+        if len(group) == 1 and group[0]["age"] is not None:
+            text += f"; the last good one is {_ago(group[0]['age'])} old"
+        elif len(group) == 1:
+            text += "; it has none"
+        out.append(_item("problem", "backup", text))
+    for job in jobs:
+        missed = [vm for vm in vms if vm["state"] == "missed" and vm["job"] == job["id"]]
+        if missed:
+            text = f"{job['id']}'s run due {_ago(missed[0]['due_ago'])} ago made no backup of {_labels(missed)}"
+            out.append(_item("problem", "backup", text))
+        none = [vm for vm in vms if vm["state"] == "none" and vm["job"] == job["id"]]
+        if none:
+            text = f"{_labels(none)} {'has' if len(none) == 1 else 'have'} no backup yet"
+            if job["next_in"] is not None and job["next_in"] > 0:
+                text += f": {job['id']} runs next in {_uptime(job['next_in'])}"
+            out.append(_item("todo", "backup", text))
+    return out
+
+
 def unknown_types(types):
     """The names in `types` that are no section of the report."""
     return [t for t in types or [] if t not in TYPES]
@@ -1526,7 +1817,8 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
     and the exit code. `found` is {source: findings}; a source without findings was never read. `types` narrows the
     sections; empty means every one. `probes` is what status_probe saw, `admin` the admin pages ({name, url}) to
     list, `commands` the commands to suggest by purpose (upgrade, resume with {names}, talos_upgrade, credentials,
-    allowlist, secrets, nas, nas_release, nas_network), `now` seconds since the epoch."""
+    allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot), `now` seconds since
+    the epoch."""
     shown, setup, commands = types_shown(types), dict(setup or {}), dict(commands or {})
     found = found or {}
     attention, unread = [], []
@@ -1575,6 +1867,10 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
             for fs in node.get("filesystems") or []:
                 if fs["mount"] == "/var":
                     attention += _fill_attention(f"{node['name']} /var", fs["used"], fs["total"])
+    backed_up = None
+    if "backups" in shown and prox_read:
+        backed_up = _backups_model(prox, found.get("etcd_snapshots"), now, commands)
+        attention += _backup_attention(backed_up, commands) if backed_up else []
     if "cluster" in shown and readable:
         attention += _cluster_attention(clu, commands)
     if "nas" in shown and nas_read:
@@ -1592,8 +1888,9 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
         "dns": dns,
         "tls": tls,
         "admin": [dict(a) for a in admin or []],
-        "proxmox": _with_guest_view(prox, clu if readable else None) or {},
+        "proxmox": _with_guest_view({k: v for k, v in prox.items() if k != "backups"}, clu if readable else None) or {},
         "volumes": volumes,
+        "backups": backed_up,
         "cluster": clu,
         "nas": nas_found,
     }
@@ -1914,7 +2211,8 @@ def _vm_lines(found):
         if other.get("templates"):
             count = len(other["templates"])
             parts.append(f"{count} template{'s' if count != 1 else ''} ({', '.join(map(str, other['templates']))})")
-        lines.append(_Line().add(" " * 7).add("+ ", "k").add(" and ".join(parts) + ", not this repo's", "d"))
+        for i, part in enumerate(_wrap(" and ".join(parts) + ", not this repo's", WIDTH - 9)):
+            lines.append(_Line().add(" " * 7).add("+ " if i == 0 else "  ", "k").add(part, "d"))
     if host_view:
         lines.append(
             _Line().add(
@@ -1944,6 +2242,89 @@ def _storage_lines(storages):
         elif s.get("claims"):
             count = len(s["claims"])
             line.add(" · ", "d").add(f"{count} volume{'s' if count != 1 else ''} in use", "d")
+        lines.append(line)
+    return lines
+
+
+def _keep_text(keep):
+    if keep.get("all"):
+        return "keeps all"
+    return "keeps " + ", ".join(f"{keep[k]} {k}" for k in KEEP_KINDS if keep.get(k)) if keep else ""
+
+
+# How each backup state is drawn, and the words for it.
+BACKUP_STATES = {
+    "ok": ("ok", "g"),
+    "failed": ("failed", "r"),
+    "missed": ("missed", "r"),
+    "none": ("none yet", "y"),
+    "left out": ("left out", "y"),
+    "missing": ("no VM", "d"),
+    "unknown": ("not read", "d"),
+}
+
+
+def _backup_lines(model):
+    found = model.get("backups") or {}
+    jobs, vms = found.get("jobs") or [], found.get("vms") or []
+    lines = []
+    for i, job in enumerate(jobs):
+        line = _Line().add("BACKUPS", "h").add("  ") if i == 0 else _Line().add(" " * 9)
+        line.add(job["id"], "b").add(f" → {job['storage'] or job['wanted_storage']}", "d")
+        if job["on_host"] is False:
+            line.add(" · ", "d").add("not on the host", "y")
+        elif job["on_host"] and not job["enabled"]:
+            line.add(" · ", "d").add("disabled", "y")
+        else:
+            facts = [job["schedule"], _keep_text(job["keep"])]
+            if found.get("running") is not None:
+                facts.append(f"running for {_uptime(found['running'])}")
+            elif job["next_in"] is not None:
+                facts.append(f"next in {_uptime(job['next_in'])}" if job["next_in"] > 0 else "due now")
+            line.add("".join(f" · {f}" for f in facts if f), "d")
+        lines.append(line)
+    if not jobs:
+        names = _and(str(vm["vmid"]) for vm in vms)
+        line = _Line().add("BACKUPS", "h").add("  ").add("no backup job: ", "y")
+        lines.append(line.add(f"{names} {'is' if len(vms) == 1 else 'are'} not backed up", "d"))
+    name_width = max([len(vm["name"]) for vm in vms] + [16]) + 2
+
+    def row(vmid, name, ago, state, detail, detail_style=""):
+        line = _Line().add(" ").cell(vmid, 4, "d", right=True).add("  ").cell(name, name_width, "b")
+        line.cell(ago, 9, right=True).add("  ")
+        word, style = BACKUP_STATES.get(state, (state, "d"))
+        line.cell(word, 10, style)
+        parts = _wrap(detail, WIDTH - len(line)) if detail else [""]
+        out = [line.add(parts[0], detail_style)]
+        out += [_Line().to(len(line) - len(parts[0])).add(part, detail_style) for part in parts[1:]]
+        return out
+
+    def kept(vm):
+        return f"{_gib(vm['size'], 1)} GiB · {vm['kept']} kept" if vm["size"] is not None else ""
+
+    for vm in vms if jobs else []:
+        age = f"{_ago(vm['age'])} ago" if vm["age"] is not None else "—"
+        state = vm["state"]
+        if state == "failed":
+            lines += row(vm["vmid"], vm["name"], f"{_ago(vm['failed_ago'])} ago", state, vm["failure"]["reason"], "r")
+            if vm["age"] is not None:
+                lines += row("", "", age, "ok", kept(vm))
+        elif state == "missed":
+            lines += row(vm["vmid"], vm["name"], age, state, f"none since the run due {_ago(vm['due_ago'])} ago")
+        elif state == "missing":
+            lines += row(vm["vmid"], vm["name"], age, state, "the VM is not on this host")
+        else:
+            lines += row(vm["vmid"], vm["name"], age, state, kept(vm))
+    etcd = found.get("etcd")
+    if etcd is not None:
+        line = _Line().add(" " * 7).cell("etcd snapshot", name_width, "b")
+        if etcd["count"]:
+            line.cell(f"{_ago(etcd['age'])} ago", 9, right=True).add("  ").cell("", 10)
+            line.add(f"{etcd['count']} in {etcd['dir']}", "d")
+        else:
+            line.cell("—", 9, right=True).add("  ").cell("none yet", 10, "y").add(f"in {etcd['dir']}", "d")
+            if etcd["command"]:
+                line.add("  → ", "d").add(etcd["command"], "c")
         lines.append(line)
     return lines
 
@@ -2182,6 +2563,9 @@ def text(model, color=False):
     storages = ((prox.get("storages") or []) if prox_read else []) + (model.get("volumes") or [])
     if "storage" in types and storages:
         lines += [*_storage_lines(storages), _Line()]
+    backed_up = model.get("backups") or {}
+    if "backups" in types and (backed_up.get("jobs") or backed_up.get("vms")):
+        lines += [*_backup_lines(model), _Line()]
     if "cluster" in types and clu:
         lines += [*_cluster_lines(model), _Line()]
     if "nas" in types and (model.get("setup") or {}).get("nas"):
@@ -2205,6 +2589,7 @@ class FilterModule:
     def filters(self):
         return {
             "status_proxmox": proxmox,
+            "status_backup_failed_runs": backup_failed_runs,
             "status_cluster": cluster,
             "status_nas": nas,
             "status_credentials": credentials,

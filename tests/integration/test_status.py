@@ -40,7 +40,13 @@ sys.path.insert(0, str(ROOT / "tests" / "policy"))
 import fake_pve  # noqa: E402
 import fake_talos  # noqa: E402
 import fake_truenas  # noqa: E402
-from helpers import CLUSTER_VARS, PROXMOX_ONLY_CLUSTER_LOCAL_YML, example_tree  # noqa: E402
+from helpers import (  # noqa: E402
+    CLUSTER_VARS,
+    PROXMOX_ONLY_CLUSTER_LOCAL_YML,
+    PROXMOX_ONLY_LOCAL_YML,
+    example_tree,
+    example_without_kubernetes,
+)
 
 GIB = 2**30
 BIN = Path(sys.executable).parent
@@ -319,6 +325,11 @@ def fake_kubectl_operator():
     return fake_talos.fake_kubectl.operator_objects("v0.61.0")
 
 
+def talos_dir(tmp_path):
+    """Where roles/talos keeps the cluster's credentials and etcd snapshots, under the test's own HOME."""
+    return tmp_path / "home" / ".talos" / "homeserver"
+
+
 def credentials(directory, server=f"https://{CONTROL_PLANE}:6443", days=364):
     """A kubeconfig naming `server` and a talosconfig for the control plane, each with a real client certificate."""
     directory.mkdir(parents=True, exist_ok=True)
@@ -394,7 +405,7 @@ def tree(tmp_path):
     shutil.copy(ROOT / "Makefile", root)
     (root / "run").mkdir()
     (tmp_path / "home").mkdir()
-    credentials(tmp_path / "talos")
+    credentials(talos_dir(tmp_path))
     seed_cluster(tmp_path / "talos.json")
     return root
 
@@ -427,17 +438,18 @@ def environment(tree, state, fake=True, **more):
     }
 
 
-def extra_vars(tree, local=True, **more):
+def extra_vars(tree, local=True, cluster=True, **more):
     """The variables a run needs here: the local connection, unless the inventory gives one, this Python, the
-    placeholders' values, the reboot flag in the tree, the cluster's credentials, and no probes unless asked."""
+    placeholders' values (a cluster's and Home Assistant's, unless the setup has neither), the reboot flag in the tree,
+    the cluster's credentials, and no probes unless asked."""
     return json.dumps(
         {
             **({"ansible_connection": "local"} if local else {}),
             "ansible_python_interpreter": sys.executable,
             "status_reboot_required_file": str(tree / "run" / "reboot-required"),
-            "talos_config_dir": str(tree.parent / "talos"),
+            "talos_config_dir": str(talos_dir(tree.parent)),
             "status_probe_apps": False,
-            **CLUSTER_VARS,
+            **(CLUSTER_VARS if cluster else {}),
             **more,
         }
     )
@@ -451,9 +463,9 @@ def playbook(tree, state, *args, **env):
     return proc.returncode, proc.stdout, proc.stderr
 
 
-def make_status(tree, state, *args, fake=True, inventory="inventory.example", local=True, **more):
+def make_status(tree, state, *args, fake=True, inventory="inventory.example", local=True, cluster=True, **more):
     """make status in the tree, with this test's inventory and variables passed through ANSIBLE_ARGS."""
-    ansible_args = f"-i {inventory} -e '{extra_vars(tree, local, **more)}'"
+    ansible_args = f"-i {inventory} -e '{extra_vars(tree, local, cluster, **more)}'"
     cmd = ["make", "--no-print-directory", "status", f"VENV={sys.prefix}", f"ANSIBLE_ARGS={ansible_args}", *args]
     env = environment(tree, state, fake=fake)
     env.pop("ANSIBLE_STDOUT_CALLBACK")
@@ -501,6 +513,12 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
         ("restart", "qm reboot 301"),
         # The disks provisioned on local-lvm add up to more than it holds, as on a host run with overcommit allowed.
         ("local-lvm", "keep its use well below 100% (pvesm status)"),
+        # Without a NAS and without vm_backup_storage there is no backup job.
+        (
+            "backup",
+            "vm_backup_storage in local.yml names where they go (a USB disk, or a Proxmox Backup Server), then make "
+            "deploy TYPE=proxmox",
+        ),
     ]
     assert report["attention"][0]["text"] == f"sonarr is suspended since {at(days=-2)[:10]}"
     vms = {v["vmid"]: v for v in report["proxmox"]["vms"]}
@@ -556,7 +574,9 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
     assert " Nodes      ● homeserver-cp-1 Ready · ● homeserver-worker-1 Ready · etcd healthy" in out
     assert f" Flux       main@{COMMIT[:7]}, the same as the branch · 5 of 5 Kustomizations ready" in out
     assert " Kubernetes API   https://192.0.2.30:6443" in out
-    assert out.rstrip().endswith("make status TYPE=apps|admin|vms|storage|cluster|nas · JSON=1"), out
+    assert "BACKUPS  no backup job: 300, 301 and 310 are not backed up" in out
+    assert "etcd snapshot                —  none yet  in ~/.talos/homeserver/etcd  → make etcd-snapshot" in out
+    assert out.rstrip().endswith("make status TYPE=apps|admin|vms|storage|backups|cluster|nas · JSON=1"), out
     assert max(len(line) for line in lines) <= 100, out
 
 
@@ -583,7 +603,7 @@ def test_make_status_exits_with_the_reports_code(tree, tmp_path):
 
     # A section make status does not have: make refuses it before anything runs.
     rc, out, err = make_status(tree, state, "TYPE=vms,disks")
-    assert rc == 2 and "make status takes TYPE=apps,admin,vms,storage,cluster,nas, not disks" in err, out + err
+    assert rc == 2 and "make status takes TYPE=apps,admin,vms,storage,backups,cluster,nas, not disks" in err, out + err
     assert "ATTENTION" not in out and "reading" not in out
 
     # The playbook refuses it too, given by hand: exit 3, the run having failed, and no report.
@@ -603,7 +623,7 @@ def test_an_app_that_fails_is_a_problem(tree, tmp_path):
     problem = report_of(tree)["attention"][0]
     assert (problem["level"], problem["subject"]) == ("problem", "jellyfin")
     assert problem["text"] == "CrashLoopBackOff, 14 restarts, the last 2 m ago"
-    kubeconfig = tmp_path / "talos" / "kubeconfig"
+    kubeconfig = "~/.talos/homeserver/kubeconfig"
     assert problem["command"] == f"kubectl --kubeconfig {kubeconfig} -n media logs deploy/jellyfin --previous"
     assert " jellyfin       media       ● failing" in out, out
 
@@ -623,7 +643,7 @@ def test_another_clusters_credentials_are_not_read_with(tree, tmp_path):
     never used: no kubectl runs."""
     state = tmp_path / "pve.json"
     seed(state)
-    credentials(tmp_path / "talos", server="https://192.0.2.99:6443")
+    credentials(talos_dir(tmp_path), server="https://192.0.2.99:6443")
     (tmp_path / "talos.json").write_text(json.dumps({"mutations": 0}))
     rc, out, err = make_status(tree, state)
     assert rc == 2 and make_failed(err, 2), out + err
@@ -788,7 +808,7 @@ def nas_tree(tmp_path):
     shutil.copy(ROOT / "Makefile", root)
     (root / "run").mkdir()
     (tmp_path / "home").mkdir()
-    credentials(tmp_path / "talos")
+    credentials(talos_dir(tmp_path))
     seed_cluster(tmp_path / "talos.json")
     return root
 
@@ -894,3 +914,154 @@ def test_a_nas_that_is_not_read(nas_tree, nas, tmp_path, given, why):
     assert unread["level"] == "unread" and unread["text"].startswith("the NAS could not be read: ")
     assert why in unread["text"], unread
     assert "NAS  not read" in out and "auth.login_with_api_key" not in nas_calls(nas)
+
+
+# ------------------------------------------------------------------------------------------------ backups ---
+DAY = 86400
+
+
+def seed_backups(path, runs, vmids=(300, 301, 310), job=True, next_in=4 * 3600):
+    """The NAS's backup storage on the fake host, the nightly job over `vmids` as roles/proxmox_backup makes it, due
+    next in `next_in` seconds, and `runs` seeded through fake_pve.backup_run: each (days before the last run due,
+    {vmid: why it failed})."""
+    state = json.loads(path.read_text())
+    state["storage"].append(
+        {
+            "storage": "homeserver-backup",
+            "type": "nfs",
+            "content": "backup",
+            "server": "192.0.2.10",
+            "export": "/mnt/persistent/proxmox/backup",
+            "path": "/mnt/pve/homeserver-backup",
+            "options": "vers=4.2",
+        }
+    )
+    next_run = int(time.time()) + next_in
+    if job:
+        state["backup_jobs"] = {
+            "vm-nightly": {
+                "id": "vm-nightly",
+                "schedule": "02:00",
+                "storage": "homeserver-backup",
+                "vmid": ",".join(map(str, vmids)),
+                "mode": "snapshot",
+                "compress": "zstd",
+                "prune-backups": "keep-daily=7,keep-weekly=4",
+                "enabled": "1",
+            }
+        }
+        state["next_runs"] = {"vm-nightly": next_run}
+    for days, failures in runs:
+        fake_pve.backup_run(state, next_run - (days + 1) * DAY + 1, list(vmids), "homeserver-backup", failures)
+    path.write_text(json.dumps(state))
+    return state
+
+
+FREEZE = "VM 301 qmp command 'guest-fsfreeze-freeze' failed - got timeout"
+
+
+def test_the_backups_of_this_setups_vms(nas_tree, nas, tmp_path):
+    """The last run failed for the worker, and Home Assistant was added to the job after it ran: the failure with its
+    reason from the run's log, the VM with no backup yet, and the etcd snapshots beside them."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    seed_backups(state, [(1, {}), (0, {301: FREEZE})], vmids=(300, 301))
+    pve = json.loads(state.read_text())
+    pve["backup_jobs"]["vm-nightly"]["vmid"] = "300,301,310"
+    state.write_text(json.dumps(pve))
+    snapshots = talos_dir(tmp_path) / "etcd"
+    snapshots.mkdir()
+    taken = datetime.now(UTC) - timedelta(days=3, hours=1)
+    (snapshots / f"etcd-{taken:%Y%m%dT%H%M%SZ}.db").write_text("")
+    seed_nas(nas["state"])
+    rc, out, err = make_status(nas_tree, state, "TYPE=backups", **nas_vars(nas))
+    report = report_of(nas_tree)
+    assert rc == 2 and report["exit"] == 1, out + err
+    # The ages are the wall clock's: the run started 20 h before the report, give or take the run's own seconds.
+    attention = [(a["level"], re.sub(r"\d\d h (ago|old)", r"NN h \1", a["text"])) for a in report["attention"]]
+    assert attention == [
+        ("problem", f"the backup of 301 homeserver-worker-1 failed NN h ago: {FREEZE}; the last good one is NN h old"),
+        ("todo", "310 homeassistant has no backup yet: vm-nightly runs next in 3 h 59 m"),
+    ], report["attention"]
+    assert json.loads(state.read_text())["mutations"] == pve["mutations"]
+    lines = [re.sub(r"\d\d h ago", "NN h ago", line) for line in out.splitlines()]
+    # The hosts are read at once, so the line names them in the order they finished.
+    assert lines[0].startswith("reading  ") and "proxmox ok " in lines[0], out
+    assert max(len(line) for line in lines) <= 100, out
+    assert "BACKUPS  vm-nightly → homeserver-backup · 02:00 · keeps 7 daily, 4 weekly · next in 3 h 59 m" in lines
+    assert "  300  homeserver-cp-1       NN h ago  ok        7.0 GiB · 2 kept" in lines, out
+    failed = "  301  homeserver-worker-1   NN h ago  failed    VM 301 qmp command 'guest-fsfreeze-freeze' failed -"
+    assert failed in lines, out
+    assert " " * 29 + "NN h ago  ok        1.0 GiB · 1 kept" in lines, out
+    assert "  310  homeassistant                —  none yet" in lines, out
+    assert "       etcd snapshot          3 d ago            1 in ~/.talos/homeserver/etcd" in lines, out
+    assert "VMS  " not in out and "NAS  " not in out
+
+
+# What each setup reports on a host as roles leave it: its sections, in order, what needs attention and the exit code.
+# The Proxmox host waits for a restart and an upgrade in every one (seed()); the rest is the setup's own.
+SETUPS = {
+    "proxmox": (
+        PROXMOX_ONLY_LOCAL_YML,
+        ["ADMIN", "VMS", "STORAGE"],
+        [("todo", "upgrades"), ("todo", "local-lvm")],
+        0,
+    ),
+    "proxmox-cluster": (
+        PROXMOX_ONLY_CLUSTER_LOCAL_YML,
+        ["APPS", "ADMIN", "VMS", "STORAGE", "BACKUPS", "CLUSTER"],
+        [
+            ("todo", "suspended"),
+            ("todo", "allowlist"),
+            ("todo", "upgrades"),
+            ("todo", "restart"),
+            ("todo", "local-lvm"),
+            ("todo", "backup"),
+        ],
+        0,
+    ),
+    "nas": (
+        example_without_kubernetes(),
+        ["ADMIN", "VMS", "STORAGE", "NAS"],
+        [("todo", "upgrades"), ("todo", "local-lvm")],
+        0,
+    ),
+    "nas-cluster": (
+        None,
+        ["APPS", "ADMIN", "VMS", "STORAGE", "BACKUPS", "CLUSTER", "NAS"],
+        [
+            ("todo", "suspended"),
+            ("todo", "allowlist"),
+            ("todo", "upgrades"),
+            ("todo", "restart"),
+            ("todo", "local-lvm"),
+        ],
+        0,
+    ),
+}
+
+
+@pytest.mark.parametrize("setup", SETUPS)
+def test_each_setup_reports_what_it_has(setup, nas, tmp_path):
+    local_yml, sections, attention, code = SETUPS[setup]
+    root = example_tree(tmp_path / "tree", local_yml)
+    shutil.copytree(ROOT / "callback_plugins", root / "callback_plugins")
+    shutil.copy(ROOT / "Makefile", root)
+    (root / "run").mkdir()
+    (tmp_path / "home").mkdir()
+    credentials(talos_dir(tmp_path))
+    seed_cluster(tmp_path / "talos.json")
+    state = tmp_path / "pve.json"
+    seed(state)
+    if setup == "nas-cluster":
+        seed_backups(state, [(0, {})])
+    seed_nas(nas["state"])
+    given = nas_vars(nas) if setup.startswith("nas") else {}
+    rc, out, err = make_status(root, state, cluster=setup.endswith("cluster"), **given)
+    assert (root / ".cache" / "status" / "report.json").exists(), out + err
+    report = report_of(root)
+    headers = [m.group(1) for m in map(re.compile(r"([A-Z]{3,})(  |$)").match, out.splitlines()) if m]
+    assert headers[1:] == sections, out
+    assert [(a["level"], a["subject"]) for a in report["attention"]] == attention, out
+    assert (rc, report["exit"]) == (2 if code else 0, code), out + err
+    assert max(len(line) for line in out.splitlines()) <= 100, out

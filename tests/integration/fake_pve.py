@@ -18,9 +18,10 @@ restricted to other cluster nodes. Nothing the role runs changes either. Anythin
 unexpected command fails the test. A state's `storage_total` gives a storage's size in bytes (64 GiB otherwise).
 
 Backup jobs: `pvesh get|create /cluster/backup` and `pvesh get|set /cluster/backup/<id>`, from Proxmox VE 9's
-API schema, not yet captured from a host. A job's prune settings come back as an object and its enabled flag
-as a number; the role reads text as well, in case a real host gives that. Ids follow Proxmox's pve-configid
-rule, and an option the schema lacks fails as it does there.
+API schema, and since 2026-10-21 checked against a host's: a job's prune settings come back as an object and its
+enabled flag as a number (the role reads text as well), and only the listing carries `next-run`. Ids follow
+Proxmox's pve-configid rule, and an option the schema lacks fails as it does there. The backup runs make status
+reads are described under backup_run().
 
 VMs: `qm create|set|config|status|start|shutdown` and `qm disk resize`, and pvesh's /nodes/<node>/qemu,
 /nodes/<node>/lxc (the state's `containers`), .../qemu/<id>/config and .../pending, /nodes/<node>/status,
@@ -81,6 +82,9 @@ import json
 import os
 import re
 import sys
+import time
+from datetime import datetime, timedelta
+from datetime import time as clock
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -289,7 +293,18 @@ def shown_job(job):
 
 
 def get_backup_jobs(state, opts):
-    return [shown_job(job) for job in state.get("backup_jobs", {}).values()]
+    """The jobs as the listing shows them, which alone carries each job's next run: the state's `next_runs` by id,
+    else the next time a daily HH:MM schedule fires."""
+    out = []
+    for job in state.get("backup_jobs", {}).values():
+        shown = shown_job(job)
+        next_run = state.get("next_runs", {}).get(job["id"])
+        if next_run is None and re.fullmatch(r"\d{1,2}:\d{2}", job.get("schedule", "")):
+            next_run = daily(job["schedule"], time.time(), 1)[0]
+        if next_run is not None:
+            shown["next-run"] = int(next_run)
+        out.append(shown)
+    return out
 
 
 def create_backup_job(state, opts):
@@ -319,6 +334,119 @@ def set_backup_job(state, jid, opts):
         job.pop(name, None)
     job.update(opts)
     state["mutations"] += 1
+
+
+# ------------------------------------------------------------------------------------------ backup runs ---
+# make status reads when a schedule fires (/cluster/jobs/schedule-analyze), the backup runs (/nodes/<node>/tasks with
+# --typefilter vzdump) and a run's log (/nodes/<node>/tasks/<upid>/log), in the shapes captured from a Proxmox VE 9.2
+# host on 2026-10-21: a finished run's `status` is OK or its error, a running one has neither status nor end time,
+# and a log is numbered lines that end with TASK OK or TASK ERROR. Runs come from the state's `tasks`, which
+# backup_run() below seeds as vzdump would leave them; the fake runs no backup itself.
+
+
+def daily(schedule, after, count):
+    """The next `count` times, after `after`, that a daily HH:MM schedule fires in local time; no other calendar
+    form is known here."""
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", schedule)
+    if not match:
+        fail(f"fake pvesh: only daily HH:MM schedules are known here, not {schedule!r}")
+    day, out = datetime.fromtimestamp(after).date(), []
+    while len(out) < count:
+        when = datetime.combine(day, clock(int(match.group(1)), int(match.group(2)))).timestamp()
+        if when > after:
+            out.append(int(when))
+        day += timedelta(days=1)
+    return out
+
+
+def schedule_analyze(state, opts):
+    if set(opts) - {"schedule", "iterations", "starttime"} or "schedule" not in opts:
+        fail(f"400 Parameter verification failed: {sorted(opts)}")
+    times = daily(opts["schedule"], int(opts.get("starttime", time.time())), int(opts.get("iterations", 10)))
+    return [{"timestamp": t, "utc": time.strftime("%a %b %d %H:%M:%S %Y", time.gmtime(t))} for t in times]
+
+
+def vzdump_upid(start, vmid=""):
+    return f"UPID:{NODE}:{start % 2**24:08X}:{start % 2**28:08X}:{start:08X}:vzdump:{vmid}:root@pam:"
+
+
+def backup_run(state, start, vmids, storage, failed=None, running=False, error=""):
+    """Seed a backup run as vzdump leaves it: its task and log, and a backup on `storage` of each VM it made, a
+    minute apart. `failed` maps the VMs it failed to why; `error` fails it before any VM, as a storage that cannot
+    be activated does; `running` leaves it running, with no VM done yet."""
+    failed, lines = (
+        failed or {},
+        [f"INFO: starting new backup job: vzdump {' '.join(map(str, vmids))} --storage {storage}"],
+    )
+    when = start
+    for vmid in [] if error or running else vmids:
+        name = state.get("vms", {}).get(str(vmid), {}).get("config", {}).get("name", "")
+        lines += [f"INFO: Starting Backup of VM {vmid} (qemu)", f"INFO: VM Name: {name}"]
+        if vmid in failed:
+            lines += [f"ERROR: Backup of VM {vmid} failed - {failed[vmid]}", "INFO: Failed at"]
+        else:
+            stamp = time.strftime("%Y_%m_%d-%H_%M_%S", time.localtime(when))
+            state.setdefault("content", {}).setdefault(storage, []).append(
+                {
+                    "content": "backup",
+                    "ctime": when,
+                    "format": "vma.zst",
+                    "notes": name,
+                    "size": (vmid % 7 + 1) * 2**30,
+                    "subtype": "qemu",
+                    "vmid": vmid,
+                    "volid": f"{storage}:backup/vzdump-qemu-{vmid}-{stamp}.vma.zst",
+                }
+            )
+            lines.append(f"INFO: Finished Backup of VM {vmid} (00:01:00)")
+        when += 60
+    task = {"type": "vzdump", "id": "", "user": "root@pam", "starttime": start, "log": lines}
+    if error:
+        task.update(endtime=start + 1, exitstatus=error)
+    elif not running:
+        lines.append("INFO: Backup job finished " + ("with errors" if failed else "successfully"))
+        task.update(endtime=when, exitstatus="job errors" if failed else "OK")
+    state.setdefault("tasks", {})[vzdump_upid(start)] = task
+
+
+def shown_task(upid, task):
+    out = {"upid": upid, "node": NODE, "pid": 1, "pstart": 1, "starttime": task["starttime"], "type": task["type"]}
+    out |= {"id": task.get("id", ""), "user": task.get("user", "root@pam")}
+    if "endtime" in task:
+        out |= {"endtime": task["endtime"], "status": task["exitstatus"]}
+    return out
+
+
+def get_tasks(state, node, opts):
+    check_node(node)
+    if set(opts) - {"typefilter", "source", "limit", "start", "errors"}:
+        fail(f"400 Parameter verification failed.\n{sorted(opts)[0]}: property is not defined in schema")
+    source = opts.get("source", "archive")
+    tasks = [
+        shown_task(upid, t)
+        for upid, t in state.get("tasks", {}).items()
+        if "starttime" in t and opts.get("typefilter", t["type"]) == t["type"]
+    ]
+    if source != "all":
+        tasks = [t for t in tasks if ("endtime" in t) == (source == "archive")]
+    tasks.sort(key=lambda t: -t["starttime"])
+    start = int(opts.get("start", 0))
+    return tasks[start : start + int(opts.get("limit", 50))]
+
+
+def get_task_log(state, node, upid, opts):
+    check_node(node)
+    if set(opts) - {"limit", "start"}:
+        fail(f"400 Parameter verification failed.\n{sorted(opts)[0]}: property is not defined in schema")
+    task = state.get("tasks", {}).get(upid)
+    if task is None:
+        fail(f"no such task '{upid}'")
+    lines = list(task.get("log", []))
+    if "endtime" in task:
+        lines.append("TASK OK" if task["exitstatus"] == "OK" else f"TASK ERROR: {task['exitstatus']}")
+    start = int(opts.get("start", 0))
+    # As Proxmox does, 50 lines unless asked for more.
+    return [{"n": n + 1, "t": t} for n, t in enumerate(lines)][start : start + int(opts.get("limit", 50))]
 
 
 # ---------------------------------------------------------------------------------------------- VMs ---
@@ -905,6 +1033,9 @@ ROUTES = [
     (re.compile(r"/nodes/([^/]+)/storage/([^/]+)/content"), {"get": get_content}),
     (re.compile(r"/nodes/([^/]+)/storage/([^/]+)/download-url"), {"create": download_url}),
     (re.compile(r"/nodes/([^/]+)/tasks/([^/]+)/status"), {"get": get_task_status}),
+    (re.compile(r"/nodes/([^/]+)/tasks"), {"get": get_tasks}),
+    (re.compile(r"/nodes/([^/]+)/tasks/([^/]+)/log"), {"get": get_task_log}),
+    (re.compile(r"/cluster/jobs/schedule-analyze"), {"get": schedule_analyze}),
     (re.compile(r"/nodes/([^/]+)/storage/([^/]+)/status"), {"get": get_storage_status}),
     (re.compile(r"/cluster/backup"), {"get": get_backup_jobs, "create": create_backup_job}),
     (re.compile(r"/cluster/backup/([^/]+)"), {"get": get_backup_job, "set": set_backup_job}),

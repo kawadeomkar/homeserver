@@ -67,9 +67,15 @@
       {%- endif -%}
       {{ c }}
 
+# The etcd snapshots are files on this machine, read whether the cluster answers or not: their names say when each
+# was taken.
 - name: cluster | Work out what the cluster says
   ansible.builtin.set_fact:
     status_found:
+      etcd_snapshots: >-
+        {{ {'dir': status_cluster_snapshot_dir | regex_replace(_home, '~/'),
+            'files': query('ansible.builtin.fileglob', status_cluster_snapshot_dir ~ '/*.db') | map('basename') | list}
+           if status_cluster_snapshot_dir else none }}
       cluster: >-
         {{ {'unread': status_cluster_unread, 'results': status_cluster_reads.results | default({}),
             'access': status_cluster_access}
@@ -78,5 +84,6 @@
                             volumes=status_cluster_volumes, settings=status_cluster_settings,
                             pins=status_cluster_pins, kubeconfig=_shown, now=now().timestamp() | int) }}
   vars:
+    _home: "{{ '^' ~ (lookup('ansible.builtin.env', 'HOME') | regex_escape) ~ '/' }}"
     # The kubeconfig as the kubectl commands the report suggests name it.
-    _shown: "{{ status_cluster_kubeconfig | regex_replace('^' ~ (lookup('ansible.builtin.env', 'HOME') | regex_escape) ~ '/', '~/') }}"
+    _shown: "{{ status_cluster_kubeconfig | regex_replace(_home, '~/') }}"

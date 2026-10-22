@@ -365,7 +365,7 @@ def test_what_needs_attention_and_the_exit_code():
     assert model["attention"][1]["command"] == "make deploy TYPE=proxmox"
     assert model["attention"][2]["text"] == "301 homeserver-worker-1 waits for a restart to apply memory, watchdog"
     assert model["attention"][2]["command"] == "qm reboot 301"
-    assert model["exit"] == 0 and model["types"] == ["apps", "admin", "vms", "storage", "cluster", "nas"]
+    assert model["exit"] == 0 and model["types"] == ["apps", "admin", "vms", "storage", "backups", "cluster", "nas"]
     # A command not given is suggested by text alone.
     assert fs.report({"proxmox": found()}, SETUP)["attention"][1]["command"] == ""
 
@@ -421,7 +421,7 @@ def test_types_narrow_the_report():
     model = fs.report({"proxmox": found()}, SETUP, ["storage"])
     assert model["types"] == ["storage"] and model["attention"] == []
     assert fs.unknown_types(["vms", "apps", "nas", "disks"]) == ["disks"]
-    assert fs.types_shown([]) == ["apps", "admin", "vms", "storage", "cluster", "nas"]
+    assert fs.types_shown([]) == ["apps", "admin", "vms", "storage", "backups", "cluster", "nas"]
     assert fs.types_shown(["storage", "vms"]) == ["vms", "storage"]
 
 
@@ -461,8 +461,16 @@ def test_the_text_says_what_matters():
     assert "the host's view: ballooning is off" in out
     assert "disks 68 of 68 GiB budgeted" in out
     assert out.rstrip().endswith(
-        "exit 0 · nothing is wrong · make status TYPE=apps|admin|vms|storage|cluster|nas · JSON=1"
+        "exit 0 · nothing is wrong · make status TYPE=apps|admin|vms|storage|backups|cluster|nas · JSON=1"
     )
+
+
+def test_many_other_vms_wrap_under_their_line():
+    others = [vm_entry(vmid, f"vm-{vmid}", cores=4, maxmem=16) for vmid in (9002, 9003, 9004, 9005, 9006)]
+    lines = report_text(resources=ok(RESOURCES + others)).splitlines()
+    assert max(len(line) for line in lines) <= 100, "\n".join(lines)
+    first = next(i for i, line in enumerate(lines) if line.startswith("       + 6 other VMs (9001, 9002, "))
+    assert lines[first + 1].startswith("         ") and lines[first + 1].rstrip().endswith("not this repo's")
 
 
 def test_long_messages_wrap_under_their_subject():
@@ -487,7 +495,7 @@ def test_the_text_of_a_host_not_read():
     out = fs.text(fs.report({"proxmox": {"unread": "it did not answer"}}, SETUP), False)
     assert "ATTENTION  1 problem · 0 to do" in out and "could not be read: it did not answer" in out
     assert "VMS" not in out and out.rstrip().endswith(
-        "exit 2 · 1 source not read · make status TYPE=apps|admin|vms|storage|cluster|nas · JSON=1"
+        "exit 2 · 1 source not read · make status TYPE=apps|admin|vms|storage|backups|cluster|nas · JSON=1"
     )
 
 
@@ -713,7 +721,8 @@ SERVICES = [
         {"app.kubernetes.io/name": "frigate"},
         "LoadBalancer",
         "192.0.2.41",
-        (("rtsp", 8554),),
+        # As k8s/apps/frigate's: WebRTC on one port over TCP and UDP.
+        (("rtsp", 8554), ("webrtc-tcp", 8555), ("webrtc-udp", 8555)),
     ),
     service(
         "monitoring",
@@ -889,7 +898,7 @@ def test_the_apps_and_what_finds_them():
     assert [(d["name"], d["state"], d["version"]) for d in apps["nextcloud"]["databases"]] == [
         ("nextcloud-db", "running", "11.4.12")
     ]
-    assert apps["frigate"]["streams"] == ["rtsp://192.0.2.41:8554"]
+    assert apps["frigate"]["streams"] == ["rtsp://192.0.2.41:8554", "192.0.2.41:8555"]
     assert apps["sonarr"]["state"] == "suspended" and apps["sonarr"]["since"] == iso(SUSPENDED_AT)
     assert all(apps[a]["state"] == "running" for a in ("frigate", "homepage", "jellyfin", "grafana", "nextcloud"))
 
@@ -1747,3 +1756,327 @@ def test_the_nas_report_is_json():
     model = nas_report()
     assert json.loads(json.dumps(model)) == model
     assert "SERIAL-MUST-NOT-LEAK" not in json.dumps(model)
+
+
+# ------------------------------------------------------------------------------------------------ backups ---
+# The shapes captured on 2026-10-21 from a Proxmox VE 9.2 host's nightly job: /cluster/backup (the listing, which
+# alone carries next-run), the vzdump runs, a run's log, the backups on the job's storage, and schedule-analyze.
+
+JOB = {"id": "vm-nightly", "schedule": "02:00", "storage": "homeserver-backup", "vmid": [300, 301, 310]}
+DAY = 86400
+NEXT_RUN = NOW + 4 * 3600
+DUE = NEXT_RUN - DAY
+BACKUP_COMMANDS = COMMANDS | {
+    "backup": "make deploy TYPE=proxmox",
+    "backup_target": "vm_backup_storage in local.yml, then make deploy TYPE=proxmox",
+    "etcd_snapshot": "make etcd-snapshot",
+}
+NAMES = {300: "homeserver-cp-1", 301: "homeserver-worker-1", 310: "homeassistant"}
+
+
+def hosted_job(**more):
+    return {
+        "compress": "zstd",
+        "enabled": 1,
+        "id": "vm-nightly",
+        "mode": "snapshot",
+        "next-run": NEXT_RUN,
+        "notes-template": "{{guestname}}",
+        "prune-backups": {"keep-daily": "7", "keep-weekly": "4"},
+        "schedule": "02:00",
+        "storage": "homeserver-backup",
+        "type": "vzdump",
+        "vmid": "300,301,310",
+    } | more
+
+
+def upid(start, vmid=""):
+    return f"UPID:pve:002BE7DF:04A56412:{start:08X}:vzdump:{vmid}:root@pam:"
+
+
+def run(start, status="OK", vmid=""):
+    entry = {"id": str(vmid), "node": "pve", "pid": 2877407, "pstart": 77947922, "starttime": start}
+    entry |= {"type": "vzdump", "upid": upid(start, vmid), "user": "root@pam"}
+    return entry if status is None else entry | {"endtime": start + 170, "status": status}
+
+
+def archive(vmid, ctime, gib=1.5):
+    return {
+        "content": "backup",
+        "ctime": ctime,
+        "format": "vma.zst",
+        "notes": NAMES[vmid],
+        "size": int(gib * GIB),
+        "subtype": "qemu",
+        "vmid": vmid,
+        "volid": f"homeserver-backup:backup/vzdump-qemu-{vmid}-{ctime}.vma.zst",
+    }
+
+
+def log(*lines):
+    return [{"n": n + 1, "t": t} for n, t in enumerate(lines)]
+
+
+def run_log(failed=(), asked=(300, 301, 310)):
+    lines = [f"INFO: starting new backup job: vzdump {' '.join(map(str, asked))} --mode snapshot --storage x"]
+    for vmid in asked:
+        lines += [f"INFO: Starting Backup of VM {vmid} (qemu)", f"INFO: VM Name: {NAMES[vmid]}"]
+        if vmid in failed:
+            lines += [f"ERROR: Backup of VM {vmid} failed - {failed[vmid]}", "INFO: Failed at 2026-10-21 02:01:11"]
+        else:
+            lines += [f"INFO: Finished Backup of VM {vmid} (00:00:10)"]
+    return log(*lines, "INFO: Backup job finished with errors", "TASK ERROR: job errors")
+
+
+FREEZE = "VM 301 qmp command 'guest-fsfreeze-freeze' failed - got timeout"
+
+
+def backup_results(runs=None, archives=None, **more):
+    """Two nightly runs, the day before's and the last, every VM backed up by both."""
+    runs = [run(DUE + 1), run(DUE - DAY + 1)] if runs is None else runs
+    if archives is None:
+        archives = [archive(v, start + 60 * i) for start in (DUE - DAY + 1, DUE + 1) for i, v in enumerate(NAMES)]
+    return {
+        "backup-jobs": ok([hosted_job()]),
+        "backup-tasks": ok(runs),
+        "backups-homeserver-backup": ok(archives),
+        "schedule-vm-nightly": ok([{"timestamp": NEXT_RUN, "utc": "x"}, {"timestamp": NEXT_RUN + DAY, "utc": "x"}]),
+    } | more
+
+
+def backed_up(jobs=(JOB,), resources=None, **more):
+    extra = {"resources": ok(resources)} if resources else {}
+    return fs.proxmox(
+        {"unread": "", "node": "pve", "results": results(**extra, **backup_results(**more))},
+        VMS,
+        ["local-lvm"],
+        16,
+        "/run/reboot-required",
+        list(jobs),
+    )
+
+
+SNAPSHOTS = {"dir": "~/.talos/homeserver/etcd", "files": ["etcd-20261018T032459Z.db", "etcd-20261020T035037Z.db"]}
+
+
+def backup_report(prox=None, snapshots=SNAPSHOTS, types=("backups",)):
+    found_ = {"proxmox": prox or backed_up()} | ({"etcd_snapshots": snapshots} if snapshots is not None else {})
+    return fs.report(found_, SETUP, list(types), commands=BACKUP_COMMANDS, now=NOW)
+
+
+def backup_attention(model):
+    return [(a["level"], a["text"], a["command"]) for a in model["attention"]]
+
+
+def test_the_backups_as_read():
+    found_ = backed_up()["backups"]
+    assert found_["jobs"] == [
+        {
+            "id": "vm-nightly",
+            "on_host": True,
+            "enabled": True,
+            "schedule": "02:00",
+            "storage": "homeserver-backup",
+            "wanted_storage": "homeserver-backup",
+            "keep": {"daily": 7, "weekly": 4},
+            "next_run": NEXT_RUN,
+            "period": DAY,
+            "vmids": [300, 301, 310],
+            "wanted_vmids": [300, 301, 310],
+        }
+    ]
+    vms = {vm["vmid"]: vm for vm in found_["vms"]}
+    assert vms[301] == {
+        "vmid": 301,
+        "name": "homeserver-worker-1",
+        "status": "running",
+        "job": "vm-nightly",
+        "wanted": True,
+        "read": True,
+        "newest": DUE + 61,
+        "size": int(1.5 * GIB),
+        "kept": 2,
+        "failure": None,
+    }
+    assert found_["running"] is None
+    # Not asked for (TYPE without backups): no reads, no section.
+    assert found()["backups"] is None
+
+
+def test_retention_from_the_object_or_the_text():
+    assert fs._keep({"keep-daily": "7", "keep-weekly": "4"}) == {"daily": 7, "weekly": 4}
+    assert fs._keep("keep-last=3, keep-monthly=2,keep-foo=1") == {"last": 3, "monthly": 2}
+    assert fs._keep("keep-all=1") == {"all": 1} and fs._keep(None) == {}
+
+
+def test_a_healthy_backup_asks_for_nothing():
+    model = backup_report()
+    assert model["attention"] == [] and model["exit"] == 0
+    assert [vm["state"] for vm in model["backups"]["vms"]] == ["ok", "ok", "ok"]
+    assert model["backups"]["etcd"] == {
+        "dir": "~/.talos/homeserver/etcd",
+        "count": 2,
+        "age": NOW - int(datetime(2026, 10, 20, 3, 50, 37, tzinfo=UTC).timestamp()),
+        "command": "make etcd-snapshot",
+    }
+    # The raw reads are not in the report twice.
+    assert "backups" not in model["proxmox"]
+
+
+def test_only_the_newest_failed_runs_logs_are_read():
+    runs = [run(DUE + 1, "job errors"), run(DUE - DAY + 1, "WARNINGS: 1"), run(DUE - 2 * DAY, None)]
+    runs += [run(DUE - n * DAY, "job errors") for n in range(3, 8)] + [run(DUE - 9 * DAY, "job errors", vmid="bad")]
+    assert fs.backup_failed_runs({"backup-tasks": ok(runs)}) == [upid(DUE + 1)] + [upid(DUE - n * DAY) for n in (3, 4)]
+    assert fs.backup_failed_runs({}) == [] and fs.backup_failed_runs({"backup-tasks": failed("x")}) == []
+
+
+def test_a_vm_whose_backup_failed():
+    runs = [run(DUE + 1, "job errors"), run(DUE - DAY + 1)]
+    archives = [archive(v, DUE - DAY + 1) for v in NAMES] + [archive(v, DUE + 1) for v in (300, 310)]
+    prox = backed_up(runs=runs, archives=archives, **{f"log-{upid(DUE + 1)}": ok(run_log(failed={301: FREEZE}))})
+    model = backup_report(prox)
+    assert backup_attention(model) == [
+        (
+            "problem",
+            f"the backup of 301 homeserver-worker-1 failed 19 h ago: {FREEZE}; the last good one is 43 h old",
+            "",
+        )
+    ]
+    assert model["exit"] == 1
+    worker = next(vm for vm in model["backups"]["vms"] if vm["vmid"] == 301)
+    assert worker["state"] == "failed" and worker["failure"] == {"time": DUE + 1, "reason": FREEZE}
+
+
+def test_a_run_that_failed_before_any_vm():
+    """A storage that cannot be activated fails the run before its first VM: every VM it was to back up failed."""
+    error = "could not activate storage 'homeserver-backup': mount error: mount.nfs: Connection timed out"
+    runs = [run(DUE + 1, error), run(DUE - DAY + 1)]
+    archives = [archive(v, DUE - DAY + 1) for v in NAMES]
+    prox = backed_up(runs=runs, archives=archives, **{f"log-{upid(DUE + 1)}": ok(log(f"TASK ERROR: {error}"))})
+    assert backup_attention(backup_report(prox)) == [
+        (
+            "problem",
+            "the backups of 300 homeserver-cp-1, 301 homeserver-worker-1 and 310 homeassistant failed 19 h ago: "
+            + error,
+            "",
+        )
+    ]
+
+
+def test_a_failure_since_made_good_is_no_failure():
+    """A backup made after the failed run, by hand or by a later run, ends the failure."""
+    runs = [run(DUE + 1, "job errors"), run(DUE - DAY + 1)]
+    archives = [archive(v, DUE + 1) for v in (300, 310)] + [archive(301, DUE + 3600)]
+    prox = backed_up(runs=runs, archives=archives, **{f"log-{upid(DUE + 1)}": ok(run_log(failed={301: FREEZE}))})
+    assert backup_report(prox)["attention"] == []
+
+
+def test_a_run_that_never_happened():
+    """The host was off when the job was due: no run, no failure, every VM's newest backup older than the run due."""
+    archives = [archive(v, DUE - DAY + 1) for v in NAMES]
+    model = backup_report(backed_up(runs=[run(DUE - DAY + 1)], archives=archives))
+    assert backup_attention(model) == [
+        (
+            "problem",
+            "vm-nightly's run due 20 h ago made no backup of 300 homeserver-cp-1, 301 homeserver-worker-1 and 310 "
+            "homeassistant",
+            "",
+        )
+    ]
+    # While a run goes on, the VMs it has not reached yet are not missed.
+    running = backup_report(backed_up(runs=[run(NOW - 60, None), run(DUE - DAY + 1)], archives=archives))
+    assert running["attention"] == [] and running["backups"]["running"] == 60
+
+
+def test_a_daylight_saving_change_is_no_missed_run():
+    """Between the next two runs the clocks change: the period worked out is 23 h, so the run due seems an hour
+    later than it was."""
+    schedule = ok([{"timestamp": NEXT_RUN, "utc": "x"}, {"timestamp": NEXT_RUN + DAY - 3600, "utc": "x"}])
+    model = backup_report(backed_up(**{"schedule-vm-nightly": schedule}))
+    assert model["attention"] == []
+
+
+def test_a_vm_the_job_leaves_out_or_has_not_reached_yet():
+    # A VM added to local.yml's extra VMIDs since the job was applied: left out until make deploy TYPE=proxmox.
+    left_out = backed_up(**{"backup-jobs": ok([hosted_job(vmid="300,301")])})
+    assert backup_attention(backup_report(left_out)) == [
+        ("todo", "the backup job vm-nightly leaves out 310 homeassistant", "make deploy TYPE=proxmox")
+    ]
+    assert next(vm for vm in left_out["backups"]["vms"] if vm["vmid"] == 310)["job"] == ""
+    # A VM with no backup yet, the job not run since it was added.
+    fresh = backed_up(archives=[archive(v, DUE + 1) for v in (300, 301)])
+    assert backup_attention(backup_report(fresh)) == [
+        ("todo", "310 homeassistant has no backup yet: vm-nightly runs next in 4 h 0 m", "")
+    ]
+    # A VM that is not on the host says so in its own item, never as a backup.
+    gone = backed_up(resources=[r for r in RESOURCES if r.get("vmid") != 310])
+    model = backup_report(gone)
+    assert backup_attention(model) == [] and model["backups"]["vms"][2]["state"] == "missing"
+
+
+@pytest.mark.parametrize(
+    ("hosted", "text"),
+    [
+        ([], "the backup job vm-nightly is not on the host"),
+        ([hosted_job(enabled=0)], "the backup job vm-nightly is disabled"),
+        ([hosted_job(storage="local")], "the backup job vm-nightly writes to local, not homeserver-backup"),
+    ],
+)
+def test_a_job_that_differs_from_its_configuration(hosted, text):
+    model = backup_report(backed_up(**{"backup-jobs": ok(hosted)}))
+    assert backup_attention(model)[0] == ("todo", text, "make deploy TYPE=proxmox")
+    assert model["exit"] == 0
+
+
+def test_nothing_backed_up_without_a_job():
+    """Without a NAS and without vm_backup_storage there is no job: a thing to do, with where backups could go."""
+    model = backup_report(backed_up(jobs=()))
+    assert backup_attention(model) == [
+        (
+            "todo",
+            "nothing is backed up: no backup job covers 300 homeserver-cp-1, 301 homeserver-worker-1 and 310 "
+            "homeassistant",
+            "vm_backup_storage in local.yml, then make deploy TYPE=proxmox",
+        )
+    ]
+    assert model["exit"] == 0
+
+
+def test_backups_not_read_say_so_and_judge_nothing():
+    model = backup_report(backed_up(**{"backup-jobs": failed("500 permission denied")}))
+    assert model["attention"] == [] and "the backup jobs: 500 permission denied" in model["proxmox"]["errors"]
+    assert {vm["state"] for vm in model["backups"]["vms"]} == {"unknown"}
+    model = backup_report(backed_up(**{"backups-homeserver-backup": failed("storage is not online")}))
+    assert model["attention"] == [] and {vm["state"] for vm in model["backups"]["vms"]} == {"unknown"}
+
+
+def test_the_backups_text():
+    runs = [run(DUE + 1, "job errors"), run(DUE - DAY + 1)]
+    archives = [archive(v, DUE - DAY + 1, gib=9.4) for v in NAMES] + [archive(v, DUE + 1) for v in (300, 310)]
+    prox = backed_up(runs=runs, archives=archives, **{f"log-{upid(DUE + 1)}": ok(run_log(failed={301: FREEZE}))})
+    out = fs.text(backup_report(prox), False)
+    lines = out.splitlines()
+    assert max(len(line) for line in lines) <= 100, out
+    assert "BACKUPS  vm-nightly → homeserver-backup · 02:00 · keeps 7 daily, 4 weekly · next in 4 h 0 m" in lines
+    assert "  300  homeserver-cp-1       19 h ago  ok        1.5 GiB · 2 kept" in lines, out
+    failure = lines.index(
+        "  301  homeserver-worker-1   19 h ago  failed    VM 301 qmp command 'guest-fsfreeze-freeze' failed -"
+    )
+    assert lines[failure + 1] == " " * 49 + "got timeout", out
+    assert lines[failure + 2] == " " * 29 + "43 h ago  ok        9.4 GiB · 1 kept", out
+    assert "       etcd snapshot         28 h ago            2 in ~/.talos/homeserver/etcd" in lines, out
+
+
+def test_the_text_without_a_job_or_a_snapshot():
+    out = fs.text(backup_report(backed_up(jobs=()), snapshots={"dir": "~/.talos/pve-2/etcd", "files": []}), False)
+    assert "BACKUPS  no backup job: 300, 301 and 310 are not backed up" in out
+    assert "       etcd snapshot                —  none yet  in ~/.talos/pve-2/etcd  → make etcd-snapshot" in out
+    assert "  300 " not in out
+    # Not shown unless asked for, and nothing without a cluster's snapshots.
+    assert "BACKUPS" not in fs.text(backup_report(types=("vms",)), False)
+    assert "etcd snapshot" not in fs.text(backup_report(snapshots=None), False)
+
+
+def test_the_backups_report_is_json():
+    model = backup_report()
+    assert json.loads(json.dumps(model)) == model

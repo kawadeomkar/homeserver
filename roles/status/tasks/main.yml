@@ -25,6 +25,12 @@
       {%- if status_cluster_database_label and status_cluster_database_label is not match('^[^=\s]+=[^=\s]+$') -%}
       {%-   set _ = out.append('status_cluster_database_label must be one label as key=value, or empty.') -%}
       {%- endif -%}
+      {%- set complete = status_backup_jobs | selectattr('id', 'defined') | selectattr('schedule', 'defined')
+                         | selectattr('storage', 'defined') | selectattr('id') | selectattr('schedule')
+                         | selectattr('storage') | list -%}
+      {%- if complete | length != status_backup_jobs | length -%}
+      {%-   set _ = out.append('status_backup_jobs must each have an id, a schedule and a storage.') -%}
+      {%- endif -%}
       {%- set vmids = status_vms | map(attribute='vmid') | map('int') | list -%}
       {%- if vmids | select('<', 100) | list or vmids | unique | length != vmids | length -%}
       {%-   set _ = out.append('status_vms must be VMs with distinct VMIDs from 100 up.') -%}

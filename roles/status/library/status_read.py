@@ -80,6 +80,11 @@ NODE = r"[A-Za-z0-9][A-Za-z0-9.-]*"
 VMID = r"[1-9][0-9]{2,8}"
 STORAGE = r"[A-Za-z][A-Za-z0-9_.-]*"
 PATH = r"/[A-Za-z0-9_./-]+"
+# A vzdump task's id, as Proxmox writes it (UPID:<node>:<pid>:<pstart>:<start time>:vzdump:<vmid or none>:<user>:),
+# a count, and a calendar event as Proxmox's schedules are written (02:00, mon..fri 02:00, */30), never an option.
+UPID = rf"UPID:{NODE}:[0-9A-F]{{8,}}:[0-9A-F]{{8,}}:[0-9A-F]{{8,}}:vzdump:[0-9]*:[A-Za-z0-9@._!-]+:"
+COUNT = r"[1-9][0-9]{0,4}"
+SCHEDULE = r"[A-Za-z0-9*][A-Za-z0-9 :.,*/~-]{0,99}"
 # A credentials file, wherever its owner keeps it: no shell ever reads an argument, so any absolute path is one word.
 CONFIG = r"/[^\x00\n]+"
 JSON = ["--output-format", "json"]
@@ -93,7 +98,8 @@ GIT_URL = r"(https://|ssh://)[A-Za-z0-9._~:/@%+=-]+|git@[A-Za-z0-9.-]+:[A-Za-z0-
 GIT_REF = r"refs/(heads|tags)/[A-Za-z0-9._/-]+"
 
 # Every command this module runs, as one regular expression per argument. Nothing here writes, and nothing returns
-# a secret: no other pvesh path, no qm guest command beyond these three reads, apt-get only simulating, kubectl only
+# a secret: no other pvesh path (the backup jobs, the backup tasks and their logs, and when a schedule next fires
+# among them), no qm guest command beyond these three reads, apt-get only simulating, kubectl only
 # listing kinds that hold no secret (the Deployments with the times each field was set), one ConfigMap, a node's
 # kubelet statistics and Alertmanager's alerts, talosctl only the etcd service's state (talosctl get could read the
 # machine configuration, every key of the cluster), and git only the commit a branch points at.
@@ -106,6 +112,11 @@ READS = [
     ["pvesh", "get", f"/nodes/{NODE}/qemu/{VMID}/rrddata", *DAY, *JSON],
     ["pvesh", "get", f"/nodes/{NODE}/qemu/{VMID}/pending", *JSON],
     ["pvesh", "get", f"/nodes/{NODE}/storage/{STORAGE}/content", *JSON],
+    ["pvesh", "get", f"/nodes/{NODE}/storage/{STORAGE}/content", "--content", "backup", *JSON],
+    ["pvesh", "get", "/cluster/backup", *JSON],
+    ["pvesh", "get", "/cluster/jobs/schedule-analyze", "--schedule", SCHEDULE, "--iterations", "2", *JSON],
+    ["pvesh", "get", f"/nodes/{NODE}/tasks", "--typefilter", "vzdump", "--source", "all", "--limit", COUNT, *JSON],
+    ["pvesh", "get", f"/nodes/{NODE}/tasks/{UPID}/log", "--limit", COUNT, *JSON],
     ["qm", "guest", "cmd", VMID, "get-fsinfo|get-osinfo|network-get-interfaces"],
     ["apt-get", "-q", "-s", "dist-upgrade"],
     [*KUBECTL, "get", KINDS, "-A", "-o", "json"],

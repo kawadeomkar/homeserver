@@ -20,9 +20,11 @@
 
 # The day's history and the pending changes of each of this setup's VMs; the guest agent's filesystems and OS of those
 # whose agent reports them (Home Assistant's; Talos's lists no filesystem), and the address of one that serves an app
-# without a URL of its own; the disks on each budgeted storage; the
-# upgrades apt would make, from the lists as last refreshed (a simulation, which is quick, where the API's own list
-# takes four seconds); and whether an upgrade asked for a reboot.
+# without a URL of its own; the disks on each budgeted storage; the upgrades apt would make, from the lists as last
+# refreshed (a simulation, which is quick, where the API's own list takes four seconds); whether an upgrade asked for
+# a reboot; and the backups: the host's jobs (each with its next run), the latest backup runs, running ones among them,
+# the backups on each of this setup's jobs' storages, and when each job's schedule fires next, twice, which gives its
+# period without reading the calendar format here.
 - name: proxmox | Read the host, its storages and its VMs, at once
   status_read:
     commands: "{{ _commands }}"
@@ -64,18 +66,48 @@
       {%-     set _ = c.update({'content-' ~ storage: ['pvesh', 'get', _node ~ '/storage/' ~ storage ~ '/content'] + _json}) -%}
       {%-   endfor -%}
       {%- endif -%}
+      {%- if 'backups' in _types -%}
+      {%-   set _ = c.update({'backup-jobs': ['pvesh', 'get', '/cluster/backup'] + _json,
+                            'backup-tasks': ['pvesh', 'get', _node ~ '/tasks', '--typefilter', 'vzdump', '--source',
+                                             'all', '--limit', '20'] + _json}) -%}
+      {%-   for job in status_backup_jobs -%}
+      {%-     set _ = c.update({'backups-' ~ job.storage: ['pvesh', 'get', _node ~ '/storage/' ~ job.storage ~ '/content',
+                                                         '--content', 'backup'] + _json,
+                              'schedule-' ~ job.id: ['pvesh', 'get', '/cluster/jobs/schedule-analyze', '--schedule',
+                                                     job.schedule | string, '--iterations', '2'] + _json}) -%}
+      {%-   endfor -%}
+      {%- endif -%}
       {{ c }}
+
+# Which VMs a failed backup run failed, and why, is only in its log: read those of the newest few that failed.
+- name: proxmox | Read the logs of the backup runs that failed
+  status_read:
+    commands: >-
+      {%- set c = {} -%}
+      {%- for upid in _runs -%}
+      {%-   set _ = c.update({'log-' ~ upid: ['pvesh', 'get', '/nodes/' ~ status_proxmox_node_name ~ '/tasks/' ~ upid
+                                             ~ '/log', '--limit', '5000', '--output-format', 'json']}) -%}
+      {%- endfor -%}
+      {{ c }}
+    parallel: "{{ status_parallel }}"
+    timeout: "{{ status_timeout }}"
+  register: status_proxmox_logs
+  ignore_unreachable: true
+  when: _runs | length > 0
+  vars:
+    _runs: "{{ status_proxmox_reads.results | default({}) | status_backup_failed_runs }}"
 
 - name: proxmox | Work out what the host says
   ansible.builtin.set_fact:
     status_found:
       proxmox: >-
-        {{ {'unread': _unread, 'node': status_proxmox_node_name, 'results': status_proxmox_reads.results | default({})}
+        {{ {'unread': _unread, 'node': status_proxmox_node_name,
+            'results': status_proxmox_reads.results | default({}) | combine(status_proxmox_logs.results | default({}))}
            | status_proxmox(status_vms, status_budget_storages, status_storage_headroom_gib,
-                            status_reboot_required_file) }}
+                            status_reboot_required_file, status_backup_jobs) }}
   vars:
     _missed: >-
-      {{ [status_proxmox_name, status_proxmox_reads] | selectattr('unreachable', 'defined')
+      {{ [status_proxmox_name, status_proxmox_reads, status_proxmox_logs] | selectattr('unreachable', 'defined')
          | selectattr('unreachable') | list }}
     _unread: >-
       {{ (_missed | first).msg | default('it did not answer') if _missed
