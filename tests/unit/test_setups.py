@@ -331,9 +331,18 @@ def test_the_command_line_says_why_it_refuses(root, capsys, argv, says):
 
 
 def test_the_command_line_makes_a_setup_of_the_example(root, capsys):
+    assert setups.main(["name"], root=root) == 0 and capsys.readouterr().out == "", "no setup, no name"
     assert setups.main(["new", "home"], root=root) == 0
     assert "Made setup home" in capsys.readouterr().out
     assert (root / LOCAL).read_text() == wizard.commented_example(root)
+    assert setups.main(["name"], root=root) == 0 and capsys.readouterr().out == "home\n", "for the run's log"
+
+
+def test_without_a_name_new_makes_the_checkouts_own_vault(root, capsys):
+    assert setups.main(["new"], root=root) == 0
+    assert decrypt(root / VAULT, root / VAULT_PASS) == {}
+    assert not links(root) and stat.S_IMODE((root / VAULT_PASS).stat().st_mode) == 0o600
+    assert setups.main(["new"], root=root) == 0 and "nothing to do" in capsys.readouterr().out
 
 
 def test_the_store_is_never_inside_the_checkout(root, monkeypatch, capsys):
@@ -388,7 +397,7 @@ def test_make_vault_makes_lists_and_switches_setups(tmp_path):
     assert switched.returncode == 0 and "uses setup home now" in switched.stdout, switched.stdout + switched.stderr
     assert setups.target(checkout / LOCAL) == store / "home" / "local.yml"
     plain = make(checkout, "vault", "TYPE=new", f"SETUPS={store}")
-    assert plain.returncode != 0 and "uses a setup" in plain.stdout, "never written through a setup's links"
+    assert plain.returncode != 0 and "uses setup home" in plain.stderr, "never written through a setup's links"
     nameless = make(checkout, "vault", "TYPE=switch", f"SETUPS={store}")
     assert nameless.returncode != 0 and "needs NAME" in nameless.stderr
     both = make(checkout, "vault", "TYPE=list,switch")

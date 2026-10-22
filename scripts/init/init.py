@@ -45,12 +45,10 @@ import setups
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-LOCAL = Path("group_vars/all/local.yml")
+LOCAL, VAULT, VAULT_PASS = (setups.FILES[f] for f in ("local.yml", "vault.yml", "vault_pass"))
 EXAMPLE = Path("group_vars/all/local.yml.example")
-VAULT = Path("group_vars/all/local.vault.yml")
 # Where the vault was committed until 2026-10-20: a checkout from before moves it (README.md, Setups and the vault).
-OLD_VAULT = Path("group_vars/all/vault.yml")
-VAULT_PASS = Path(".vault_pass")
+OLD_VAULT = setups.OLD_VAULT
 INVENTORY = Path("inventory")
 VALIDATE = Path("scripts/init/validate.yml")
 
@@ -261,33 +259,21 @@ class Vault:
         if not self.path.is_file():
             self.state = "not moved" if (self.root / OLD_VAULT).is_file() else "missing"
             return
-        from ansible.errors import AnsibleError
-        from ansible.parsing.vault import VaultLib, VaultSecret, parse_vaulttext_envelope
+        from ansible.parsing.vault import parse_vaulttext_envelope
 
-        secret = VaultSecret(self.password_file.read_bytes().strip())
+        password = self.password_file.read_bytes().strip()
         raw = self.path.read_bytes()
-        try:
-            plain = VaultLib([("default", secret)]).decrypt(raw)
-        except AnsibleError:
+        plain = setups.decrypt(raw, password)
+        if plain is None:
             self.state = "does not open"
             return
-        self._lib = VaultLib([("default", secret)])
-        self._secret = secret
+        self._password = password
         self._vault_id = parse_vaulttext_envelope(raw)[3]
         self.doc = YamlKeys(plain.decode())
         self.state = "open"
 
     def opens_with(self, password: str) -> bool:
-        from ansible.errors import AnsibleError
-        from ansible.parsing.vault import VaultLib, VaultSecret
-
-        if not self.path.is_file():
-            return False
-        try:
-            VaultLib([("default", VaultSecret(password.encode()))]).decrypt(self.path.read_bytes())
-        except AnsibleError:
-            return False
-        return True
+        return self.path.is_file() and setups.decrypt(self.path.read_bytes(), password.encode()) is not None
 
     def get(self, key: str) -> Any:
         return self.doc.values().get(key) if self.doc else None
@@ -301,7 +287,7 @@ class Vault:
             self._save()
 
     def _save(self) -> None:
-        data = self._lib.encrypt(self.doc.text.encode(), secret=self._secret, vault_id=self._vault_id)
+        data = setups.encrypt(self.doc.text, self._password, self._vault_id)
         write_file(self.path, data, stat.S_IMODE(self.path.stat().st_mode))
         self.changed = True
 
@@ -851,9 +837,10 @@ class Init:
             self.console.say(f"  This checkout uses setup {name} now: the answers below go into it.")
             return
 
-    def adoptable(self) -> bool:
+    def adoptable(self, opens: bool | None = None) -> bool:
+        """Whether this checkout's own files can become a setup; opens, once the vault is read."""
         try:
-            setups.adoptable(self.root)
+            setups.adoptable(self.root, opens)
         except setups.Refused:
             return False
         return True
@@ -1188,7 +1175,7 @@ class Init:
         ) + (["the cluster's credentials directory", "its age key"] if on["cluster"] else [])
         listed = keep[0] if len(keep) == 1 else f"{', '.join(keep[:-1])} and {keep[-1]}"
         manual.append(f"Keep copies of {listed} in your password manager, and update them when they change")
-        if not self.setup and self.adoptable():
+        if not self.setup and self.adoptable(self.vault.is_open):
             notes.append(
                 "make vault TYPE=new NAME=<name> FROM=current keeps local.yml, the vault and .vault_pass as a named "
                 "setup outside the checkout, to switch between machines (README.md, Setups and the vault)"

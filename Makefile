@@ -3,7 +3,7 @@
 # Every Python tool comes from the project's virtualenv, so the versions locked in
 # poetry.lock are the ones that run, here and in CI (.github/workflows/ci.yml). Poetry, kubeconform,
 # kube-linter and gitleaks are the exceptions: they come from PATH (pipx or Homebrew locally; CI pins each
-# version, and each binary's checksum), as does openssl, which the idempotence tests and make vault TYPE=new use.
+# version, and each binary's checksum), as does openssl, which the idempotence tests use.
 # The virtualenv is yours to make and keep, wherever you keep them (pyenv virtualenv, python3 -m venv): make never
 # creates one, and make install fills it from the lock. make uses the active one (VIRTUAL_ENV, set by
 # `pyenv activate <env>` or `source <env>/bin/activate`); otherwise the virtualenv python3 runs from, but only when
@@ -97,11 +97,11 @@ ANSIBLE_ARGS ?=
 PLAYBOOK := $(BIN)/ansible-playbook
 # Setups (scripts/init/setups.py): each machine's local.yml, vault and .vault_pass, kept together in a store outside the
 # checkout, SETUPS or $XDG_CONFIG_HOME/homeserver/setups (~/.config/homeserver/setups without it), and the one the
-# checkout uses linked in at LOCAL, VAULT and .vault_pass. NAME names a setup for make vault, and FROM=current makes
-# this checkout's own files one, with TYPE=new alone. Both come from make's command line alone, never the environment,
-# where a shell may have put a NAME of its own (WSL sets it to the machine's name); and both are make vault's alone:
-# any other target runs with the setup the checkout links to, so make deploy NAME=lab is refused rather than run with
-# another setup. SETUP_NAME is the setup the checkout links to, for the log's name.
+# checkout uses linked in at group_vars/all/local.yml, VAULT and .vault_pass. NAME names a setup for make vault, and
+# FROM=current makes this checkout's own files one, with TYPE=new alone. Both come from make's command line alone,
+# never the environment, where a shell may have put a NAME of its own (WSL sets it to the machine's name); and both are
+# make vault's alone: any other target runs with the setup the checkout links to, so make deploy NAME=lab is refused
+# rather than run with another setup.
 NAME   :=
 FROM   :=
 SETUPS ?=
@@ -113,9 +113,9 @@ NOT_VAULT := $(filter-out vault vault/% help,$(MAKECMDGOALS))
 $(if $(NOT_VAULT),$(error NAME and FROM are make vault's: make $(firstword $(NOT_VAULT)) runs with the setup this checkout links to, so link the one you mean in first, make vault TYPE=switch NAME=<setup>))
 $(if $(and $(FROM),$(filter-out new,$(or $(TYPES),edit))),$(error FROM=current is make vault TYPE=new's alone: make vault TYPE=new NAME=<name> FROM=current))
 endif
-LOCAL      := group_vars/all/local.yml
 SETUPS_PY   = $(BIN)/python scripts/init/setups.py
-SETUP_NAME := $(shell [ -L $(LOCAL) ] && basename "$$(dirname "$$(readlink $(LOCAL))")")
+# The setup the checkout links to, for the log's name: asked of setups.py once, when a playbook run's recipe is read.
+SETUP_NAME  = $(eval SETUP_NAME := $$(shell $(SETUPS_PY) name 2>/dev/null))$(SETUP_NAME)
 # Every playbook run is also written to its own log (git-ignored: it holds addresses), named after
 # the setup, the target, TYPE and TAGS, e.g. logs/20261004-210501-home-deploy-truenas-truenas_network.log.
 # logs/latest.log points at the newest. The API key never appears: the modules mark it no_log.
@@ -231,9 +231,9 @@ lock: ## Update poetry.lock after editing pyproject.toml
 	$(ENV_FOUND)
 	$(POETRY_RUN) $(if $(UPDATE),update --lock $(UPDATE),lock)
 
-# The vault: git-ignored, at a path no commit ever held. Until 2026-10-20 it was committed at OLD_VAULT.
+# The vault: git-ignored, at a path no commit ever held. Until 2026-10-20 it was committed as
+# group_vars/all/vault.yml.
 VAULT     := group_vars/all/local.vault.yml
-OLD_VAULT := group_vars/all/vault.yml
 
 .PHONY: vault vault/edit vault/new vault/list vault/switch
 vault: vault/$(if $(TYPES),$(TYPES),edit) ## Edit the vault's secrets (addresses go in local.yml), then lint them; NAME= another setup's
@@ -260,36 +260,14 @@ vault/switch:
 # vault and a random password (FROM=current: this checkout's own three files, moved into it).
 # Without NAME, the vault in the checkout itself. Every run decrypts the vault, so it and .vault_pass must exist, and
 # both are yours alone: neither is ever committed (.gitignore; README.md, Setups and the vault). This makes what is
-# missing: a random .vault_pass readable by its owner alone, and an empty vault encrypted with it. A vault that already
-# opens with .vault_pass is left alone, and one that does not is refused, since it may hold your secrets with their
-# password lost; so is a checkout that still has the vault's old, committed place, whose vault moves rather than a new
-# one being made beside it, and one that uses a setup, whose links this would write through. Without ansible-vault it
-# stops before anything else. The empty vault reaches ansible-vault on stdin, so the file is written only once
-# encryption has worked.
+# missing: a random .vault_pass readable by its owner alone, and an empty vault encrypted with it, both encrypted
+# before either is written. A vault that already opens with .vault_pass is left alone, and one that does not is
+# refused, since it may hold your secrets with their password lost; so is a checkout that still has the vault's old,
+# committed place, whose vault moves rather than a new one being made beside it, and one that uses a setup, whose
+# links this would write through (scripts/init/setups.py). Without ansible-vault it stops before anything else.
 vault/new:
 	@test -x $(BIN)/ansible-vault || { echo "ansible-vault is not in $(VENV): activate the project's virtualenv, or pass VENV=<path>"; exit 1; }
-ifneq ($(NAME)$(FROM),)
 	@$(SETUPS_PY) new '$(NAME)' --from='$(FROM)'
-else
-	@if [ -L .vault_pass ] || [ -L $(VAULT) ] || [ -L $(LOCAL) ]; then \
-	  echo "This checkout uses a setup (make vault TYPE=list): make vault TYPE=new NAME=<name> makes another."; \
-	  exit 1; \
-	elif [ -f .vault_pass ] && [ -f $(VAULT) ] && $(BIN)/ansible-vault view $(VAULT) >/dev/null 2>&1; then \
-	  echo "$(VAULT) already opens with .vault_pass: nothing to do."; \
-	elif [ -f $(VAULT) ]; then \
-	  echo "$(VAULT) does not open with .vault_pass, so it may hold your secrets: restore the .vault_pass" \
-	    "that opens it rather than replace it. To start afresh all the same, move the file out of the repository first."; \
-	  exit 1; \
-	elif [ -f $(OLD_VAULT) ]; then \
-	  echo "$(OLD_VAULT) is where the vault was committed until 2026-10-20. Move it rather than make a new one:" \
-	    "README.md, Setups and the vault, says how."; \
-	  exit 1; \
-	else \
-	  umask 077 && { [ -f .vault_pass ] || openssl rand -hex 32 > .vault_pass; } \
-	  && printf -- '---\n{}\n' | $(BIN)/ansible-vault encrypt --output $(VAULT) \
-	  && echo "Made $(VAULT), encrypted with .vault_pass. Keep a copy of both in your password manager."; \
-	fi
-endif
 
 ##@ Code
 .PHONY: lint $(addprefix lint/,$(lint_TYPES))
