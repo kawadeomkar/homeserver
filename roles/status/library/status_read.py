@@ -141,6 +141,8 @@ READS = [
     ],
     ["talosctl", "--talosconfig", CONFIG, "service", "etcd"],
     ["git", "ls-remote", GIT_URL, GIT_REF],
+    # This machine's own Tailscale: where the tailnet's split DNS sends the apps' domain.
+    ["tailscale", "dns", "status", "--json"],
 ]
 _READS = [[re.compile(part) for part in form] for form in READS]
 

@@ -365,7 +365,16 @@ def test_what_needs_attention_and_the_exit_code():
     assert model["attention"][1]["command"] == "make deploy TYPE=proxmox"
     assert model["attention"][2]["text"] == "301 homeserver-worker-1 waits for a restart to apply memory, watchdog"
     assert model["attention"][2]["command"] == "qm reboot 301"
-    assert model["exit"] == 0 and model["types"] == ["apps", "admin", "vms", "storage", "backups", "cluster", "nas"]
+    assert model["exit"] == 0 and model["types"] == [
+        "apps",
+        "admin",
+        "tailscale",
+        "vms",
+        "storage",
+        "backups",
+        "cluster",
+        "nas",
+    ]
     # A command not given is suggested by text alone.
     assert fs.report({"proxmox": found()}, SETUP)["attention"][1]["command"] == ""
 
@@ -421,7 +430,7 @@ def test_types_narrow_the_report():
     model = fs.report({"proxmox": found()}, SETUP, ["storage"])
     assert model["types"] == ["storage"] and model["attention"] == []
     assert fs.unknown_types(["vms", "apps", "nas", "disks"]) == ["disks"]
-    assert fs.types_shown([]) == ["apps", "admin", "vms", "storage", "backups", "cluster", "nas"]
+    assert fs.types_shown([]) == ["apps", "admin", "tailscale", "vms", "storage", "backups", "cluster", "nas"]
     assert fs.types_shown(["storage", "vms"]) == ["vms", "storage"]
 
 
@@ -461,7 +470,7 @@ def test_the_text_says_what_matters():
     assert "the host's view: ballooning is off" in out
     assert "disks 68 of 68 GiB budgeted" in out
     assert out.rstrip().endswith(
-        "exit 0 · nothing is wrong · make status TYPE=apps|admin|vms|storage|backups|cluster|nas · JSON=1"
+        "exit 0 · nothing is wrong · TYPE=apps|admin|tailscale|vms|storage|backups|cluster|nas · JSON=1"
     )
 
 
@@ -495,7 +504,7 @@ def test_the_text_of_a_host_not_read():
     out = fs.text(fs.report({"proxmox": {"unread": "it did not answer"}}, SETUP), False)
     assert "ATTENTION  1 problem · 0 to do" in out and "could not be read: it did not answer" in out
     assert "VMS" not in out and out.rstrip().endswith(
-        "exit 2 · 1 source not read · make status TYPE=apps|admin|vms|storage|backups|cluster|nas · JSON=1"
+        "exit 2 · 1 source not read · TYPE=apps|admin|tailscale|vms|storage|backups|cluster|nas · JSON=1"
     )
 
 
@@ -2080,3 +2089,275 @@ def test_the_text_without_a_job_or_a_snapshot():
 def test_the_backups_report_is_json():
     model = backup_report()
     assert json.loads(json.dumps(model)) == model
+
+
+# ------------------------------------------------------------------------------------------ Tailscale ---
+
+ROUTE = "192.0.2.0/24"
+SUFFIX = "tail0example" + ".ts.net"
+TAILNET_IPV4 = ".".join(["100", "64", "0", "20"])
+TAILSCALE_COMMANDS = {
+    "tailscale": "make deploy TYPE=proxmox",
+    "tailscale_login": "an auth key in the vault, then make deploy TYPE=proxmox",
+    "split_dns": "the admin console's DNS page",
+}
+NODE_PAGE = {"name": "Proxmox VE", "url": "https://192.0.2.20:8006", "tailscale_node": True}
+ADMIN_PAGES = [
+    NODE_PAGE,
+    {"name": "TrueNAS", "url": "https://192.0.2.10"},
+    {"name": "Kubernetes API", "url": "https://192.0.2.30:6443"},
+    {"name": "Talos API", "url": "192.0.2.30:50000"},
+]
+
+
+def tail_state(routes=(ROUTE,), served=True, **more):
+    """What roles/proxmox_tailscale's status entry point records for a subnet router that is as configured."""
+    state = {
+        "wanted_routes": list(routes),
+        "wanted_tags": ["tag:homeserver"],
+        "guard_hosts": ["192.0.2.10"],
+        "guard_allow": ["tcp/443"],
+        "installed": True,
+        "running": True,
+        "backend": "Running",
+        "version": "1.104.2",
+        "suffix": SUFFIX,
+        "dns_name": f"pve.{SUFFIX}",
+        "addresses": [TAILNET_IPV4],
+        "tags": ["tag:homeserver"],
+        "key_expiry": "",
+        "routes": [{"route": r, "wanted": True, "advertised": True, "served": served} for r in routes],
+        "prefs_read": True,
+        "differ": [],
+        "settings": {"accept-routes": False, "accept-dns": False, "ssh": False, "auto-update": False},
+        "snat": True,
+        "serve": False,
+        "health": [],
+        "guard": {
+            "loaded": True,
+            "routes": list(routes),
+            "guarded": ["192.0.2.10"],
+            "allow": {"192.0.2.10": ["tcp/443"]},
+        },
+        "forwarding": bool(routes),
+        "console": [],
+    }
+    return state | more
+
+
+def tailnet_dns(routes=None, suffix=SUFFIX):
+    """tailscale dns status --json on this machine, with the tailnet's split DNS routes."""
+    data = {
+        "TailscaleDNS": True,
+        "CurrentTailnet": {"MagicDNSEnabled": True, "MagicDNSSuffix": suffix},
+        "SplitDNSRoutes": {"ts.net.": [{"Addr": "192.0.2.53"}], **(routes or {})},
+    }
+    return {"rc": 0, "stdout": json.dumps(data), "stderr": ""}
+
+
+def tail_report(state=None, types=(), dns=None, admin=ADMIN_PAGES, setup=FULL_SETUP):
+    return fs.report(
+        {"proxmox": found(), "cluster": cluster_found(), "tailscale": tail_state() if state is None else state},
+        setup,
+        types,
+        probes=probes(),
+        admin=admin,
+        commands=TAILSCALE_COMMANDS,
+        now=NOW,
+        tailnet_dns=dns,
+    )
+
+
+def test_the_apps_through_a_route_this_host_serves():
+    model = tail_report(dns=tailnet_dns({"homeserver.internal.": [{"Addr": "192.0.2.1"}]}))
+    assert model["tailscale"]["reach"] == {
+        "state": "served",
+        "route": ROUTE,
+        "source": "192.0.2.20",
+        "allowed": True,
+        "split_dns": ["192.0.2.1"],
+        "domain": "homeserver.internal",
+    }
+    assert [a for a in model["attention"] if a["subject"] == "tailscale"] == []
+    out = fs.text(model, False)
+    # Under the apps: how they answer from the tailnet, wrapped between its phrases.
+    reach = f" Tailnet    the same URLs, through {ROUTE} · clients arrive as 192.0.2.20, inside the allowlist\n"
+    assert reach + "            split DNS sends homeserver.internal to 192.0.2.1\n" in out, out
+    assert "ADMIN             LAN                       TAILNET\n" in out
+    assert f" Proxmox VE       https://192.0.2.20:8006   https://pve.{SUFFIX}:8006\n" in out
+    assert " TrueNAS          https://192.0.2.10        through the route, tcp/443 only\n" in out
+    assert " Kubernetes API   https://192.0.2.30:6443   through the route\n" in out
+    assert "TAILSCALE  subnet router on the Proxmox host · 1.104.2 · ● running" in out
+    assert f" Node       pve.{SUFFIX} · {TAILNET_IPV4} · tag:homeserver · key expiry off" in out
+    assert f" Routes     {ROUTE} advertised, served by this host" in out
+    assert " Guard      loaded · guards 192.0.2.10 (tcp/443 only) · forwarding on" in out
+    assert " Prefs      accept-routes off · accept-dns off · ssh off · auto-update off · as configured" in out
+    assert " Health     no warnings" in out
+    assert max(len(line) for line in out.splitlines()) <= 100, out
+
+
+def test_a_parent_domain_or_none_in_the_tailnets_split_dns():
+    parent = tail_report(dns=tailnet_dns({"internal.": [{"Addr": "192.0.2.1"}]}))
+    assert parent["tailscale"]["reach"]["split_dns"] == ["192.0.2.1"]
+    missing = tail_report(dns=tailnet_dns())
+    assert missing["tailscale"]["reach"]["split_dns"] == []
+    item = next(a for a in missing["attention"] if a["subject"] == "tailscale")
+    assert item == {
+        "level": "todo",
+        "subject": "tailscale",
+        "text": "the tailnet has no split DNS for homeserver.internal: away from home, its clients do not resolve the "
+        "apps",
+        "command": "the admin console's DNS page",
+    }
+    assert "no split DNS for homeserver.internal\n" in fs.text(missing, False)
+    # This machine on another tailnet, or without Tailscale: nothing said either way.
+    for dns in (tailnet_dns(suffix="other" + ".ts.net"), {"rc": None, "stdout": "", "error": "No such file"}, None):
+        model = tail_report(dns=dns)
+        assert model["tailscale"]["reach"]["split_dns"] is None
+        assert [a for a in model["attention"] if a["subject"] == "tailscale"] == []
+
+
+def test_the_apps_through_a_route_another_router_serves():
+    console = [{"kind": "routes", "text": f"Advertised but not approved, or served by another subnet router: {ROUTE}."}]
+    model = tail_report(tail_state(served=False, console=console))
+    assert model["tailscale"]["reach"]["state"] == "not served"
+    assert [(a["level"], a["text"], a["command"]) for a in model["attention"] if a["subject"] == "tailscale"] == [
+        ("todo", console[0]["text"], "")
+    ]
+    out = fs.text(model, False)
+    assert f" Tailnet    through {ROUTE}, which this host does not serve" in out
+    assert " Kubernetes API   https://192.0.2.30:6443   route not served by this host" in out
+    assert f" Routes     {ROUTE} advertised, not served by this host" in out
+
+
+def test_tailnet_clients_outside_the_allowlist():
+    cluster = cluster_found(
+        settings=ok({**SETTINGS, "data": SETTINGS["data"] | {"INGRESS_ALLOWED_RANGE": "127.0.0.1/32"}})
+    )
+    model = fs.report(
+        {"proxmox": found(), "cluster": cluster, "tailscale": tail_state()},
+        FULL_SETUP,
+        probes=probes(),
+        admin=ADMIN_PAGES,
+        commands=TAILSCALE_COMMANDS,
+        now=NOW,
+    )
+    assert model["tailscale"]["reach"]["allowed"] is False
+    assert "clients arrive as 192.0.2.20, outside the allowlist" in fs.text(model, False)
+
+
+def test_a_host_on_the_tailnet_without_routes():
+    guard = {"loaded": True, "routes": [], "guarded": ["192.0.2.10"], "allow": {"192.0.2.10": ["tcp/443"]}}
+    model = tail_report(tail_state(routes=(), guard=guard))
+    assert model["tailscale"]["reach"] == {"state": "no route"}
+    assert [a for a in model["attention"] if a["subject"] == "tailscale"] == []
+    out = fs.text(model, False)
+    assert "TAILSCALE  a device of its own on the Proxmox host · 1.104.2 · ● running" in out
+    assert " Routes     none, so nothing is forwarded from the tailnet" in out
+    assert " Guard      loaded · guards 192.0.2.10 (tcp/443 only) · forwarding off" in out
+    assert " Tailnet    no route is advertised, so from the tailnet only the Proxmox host answers" in out
+    assert " Talos API        192.0.2.30:50000          not without a route" in out
+
+
+@pytest.mark.parametrize(
+    "state, expected",
+    [
+        (
+            {"installed": False, "running": False, "why": "No such file"},
+            [("todo", "Tailscale is not on the Proxmox host yet", "make deploy TYPE=proxmox")],
+        ),
+        (
+            {"running": False, "why": "failed to connect to local tailscaled"},
+            [
+                (
+                    "problem",
+                    "tailscaled does not answer on the Proxmox host: failed to connect to local tailscaled",
+                    "make deploy TYPE=proxmox",
+                )
+            ],
+        ),
+        (
+            {"backend": "NeedsLogin"},
+            [
+                (
+                    "todo",
+                    "the Proxmox host is not logged in to the tailnet",
+                    "an auth key in the vault, then make deploy TYPE=proxmox",
+                )
+            ],
+        ),
+        (
+            {"backend": "Stopped"},
+            [("problem", "Tailscale is stopped on the Proxmox host (tailscale down)", "make deploy TYPE=proxmox")],
+        ),
+        (
+            {"guard": {"loaded": False}},
+            [
+                (
+                    "problem",
+                    "the tailnet guard's table is not loaded, so tailscaled runs unguarded",
+                    "make deploy TYPE=proxmox",
+                )
+            ],
+        ),
+        (
+            {"guard": {"loaded": True, "routes": [ROUTE], "guarded": [], "allow": {}}},
+            [
+                (
+                    "todo",
+                    "the tailnet guard on the host is not the one this configuration describes",
+                    "make deploy TYPE=proxmox",
+                )
+            ],
+        ),
+        (
+            {"forwarding": False},
+            [("problem", f"the host forwards no IPv4, so {ROUTE} leads nowhere", "make deploy TYPE=proxmox")],
+        ),
+        (
+            {"differ": ["accept-dns"]},
+            [("todo", "the host's Tailscale preferences differ: accept-dns", "make deploy TYPE=proxmox")],
+        ),
+        (
+            {
+                "health": ["UDP GRO is off"],
+                "console": [{"kind": "health", "text": "Tailscale reports: UDP GRO is off"}],
+            },
+            [],
+        ),
+    ],
+    ids=[
+        "not-installed",
+        "not-running",
+        "needs-login",
+        "stopped",
+        "guard-not-loaded",
+        "guard-differs",
+        "forwarding-off",
+        "preferences-differ",
+        "health-shown-only",
+    ],
+)
+def test_what_needs_attention_about_tailscale(state, expected):
+    model = tail_report(tail_state(**state))
+    found_items = [(a["level"], a["text"], a["command"]) for a in model["attention"] if a["subject"] == "tailscale"]
+    assert found_items == expected
+    out = fs.text(model, False)
+    assert max(len(line) for line in out.splitlines()) <= 100, out
+
+
+def test_tailscale_that_does_not_answer_in_the_text():
+    out = fs.text(tail_report(tail_state(running=False, why="failed to connect to local tailscaled")), False)
+    assert "TAILSCALE  subnet router on the Proxmox host · ● not running" in out
+    assert " Why        failed to connect to local tailscaled" in out
+    # Without a running node, the admin pages have no tailnet column.
+    assert "TAILNET" not in out and " Proxmox VE       https://192.0.2.20:8006\n" in out
+    unread = fs.text(tail_report({"unread": "it did not answer"}), False)
+    assert "TAILSCALE  not read: the Proxmox host did not answer" in unread
+
+
+def test_no_tailscale_section_when_it_is_off():
+    model = tail_report({})
+    assert model["tailscale"] is None and "TAILSCALE" not in fs.text(model, False)
+    assert all("tailnet" not in page for page in model["admin"])
+    assert "TAILSCALE" not in fs.text(tail_report(types=["apps", "vms"]), False)

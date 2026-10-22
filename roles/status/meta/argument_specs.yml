@@ -187,6 +187,12 @@ argument_specs:
         type: str
         default: ""
         description: The TrueNAS release (major.minor) the NAS's configuration is written for; empty compares none.
+      status_tailscale_state:
+        type: dict
+        default: {}
+        description: >-
+          The Proxmox host's Tailscale, as roles/proxmox_tailscale's status entry point records it in
+          proxmox_tailscale_status_state; empty when it is off.
       status_parallel:
         type: int
         default: 8
@@ -224,14 +230,16 @@ argument_specs:
         type: list
         elements: dict
         default: []
-        description: The admin pages the report lists, each {name, url}.
+        description: >-
+          The admin pages the report lists, each {name, url}; tailscale_node marks the page the Proxmox host serves
+          itself, which its tailnet name reaches too.
       status_commands:
         type: dict
         default: {}
         description: >-
           The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials,
-          allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot. One left out is
-          suggested by text alone.
+          allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale,
+          tailscale_login, split_dns. One left out is suggested by text alone.
   report:
     short_description: Put make status's findings together, write the report and show it
     description:
@@ -279,11 +287,13 @@ argument_specs:
         type: list
         elements: dict
         default: []
-        description: The admin pages the report lists, each {name, url}.
+        description: >-
+          The admin pages the report lists, each {name, url}; tailscale_node marks the page the Proxmox host serves
+          itself, which its tailnet name reaches too.
       status_commands:
         type: dict
         default: {}
         description: >-
           The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials,
-          allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot. One left out is
-          suggested by text alone.
+          allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale,
+          tailscale_login, split_dns. One left out is suggested by text alone.

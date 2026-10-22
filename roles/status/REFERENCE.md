@@ -308,6 +308,16 @@ Description: Read the homeserver's machines without changing them, and report wh
   
   
 
+  - **status_tailscale_state**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: The Proxmox host's Tailscale, as roles/proxmox_tailscale's status entry point records it in proxmox_tailscale_status_state; empty when it is off.
+  
+  
+  
+
   - **status_parallel**
     - **Required**: false
     - **Type**: int
@@ -393,7 +403,7 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Type**: list
     - **Default**: []
   
-    - **Description**: The admin pages the report lists, each {name, url}.
+    - **Description**: The admin pages the report lists, each {name, url}; tailscale_node marks the page the Proxmox host serves itself, which its tailnet name reaches too.
   
   
   
@@ -405,7 +415,7 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Type**: dict
     - **Default**: {}
   
-    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot. One left out is suggested by text alone.
+    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns. One left out is suggested by text alone.
   
   
   
@@ -508,7 +518,7 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Type**: list
     - **Default**: []
   
-    - **Description**: The admin pages the report lists, each {name, url}.
+    - **Description**: The admin pages the report lists, each {name, url}; tailscale_node marks the page the Proxmox host serves itself, which its tailnet name reaches too.
   
   
   
@@ -520,7 +530,7 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Type**: dict
     - **Default**: {}
   
-    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot. One left out is suggested by text alone.
+    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns. One left out is suggested by text alone.
   
   
   
@@ -566,16 +576,17 @@ Description: Read the homeserver's machines without changing them, and report wh
 | [status_cluster_snapshot_dir](defaults/main.yml#L57)   | str |  |    
 | [status_nas_state](defaults/main.yml#L60)   | dict | `{}` |    
 | [status_nas_release](defaults/main.yml#L61)   | str |  |    
-| [status_parallel](defaults/main.yml#L63)   | int | `8` |    
-| [status_timeout](defaults/main.yml#L64)   | int | `30` |    
-| [status_hosts](defaults/main.yml#L67)   | list | `[]` |    
-| [status_report_file](defaults/main.yml#L68)   | str |  |    
-| [status_color](defaults/main.yml#L69)   | bool | `False` |    
-| [status_quiet](defaults/main.yml#L70)   | bool | `False` |    
-| [status_probe_apps](defaults/main.yml#L73)   | bool | `True` |    
-| [status_probe_timeout](defaults/main.yml#L74)   | int | `5` |    
-| [status_admin](defaults/main.yml#L76)   | list | `[]` |    
-| [status_commands](defaults/main.yml#L82)   | dict | `{}` |    
+| [status_tailscale_state](defaults/main.yml#L63)   | dict | `{}` |    
+| [status_parallel](defaults/main.yml#L65)   | int | `8` |    
+| [status_timeout](defaults/main.yml#L66)   | int | `30` |    
+| [status_hosts](defaults/main.yml#L69)   | list | `[]` |    
+| [status_report_file](defaults/main.yml#L70)   | str |  |    
+| [status_color](defaults/main.yml#L71)   | bool | `False` |    
+| [status_quiet](defaults/main.yml#L72)   | bool | `False` |    
+| [status_probe_apps](defaults/main.yml#L75)   | bool | `True` |    
+| [status_probe_timeout](defaults/main.yml#L76)   | int | `5` |    
+| [status_admin](defaults/main.yml#L79)   | list | `[]` |    
+| [status_commands](defaults/main.yml#L87)   | dict | `{}` |    
 
 
 
@@ -619,6 +630,7 @@ Description: Read the homeserver's machines without changing them, and report wh
 | ---- | ------ | -------------- |
 | report ¦ Put the findings together | ansible.builtin.set_fact | False |
 | report ¦ Ask the apps' addresses | status_probe | True |
+| report ¦ Read this machine's Tailscale DNS | status_read | True |
 | report ¦ Rank what needs attention | ansible.builtin.set_fact | False |
 | report ¦ Write the report | block | True |
 | report ¦ Make the report's directory | ansible.builtin.file | False |
@@ -714,13 +726,14 @@ classDef rescue stroke:#665352,stroke-width:2px;
 
   Start-->|Task| report___Put_the_findings_together0[report   put the findings together]:::task
   report___Put_the_findings_together0-->|Task| report___Ask_the_apps__addresses1[report   ask the apps  addresses<br>When: **status probe apps and  targets   length   0**]:::task
-  report___Ask_the_apps__addresses1-->|Task| report___Rank_what_needs_attention2[report   rank what needs attention]:::task
-  report___Rank_what_needs_attention2-->|Block Start| report___Write_the_report3_block_start_0[[report   write the report<br>When: **status report file   length   0**]]:::block
-  report___Write_the_report3_block_start_0-->|Task| report___Make_the_report_s_directory0[report   make the report s directory]:::task
+  report___Ask_the_apps__addresses1-->|Task| report___Read_this_machine_s_Tailscale_DNS2[report   read this machine s tailscale dns<br>When: **status findings tailscale   default      routes  <br>default       selectattr  advertised     list  <br>length   0**]:::task
+  report___Read_this_machine_s_Tailscale_DNS2-->|Task| report___Rank_what_needs_attention3[report   rank what needs attention]:::task
+  report___Rank_what_needs_attention3-->|Block Start| report___Write_the_report4_block_start_0[[report   write the report<br>When: **status report file   length   0**]]:::block
+  report___Write_the_report4_block_start_0-->|Task| report___Make_the_report_s_directory0[report   make the report s directory]:::task
   report___Make_the_report_s_directory0-->|Task| report___Write_the_report_as_JSON1[report   write the report as json]:::task
-  report___Write_the_report_as_JSON1-.->|End of Block| report___Write_the_report3_block_start_0
-  report___Write_the_report_as_JSON1-->|Task| report___Show_the_report4[report   show the report<br>When: **not status quiet**]:::task
-  report___Show_the_report4-->End
+  report___Write_the_report_as_JSON1-.->|End of Block| report___Write_the_report4_block_start_0
+  report___Write_the_report_as_JSON1-->|Task| report___Show_the_report5[report   show the report<br>When: **not status quiet**]:::task
+  report___Show_the_report5-->End
 ```
 
 

@@ -135,6 +135,11 @@ left there does nothing.
    - `nft list table inet tailnet_guard` shows every address `local.yml` gives the NAS in `guarded`;
    - `systemctl show -p Requires,After tailscaled` names `tailnet-guard.service`.
 
+`make status TYPE=tailscale,admin` says the same from this machine at any time: the node, its routes as served or
+not, the guard as loaded, forwarding, what only the admin console can fix, and the tailnet address of each admin page.
+With a cluster, `make status TYPE=apps,tailscale` adds how the apps answer from the tailnet and whether the tailnet's
+split DNS (step 2) sends their domain to the router, read from this machine's own Tailscale.
+
 ## 6. The machine in the console
 
 In the admin console, the host must show three things:

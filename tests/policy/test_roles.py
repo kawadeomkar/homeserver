@@ -1666,7 +1666,9 @@ def test_status_refuses_a_section_it_does_not_have(tmp_path):
     types = json.dumps({"types": "vms,disks"})
     rc, out = argspec_pass(example_tree(tmp_path), "status.yml", *CLUSTER_ARGS, "-e", types)
     assert rc != 0, out[-3000:]
-    message = "make status has no section disks: TYPE takes apps, admin, vms, storage, backups, cluster, nas, "
+    message = (
+        "make status has no section disks: TYPE takes apps, admin, tailscale, vms, storage, backups, cluster, nas, "
+    )
     message += "comma-separated."
     assert message in out, out[-3000:]
 
@@ -1691,11 +1693,36 @@ def test_status_reads_the_nas_as_its_play_reaches_it(tmp_path, local_yml, source
     play = yaml.safe_load((ROOT / "status.yml").read_text())[0]
     assert "nas" in play["hosts"].split(":")
     imports = [t for t in play["pre_tasks"] if "ansible.builtin.import_role" in t]
-    assert [t["ansible.builtin.import_role"] for t in imports] == [{"name": "truenas", "tasks_from": "status"}]
+    assert [t["ansible.builtin.import_role"] for t in imports] == [
+        {"name": "truenas", "tasks_from": "status"},
+        {"name": "proxmox_tailscale", "tasks_from": "status"},
+    ]
     assert "nas_present" in imports[0]["when"]
     nas_vars = yaml.safe_load((ROOT / "group_vars" / "nas" / "status.yml").read_text())
     assert "truenas_status" in nas_vars["status_nas_state"]
     assert "truenas_supported_version" in nas_vars["status_nas_release"]
+
+
+@pytest.mark.parametrize(
+    ("more", "enabled"),
+    [("", False), ("tailscale_enabled: true\n", True), ("tailscale_advertise_routes: [192.0.2.0/24]\n", True)],
+    ids=["off", "host-only", "routes"],
+)
+def test_status_reads_tailscale_as_the_proxmox_play_keeps_it(tmp_path, more, enabled):
+    """make status reads the Proxmox host's Tailscale through roles/proxmox_tailscale's status entry point, with the
+    variables proxmox.yml gives the role (group_vars/proxmox/tailscale.yml), and only when the setup turns it on."""
+    tree = example_tree(tmp_path, PROXMOX_ONLY_LOCAL_YML + more)
+    names = "{'enabled': proxmox_tailscale_enabled, 'tags': proxmox_tailscale_tags}"
+    assert resolve_on(tree, "homeserver", names) == {"enabled": enabled, "tags": ["tag:homeserver"]}
+    play = yaml.safe_load((ROOT / "status.yml").read_text())[0]
+    reads = next(
+        t for t in play["pre_tasks"] if t.get("ansible.builtin.import_role", {}).get("name") == "proxmox_tailscale"
+    )
+    assert reads["when"] == "'proxmox' in group_names and proxmox_tailscale_enabled is true"
+    proxmox_vars = yaml.safe_load((ROOT / "group_vars" / "proxmox" / "status.yml").read_text())
+    assert proxmox_vars["status_tailscale_state"] == "{{ proxmox_tailscale_status_state | default({}) }}"
+    admin = resolve_on(tree, "homeserver", "status_admin")
+    assert admin[0] == {"name": "Proxmox VE", "url": "https://192.0.2.20:8006", "tailscale_node": True}
 
 
 @pytest.mark.parametrize(

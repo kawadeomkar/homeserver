@@ -1,0 +1,67 @@
+---
+# Read-only, for make status (status.yml, roles/status): the node's Tailscale, its guard and its forwarding, and what
+# only the admin console can fix, in proxmox_tailscale_status_state, and never an error. Whether tailscaled runs is
+# whether tailscale status answers, and whether the guard is loaded whether nft lists its table; a node that does not
+# answer is recorded as such. tailscale status --json lists every device and login on the tailnet, and Serve's
+# configuration can name the tailnet: both are read under no_log, and the filter keeps only the node's own entry.
+
+- name: status | Read the node's state
+  ansible.builtin.command:
+    argv: [tailscale, status, --json]
+  register: proxmox_tailscale_status_read
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+  ignore_unreachable: true
+
+- name: status | Read the node's preferences
+  ansible.builtin.command:
+    argv: [tailscale, get, --json]
+  register: proxmox_tailscale_status_prefs
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  ignore_unreachable: true
+  when: proxmox_tailscale_status_read.rc | default(1) == 0
+
+- name: status | Read Tailscale Serve's configuration
+  ansible.builtin.command:
+    argv: [tailscale, serve, status, --json]
+  register: proxmox_tailscale_status_serve
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  ignore_unreachable: true
+  no_log: true
+  when: proxmox_tailscale_status_read.rc | default(1) == 0
+
+- name: status | Read the guard's table
+  ansible.builtin.command:
+    argv: [nft, list, table, inet, tailnet_guard]
+  register: proxmox_tailscale_status_table
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  ignore_unreachable: true
+  when: proxmox_tailscale_status_read is not unreachable
+
+- name: status | Read whether the node forwards IPv4
+  ansible.builtin.command:
+    argv: [sysctl, -n, net.ipv4.ip_forward]
+  register: proxmox_tailscale_status_forwarding
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  ignore_unreachable: true
+  when: proxmox_tailscale_status_read is not unreachable
+
+- name: status | Work out what the node says
+  ansible.builtin.set_fact:
+    proxmox_tailscale_status_state: >-
+      {{ proxmox_tailscale_status_read
+         | proxmox_tailscale_status(proxmox_tailscale_status_prefs, proxmox_tailscale_status_serve,
+                                    proxmox_tailscale_status_table, proxmox_tailscale_status_forwarding,
+                                    proxmox_tailscale_advertise_routes, proxmox_tailscale_tags,
+                                    proxmox_tailscale_settings, proxmox_tailscale_guard_hosts,
+                                    proxmox_tailscale_guard_allow) }}

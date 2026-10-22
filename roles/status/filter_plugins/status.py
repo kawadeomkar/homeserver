@@ -1,13 +1,15 @@
 """What make status reports, worked out from what roles/status read, and the report as text.
 
-The role's tasks read each host through status_read and pass the results here: status_proxmox for the Proxmox host
-(with status_backup_failed_runs naming the failed backup runs whose logs are read next), status_cluster for the
-cluster (with status_credentials for its credentials' expiry, read under no_log), status_nas for what truenas_info
-read of the NAS with its status option. The report play asks the apps' addresses (status_probe_targets, then the
-module status_probe), passes what every host found and what the probes saw to status_report, then the report to
-status_text. Everything here is pure: it runs on the controller, never connects anywhere, and is unit-tested in
-tests/unit/test_status_filters.py, with the shapes captured from Proxmox VE 9.2 hosts and from the cluster on one,
-and the NAS's as TrueNAS 25.10's API reference documents them.
+The role's tasks read each host through status_read and pass the results here: status_proxmox for the Proxmox host (with
+status_backup_failed_runs naming the failed backup runs whose logs are read next), status_cluster for the cluster (with
+status_credentials for its credentials' expiry, read under no_log), status_nas for what truenas_info read of the NAS
+with its status option; the Proxmox host's Tailscale comes as roles/proxmox_tailscale's status entry point recorded it,
+and the report adds what this machine's own Tailscale says of the tailnet's split DNS. The report play asks the apps'
+addresses (status_probe_targets, then the module status_probe), passes what every host found and what the probes saw to
+status_report, then the report to status_text. Everything here is pure: it runs on the controller, never connects
+anywhere, and is unit-tested in tests/unit/test_status_filters.py, with the shapes captured from Proxmox VE 9.2 hosts
+and from the cluster on one, the NAS's as TrueNAS 25.10's API reference documents them (and seen since on a real NAS),
+and Tailscale's from 1.104.2 on a Proxmox host and 1.102.4 on a Mac.
 
 The report is a mapping that JSON=1 prints as it is: every source's findings, the attention list (problems, things
 to do, and sources that could not be read, each with the command that deals with it), and the exit code make status
@@ -17,6 +19,7 @@ configuration (status_commands), so the role names none of this repo's make targ
 
 import base64
 import html
+import ipaddress
 import json
 import re
 import textwrap
@@ -42,7 +45,7 @@ SMALL_FILESYSTEM = GIB
 # A storage this full is a thing to do, and this full a problem.
 STORAGE_TODO, STORAGE_PROBLEM = 0.8, 0.9
 # The sections make status knows, in the order it shows them.
-TYPES = ("apps", "admin", "vms", "storage", "backups", "cluster", "nas")
+TYPES = ("apps", "admin", "tailscale", "vms", "storage", "backups", "cluster", "nas")
 # A guest's interfaces that are never the address it is reached at: loopback, container bridges, tunnels.
 INNER_INTERFACES = ("lo", "docker", "hassio", "veth", "br-", "cni", "flannel", "tailscale", "virbr")
 
@@ -1704,6 +1707,181 @@ def _nas_attention(found, commands):
     return out
 
 
+def _network_of(address, networks):
+    """The network of `networks` (CIDR strings) that holds `address`, or "": also for a name, which none holds."""
+    try:
+        ip = ipaddress.ip_address(str(address))
+    except ValueError:
+        return ""
+    for network in networks:
+        try:
+            if ip in ipaddress.ip_network(str(network).strip(), strict=False):
+                return network
+        except ValueError:
+            continue
+    return ""
+
+
+def _tailnet_dns(read, suffix, domain):
+    """Where the tailnet's split DNS sends the apps' domain (or a parent of it), as this machine's Tailscale has it
+    from the coordination server: a list of resolvers, empty for none, or None when this machine runs no Tailscale
+    on the node's tailnet, so that nothing can be said."""
+    if not domain or not suffix or not isinstance(read, dict) or read.get("rc") != 0:
+        return None
+    try:
+        data = json.loads(read.get("stdout") or "{}")
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or (data.get("CurrentTailnet") or {}).get("MagicDNSSuffix") != suffix:
+        return None
+    routes = data.get("SplitDNSRoutes") or {}
+    labels = domain.strip(".").split(".")
+    for i in range(len(labels)):
+        resolvers = routes.get(".".join(labels[i:]) + ".")
+        if resolvers:
+            return [r.get("Addr", "") for r in resolvers if isinstance(r, dict)]
+    return []
+
+
+def _tailscale_model(state, admin, traefik, domain, allowlist, workstation):
+    """The Proxmox host's Tailscale as roles/proxmox_tailscale's status entry point read it, with how the apps answer
+    from the tailnet: through a route this host serves that holds Traefik's address, tailnet clients arriving as the
+    host's own address (which admin's tailscale_node page gives) when it masquerades them, which Traefik's allowed
+    range must let in; and where the tailnet's split DNS sends the apps' domain, from this machine's Tailscale."""
+    if not state:
+        return None
+    model = dict(state)
+    if state.get("unread") or not state.get("running"):
+        return model
+    advertised = [r["route"] for r in state.get("routes") or [] if r["advertised"]]
+    served = [r["route"] for r in state.get("routes") or [] if r["served"]]
+    node = next((a for a in admin or [] if a.get("tailscale_node")), None)
+    model["node_address"] = _host_of(node["url"]) if node else ""
+    reach = None
+    if traefik:
+        route = _network_of(traefik, advertised)
+        if not advertised:
+            reach = {"state": "no route"}
+        elif not route:
+            reach = {"state": "outside", "address": traefik}
+        elif route not in served:
+            reach = {"state": "not served", "route": route}
+        else:
+            snat = state.get("snat", True) is not False
+            source = model["node_address"] if snat else ""
+            reach = {
+                "state": "served",
+                "route": route,
+                "source": source,
+                "allowed": bool(_network_of(source, str(allowlist or "").split(","))) if source else None,
+            }
+        if advertised:
+            reach["split_dns"] = _tailnet_dns(workstation, state.get("suffix"), domain)
+            reach["domain"] = domain
+    model["reach"] = reach
+    return model
+
+
+def _admin_pages(admin, tail):
+    """The admin pages, each with how it answers from the tailnet when the host runs Tailscale: the page the node
+    serves itself at its tailnet name, every other through a route this host serves, on the ports its guard allows."""
+    pages = [dict(a) for a in admin or []]
+    if not tail or not tail.get("running") or tail.get("backend") != "Running":
+        return pages
+    advertised = [r["route"] for r in tail.get("routes") or [] if r["advertised"]]
+    served = [r["route"] for r in tail.get("routes") or [] if r["served"]]
+    guard = tail.get("guard") or {}
+    for page in pages:
+        host = _host_of(page.get("url", ""))
+        if page.get("tailscale_node"):
+            page["tailnet"] = page["url"].replace(host, tail["dns_name"], 1) if tail.get("dns_name") else ""
+            continue
+        route = _network_of(host, advertised)
+        if not advertised:
+            page["tailnet"] = "not without a route"
+        elif not route:
+            page["tailnet"] = "outside the routes"
+        elif route not in served:
+            page["tailnet"] = "route not served by this host"
+        elif host in (guard.get("allow") or {}):
+            page["tailnet"] = f"through the route, {', '.join(guard['allow'][host])} only"
+        elif host in (guard.get("guarded") or []):
+            page["tailnet"] = "through the route, nothing: guarded"
+        else:
+            page["tailnet"] = "through the route"
+    return pages
+
+
+def _tailscale_attention(tail, commands):
+    """Problems and things to do about the Proxmox host's Tailscale. What only the admin console can fix comes from
+    roles/proxmox_tailscale's own judgment, word for word as make deploy reports it; Tailscale's health warnings are
+    only shown."""
+    out = []
+    deploy = commands.get("tailscale", "")
+    if tail.get("unread"):
+        return out
+    if not tail.get("installed"):
+        return [_item("todo", "tailscale", "Tailscale is not on the Proxmox host yet", deploy)]
+    if not tail.get("running"):
+        return [_item("problem", "tailscale", f"tailscaled does not answer on the Proxmox host: {tail['why']}", deploy)]
+    backend = tail.get("backend")
+    if backend == "NeedsLogin":
+        out.append(
+            _item(
+                "todo",
+                "tailscale",
+                "the Proxmox host is not logged in to the tailnet",
+                commands.get("tailscale_login", ""),
+            )
+        )
+    elif backend == "Stopped":
+        out.append(_item("problem", "tailscale", "Tailscale is stopped on the Proxmox host (tailscale down)", deploy))
+    elif backend != "Running":
+        out.append(
+            _item("problem", "tailscale", f"Tailscale's backend on the Proxmox host is {backend or 'unknown'}", deploy)
+        )
+    guard = tail.get("guard") or {}
+    if not guard.get("loaded"):
+        out.append(
+            _item(
+                "problem", "tailscale", "the tailnet guard's table is not loaded, so tailscaled runs unguarded", deploy
+            )
+        )
+    elif sorted(guard.get("routes") or []) != sorted(tail.get("wanted_routes") or []) or sorted(
+        guard.get("guarded") or []
+    ) != sorted(set(tail.get("guard_hosts") or [])):
+        out.append(
+            _item(
+                "todo", "tailscale", "the tailnet guard on the host is not the one this configuration describes", deploy
+            )
+        )
+    advertised = [r["route"] for r in tail.get("routes") or [] if r["advertised"]]
+    if advertised and tail.get("forwarding") is False:
+        out.append(
+            _item(
+                "problem",
+                "tailscale",
+                f"the host forwards no IPv4, so {_and(advertised)} lead{'s' if len(advertised) == 1 else ''} nowhere",
+                deploy,
+            )
+        )
+    if tail.get("differ"):
+        out.append(
+            _item("todo", "tailscale", f"the host's Tailscale preferences differ: {', '.join(tail['differ'])}", deploy)
+        )
+    if backend == "Running":
+        for item in tail.get("console") or []:
+            if item["kind"] != "health":
+                out.append(_item("todo", "tailscale", item["text"]))
+    reach = tail.get("reach") or {}
+    if reach.get("split_dns") == []:
+        text = (
+            f"the tailnet has no split DNS for {reach['domain']}: away from home, its clients do not resolve the apps"
+        )
+        out.append(_item("todo", "tailscale", text, commands.get("split_dns", "")))
+    return out
+
+
 def _version(text):
     return str(text or "").removeprefix("v")
 
@@ -1812,13 +1990,14 @@ def _volumes(clu):
     return out
 
 
-def report(found, setup=None, types=(), read_at="", probes=None, admin=(), commands=None, now=0):
+def report(found, setup=None, types=(), read_at="", probes=None, admin=(), commands=None, now=0, tailnet_dns=None):
     """The report: every source's findings, the attention list ranked (sources not read, problems, things to do),
     and the exit code. `found` is {source: findings}; a source without findings was never read. `types` narrows the
-    sections; empty means every one. `probes` is what status_probe saw, `admin` the admin pages ({name, url}) to
-    list, `commands` the commands to suggest by purpose (upgrade, resume with {names}, talos_upgrade, credentials,
-    allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot), `now` seconds since
-    the epoch."""
+    sections; empty means every one. `probes` is what status_probe saw, `admin` the admin pages ({name, url, and
+    tailscale_node for the page the Proxmox host serves itself}) to list, `commands` the commands to suggest by
+    purpose (upgrade, resume with {names}, talos_upgrade, credentials, allowlist, secrets, nas, nas_release,
+    nas_network, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns), `now` seconds since
+    the epoch, `tailnet_dns` what tailscale dns status --json said on this machine, if it runs Tailscale."""
     shown, setup, commands = types_shown(types), dict(setup or {}), dict(commands or {})
     found = found or {}
     attention, unread = [], []
@@ -1875,6 +2054,16 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
         attention += _cluster_attention(clu, commands)
     if "nas" in shown and nas_read:
         attention += _nas_attention(nas_found, commands)
+    tail = _tailscale_model(
+        found.get("tailscale"),
+        admin,
+        _traefik(clu) if readable else "",
+        _domain(rows),
+        clu.get("allowlist") if readable else "",
+        tailnet_dns,
+    )
+    if "tailscale" in shown and tail:
+        attention += _tailscale_attention(tail, commands)
     ranked = unread + [a for a in attention if a["level"] == "problem"] + [a for a in attention if a["level"] == "todo"]
     problems = sum(1 for a in ranked if a["level"] == "problem")
     return {
@@ -1887,12 +2076,13 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
         "traefik": _traefik(clu) if readable else "",
         "dns": dns,
         "tls": tls,
-        "admin": [dict(a) for a in admin or []],
+        "admin": _admin_pages(admin, tail),
         "proxmox": _with_guest_view({k: v for k, v in prox.items() if k != "backups"}, clu if readable else None) or {},
         "volumes": volumes,
         "backups": backed_up,
         "cluster": clu,
         "nas": nas_found,
+        "tailscale": tail,
     }
 
 
@@ -2110,6 +2300,8 @@ def _apps_lines(model):
             line = _Line().add("   ").cell("database", name_width - 2, "d").cell("", group_width)
             state_cells(line, db["state"], db["version"])
             lines.append(line)
+    if "tailscale" in model["types"]:
+        lines += _reach_line(model)
     if dns and dns["missing"]:
         lines.append(_Line())
         lines.append(_Line().add(" Until DNS has them, these lines in /etc/hosts reach the apps from here:", "d"))
@@ -2120,11 +2312,119 @@ def _apps_lines(model):
 
 
 def _admin_lines(model):
-    lines = [_Line().add("ADMIN", "h")]
-    width = max([len(a.get("name", "")) for a in model["admin"]] + [14]) + 3
-    for page in model["admin"]:
-        lines.append(_Line().add(" ").cell(page.get("name", ""), width, "b").add(page.get("url", ""), "u"))
+    pages = model["admin"]
+    width = max([len(a.get("name", "")) for a in pages] + [14]) + 3
+    tailnet = any("tailnet" in a for a in pages)
+    url_width = max([len(a.get("url", "")) for a in pages] + [3]) + 3
+    head = _Line().add("ADMIN", "h")
+    if tailnet:
+        head.to(width + 1).cell("LAN", url_width, "k").add("TAILNET", "k")
+    lines = [head]
+    for page in pages:
+        line = _Line().add(" ").cell(page.get("name", ""), width, "b")
+        if not tailnet:
+            lines.append(line.add(page.get("url", ""), "u"))
+            continue
+        there = page.get("tailnet", "")
+        line.cell(page.get("url", ""), url_width, "u").add(there, "u" if "://" in there else "d")
+        lines.append(line)
     return lines
+
+
+TAILSCALE_BACKENDS = {"Running": ("running", "g"), "NeedsLogin": ("needs login", "y"), "Stopped": ("stopped", "r")}
+
+
+def _on_off(value):
+    return "on" if value is True else "off" if value is False else str(value)
+
+
+def _tailscale_lines(model):
+    tail = model["tailscale"]
+    head = _Line().add("TAILSCALE", "h").add("  ")
+    if tail.get("unread"):
+        return [head.add("not read: the Proxmox host did not answer", "d")]
+    role = (
+        "subnet router on the Proxmox host" if tail.get("wanted_routes") else "a device of its own on the Proxmox host"
+    )
+    head.add(role, "d")
+    if not tail.get("installed"):
+        return [head.add(" · ", "d").add("not installed", "y")]
+    if not tail.get("running"):
+        return [head.add(" · ", "d").add("● ", "r").add("not running", "r"), *_phrases("Why", [[(tail["why"], "d")]])]
+    word, style = TAILSCALE_BACKENDS.get(tail.get("backend"), (str(tail.get("backend") or "unknown").lower(), "r"))
+    head.add(f" · {tail.get('version') or '?'} · ", "d").add("● ", style).add(word, style)
+    lines = [head]
+    ipv4 = [a for a in tail.get("addresses") or [] if ":" not in a]
+    expiry = f"key expires {tail['key_expiry']}" if tail.get("key_expiry") else "key expiry off"
+    node = [[(tail.get("dns_name") or "no name yet", "b")], [(", ".join(ipv4[:1]), "")]]
+    node += [[(", ".join(tail.get("tags") or []) or "no tags", "" if tail.get("tags") else "y")], [(expiry, "d")]]
+    lines += _phrases("Node", node)
+    routes = []
+    for r in tail.get("routes") or []:
+        if r["served"]:
+            routes.append([(r["route"], "b"), (" advertised, served by this host", "g")])
+        elif r["advertised"] and r["wanted"]:
+            routes.append([(r["route"], "b"), (" advertised, not served by this host", "y")])
+        elif r["advertised"]:
+            routes.append([(r["route"], "b"), (" advertised, not in this configuration", "y")])
+        else:
+            routes.append([(r["route"], "b"), (" not advertised", "y")])
+    lines += _phrases("Routes", routes or [[("none, so nothing is forwarded from the tailnet", "d")]])
+    guard = tail.get("guard") or {}
+    if not guard.get("loaded"):
+        phrases = [[("not loaded", "r")]]
+    else:
+        phrases = [[("loaded", "g")]]
+        allow = guard.get("allow") or {}
+        for host in guard.get("guarded") or []:
+            phrases.append(
+                [(f"guards {host} ", ""), (f"({', '.join(allow[host])} only)" if host in allow else "(all)", "d")]
+            )
+    if tail.get("forwarding") is not None:
+        phrases.append([("forwarding ", "d"), (_on_off(tail["forwarding"]), "")])
+    lines += _phrases("Guard", phrases)
+    if tail.get("prefs_read"):
+        prefs = [[(f"{k} {_on_off(v)}", "")] for k, v in (tail.get("settings") or {}).items()]
+        differ = tail.get("differ") or []
+        prefs.append([(f"differs: {', '.join(differ)}", "y")] if differ else [("as configured", "d")])
+        lines += _phrases("Prefs", prefs)
+    if tail.get("serve"):
+        lines += _phrases("Serve", [[("configured: it connects from the host itself, past the guard", "y")]])
+    health = tail.get("health") or []
+    for i, warning in enumerate(health or ["no warnings"]):
+        for j, part in enumerate(_wrap(warning, WIDTH - 12)):
+            key = "Health" if i == 0 and j == 0 else ""
+            lines.append(_Line().add(" ").cell(key, 11, "k").add(part, "y" if health else "d"))
+    return lines
+
+
+def _reach_line(model):
+    """How the apps answer from the tailnet, under the apps."""
+    tail = model.get("tailscale") or {}
+    reach = tail.get("reach")
+    if not reach:
+        return []
+    state = reach["state"]
+    if state == "no route":
+        phrases = [[("no route is advertised, so from the tailnet only the Proxmox host answers", "d")]]
+    elif state == "outside":
+        phrases = [[(f"Traefik's address {reach['address']} is in no advertised route", "y")]]
+    elif state == "not served":
+        phrases = [[(f"through {reach['route']}, which this host does not serve", "y")]]
+    else:
+        phrases = [[(f"the same URLs, through {reach['route']}", "")]]
+        if reach.get("source"):
+            allowed = reach.get("allowed")
+            inside = [(", inside the allowlist", "d")] if allowed else [(", outside the allowlist", "y")]
+            phrases.append([(f"clients arrive as {reach['source']}", "d"), *(inside if allowed is not None else [])])
+        else:
+            phrases.append([("clients keep their tailnet addresses", "d")])
+    dns = reach.get("split_dns")
+    if dns:
+        phrases.append([(f"split DNS sends {reach['domain']} to {', '.join(dns)}", "d")])
+    elif dns == []:
+        phrases.append([(f"no split DNS for {reach['domain']}", "y")])
+    return _phrases("Tailnet", phrases)
 
 
 def _vm_lines(found):
@@ -2557,6 +2857,8 @@ def text(model, color=False):
         lines += [*_apps_lines(model), _Line()]
     if "admin" in types and model.get("admin"):
         lines += [*_admin_lines(model), _Line()]
+    if "tailscale" in types and model.get("tailscale"):
+        lines += [*_tailscale_lines(model), _Line()]
     prox_read = prox and not prox.get("unread")
     if "vms" in types and prox_read:
         lines += [*_vm_lines(prox), _Line()]
@@ -2581,7 +2883,7 @@ def text(model, color=False):
         else "nothing is wrong"
     )
     foot = _Line().add(f"exit {model['exit']}", "r" if model["exit"] else "g")
-    lines.append(foot.add(f" · {summary} · make status TYPE={'|'.join(TYPES)} · JSON=1", "d"))
+    lines.append(foot.add(f" · {summary} · TYPE={'|'.join(TYPES)} · JSON=1", "d"))
     return "\n".join(line.text(color) for line in lines) + "\n"
 
 

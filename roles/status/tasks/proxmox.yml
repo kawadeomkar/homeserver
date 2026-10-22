@@ -105,6 +105,8 @@
             'results': status_proxmox_reads.results | default({}) | combine(status_proxmox_logs.results | default({}))}
            | status_proxmox(status_vms, status_budget_storages, status_storage_headroom_gib,
                             status_reboot_required_file, status_backup_jobs) }}
+      # What roles/proxmox_tailscale's status entry point read, before this role ran: {} when Tailscale is off.
+      tailscale: "{{ status_tailscale_state }}"
   vars:
     _missed: >-
       {{ [status_proxmox_name, status_proxmox_reads, status_proxmox_logs] | selectattr('unreachable', 'defined')

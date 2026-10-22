@@ -30,10 +30,12 @@ status_vms: >-
   {%- endfor -%}
   {{ out }}
 # The admin pages the report lists: the Proxmox host's, the NAS's, and the cluster's two APIs, on the control plane.
+# The Proxmox host's own page is its Tailscale node's too, which the report also gives at the host's tailnet name.
 status_admin: >-
   {%- set out = [] -%}
   {%- if proxmox_address | default('', true) -%}
-  {%-   set _ = out.append({'name': 'Proxmox VE', 'url': 'https://' ~ proxmox_address | trim ~ ':8006'}) -%}
+  {%-   set _ = out.append({'name': 'Proxmox VE', 'url': 'https://' ~ proxmox_address | trim ~ ':8006',
+                            'tailscale_node': true}) -%}
   {%- endif -%}
   {%- if nas_present and nas_address -%}
   {%-   set _ = out.append({'name': 'TrueNAS', 'url': 'https://' ~ nas_address}) -%}
@@ -65,3 +67,8 @@ status_commands:
     vm_backup_storage in local.yml names where they go (a USB disk, or a Proxmox Backup Server), then make deploy
     TYPE=proxmox
   etcd_snapshot: make etcd-snapshot
+  tailscale: make deploy TYPE=proxmox
+  tailscale_login: >-
+    a one-off auth key in the vault (make vault; scripts/runbooks/tailscale.md, section 4), then make deploy
+    TYPE=proxmox
+  split_dns: Tailscale's admin console, DNS (scripts/runbooks/tailscale.md, section 2)

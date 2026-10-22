@@ -103,6 +103,7 @@ AMTOOL = ["--", "amtool", "alert", "query", "-o", "json", "--alertmanager.url=ht
         ["git", "ls-remote", "https://github.com/example/homeserver.git", "refs/heads/main"],
         ["git", "ls-remote", "git@github.com:example/homeserver.git", "refs/heads/deploy/nuc"],
         ["git", "ls-remote", "ssh://git@example.com/homeserver.git", "refs/tags/v1"],
+        ["tailscale", "dns", "status", "--json"],
     ],
 )
 def test_reads_are_allowed(argv):
@@ -189,6 +190,11 @@ def test_reads_are_allowed(argv):
         ["git", "ls-remote", "--upload-pack=touch /tmp/x", "refs/heads/main"],
         ["git", "ls-remote", "/srv/repo.git", "refs/heads/main"],
         ["git", "ls-remote", "https://github.com/example/homeserver.git", "HEAD"],
+        # This machine's Tailscale: its DNS alone, never the tailnet's devices, a login or a change.
+        ["tailscale", "status", "--json"],
+        ["tailscale", "dns", "status", "--all", "--json"],
+        ["tailscale", "up"],
+        ["tailscale", "set", "--accept-dns=false"],
         ["git", "fetch", "https://github.com/example/homeserver.git", "refs/heads/main"],
     ],
 )

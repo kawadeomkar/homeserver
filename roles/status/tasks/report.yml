@@ -24,13 +24,24 @@
   vars:
     _targets: "{{ status_findings | status_probe_targets(status_types) }}"
 
+# Where the tailnet's split DNS sends the apps' domain, as this machine's own Tailscale has it, when the Proxmox host
+# advertises routes and this machine runs Tailscale; without it, the report says nothing of split DNS.
+- name: report | Read this machine's Tailscale DNS
+  status_read:
+    commands:
+      dns: [tailscale, dns, status, --json]
+    timeout: "{{ status_probe_timeout }}"
+  register: status_tailnet_dns
+  when: (status_findings.tailscale | default({})).routes | default([]) | selectattr('advertised') | list | length > 0
+
 - name: report | Rank what needs attention
   ansible.builtin.set_fact:
     status_report: >-
       {{ status_findings
          | status_report(status_setup, status_types, now().strftime('%Y-%m-%d %H:%M %Z') | trim,
                          probes=status_probes.results | default([]), admin=status_admin, commands=status_commands,
-                         now=now().timestamp() | int) }}
+                         now=now().timestamp() | int,
+                         tailnet_dns=status_tailnet_dns.results.dns | default(none)) }}
 
 - name: report | Write the report
   when: status_report_file | length > 0

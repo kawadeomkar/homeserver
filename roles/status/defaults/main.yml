@@ -59,6 +59,8 @@ status_cluster_snapshot_dir: ""
 # its configuration is written for, which a NAS on another is told; empty compares none.
 status_nas_state: {}
 status_nas_release: ""
+# The Proxmox host's Tailscale: what roles/proxmox_tailscale's status entry point recorded, {} when it is off.
+status_tailscale_state: {}
 # How many reads run at once on a host, and the seconds each may take.
 status_parallel: 8
 status_timeout: 30
@@ -72,11 +74,14 @@ status_quiet: false
 # may take.
 status_probe_apps: true
 status_probe_timeout: 5
-# The admin pages to list, each {name, url}.
+# The admin pages to list, each {name, url}; tailscale_node: true marks the page the Proxmox host serves itself,
+# which its tailnet name reaches too.
 status_admin: []
 # The commands the report suggests, by purpose: upgrade (the Proxmox host's packages), resume (suspended apps, with
 # {names} for theirs), talos_upgrade, credentials (renewed), allowlist (Traefik's still closed), secrets (an app's
 # missing Secret), nas (the NAS's settings applied again), nas_release (a TrueNAS release its configuration is not
 # written for), nas_network (interface changes never committed), backup (a backup job applied again), backup_target
-# (where backups could go, when there is no job), etcd_snapshot (taking one). One left out is suggested by text alone.
+# (where backups could go, when there is no job), etcd_snapshot (taking one), tailscale (the Proxmox host's Tailscale
+# applied again), tailscale_login (its first login), split_dns (the tailnet's split DNS for the apps' domain). One left
+# out is suggested by text alone.
 status_commands: {}

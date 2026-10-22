@@ -30,6 +30,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import jinja2
 import pytest
 import yaml
 
@@ -38,6 +39,7 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "tests" / "policy"))
 import fake_pve  # noqa: E402
+import fake_tailscale  # noqa: E402
 import fake_talos  # noqa: E402
 import fake_truenas  # noqa: E402
 from helpers import (  # noqa: E402
@@ -576,7 +578,7 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
     assert " Kubernetes API   https://192.0.2.30:6443" in out
     assert "BACKUPS  no backup job: 300, 301 and 310 are not backed up" in out
     assert "etcd snapshot                —  none yet  in ~/.talos/homeserver/etcd  → make etcd-snapshot" in out
-    assert out.rstrip().endswith("make status TYPE=apps|admin|vms|storage|backups|cluster|nas · JSON=1"), out
+    assert out.rstrip().endswith(" · TYPE=apps|admin|tailscale|vms|storage|backups|cluster|nas · JSON=1"), out
     assert max(len(line) for line in lines) <= 100, out
 
 
@@ -603,7 +605,9 @@ def test_make_status_exits_with_the_reports_code(tree, tmp_path):
 
     # A section make status does not have: make refuses it before anything runs.
     rc, out, err = make_status(tree, state, "TYPE=vms,disks")
-    assert rc == 2 and "make status takes TYPE=apps,admin,vms,storage,backups,cluster,nas, not disks" in err, out + err
+    assert (
+        rc == 2 and "make status takes TYPE=apps,admin,tailscale,vms,storage,backups,cluster,nas, not disks" in err
+    ), out + err
     assert "ATTENTION" not in out and "reading" not in out
 
     # The playbook refuses it too, given by hand: exit 3, the run having failed, and no report.
@@ -712,6 +716,144 @@ def test_a_host_that_does_not_answer(tree, tmp_path):
 # ------------------------------------------------------------------------------------------------ the NAS ---
 
 # What roles/truenas's status entry point may ask: truenas_info's reads, nothing that changes the NAS.
+ROUTE = "192.0.2.0/24"
+TAILSCALE_SETTINGS = {"accept-routes": False, "accept-dns": False, "ssh": False, "auto-update": False}
+
+
+def seed_tailscale(path, routes=(ROUTE,), approved=True, split_dns=None, **more):
+    """The fake host's Tailscale as roles/proxmox_tailscale leaves it: installed, tailscaled and the guard running, the
+    node logged in with its tag and preferences, the routes advertised (approved when `approved`), the guard's table
+    as the role's own template writes it, and forwarding on with routes."""
+    state = fake_tailscale.fresh_state()
+    state["packages"]["installed"].update(fake_tailscale.REPOSITORY)
+    for unit in ("tailscaled.service", fake_tailscale.GUARD):
+        state["units"][unit] = {"enabled": True, "active": True}
+    prefs = dict(fake_tailscale.DEFAULT_PREFS) | TAILSCALE_SETTINGS | {"advertise-routes": ",".join(routes)}
+    state["node"] = {"backend": "Running", "tags": ["tag:homeserver"], "prefs": prefs}
+    state["auto_approve"] = approved
+    state["sysctl"]["net.ipv4.ip_forward"] = "1" if routes else "0"
+    template = (ROOT / "roles" / "proxmox_tailscale" / "templates" / "tailnet-guard.nft.j2").read_text()
+    state["table"] = (
+        jinja2.Environment(trim_blocks=True)
+        .from_string(template)
+        .render(
+            proxmox_tailscale_advertise_routes=list(routes),
+            proxmox_tailscale_guard_hosts=[],
+            proxmox_tailscale_guard_allow=["tcp/443"],
+        )
+    )
+    state["split_dns"] = split_dns or {}
+    state.update(more)
+    path.write_text(json.dumps(state))
+    return state
+
+
+def tailscale_environment(state):
+    """The Tailscale fake after fake_pve's on PATH, whose apt-get and systemctl the host's other reads use."""
+    return {
+        "FAKE_TAILSCALE_STATE": str(state),
+        "FAKE_TAILSCALE_PYTHON": sys.executable,
+        "FAKE_TAILSCALE_GUARD_FILE": str(state.parent / "tailnet-guard.nft"),
+        "FAKE_TAILSCALE_SOURCES_DIR": str(state.parent),
+        "FAKE_TAILSCALE_SYSTEMD_DIR": str(state.parent),
+    }
+
+
+@pytest.mark.parametrize("approved", [True, False], ids=["served", "not-approved"])
+def test_the_hosts_tailscale(tree, tmp_path, approved):
+    state = tmp_path / "pve.json"
+    seed(state)
+    tailscale = tmp_path / "tailscale.json"
+    seed_tailscale(tailscale, approved=approved)
+    env = environment(tree, state, **tailscale_environment(tailscale))
+    env["PATH"] = env["PATH"].replace(
+        str(HERE / "fake_pve_bin"), f"{HERE / 'fake_pve_bin'}:{HERE / 'fake_tailscale_bin'}"
+    )
+    variables = extra_vars(tree, tailscale_advertise_routes=[ROUTE])
+    cmd = [str(BIN / "ansible-playbook"), "-i", "inventory.example", "status.yml", "--check", "-e", variables]
+    proc = subprocess.run(cmd, cwd=tree, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    out = proc.stdout
+    assert proc.returncode == 0, out + proc.stderr
+
+    # Reads only: on the host, then this machine's own Tailscale for the tailnet's split DNS. (On Linux, Python's
+    # uuid.getnode(), which Ansible calls for its ids, runs `ip link` too, which the fake's ip on PATH records.)
+    after = json.loads(tailscale.read_text())
+    assert after["mutations"] == 0
+    assert [c for c in after["calls"] if c[0] != "ip"] == [
+        ["tailscale", "status", "--json"],
+        ["tailscale", "get", "--json"],
+        ["tailscale", "serve", "status", "--json"],
+        ["nft", "list", "table", "inet", "tailnet_guard"],
+        ["sysctl", "-n", "net.ipv4.ip_forward"],
+        ["tailscale", "dns", "status", "--json"],
+    ]
+
+    report = report_of(tree)
+    tail = report["tailscale"]
+    name = f"pve.{fake_tailscale.SUFFIX}"
+    assert (tail["backend"], tail["dns_name"], tail["tags"]) == ("Running", name, ["tag:homeserver"])
+    assert tail["routes"] == [{"route": ROUTE, "wanted": True, "advertised": True, "served": approved}]
+    assert tail["guard"] == {"loaded": True, "routes": [ROUTE], "guarded": [], "allow": {}}
+    assert tail["forwarding"] is True and tail["differ"] == []
+    # Nothing of another device, its owner or the tailnet's name, which for a personal tailnet is a login.
+    text = json.dumps(report) + out
+    for secret in [fake_tailscale.TAILNET_NAME, "laptop", *fake_tailscale.PEER_ADDRESSES]:
+        assert secret not in text
+
+    attention = [(a["level"], a["text"]) for a in report["attention"] if a["subject"] == "tailscale"]
+    unapproved = f"Advertised but not approved, or served by another subnet router: {ROUTE}."
+    expected = [*([] if approved else [unapproved]), "the tailnet has no split DNS for homeserver.invalid:"]
+    assert [level for level, _ in attention] == ["todo"] * len(expected), attention
+    assert all(text.startswith(e) for (_, text), e in zip(attention, expected, strict=True)), attention
+    split_dns = next(a for a in report["attention"] if a["text"].startswith("the tailnet has no split DNS"))
+    assert split_dns["command"] == "Tailscale's admin console, DNS (scripts/runbooks/tailscale.md, section 2)"
+
+    assert "TAILSCALE  subnet router on the Proxmox host · 1.104.1 · ● running" in out, out
+    assert f" Node       {name} · {fake_tailscale.NODE_ADDRESSES[0]} · tag:homeserver · key expiry off" in out
+    served = "served by this host" if approved else "not served by this host"
+    assert f" Routes     {ROUTE} advertised, {served}" in out
+    assert " Guard      loaded · forwarding on" in out
+    assert " Prefs      accept-routes off · accept-dns off · ssh off · auto-update off · as configured" in out
+    assert re.search(rf" Proxmox VE +https://192\.0\.2\.20:8006 +https://{re.escape(name)}:8006", out), out
+    tailnet = "through the route" if approved else "route not served by this host"
+    assert re.search(rf" Kubernetes API +https://192\.0\.2\.30:6443 +{tailnet}$", out, re.M), out
+    if approved:
+        # Tailnet clients arrive as the host's own address, which Traefik's allowed range (loopback) leaves out.
+        reach = f" Tailnet    the same URLs, through {ROUTE}\n"
+        reach += "            clients arrive as 192.0.2.20, outside the allowlist\n"
+        assert reach in out, out
+    else:
+        assert f" Tailnet    through {ROUTE}, which this host does not serve" in out, out
+    assert max(len(line) for line in out.splitlines()) <= 100, out
+
+
+def test_tailscale_that_is_not_running_is_a_problem(tree, tmp_path):
+    state = tmp_path / "pve.json"
+    seed(state)
+    tailscale = tmp_path / "tailscale.json"
+    seed_tailscale(tailscale)
+    stopped = json.loads(tailscale.read_text())
+    stopped["units"]["tailscaled.service"]["active"] = False
+    stopped["table"] = None
+    tailscale.write_text(json.dumps(stopped))
+    env = environment(tree, state, **tailscale_environment(tailscale))
+    env["PATH"] = env["PATH"].replace(
+        str(HERE / "fake_pve_bin"), f"{HERE / 'fake_pve_bin'}:{HERE / 'fake_tailscale_bin'}"
+    )
+    variables = extra_vars(tree, tailscale_advertise_routes=[ROUTE])
+    cmd = [str(BIN / "ansible-playbook"), "-i", "inventory.example", "status.yml", "--check", "-e", variables]
+    proc = subprocess.run(cmd, cwd=tree, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    report = report_of(tree)
+    assert report["exit"] == 1
+    item = next(a for a in report["attention"] if a["subject"] == "tailscale")
+    assert item["level"] == "problem" and item["command"] == "make deploy TYPE=proxmox"
+    assert item["text"].startswith(
+        "tailscaled does not answer on the Proxmox host: failed to connect to local tailscaled"
+    )
+    assert "TAILSCALE  subnet router on the Proxmox host · ● not running" in proc.stdout
+
+
 NAS_READS = {
     "auth.login_with_api_key",
     "network.configuration.config",

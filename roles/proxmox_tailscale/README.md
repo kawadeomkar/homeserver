@@ -44,6 +44,19 @@ In order, on every run:
    - a Tailscale Serve or Funnel configuration;
    - Tailscale's own health warnings.
 
+   The judgment is a filter plugin (`filter_plugins/proxmox_tailscale.py`, with which preferences differ), which the
+   role's read-only `status` entry point shares, so `make status` says the same.
+
+**The `status` entry point** (`tasks_from: status`) reads the node and changes nothing: `tailscale status --json`,
+`get --json` and `serve status --json`, the guard's table (`nft list table inet tailnet_guard`) and IPv4 forwarding
+(`sysctl -n net.ipv4.ip_forward`). It records in `proxmox_tailscale_status_state` what they say against the role's
+variables: whether Tailscale is installed and `tailscaled` answers, the backend state, the node's tailnet name,
+addresses, tags and key expiry, each route as configured, advertised and served by this node, the preferences, a
+Serve configuration, the health warnings, the guard's sets as loaded, forwarding, and the report above. `tailscale
+status --json` lists every device and login on the tailnet, and for a personal tailnet its name is the owner's
+login: it is read under `no_log`, and only the node's own entry is kept. A node that does not answer is recorded,
+never a failure. `make status` (roles/status) runs it.
+
 The role never logs the node out, deletes it, changes its tags, restarts `tailscaled` itself, or advertises an
 exit node. It never touches `/etc/network/interfaces`, `/etc/resolv.conf`, `/etc/nftables.conf`, Debian's
 `nftables.service`, another nftables table or Proxmox's firewalls. Taking the routes out withdraws them and reloads

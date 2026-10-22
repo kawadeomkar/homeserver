@@ -181,6 +181,68 @@ Description: Join a Proxmox VE node to a tailnet, and with routes make it the LA
 
 
 
+#### Key: status
+
+**Description**: 
+- Reads tailscale status, get and serve status, the guard's nftables table and the node's IPv4 forwarding, and records in proxmox_tailscale_status_state what they say against this configuration, with what only the tailnet's admin console can fix, worked out as the main entry point reports it.
+- tailscale status lists every device and login on the tailnet, and is read under no_log; only the node's own entry is kept. Never fails, and a node that does not answer is recorded as such.
+
+
+**Options**:
+
+
+  - **proxmox_tailscale_advertise_routes**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: The LAN prefixes to advertise, IPv4, in CIDR form, which need proxmox_tailscale_enabled. Empty, the node advertises none.
+  
+  
+  
+
+  - **proxmox_tailscale_tags**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: The tags the node joins with, each tag:<name>. At least one is required once the role is enabled.
+  
+  
+  
+
+  - **proxmox_tailscale_settings**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: Preferences kept with tailscale set, by its flag names, each a boolean or a string.
+  
+  
+  
+
+  - **proxmox_tailscale_guard_hosts**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: IPv4 addresses of LAN hosts that tailnet clients may reach only on proxmox_tailscale_guard_allow.
+  
+  
+  
+
+  - **proxmox_tailscale_guard_allow**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: The ports still reachable on the guarded hosts, each tcp/<port> or udp/<port>.
+  
+  
+  
+
+
+
 </details>
 
 
@@ -295,6 +357,17 @@ Description: Join a Proxmox VE node to a tailnet, and with routes make it the LA
 | node ¦ Read the node's state after the changes | ansible.builtin.command | True |
 | node ¦ Read Tailscale Serve's configuration | ansible.builtin.command | True |
 | node ¦ Report what the admin console must fix | ansible.builtin.debug | True |
+
+#### File: tasks/status.yml
+
+| Name | Module | Has Conditions |
+| ---- | ------ | -------------- |
+| status ¦ Read the node's state | ansible.builtin.command | False |
+| status ¦ Read the node's preferences | ansible.builtin.command | True |
+| status ¦ Read Tailscale Serve's configuration | ansible.builtin.command | True |
+| status ¦ Read the guard's table | ansible.builtin.command | True |
+| status ¦ Read whether the node forwards IPv4 | ansible.builtin.command | True |
+| status ¦ Work out what the node says | ansible.builtin.set_fact | False |
 
 
 ## Task Flow Graphs
@@ -443,6 +516,30 @@ classDef rescue stroke:#665352,stroke-width:2px;
   node___Read_the_node_s_state_after_the_changes18-->|Task| node___Read_Tailscale_Serve_s_configuration19[node   read tailscale serve s configuration<br>When: **proxmox tailscale status rc    0**]:::task
   node___Read_Tailscale_Serve_s_configuration19-->|Task| node___Report_what_the_admin_console_must_fix20[node   report what the admin console must fix<br>When: **proxmox tailscale status after is not skipped**]:::task
   node___Report_what_the_admin_console_must_fix20-->End
+```
+
+
+### Graph for status.yml
+
+```mermaid
+flowchart TD
+Start
+classDef block stroke:#3498db,stroke-width:2px;
+classDef task stroke:#4b76bb,stroke-width:2px;
+classDef includeTasks stroke:#16a085,stroke-width:2px;
+classDef importTasks stroke:#34495e,stroke-width:2px;
+classDef includeRole stroke:#2980b9,stroke-width:2px;
+classDef importRole stroke:#699ba7,stroke-width:2px;
+classDef includeVars stroke:#8e44ad,stroke-width:2px;
+classDef rescue stroke:#665352,stroke-width:2px;
+
+  Start-->|Task| status___Read_the_node_s_state0[status   read the node s state]:::task
+  status___Read_the_node_s_state0-->|Task| status___Read_the_node_s_preferences1[status   read the node s preferences<br>When: **proxmox tailscale status read rc   default 1     0**]:::task
+  status___Read_the_node_s_preferences1-->|Task| status___Read_Tailscale_Serve_s_configuration2[status   read tailscale serve s configuration<br>When: **proxmox tailscale status read rc   default 1     0**]:::task
+  status___Read_Tailscale_Serve_s_configuration2-->|Task| status___Read_the_guard_s_table3[status   read the guard s table<br>When: **proxmox tailscale status read is not unreachable**]:::task
+  status___Read_the_guard_s_table3-->|Task| status___Read_whether_the_node_forwards_IPv44[status   read whether the node forwards ipv4<br>When: **proxmox tailscale status read is not unreachable**]:::task
+  status___Read_whether_the_node_forwards_IPv44-->|Task| status___Work_out_what_the_node_says5[status   work out what the node says]:::task
+  status___Work_out_what_the_node_says5-->End
 ```
 
 
