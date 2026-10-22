@@ -26,7 +26,9 @@ Everything runs from a checkout of this repo.
    3.12+: `python3 -m venv <dir> && source <dir>/bin/activate && make install`).
 2. `make init`, which creates `inventory` and `group_vars/all/local.yml` from their examples, asks for each setting
    and secret, and ends with what is still missing. With the files below restored first, it only shows each value
-   for Enter to keep; run it again after restoring any of them.
+   for Enter to keep, and with named setups its first question links one in; run it again after restoring any of
+   them. A `local.yml` an earlier run wrote with nothing set gives way to a setup restored later; one with settings
+   answered is refused until it is moved out of the checkout.
 3. Restore the files only you have, from your password manager. With named setups, the first three are each
    setup's, in `~/.config/homeserver/setups/<setup>/`: restore that directory (mode 0700, its files 0600), then
    `make init`'s first question, or `make vault TYPE=switch NAME=<setup>`, links one in (`README.md`, Setups and the
