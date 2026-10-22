@@ -27,13 +27,6 @@ argument_specs:
         elements: str
         default: []
         description: Names another play acts on, accepted in app_scale_only and left to it.
-      app_scale_disabled_names:
-        type: list
-        elements: str
-        default: []
-        description: >-
-          Names of apps and groups the cluster leaves out on purpose; a name in app_scale_only that is one of them is
-          still refused, saying so.
       app_scale_kubeconfig:
         type: str
         default: ""

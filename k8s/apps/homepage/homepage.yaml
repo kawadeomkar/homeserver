@@ -3,9 +3,9 @@
 # across nodes when there are two, since it holds nothing. Homepage writes into /app/config (its logs, and a skeleton
 # file for any its configuration lacks) and exits when it cannot, so /app/config is an emptyDir the ConfigMap is
 # copied into at each start: a release that adds a skeleton file then starts too. Its services.yaml is joined there
-# from the tiles of the apps this host runs, in the order HOMEPAGE_SERVICES gives (kustomization.yaml). The
+# from the sections of the groups this host runs, in the order HOMEPAGE_SERVICES gives (kustomization.yaml). The
 # ConfigMaps are generated, so a change to their files rolls the pods. Kustomize takes their hash before Flux fills
-# in the settings, so the pod template carries those too: the domain in HOMEPAGE_ALLOWED_HOSTS, the tiles in
+# in the settings, so the pod template carries those too: the domain in HOMEPAGE_ALLOWED_HOSTS, the sections in
 # HOMEPAGE_SERVICES, Home Assistant's address in an annotation, and a change to any of them rolls the pods as well.
 apiVersion: apps/v1
 kind: Deployment
@@ -63,7 +63,7 @@ spec:
       initContainers:
         - name: copy-config
           image: ghcr.io/gethomepage/homepage:v1.13.2@sha256:a0b71c8e757298d02560186bab9fbe3fc2d375c523a62cc1019177b37e48aa28
-          # A fragment that is missing fails the start; no tile at all is an empty list, which Homepage reads.
+          # A section that is missing fails the start; none at all is an empty list, which Homepage reads.
           command:
             - sh
             - -c

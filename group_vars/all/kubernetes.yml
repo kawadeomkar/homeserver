@@ -82,61 +82,16 @@ kubernetes_power_order: >-
   {{ kubernetes_nodes | rejectattr('role', 'equalto', 'controlplane') | map(attribute='vmid') | list
      + kubernetes_nodes | selectattr('role', 'equalto', 'controlplane') | map(attribute='vmid') | list }}
 
-# Each app group (a namespace, applied by the Flux Kustomization apps-<group>) and its apps, in the order Homepage
-# lists their tiles (group_vars/kubernetes/flux.yml). An app's objects carry app.kubernetes.io/name: the app's own
-# name, or one of its `objects` (its database's), which is how a single app is left out of its group.
-# tests/policy/test_k8s.py checks all of it against k8s/apps and k8s/clusters/*/apps.yaml.
-kubernetes_app_catalogue:
-  media:
-    jellyfin: {}
-    seerr: {}
-    sonarr: {}
-    radarr: {}
-    prowlarr: {}
-    sabnzbd: {}
-    filebrowser: {}
-  nextcloud:
-    nextcloud: {objects: [nextcloud, nextcloud-db]}
-  photoprism:
-    photoprism: {objects: [photoprism, photoprism-db]}
-  frigate:
-    frigate: {}
-  homepage:
-    homepage: {}
-# The apps this host runs, by name, in the catalogue's order: every app, unless local.yml's kubernetes_apps chooses
-# some, each entry group=<group> (all of a group's apps) or app=<app> (that one). An empty list runs the platform
-# alone. An entry that names nothing is left out here and refused by kubernetes_settings_error.
+# The app groups, each a namespace that the Flux Kustomization apps-<group> applies, in the order Homepage lists them
+# (group_vars/kubernetes/flux.yml). tests/policy/test_k8s.py checks them against k8s/clusters/*/apps.yaml.
+kubernetes_app_groups: [media, nextcloud, photoprism, frigate, homepage]
+# The groups this host runs, in that order: every one, unless local.yml's kubernetes_apps names some. An empty list
+# runs the platform alone. A name that is no group is left out here and refused by kubernetes_settings_error.
 kubernetes_apps_enabled: >-
-  {%- set every = [] -%}
-  {%- for apps in kubernetes_app_catalogue.values() -%}
-  {%-   set _ = every.extend(apps.keys() | list) -%}
-  {%- endfor -%}
   {%- set chosen = kubernetes_apps | default(none) -%}
-  {%- set on = [] -%}
-  {%- for entry in ([] if chosen is none or chosen is string or chosen is mapping or chosen is not iterable
-                    else chosen) -%}
-  {%-   set parts = (entry | string).split('=', 1) -%}
-  {%-   if parts[0] == 'group' and parts | length == 2 and parts[1] in kubernetes_app_catalogue -%}
-  {%-     set _ = on.extend(kubernetes_app_catalogue[parts[1]].keys() | list) -%}
-  {%-   elif parts[0] == 'app' and parts | length == 2 and parts[1] in every -%}
-  {%-     set _ = on.append(parts[1]) -%}
-  {%-   endif -%}
-  {%- endfor -%}
-  {{ every if chosen is none else every | select('in', on) | list }}
-# What make suspend and make resume are told this host leaves out, so they can say so: the groups none of whose apps
-# run, and the apps that don't, their databases included.
-kubernetes_apps_disabled_names: >-
-  {%- set out = [] -%}
-  {%- for group, apps in kubernetes_app_catalogue.items() -%}
-  {%-   set off = apps.keys() | reject('in', kubernetes_apps_enabled) | list -%}
-  {%-   if off | length == apps | length -%}
-  {%-     set _ = out.append(group) -%}
-  {%-   endif -%}
-  {%-   for app in off -%}
-  {%-     set _ = out.extend(apps[app].objects | default([app])) -%}
-  {%-   endfor -%}
-  {%- endfor -%}
-  {{ out | unique | list }}
+  {{ kubernetes_app_groups if chosen is none
+     else kubernetes_app_groups | select('in', chosen if chosen is iterable and chosen is not string
+                                                       and chosen is not mapping else []) | list }}
 
 # The apps answer at <app>.<domain>, unless local.yml names another domain (kubernetes_domain).
 kubernetes_domain_default: homeserver.internal
@@ -157,12 +112,10 @@ kubernetes_data_storage: "{{ vm_storage_classes.persistent.proxmox_id if nas_pre
 #   - without a cluster, the section's other settings: what a misspelt kubernetes_node_addresses looks like;
 #   - with a cluster, node addresses that are not a mapping or not the cluster's two nodes, two nodes with one
 #     address or one MAC, a node without a locally administered MAC, no repository for Flux to sync or one not
-#     over HTTPS, a branch other than main without flux_sync_ref_unprotected, kubernetes_apps entries that are not
-#     group=<group> or app=<app> or name nothing, MetalLB's addresses missing or not IPv4 (Frigate's only when
-#     Frigate runs, and checked whenever given), a LoadBalancer address outside MetalLB's range or used twice, a
-#     node address inside that range, an
-#     allowed ingress range that is not an IPv4 CIDR, a proxmox_address that is not IPv4 (the apps'
-#     NetworkPolicies deny it), the API's extra names given as a string, sizes that are not whole numbers, a node
+#     over HTTPS, a branch other than main without flux_sync_ref_unprotected, kubernetes_apps other than a list of
+#     groups, MetalLB's addresses missing or not IPv4, a LoadBalancer address outside MetalLB's range or used
+#     twice, a node address inside that range, an allowed ingress range that is not an IPv4 CIDR, a
+#     proxmox_address that is not IPv4 (the apps' NetworkPolicies deny it), the API's extra names given as a string, sizes that are not whole numbers, a node
 #     without cores or memory, a data or media disk under 11 GiB (its Talos volume takes 10, the partition table a
 #     little more), a system disk under the 10 GiB Talos installs on, a worker's under 32 GiB (every app's image), a
 #     control plane with a data or media disk or under 2 GiB of memory, and a worker without a data disk, where the
@@ -171,9 +124,8 @@ kubernetes_data_storage: "{{ vm_storage_classes.persistent.proxmox_id if nas_pre
 #     quarters of the persistent VM dataset's quota (vm_storage_persistent_quota_gib), which its snapshots share,
 #     and the settings for media without a NAS: a worker media disk, which would hold nothing, and
 #     kubernetes_media_on_data_volume;
-#   - without a NAS, a worker without every size, since the defaults fit the home host, or, when a media app or
-#     Frigate runs, without a media disk (unless media goes on the data volume, when its size may be left out), or
-#     with both;
+#   - without a NAS, a worker without every size, since the defaults fit the home host, or without a media disk
+#     (unless media goes on the data volume, when its size may be left out), or with both;
 #   - in any setup, the Talos secrets bundle in the vault (vault_talos_secrets): it lives in talos_config_dir
 #     alone.
 kubernetes_settings_error: >-
@@ -281,41 +233,16 @@ kubernetes_settings_error: >-
                              ~ 'proxmox_address in group_vars/all/local.yml is ' ~ (pve or 'not set')
                              ~ ": give the host's IPv4 address there.") -%}
   {%-   endif -%}
-  {#-   The apps a host runs: group=<group> or app=<app> entries, the prefix required, since four names are both a
-        group and an app. -#}
-  {%-   set app_names = [] -%}
-  {%-   for apps in kubernetes_app_catalogue.values() -%}
-  {%-     set _ = app_names.extend(apps.keys() | list) -%}
-  {%-   endfor -%}
-  {%-   set group_names = kubernetes_app_catalogue.keys() | list -%}
   {%-   set chosen = kubernetes_apps | default(none) -%}
-  {%-   if chosen is not none and (chosen is string or chosen is mapping or chosen is not iterable) -%}
-  {%-     set _ = out.append('kubernetes_apps must be a list of group=<group> and app=<app> entries, such as '
-                             ~ '[group=media, app=nextcloud].') -%}
-  {%-   elif chosen is not none -%}
-  {%-     for entry in chosen -%}
-  {%-       set parts = (entry | string).split('=', 1) -%}
-  {%-       if parts | length != 2 or parts[0] not in ['group', 'app'] -%}
-  {%-         set both = entry | string in group_names and entry | string in app_names -%}
-  {%-         set _ = out.append('kubernetes_apps entries are group=<group> or app=<app>, such as group=media or '
-                                 ~ 'app=jellyfin; ' ~ entry ~ ' is neither.'
-                                 ~ (' ' ~ entry ~ ' is both a group and an app: write group=' ~ entry ~ ' or app='
-                                    ~ entry ~ '.' if both else '')) -%}
-  {%-       elif parts[0] == 'group' and parts[1] not in group_names -%}
-  {%-         set _ = out.append('kubernetes_apps names ' ~ entry ~ ', and there is no such group. The groups: '
-                                 ~ group_names | join(', ') ~ '.') -%}
-  {%-       elif parts[0] == 'app' and parts[1] not in app_names -%}
-  {%-         set _ = out.append('kubernetes_apps names ' ~ entry ~ ', and there is no such app. The apps: '
-                                 ~ app_names | join(', ') ~ '.') -%}
-  {%-       endif -%}
-  {%-     endfor -%}
+  {%-   set unknown = (chosen | map('string') | reject('in', kubernetes_app_groups) | list)
+                      if chosen is iterable and chosen is not string and chosen is not mapping else [] -%}
+  {%-   if chosen is not none and (chosen is string or chosen is mapping or chosen is not iterable or unknown) -%}
+  {%-     set _ = out.append('kubernetes_apps must be a list of the app groups this host runs, such as [media, '
+                             ~ 'homepage]' ~ ((', and there is no group ' ~ unknown | join(', ')) if unknown else '')
+                             ~ '. The groups: ' ~ kubernetes_app_groups | join(', ') ~ '.') -%}
   {%-   endif -%}
-  {#-   Frigate's camera streams have an address of their own, needed only when Frigate runs; one given without it
-        is still checked, kept for when it does. -#}
-  {%-   set lb_ips = ['kubernetes_lb_traefik_ip']
-                     + (['kubernetes_lb_frigate_ip']
-                        if 'frigate' in kubernetes_apps_enabled or 'kubernetes_lb_frigate_ip' in given else []) -%}
-  {%-   set lb = (['kubernetes_lb_range'] + lb_ips) | reject('in', given) | list -%}
+  {%-   set lb = ['kubernetes_lb_range', 'kubernetes_lb_traefik_ip', 'kubernetes_lb_frigate_ip']
+               | reject('in', given) | list -%}
   {%-   if lb -%}
   {%-     set _ = out.append('MetalLB needs addresses on your network outside the DHCP range: set ' ~ lb | join(', ')
                              ~ ' in group_vars/all/local.yml.') -%}
@@ -323,7 +250,7 @@ kubernetes_settings_error: >-
   {#-     MetalLB hands out only addresses in its pool, so a LoadBalancer address outside it stays pending, and
           Flux counts the Service ready all the same. IPv4, as a first-last range or a CIDR. -#}
   {%-     set ipv4 = '^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$' -%}
-  {%-     for name in lb_ips -%}
+  {%-     for name in ['kubernetes_lb_traefik_ip', 'kubernetes_lb_frigate_ip'] -%}
   {%-       set ip = lookup('vars', name) | string | trim -%}
   {%-       if not (ip is match(ipv4) and ip.split('.') | map('int') | max <= 255) -%}
   {%-         set _ = out.append(name ~ ' must be an IPv4 address, such as 192.0.2.40, not ' ~ ip ~ '.') -%}
@@ -346,7 +273,7 @@ kubernetes_settings_error: >-
                                ~ 'CIDR (192.0.2.40/29).') -%}
   {%-     else -%}
   {%-       set within = [] -%}
-  {%-       for name in lb_ips + ['node addresses'] -%}
+  {%-       for name in ['kubernetes_lb_traefik_ip', 'kubernetes_lb_frigate_ip', 'node addresses'] -%}
   {%-         for ip in (node_ips if name == 'node addresses' else [lookup('vars', name) | string | trim]) -%}
   {%-           set p = ip.split('.') | map('int') | list
                     if ip is match(ipv4) and ip.split('.') | map('int') | max <= 255 else [] -%}
@@ -362,8 +289,7 @@ kubernetes_settings_error: >-
                                  else (bad ~ ' is outside kubernetes_lb_range ' ~ range ~ ': MetalLB hands out only '
                                        ~ 'addresses in its range, so the Service would stay pending.')) -%}
   {%-       endfor -%}
-  {%-       if 'kubernetes_lb_frigate_ip' in lb_ips
-                and (kubernetes_lb_traefik_ip | string | trim) == (kubernetes_lb_frigate_ip | string | trim) -%}
+  {%-       if (kubernetes_lb_traefik_ip | string | trim) == (kubernetes_lb_frigate_ip | string | trim) -%}
   {%-         set _ = out.append('kubernetes_lb_traefik_ip and kubernetes_lb_frigate_ip must differ: two Services '
                                  ~ 'cannot share one address here.') -%}
   {%-       endif -%}
@@ -449,15 +375,12 @@ kubernetes_settings_error: >-
                                ~ 'beside the backups.') -%}
   {%-     endif -%}
   {%-   endif -%}
-  {#- Without a NAS the host is not the one the defaults fit, and the media need a home on it when a media app or
-      Frigate runs; without them the media paths fall back to the data volume, where they stay empty. -#}
+  {#- Without a NAS the host is not the one the defaults fit, and the media need a home on it. -#}
   {%-   if not nas_present -%}
   {%-     set own = sizes.get(worker_shape.name, {}) if sizes.get(worker_shape.name) is mapping else {} -%}
-  {%-     set media_users = (kubernetes_app_catalogue.media.keys() | list) + (kubernetes_app_catalogue.frigate.keys() | list) -%}
-  {%-     set needs_media = kubernetes_apps_enabled | select('in', media_users) | list | length > 0 -%}
-  {%-     set media_optional = kubernetes_media_on_data_volume | default(false) | bool or not needs_media -%}
   {%-     set unsized = kubernetes_node_size_keys | reject('in', own)
-                      | reject('eq', 'media_disk_gib' if media_optional else '') | list -%}
+                      | reject('eq', 'media_disk_gib' if kubernetes_media_on_data_volume | default(false) | bool else '')
+                      | list -%}
   {%-     if unsized -%}
   {%-       set _ = out.append('Without a NAS, the cluster runs on a host the default sizes were not chosen for: '
                                ~ 'kubernetes_node_sizes must give ' ~ worker_shape.name ~ ', which runs the apps, '
@@ -466,7 +389,7 @@ kubernetes_settings_error: >-
                                ~ 'indexing. ' ~ cp_shape.name ~ ' keeps 2 cores, 4 GiB and a 32 GiB system disk '
                                ~ 'unless sized too; scripts/runbooks/talos.md shows both nodes sized for a small test '
                                ~ 'host.') -%}
-  {%-     elif not media_optional and (own.media_disk_gib | default(0) | int) < 1 -%}
+  {%-     elif (own.media_disk_gib | default(0) | int) < 1 and not (kubernetes_media_on_data_volume | default(false) | bool) -%}
   {%-       set _ = out.append('Without a NAS, the media and the camera recordings go on a media disk of their own, '
                                ~ 'never backed up: set media_disk_gib for ' ~ worker_shape.name ~ ' in '
                                ~ 'kubernetes_node_sizes above 0, or set kubernetes_media_on_data_volume: true to keep '

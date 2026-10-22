@@ -4,8 +4,6 @@ kind: PersistentVolumeClaim
 metadata:
   name: photoprism-storage
   namespace: photoprism
-  labels:
-    app.kubernetes.io/name: photoprism
   annotations:
     kustomize.toolkit.fluxcd.io/prune: disabled
 spec:
@@ -23,8 +21,6 @@ kind: PersistentVolumeClaim
 metadata:
   name: photoprism-media
   namespace: photoprism
-  labels:
-    app.kubernetes.io/name: photoprism
   annotations:
     kustomize.toolkit.fluxcd.io/prune: disabled
 spec:

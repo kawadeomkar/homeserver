@@ -115,17 +115,8 @@ def _list_of(parse):
 
 
 def _app_list(text: str) -> list[str]:
-    """kubernetes_apps: group=<group> and app=<app> entries, or none for the platform alone. init.py checks the names
-    against the catalogue; the playbooks' settings check, whether the worker can hold them."""
-    if text.strip().lower() == "none":
-        return []
-    entries = [e.lower() for e in _split(text)]
-    if not entries:
-        raise ValueError("give at least one entry, or none for the platform alone")
-    bad = [e for e in entries if not re.fullmatch(r"(group|app)=[a-z0-9][a-z0-9-]*", e)]
-    if bad:
-        raise ValueError(f"each entry is group=<group> or app=<app>, such as group=media or app=jellyfin, not {bad[0]}")
-    return entries
+    """kubernetes_apps: app groups, or none for the platform alone. init.py checks them against the groups."""
+    return [] if text.strip().lower() == "none" else _list_of(str.lower)(text)
 
 
 def _mac(text: str) -> str:
@@ -617,7 +608,7 @@ SETTINGS: tuple[Setting, ...] = (
         "kubernetes_apps",
         "cluster",
         "app_list",
-        "The apps this host runs, when not every one: group=<group> or app=<app> entries, or none",
+        "The app groups this host runs, when not every one, or none",
         popular=True,
         help="Unset, every app runs. A small worker can run a few: a pod that does not fit it stays Pending.",
     ),

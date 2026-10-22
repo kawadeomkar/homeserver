@@ -1054,101 +1054,32 @@ def test_network_policies_are_enforced():
 
 
 # --------------------------------------------------------------------------------------- app selection ---
-# local.yml's kubernetes_apps leaves groups and single apps out, through group_vars/all/kubernetes.yml's catalogue: a
-# group by its Flux Kustomization, which the sync drops, and an app by its objects' app.kubernetes.io/name, which its
-# group's own build drops (roles/flux_bootstrap). Homepage shows a tile for each app that runs.
-APP_LABEL = "app.kubernetes.io/name"
-# The objects a group shares among its apps, which leave with the group alone: its namespace, its NetworkPolicy and
-# media's library, which every media app mounts.
-SHARED = {"Namespace", "NetworkPolicy", "PersistentVolumeClaim media/media"}
+# local.yml's kubernetes_apps names the app groups a host runs, out of group_vars/all/kubernetes.yml's
+# kubernetes_app_groups; roles/flux_bootstrap drops the others' Flux Kustomizations from the sync, and Homepage shows a
+# section for each group that runs.
+def app_groups():
+    return yaml.safe_load((ROOT / "group_vars" / "all" / "kubernetes.yml").read_text())["kubernetes_app_groups"]
 
 
-@functools.cache
-def catalogue():
-    return yaml.safe_load((ROOT / "group_vars" / "all" / "kubernetes.yml").read_text())["kubernetes_app_catalogue"]
-
-
-def app_objects(group):
-    """Every name an app of `group` labels its objects with, as {name: app}."""
-    return {name: app for app, spec in catalogue()[group].items() for name in spec.get("objects", [app])}
-
-
-def group_objects(group):
-    """The objects a build of k8s/apps/<group> holds, its generated ConfigMaps as (name, labels) stand-ins."""
-    base = f"k8s/apps/{group}"
-    found = [obj for path in files_of(base) for obj in objects_in(ROOT / path)]
-    kustomization = yaml.safe_load((ROOT / base / "kustomization.yaml").read_text())
-    for generator in kustomization.get("configMapGenerator") or []:
-        labels = (generator.get("options") or {}).get("labels") or {}
-        found.append({"kind": "ConfigMap", "metadata": {"name": generator["name"], "labels": labels}})
-    return found
-
-
-def test_app_catalogue_names_the_groups_flux_applies():
-    """Each group of the catalogue is one Flux Kustomization, apps-<group>, applying k8s/apps/<group>, in both setups,
-    and no other Flux Kustomization applies an app; each app's name is its own across groups."""
+def test_app_groups_are_the_groups_flux_applies():
+    """Each app group is one Flux Kustomization, apps-<group>, applying k8s/apps/<group>, in both setups, and no other
+    Flux Kustomization applies an app."""
     for setup, kustomizations in flux_kustomizations().items():
         apps = {name: path for name, (path, _) in kustomizations.items() if path.startswith("k8s/apps/")}
-        assert apps == {f"apps-{group}": f"k8s/apps/{group}" for group in catalogue()}, setup
-    names = [name for group in catalogue() for name in app_objects(group)]
-    assert len(names) == len(set(names)), names
+        assert apps == {f"apps-{group}": f"k8s/apps/{group}" for group in app_groups()}, setup
 
 
-def test_every_deployment_belongs_to_one_app():
-    """Every Deployment of a group carries the name of one of its catalogued apps, and every catalogued app has one:
-    a group's apps are left out by those names."""
-    wrong = []
-    for group in catalogue():
-        owners = app_objects(group)
-        found = set()
-        for obj in group_objects(group):
-            if obj["kind"] != "Deployment":
-                continue
-            app = owners.get((obj["metadata"].get("labels") or {}).get(APP_LABEL))
-            if app is None:
-                wrong.append(f"{label(obj)} belongs to no app of {group}")
-            found.add(app)
-        wrong += [f"{group}/{app} has no Deployment" for app in catalogue()[group] if app not in found]
-    assert wrong == [], "keep kubernetes_app_catalogue (group_vars/all/kubernetes.yml) equal to the manifests"
-
-
-def test_every_app_object_carries_its_app():
-    """Every object of an app, its claims and generated ConfigMaps included, carries app.kubernetes.io/name naming that
-    app (or its database), so that leaving the app out leaves all of it out: a claim left behind with no pod would stay
-    Pending, and its group never ready. Only what the group's apps share carries no app's name."""
-    wrong = []
-    for group in catalogue():
-        owners = app_objects(group)
-        for obj in group_objects(group):
-            name = (obj["metadata"].get("labels") or {}).get(APP_LABEL)
-            shared = obj["kind"] in SHARED or f"{obj['kind']} {group}/{obj['metadata']['name']}" in SHARED
-            if shared and len(catalogue()[group]) > 1 and name in owners:
-                wrong.append(f"{obj['kind']} {obj['metadata']['name']} is shared but carries the app {name}")
-            elif not shared and name not in owners:
-                wrong.append(f"{obj['kind']} {group}/{obj['metadata']['name']}: {APP_LABEL} is {name}")
-    assert wrong == [], f"label each app's objects {APP_LABEL}: <app> (or a database's name in the catalogue)"
-
-
-def test_homepage_has_a_tile_for_every_app():
-    """Homepage joins its services.yaml from homepage-tiles: a header for each group that has a tile and a tile for
-    each app, Homepage aside, and Home Assistant's, whose names group_vars/kubernetes/flux.yml puts in
-    HOMEPAGE_SERVICES. Each joins into Homepage's list of sections."""
-    expected = {"section-home", "tile-homeassistant"}
-    for group, apps in catalogue().items():
-        if group != "homepage":
-            expected |= {f"section-{group}"} | {f"tile-{app}" for app in apps}
+def test_homepage_has_a_section_for_every_group():
+    """Homepage joins its services.yaml from homepage-tiles: a section for each group but its own, and Home
+    Assistant's, which group_vars/kubernetes/flux.yml names in HOMEPAGE_SERVICES. Joined in that order, they are
+    Homepage's list of sections."""
+    names = [group for group in app_groups() if group != "homepage"] + ["home"]
     tiles = APPS / "homepage" / "tiles"
-    assert {p.name.removesuffix(".yaml.tmpl") for p in tiles.iterdir()} == expected
+    assert sorted(p.name for p in tiles.iterdir()) == sorted(f"{n}.yaml.tmpl" for n in names)
     kustomization = yaml.safe_load((APPS / "homepage" / "kustomization.yaml").read_text())
     generator = next(g for g in kustomization["configMapGenerator"] if g["name"] == "homepage-tiles")
-    assert sorted(generator["files"]) == sorted(f"{n}.yaml=tiles/{n}.yaml.tmpl" for n in expected)
-    order = [
-        name
-        for group, apps in catalogue().items()
-        if group != "homepage"
-        for name in [f"section-{group}", *(f"tile-{app}" for app in apps)]
-    ] + ["section-home", "tile-homeassistant"]
-    sections = yaml.safe_load("".join((tiles / f"{name}.yaml.tmpl").read_text() for name in order))
+    assert sorted(generator["files"]) == sorted(f"{n}.yaml=tiles/{n}.yaml.tmpl" for n in names)
+    sections = yaml.safe_load("".join((tiles / f"{n}.yaml.tmpl").read_text() for n in names))
     assert [next(iter(s)) for s in sections] == ["Media", "Cloud", "Photos", "Cameras", "Home"], sections
     assert all(isinstance(tile, dict) for s in sections for tile in next(iter(s.values()))), sections
 

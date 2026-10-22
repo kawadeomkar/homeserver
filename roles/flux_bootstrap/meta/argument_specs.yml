@@ -58,21 +58,12 @@ argument_specs:
         description: How long a real run waits for the operator, the FluxInstance and Flux's Kustomizations.
       flux_bootstrap_sync_exclude:
         type: list
-        elements: dict
+        elements: str
         default: []
         description: >-
-          What the FluxInstance's sync leaves out. An entry with a kustomization alone drops that Flux Kustomization
-          (in flux-system) from the sync, which prunes it and what it applied, bar objects marked
-          kustomize.toolkit.fluxcd.io/prune disabled. An entry with a selector too keeps it, and its own build drops
-          the objects the label selector matches. Empty leaves the sync as the repository has it.
-        options:
-          kustomization:
-            type: str
-            required: true
-            description: The Flux Kustomization's name, in flux-system.
-          selector:
-            type: str
-            description: A label selector, such as app.kubernetes.io/name in (seerr,filebrowser).
+          The Flux Kustomizations (in flux-system) the FluxInstance's sync leaves out, which prunes them and what they
+          applied, bar objects marked kustomize.toolkit.fluxcd.io/prune disabled. Empty leaves the sync as the
+          repository has it.
       flux_bootstrap_allow_path_change:
         type: bool
         default: false

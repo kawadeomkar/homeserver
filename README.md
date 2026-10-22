@@ -213,15 +213,14 @@ checks the section and names any setting it lacks. Fill in, from `local.yml.exam
 - a MAC per node, chosen by you (locally administered: lower case, the second hex digit 2, 6, a or e) and
   reserved in DHCP for that address before the first run;
 - MetalLB's addresses on your network, outside the DHCP range: `kubernetes_lb_range`, and in it
-  `kubernetes_lb_traefik_ip` (every app) and `kubernetes_lb_frigate_ip` (the cameras' streams, needed only while
-  Frigate runs);
+  `kubernetes_lb_traefik_ip` (every app) and `kubernetes_lb_frigate_ip` (the cameras' streams);
 - `flux_sync_url`, the repository the cluster syncs. It has no default: Flux applies whatever is there with
   cluster-admin rights, so a fork names its own;
 - without a NAS, the worker's size (`kubernetes_node_sizes`), since the defaults fit the home host: for every app
-  at least 4 cores, 12 GiB and a 32 GiB system disk, with a media disk or `kubernetes_media_on_data_volume: true`
-  when a media app or Frigate runs; on a small host, size the control plane down too;
-- on a host too small for every app, the apps it runs (`kubernetes_apps`): whole groups (`group=media`) or single
-  apps (`app=jellyfin`). The rest are left out of what Flux applies, their data kept;
+  at least 4 cores, 12 GiB and a 32 GiB system disk, with a media disk or `kubernetes_media_on_data_volume: true`; on a
+  small host, size the control plane down too;
+- on a host too small for every app, the app groups it runs (`kubernetes_apps`: `media`, `nextcloud`, `photoprism`,
+  `frigate`, `homepage`). The rest are left out of what Flux applies, their data kept;
 - on a ZFS install, `proxmox_local_vm_storage: local-zfs`, with a NAS too: the nodes' system disks go on the
   installer's storage in both setups, and `make deploy TYPE=proxmox` checks that storage whenever there is a cluster.
 

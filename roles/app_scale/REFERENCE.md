@@ -68,16 +68,6 @@ Description: Scale a Flux-managed cluster's apps to zero and back
   
   
 
-  - **app_scale_disabled_names**
-    - **Required**: false
-    - **Type**: list
-    - **Default**: []
-  
-    - **Description**: Names of apps and groups the cluster leaves out on purpose; a name in app_scale_only that is one of them is still refused, saying so.
-  
-  
-  
-
   - **app_scale_kubeconfig**
     - **Required**: false
     - **Type**: str
@@ -156,13 +146,12 @@ Description: Scale a Flux-managed cluster's apps to zero and back
 | [app_scale_state](defaults/main.yml#L6)   | str |  |    
 | [app_scale_only](defaults/main.yml#L8)   | list | `[]` |    
 | [app_scale_other_names](defaults/main.yml#L10)   | list | `[]` |    
-| [app_scale_disabled_names](defaults/main.yml#L12)   | list | `[]` |    
-| [app_scale_kubeconfig](defaults/main.yml#L14)   | str |  |    
-| [app_scale_server](defaults/main.yml#L15)   | str |  |    
-| [app_scale_path](defaults/main.yml#L17)   | str |  |    
-| [app_scale_late_label](defaults/main.yml#L19)   | str |  |    
-| [app_scale_annotation](defaults/main.yml#L21)   | str |  |    
-| [app_scale_timeout](defaults/main.yml#L23)   | str | `10m` |    
+| [app_scale_kubeconfig](defaults/main.yml#L12)   | str |  |    
+| [app_scale_server](defaults/main.yml#L13)   | str |  |    
+| [app_scale_path](defaults/main.yml#L15)   | str |  |    
+| [app_scale_late_label](defaults/main.yml#L17)   | str |  |    
+| [app_scale_annotation](defaults/main.yml#L19)   | str |  |    
+| [app_scale_timeout](defaults/main.yml#L21)   | str | `10m` |    
 
 
 

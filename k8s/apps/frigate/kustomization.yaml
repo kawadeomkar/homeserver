@@ -14,7 +14,5 @@ configMapGenerator:
     files:
       - config.yml=config.yml.tmpl
     options:
-      labels:
-        app.kubernetes.io/name: frigate
       annotations:
         kustomize.toolkit.fluxcd.io/substitute: disabled

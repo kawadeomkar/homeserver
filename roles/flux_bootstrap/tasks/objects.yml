@@ -112,62 +112,6 @@
   changed_when: false
   check_mode: false
 
-# What the sync leaves out, as the patches the sync Kustomization carries (spec.patches). Kustomizations dropped whole
-# share one strategic-merge delete, whose target names them all: kustomize anchors the name, a regular expression, and
-# a target that matches nothing is no error, while a patch without a target that names an object the build lacks
-# would fail the whole sync. A Kustomization kept with a selector gets a patch of its own, which adds a delete by
-# label to its spec.patches; no Kustomization in the repository has any (scripts/ci/render_manifests.py refuses
-# one). Each level's patch is a string inside the one above, so each build reads only its own.
-- name: objects | Work out what the sync leaves out
-  ansible.builtin.set_fact:
-    # Each entry with its selector as text, empty for a Kustomization dropped whole.
-    flux_bootstrap_exclusions: "{{ _exclusions }}"
-    flux_bootstrap_sync_patches: >-
-      {%- set out = [] -%}
-      {%- set whole = _exclusions | rejectattr('selector') | map(attribute='kustomization') | list -%}
-      {%- if whole -%}
-      {%-   set _ = out.append({'target': {'group': 'kustomize.toolkit.fluxcd.io', 'kind': 'Kustomization',
-                                           'name': '(' ~ whole | join('|') ~ ')'},
-                                'patch': _delete_kustomization}) -%}
-      {%- endif -%}
-      {%- for e in _exclusions | selectattr('selector') -%}
-      {%-   set _ = out.append({'target': {'group': 'kustomize.toolkit.fluxcd.io', 'kind': 'Kustomization',
-                                           'name': e.kustomization},
-                                'patch': [{'op': 'add', 'path': '/spec/patches',
-                                           'value': [{'target': {'labelSelector': e.selector},
-                                                      'patch': _delete_selected}]}] | to_json}) -%}
-      {%- endfor -%}
-      {{ out }}
-    # The delete a kept Kustomization's own build applies, which a wait below looks for on it.
-    flux_bootstrap_delete_selected: "{{ _delete_selected }}"
-    # flux_bootstrap_wait_timeout (such as 10m) as the tries of a loop that waits 5 seconds between them.
-    flux_bootstrap_poll_retries: >-
-      {%- set t = flux_bootstrap_wait_timeout | string | trim -%}
-      {%- set n = t | regex_replace('[smh]$', '') | int -%}
-      {{ [n * {'s': 1, 'm': 60, 'h': 3600}.get(t[-1:], 1) // 5, 1] | max }}
-  vars:
-    _exclusions: >-
-      {%- set out = [] -%}
-      {%- for e in flux_bootstrap_sync_exclude -%}
-      {%-   set _ = out.append({'kustomization': e.kustomization,
-                                'selector': e.selector | default('', true) | string | trim}) -%}
-      {%- endfor -%}
-      {{ out }}
-    # With a target, kustomize gives the patch the kind of each object it matches: these kinds and names only need
-    # to be there.
-    _delete_kustomization: |
-      $patch: delete
-      apiVersion: kustomize.toolkit.fluxcd.io/v1
-      kind: Kustomization
-      metadata:
-        name: excluded
-    _delete_selected: |
-      $patch: delete
-      apiVersion: v1
-      kind: Excluded
-      metadata:
-        name: excluded
-
 - name: objects | Render the settings and the FluxInstance
   ansible.builtin.set_fact:
     flux_bootstrap_objects:
@@ -190,15 +134,31 @@
     # string: a misspelt ${DOMIAN} would otherwise give every app the host "sonarr.". kustomize-controller turns it on
     # by default from 1.9 (Flux 2.9), so nothing here sets it: a feature gate a later release has dropped would stop
     # kustomize-controller from starting. A policy test keeps the version at 2.9 or later.
-    # The operator applies its patches to its whole build, the sync Kustomization included (its guide patches the sync
-    # so: docs/guides/instance/instance-customization.md), though its API reference speaks of the controllers alone;
-    # a run reads the sync back below, so a release that stopped doing it fails loudly.
+    # What the sync leaves out (flux_bootstrap_sync_exclude): a patch of the FluxInstance's own adds to the sync
+    # Kustomization's spec.patches one strategic-merge delete, whose target names every Kustomization left out, as
+    # kustomize's anchored regular expression. A target that matches nothing is no error, where a patch without one
+    # that names an object the build lacks would fail the whole sync; with a target, kustomize gives the patch the
+    # kind and name of what it matches, so those in the patch only need to be there. The operator applies its patches
+    # to its whole build, the sync included (its guide patches the sync so:
+    # docs/guides/instance/instance-customization.md), though its API reference speaks of the controllers alone; a
+    # run waits below for what is left out to be gone.
+    _sync_patches:
+      - target:
+          group: kustomize.toolkit.fluxcd.io
+          kind: Kustomization
+          name: "({{ flux_bootstrap_sync_exclude | join('|') }})"
+        patch: |
+          $patch: delete
+          apiVersion: kustomize.toolkit.fluxcd.io/v1
+          kind: Kustomization
+          metadata:
+            name: excluded
     _instance: >-
       {{ _instance_base | combine({'spec': {'kustomize': {'patches': [
            {'target': {'group': 'kustomize.toolkit.fluxcd.io', 'kind': 'Kustomization', 'name': 'flux-system'},
-            'patch': [{'op': 'add', 'path': '/spec/patches', 'value': flux_bootstrap_sync_patches}] | to_json}]}}},
+            'patch': [{'op': 'add', 'path': '/spec/patches', 'value': _sync_patches}] | to_json}]}}},
            recursive=True)
-         if flux_bootstrap_sync_patches else _instance_base }}
+         if flux_bootstrap_sync_exclude else _instance_base }}
     _instance_base:
       apiVersion: fluxcd.controlplane.io/v1
       kind: FluxInstance
@@ -305,159 +265,21 @@
   changed_when: false
   when: not ansible_check_mode
 
-# ------------------------------------------------------------------------------------- left out ---
-# The operator renders the sync Kustomization from the FluxInstance a moment after it is ready; until it carries the
-# patches rendered above, nothing it leaves out has been left out. A release that stopped passing its patches on to
-# the sync would leave every app running: this says so instead.
-- name: objects | Wait for the sync to carry what it leaves out
-  ansible.builtin.command:
-    argv: [kubectl, --kubeconfig, "{{ flux_bootstrap_kubeconfig }}", get, kustomization, flux-system, -n, flux-system, -o, json]
-  register: flux_bootstrap_sync
-  changed_when: false
-  failed_when: false
-  until: >-
-    flux_bootstrap_sync.rc == 0
-    and ((flux_bootstrap_sync.stdout | from_json).spec.patches | default([])) == flux_bootstrap_sync_patches
-  retries: "{{ flux_bootstrap_poll_retries }}"
-  delay: 5
-  when: not ansible_check_mode
-
-- name: objects | Refuse a sync that does not carry what it leaves out
-  ansible.builtin.assert:
-    that: >-
-      flux_bootstrap_sync.rc == 0
-      and ((flux_bootstrap_sync.stdout | from_json).spec.patches | default([])) == flux_bootstrap_sync_patches
-    fail_msg: >-
-      The sync Kustomization flux-system/flux-system does not carry the patches the FluxInstance gives it after
-      {{ flux_bootstrap_wait_timeout }}{{ (': ' ~ flux_bootstrap_sync.stderr | trim) if flux_bootstrap_sync.rc != 0
-      else '' }}, so what flux_bootstrap_sync_exclude leaves out still runs. The Flux Operator applies
-      spec.kustomize.patches to the sync too; if this release no longer does, nothing here can leave apps out.
-    quiet: true
-  when: flux_bootstrap_sync is not skipped
-
-- name: objects | Read Flux's Kustomizations
-  ansible.builtin.command:
-    argv: [kubectl, --kubeconfig, "{{ flux_bootstrap_kubeconfig }}", get, kustomizations, -A, -o, json]
-  register: flux_bootstrap_live
-  changed_when: false
-  failed_when: false
-  when:
-    - not ansible_check_mode
-    - flux_bootstrap_exclusions | rejectattr('selector') | list | length > 0
-
-# A Kustomization dropped from the sync is pruned, and its finalizer deletes what it applied; the run waits for it to be
-# gone. One kept with a selector has dropped the matching objects once it has applied the new patch: its spec carries
-# the patch, its status has seen that spec, and it is ready.
+# A Kustomization dropped from the sync is pruned, and its finalizer deletes what it applied, bar what is marked never
+# to be pruned (the claims and namespaces) and what make suspend holds (kustomize.toolkit.fluxcd.io/reconcile:
+# disabled), which stays at zero replicas and comes back held with its group. kubectl's wait for a deletion passes for
+# one already gone, so this waits for the rest; it times out should a release of the operator stop passing its patches
+# on to the sync.
 - name: objects | Wait for the Kustomizations left out to be deleted
   ansible.builtin.command:
     argv: >-
       {{ ['kubectl', '--kubeconfig', flux_bootstrap_kubeconfig, 'wait', '--for=delete']
-         + (_gone | map('regex_replace', '^', 'kustomization/') | list)
+         + (flux_bootstrap_sync_exclude | map('regex_replace', '^', 'kustomization/') | list)
          + ['-n', 'flux-system', '--timeout=' ~ flux_bootstrap_wait_timeout] }}
   changed_when: false
   when:
     - not ansible_check_mode
-    - _gone | length > 0
-  vars:
-    _live: >-
-      {{ (flux_bootstrap_live.stdout | from_json)['items']
-         | selectattr('metadata.namespace', 'eq', 'flux-system') | map(attribute='metadata.name') | list
-         if flux_bootstrap_live.rc | default(1) == 0 else [] }}
-    _gone: >-
-      {{ flux_bootstrap_exclusions | rejectattr('selector') | map(attribute='kustomization')
-         | select('in', _live) | list }}
-
-- name: objects | Wait for the Kustomizations kept to leave out what their selector matches
-  ansible.builtin.command:
-    argv: [kubectl, --kubeconfig, "{{ flux_bootstrap_kubeconfig }}", get, kustomizations, -A, -o, json]
-  register: flux_bootstrap_kept
-  changed_when: false
-  failed_when: false
-  until: flux_bootstrap_kept.rc == 0 and _pending | length == 0
-  retries: "{{ flux_bootstrap_poll_retries }}"
-  delay: 5
-  when:
-    - not ansible_check_mode
-    - flux_bootstrap_exclusions | selectattr('selector') | list | length > 0
-  vars:
-    _pending: >-
-      {%- set out = [] -%}
-      {%- set items = (flux_bootstrap_kept.stdout | from_json)['items'] if flux_bootstrap_kept.rc | default(1) == 0
-                      else [] -%}
-      {%- for e in flux_bootstrap_exclusions | selectattr('selector') -%}
-      {%-   set k = items | selectattr('metadata.namespace', 'eq', 'flux-system')
-                    | selectattr('metadata.name', 'eq', e.kustomization) | list -%}
-      {%-   set want = [{'target': {'labelSelector': e.selector}, 'patch': flux_bootstrap_delete_selected}] -%}
-      {%-   set ready = k and (k[0].status.conditions | default([]) | selectattr('type', 'eq', 'Ready')
-                               | selectattr('status', 'eq', 'True') | list) -%}
-      {%-   if not (k and k[0].spec.patches | default([]) == want and ready
-                    and k[0].status.observedGeneration | default(-1) == k[0].metadata.generation) -%}
-      {%-     set _ = out.append(e.kustomization) -%}
-      {%-   endif -%}
-      {%- endfor -%}
-      {{ out }}
-
-- name: objects | Refuse Kustomizations that have not left out what their selector matches
-  ansible.builtin.assert:
-    that: flux_bootstrap_kept.rc == 0
-    fail_msg: >-
-      Flux's Kustomizations could not be read: {{ flux_bootstrap_kept.stderr | default('') | trim }}.
-    quiet: true
-  when: flux_bootstrap_kept is not skipped
-
-# Flux skips any object marked kustomize.toolkit.fluxcd.io/reconcile: disabled when it prunes, which is how make suspend
-# holds an app at zero: left out, such a Deployment would stay, owned by nobody, where make resume could no longer find
-# it. Once Flux has acted, the role deletes the Deployments it skipped: those still labelled with a Kustomization
-# dropped whole, or with one kept and matching its selector, that carry the mark. A dry run names them. Their data
-# is in claims, which stay.
-- name: objects | Find the Deployments make suspend held among those left out
-  ansible.builtin.command:
-    argv: >-
-      {{ ['kubectl', '--kubeconfig', flux_bootstrap_kubeconfig, 'get', 'deployments', '-A', '-l',
-          'kustomize.toolkit.fluxcd.io/name=' ~ item.kustomization ~ ',kustomize.toolkit.fluxcd.io/namespace=flux-system'
-          ~ ((',' ~ item.selector) if item.selector else ''), '-o', 'json'] }}
-  register: flux_bootstrap_held
-  changed_when: false
-  check_mode: false
-  failed_when: false
-  loop: "{{ flux_bootstrap_exclusions }}"
-  loop_control:
-    label: "{{ item.kustomization }}"
-
-- name: objects | Say which held Deployments would be deleted
-  ansible.builtin.debug:
-    msg: "Would delete, as make suspend left them, once Flux has left them out: {{ _held | join(', ') }}."
-  changed_when: true
-  when: ansible_check_mode and _held | length > 0
-  vars:
-    _held: >-
-      {%- set out = [] -%}
-      {%- for r in flux_bootstrap_held.results | default([]) if r.rc | default(1) == 0 -%}
-      {%-   for d in (r.stdout | from_json)['items']
-                     if (d.metadata.annotations | default({})).get('kustomize.toolkit.fluxcd.io/reconcile') == 'disabled' -%}
-      {%-     set _ = out.append(d.metadata.namespace ~ '/' ~ d.metadata.name) -%}
-      {%-   endfor -%}
-      {%- endfor -%}
-      {{ out }}
-
-- name: objects | Delete the Deployments make suspend held among those left out
-  ansible.builtin.command:
-    argv: [kubectl, --kubeconfig, "{{ flux_bootstrap_kubeconfig }}", delete, deployment, "{{ item.name }}", -n, "{{ item.namespace }}"]
-  changed_when: true
-  loop: "{{ _held }}"
-  loop_control:
-    label: "{{ item.namespace }}/{{ item.name }}"
-  when: not ansible_check_mode
-  vars:
-    _held: >-
-      {%- set out = [] -%}
-      {%- for r in flux_bootstrap_held.results | default([]) if r.rc | default(1) == 0 -%}
-      {%-   for d in (r.stdout | from_json)['items']
-                     if (d.metadata.annotations | default({})).get('kustomize.toolkit.fluxcd.io/reconcile') == 'disabled' -%}
-      {%-     set _ = out.append({'name': d.metadata.name, 'namespace': d.metadata.namespace}) -%}
-      {%-   endfor -%}
-      {%- endfor -%}
-      {{ out }}
+    - flux_bootstrap_sync_exclude | length > 0
 
 # The FluxInstance is ready once its own sync has applied, which leaves the Kustomizations that sync creates, the ones
 # that apply the apps, still reconciling, or failing: a manifest that breaks in one setup's tree only, say. Each must

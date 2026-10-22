@@ -978,7 +978,7 @@ def without(settings, *names):
                     },
                 },
                 # What such a worker holds: the platform, Homepage and Nextcloud (scripts/runbooks/talos.md).
-                "kubernetes_apps": ["group=homepage", "group=nextcloud"],
+                "kubernetes_apps": ["homepage", "nextcloud"],
             },
             [],
             id="proxmox-only-smallest-sizes",
@@ -1171,61 +1171,18 @@ def without(settings, *names):
         ),
         pytest.param(
             None,
-            CLUSTER_VARS | {"kubernetes_apps": "group=media"},
-            ["kubernetes_apps must be a list of group=<group> and app=<app> entries"],
+            CLUSTER_VARS | {"kubernetes_apps": "media"},
+            ["kubernetes_apps must be a list of the app groups this host runs, such as [media, homepage]. The groups:"],
             id="apps-not-a-list",
         ),
         pytest.param(
             None,
-            CLUSTER_VARS | {"kubernetes_apps": ["nextcloud", "jellyfin"]},
+            CLUSTER_VARS | {"kubernetes_apps": ["media", "medias", "jellyfin"]},
             [
-                "kubernetes_apps entries are group=<group> or app=<app>, such as group=media or app=jellyfin; "
-                "nextcloud is neither. nextcloud is both a group and an app: write group=nextcloud or app=nextcloud.",
-                "app=jellyfin; jellyfin is neither.",
+                "kubernetes_apps must be a list of the app groups this host runs, such as [media, homepage], and "
+                "there is no group medias, jellyfin. The groups: media, nextcloud, photoprism, frigate, homepage."
             ],
-            id="apps-without-a-prefix",
-        ),
-        pytest.param(
-            None,
-            CLUSTER_VARS | {"kubernetes_apps": ["group=medias", "app=jelyfin"]},
-            [
-                "kubernetes_apps names group=medias, and there is no such group. The groups: media, nextcloud, "
-                "photoprism, frigate, homepage.",
-                "kubernetes_apps names app=jelyfin, and there is no such app. The apps: jellyfin, seerr, sonarr,",
-            ],
-            id="apps-that-do-not-exist",
-        ),
-        # The apps' requests are not added up against the worker: every app on a 16 GB host's worker passes, and a
-        # pod that does not fit stays Pending, for the owner to see.
-        pytest.param(
-            None,
-            CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"cores": 2, "memory_mib": 7680}}},
-            [],
-            id="apps-are-not-sized-against-the-worker",
-        ),
-        pytest.param(
-            as_local_yml(without(example(), "kubernetes_lb_frigate_ip")),
-            CLUSTER_VARS | {"kubernetes_apps": ["group=media"]},
-            [],
-            id="apps-without-frigate-need-no-address-for-it",
-        ),
-        pytest.param(
-            None,
-            CLUSTER_VARS | {"kubernetes_apps": ["group=media"], "kubernetes_lb_frigate_ip": "192.0.2.400"},
-            ["kubernetes_lb_frigate_ip must be an IPv4 address, such as 192.0.2.40, not 192.0.2.400."],
-            id="apps-without-frigate-still-check-its-address",
-        ),
-        pytest.param(
-            PROXMOX_ONLY_CLUSTER_LOCAL_YML.replace(", media_disk_gib: 100", ""),
-            CLUSTER_VARS | {"kubernetes_apps": ["group=nextcloud", "group=photoprism", "group=homepage"]},
-            [],
-            id="proxmox-only-apps-without-media-need-no-media-disk",
-        ),
-        pytest.param(
-            PROXMOX_ONLY_CLUSTER_LOCAL_YML.replace(", media_disk_gib: 100", ""),
-            CLUSTER_VARS | {"kubernetes_apps": ["app=sonarr"]},
-            ["kubernetes_node_sizes must give homeserver-worker-1, which runs the apps, media_disk_gib."],
-            id="proxmox-only-a-media-app-needs-the-media-disk",
+            id="apps-that-are-no-group",
         ),
     ],
 )
@@ -1306,77 +1263,30 @@ def test_secret_options_are_no_log():
     assert excepted == set(NOT_SECRET), "NOT_SECRET names an option that no longer exists or is now no_log"
 
 
-EVERY_TILE = (
-    "section-media tile-jellyfin tile-seerr tile-sonarr tile-radarr tile-prowlarr tile-sabnzbd tile-filebrowser "
-    "section-nextcloud tile-nextcloud section-photoprism tile-photoprism section-frigate tile-frigate"
-)
-
-
 @pytest.mark.parametrize(
-    ("apps", "excluded", "tiles", "left_out"),
+    ("apps", "excluded", "sections"),
     [
-        pytest.param(None, [], EVERY_TILE, [], id="every-app"),
+        pytest.param(None, [], "media nextcloud photoprism frigate", id="every-group"),
         pytest.param(
-            ["group=media", "group=nextcloud", "group=homepage"],
-            [{"kustomization": "apps-photoprism"}, {"kustomization": "apps-frigate"}],
-            EVERY_TILE.partition(" section-photoprism")[0],
-            ["photoprism", "photoprism-db", "frigate"],
-            id="groups",
+            ["media", "nextcloud", "homepage"], ["apps-photoprism", "apps-frigate"], "media nextcloud", id="some"
         ),
         pytest.param(
-            ["app=jellyfin", "app=sonarr", "app=photoprism", "group=homepage", "app=jellyfin"],
-            [
-                {
-                    "kustomization": "apps-media",
-                    "selector": "app.kubernetes.io/name in (seerr,radarr,prowlarr,sabnzbd,filebrowser)",
-                },
-                {"kustomization": "apps-nextcloud"},
-                {"kustomization": "apps-frigate"},
-            ],
-            "section-media tile-jellyfin tile-sonarr section-photoprism tile-photoprism",
-            ["seerr", "radarr", "prowlarr", "sabnzbd", "filebrowser", "nextcloud", "nextcloud-db", "frigate"],
-            id="single-apps",
-        ),
-        pytest.param(
-            [],
-            [{"kustomization": f"apps-{g}"} for g in ("media", "nextcloud", "photoprism", "frigate", "homepage")],
-            "",
-            [
-                "media",
-                "jellyfin",
-                "seerr",
-                "sonarr",
-                "radarr",
-                "prowlarr",
-                "sabnzbd",
-                "filebrowser",
-                "nextcloud",
-                "nextcloud-db",
-                "photoprism",
-                "photoprism-db",
-                "frigate",
-                "homepage",
-            ],
-            id="the-platform-alone",
+            [], [f"apps-{g}" for g in ("media", "nextcloud", "photoprism", "frigate", "homepage")], "", id="none"
         ),
     ],
 )
-def test_apps_this_host_runs(tmp_path, apps, excluded, tiles, left_out):
-    """local.yml's kubernetes_apps, group=<group> and app=<app> entries, becomes what Flux's sync leaves out: a group
-    none of whose apps run whole, and the others' objects in a group some of whose apps run, a database with its app;
-    Homepage's tiles, a section per group that runs anything; and what make suspend and make resume say a host leaves
-    out. Unset, every app runs and nothing is left out."""
+def test_apps_this_host_runs(tmp_path, apps, excluded, sections):
+    """local.yml's kubernetes_apps, the groups this host runs, becomes the Flux Kustomizations the sync leaves out and
+    Homepage's sections. Unset, every group runs and nothing is left out; empty, the platform runs alone."""
     given = CLUSTER_VARS | ({"kubernetes_apps": apps} if apps is not None else {})
-    tree = example_tree(tmp_path)
     got = resolve_on(
-        tree,
+        example_tree(tmp_path),
         "homeserver-k8s",
-        "[flux_bootstrap_sync_exclude, flux_bootstrap_settings.HOMEPAGE_SERVICES, kubernetes_apps_disabled_names]",
+        "[flux_bootstrap_sync_exclude, flux_bootstrap_settings.HOMEPAGE_SERVICES, kubernetes_settings_error]",
         "-e",
         json.dumps(given),
     )
-    assert got == [excluded, tiles, left_out]
-    assert resolve_on(tree, "homeserver", "kubernetes_settings_error", "-e", json.dumps(given)) == []
+    assert got == [excluded, sections, []]
 
 
 def test_home_assistant_url_is_a_setting_only_when_given(tmp_path):
@@ -1387,8 +1297,8 @@ def test_home_assistant_url_is_a_setting_only_when_given(tmp_path):
     given = json.dumps({**CLUSTER_VARS, "haos_url": "http://homeassistant.home.arpa:8123"})
     settings = resolve_on(tree, "homeserver-k8s", "flux_bootstrap_settings", "-e", given)
     assert settings["HAOS_URL"] == "http://homeassistant.home.arpa:8123"
-    # Homepage shows its tile then, last.
-    assert settings["HOMEPAGE_SERVICES"].endswith(" section-frigate tile-frigate section-home tile-homeassistant")
+    # Homepage shows its section then, last.
+    assert settings["HOMEPAGE_SERVICES"].endswith(" frigate home")
 
 
 @pytest.mark.parametrize("local_yml", [None, PROXMOX_ONLY_CLUSTER_LOCAL_YML], ids=["nas", "proxmox-only"])
