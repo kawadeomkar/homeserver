@@ -3,6 +3,7 @@
 import importlib.util
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -130,3 +131,217 @@ def test_a_listening_port_counts_as_an_address_in_use():
         server.bind(("127.0.0.1", 0))
         server.listen(1)
         assert "accepts connections" in interface.address_in_use("127.0.0.1", server.getsockname()[1])
+
+
+# ----------------------------------------------------------------------------------- truenas_info's status ---
+
+info = load("truenas_info", ROLE / "library" / "truenas_info.py")
+TIB = 2**40
+SERIAL = "SERIAL-MUST-NOT-LEAK"
+
+
+def size(value):
+    return {"parsed": value, "rawvalue": str(value), "value": "x", "source": "NONE"}
+
+
+class ScriptedAPI:
+    """Answers each method as TrueNAS 25.10's reference documents it, times as {"$date": milliseconds}."""
+
+    ANSWERS: ClassVar[dict] = {
+        "network.configuration.config": {"hostname": "truenas", "domain": "local", "state": {}},
+        "disk.details": {"used": [{"name": "sda", "serial": SERIAL, "model": "SSD", "size": TIB}], "unused": []},
+        "system.version": "TrueNAS-25.10.7",
+        "system.ready": True,
+        "system.info": {"hostname": "truenas", "uptime_seconds": 86400.5, "system_serial": SERIAL},
+        "interface.websocket_interface": {"name": "enp7s0"},
+        "interface.websocket_local_ip": "192.0.2.10",
+        "interface.query": [],
+        "interface.has_pending_changes": False,
+        "pool.query": [
+            {
+                "id": 1,
+                "name": "persistent",
+                "guid": "1",
+                "status": "DEGRADED",
+                "healthy": False,
+                "status_detail": "One or more devices are faulted.",
+                "path": "/mnt/persistent",
+                "autotrim": {"rawvalue": "on"},
+                "scan": {
+                    "function": "SCRUB",
+                    "state": "FINISHED",
+                    "start_time": {"$date": 1791752400000},
+                    "end_time": {"$date": 1791763200000},
+                    "percentage": 100.0,
+                    "errors": 2,
+                    "bytes_processed": TIB,
+                },
+                "topology": {"data": [{"type": "RAIDZ1", "children": [{"type": "DISK", "serial": SERIAL}]}]},
+            },
+            {
+                "id": 2,
+                "name": "ephemeral",
+                "guid": "2",
+                "status": "ONLINE",
+                "healthy": True,
+                "path": "/mnt/ephemeral",
+                "autotrim": {"rawvalue": "on"},
+                "scan": None,
+                "topology": {"data": [{"type": "DISK"}]},
+            },
+        ],
+        "pool.dataset.query": [
+            {"id": "persistent", "used": size(2 * TIB), "available": size(5 * TIB)},
+            {"id": "persistent/nextcloud", "used": size(TIB), "available": size(5 * TIB)},
+            {"id": "ephemeral", "used": size(TIB), "available": size(TIB)},
+        ],
+        "service.query": [{"service": "nfs", "enable": True, "state": "RUNNING"}],
+        "systemdataset.config": {"pool": "boot-pool", "pool_set": True},
+        "sharing.nfs.query": [],
+        "pool.scrub.query": [{"id": 1, "pool": 1, "pool_name": "persistent", "threshold": 35, "enabled": True}],
+        "alert.list": [
+            {
+                "klass": "SMART",
+                "level": "CRITICAL",
+                "formatted": "Device: sda, SMART test failed",
+                "text": "%(device)s",
+                "datetime": {"$date": 1792497600000},
+                "dismissed": False,
+                "uuid": "a",
+            },
+            {"klass": "Old", "level": "WARNING", "formatted": "dismissed", "datetime": {"$date": 1}, "dismissed": True},
+        ],
+        "pool.snapshottask.query": [
+            {
+                "id": 7,
+                "dataset": "persistent/nextcloud",
+                "enabled": True,
+                "lifetime_value": 2,
+                "lifetime_unit": "DAY",
+                "naming_schema": "auto-%Y",
+                "schedule": {
+                    "minute": "0",
+                    "hour": "*",
+                    "dom": "*",
+                    "month": "*",
+                    "dow": "*",
+                    "begin": "00:00",
+                    "end": "23:59",
+                },
+                "state": {"state": "ERROR", "datetime": {"$date": 1792537200000}, "error": "out of space"},
+            },
+            {
+                "id": 8,
+                "dataset": "persistent/proxmox/vm",
+                "enabled": True,
+                "lifetime_value": 1,
+                "lifetime_unit": "DAY",
+                "schedule": {"minute": "0", "hour": "*"},
+                "state": {"state": "PENDING"},
+            },
+        ],
+    }
+
+    def __init__(self):
+        self.calls = []
+
+    def call(self, method, *params):
+        self.calls.append(method)
+        return self.ANSWERS[method]
+
+
+def test_status_reports_the_nas_health_in_the_same_login():
+    api = ScriptedAPI()
+    result = info.gather(api, importable=False, status=True)
+    assert result["status"] == {
+        "uptime_seconds": 86400.5,
+        "pools": [
+            {
+                "name": "persistent",
+                "status": "DEGRADED",
+                "healthy": False,
+                "detail": "One or more devices are faulted.",
+                "layout": "raidz1",
+                "used": 2 * TIB,
+                "available": 5 * TIB,
+                "scan": {
+                    "function": "SCRUB",
+                    "state": "FINISHED",
+                    "percentage": 100.0,
+                    "errors": 2,
+                    "start_time": "2026-10-11T21:00:00+00:00",
+                    "end_time": "2026-10-12T00:00:00+00:00",
+                },
+                "scrub": {"threshold": 35, "enabled": True},
+            },
+            {
+                "name": "ephemeral",
+                "status": "ONLINE",
+                "healthy": True,
+                "detail": "",
+                "layout": "stripe",
+                "used": TIB,
+                "available": TIB,
+                "scan": None,
+                "scrub": None,
+            },
+        ],
+        "alerts": [
+            {
+                "klass": "SMART",
+                "level": "CRITICAL",
+                "text": "Device: sda, SMART test failed",
+                "datetime": "2026-10-20T12:00:00+00:00",
+            }
+        ],
+        "snapshot_tasks": [
+            {
+                "id": 7,
+                "dataset": "persistent/nextcloud",
+                "enabled": True,
+                "lifetime_value": 2,
+                "lifetime_unit": "DAY",
+                "schedule": {"minute": "0", "hour": "*", "dom": "*", "month": "*", "dow": "*"},
+                "state": "ERROR",
+                "last_run": "2026-10-20T23:00:00+00:00",
+                "error": "out of space",
+            },
+            {
+                "id": 8,
+                "dataset": "persistent/proxmox/vm",
+                "enabled": True,
+                "lifetime_value": 1,
+                "lifetime_unit": "DAY",
+                "schedule": {"minute": "0", "hour": "*"},
+                "state": "PENDING",
+                "last_run": None,
+                "error": "",
+            },
+        ],
+    }
+    assert SERIAL not in repr(result["status"])
+    assert api.calls.count("system.info") == 1 and api.calls.count("pool.query") == 1
+
+
+def test_without_status_nothing_more_is_asked():
+    api = ScriptedAPI()
+    result = info.gather(api, importable=False)
+    assert "status" not in result
+    assert not {"alert.list", "pool.snapshottask.query", "pool.scrub.query"} & set(api.calls)
+    assert result["hostname"] == "truenas" and result["datasets"] == [
+        d["id"] for d in api.ANSWERS["pool.dataset.query"]
+    ]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ({"$date": 1791763200000}, "2026-10-12T00:00:00+00:00"),
+        (1791763200, "2026-10-12T00:00:00+00:00"),
+        ("2026-10-12T00:00:00Z", "2026-10-12T00:00:00Z"),
+        (None, None),
+        ({}, None),
+    ],
+)
+def test_api_times_become_rfc_3339(value, expected):
+    assert info._date(value) == expected

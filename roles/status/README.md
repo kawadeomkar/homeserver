@@ -20,6 +20,11 @@ Two entry points:
     firing alerts. The credentials are read under `no_log`, keeping only the server the kubeconfig names and when
     each client certificate expires; one naming another server than `status_cluster_server`, such as the home
     cluster's on a test host, is reported and never used. No Secret is ever read.
+  - On the NAS (`nas`) it reads nothing itself: the play reads the NAS first, through roles/truenas's `status` entry
+    point (`truenas_info` with its `status` option, one login), and the role works out what `status_nas_state` says:
+    each pool's health, use, layout and last scrub, TrueNAS's alerts, each snapshot task's last run, the NFS service
+    and its shares, and whether the NAS runs `status_nas_release`. A NAS that did not answer, refused the key or
+    presented another certificate than the pinned one is reported, not a failure.
 - **report** (`tasks_from: report`) puts together what each of `status_hosts` found, asks each app's addresses from
   this machine (unless `status_probe_apps` is off), ranks what needs attention (sources not read, problems, things to
   do, each with the command from `status_commands` that deals with it), writes the report to `status_report_file` as
@@ -59,8 +64,8 @@ kubelet, since Talos's guest agent lists no filesystem.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `status_source` | `""` | What the host is: `proxmox`, `cluster`; empty reads nothing |
-| `status_types` | `[]` | The report's sections to show (`apps`, `admin`, `vms`, `storage`, `cluster`); empty means every one |
+| `status_source` | `""` | What the host is: `proxmox`, `cluster`, `nas`; empty reads nothing |
+| `status_types` | `[]` | The report's sections to show (`apps`, `admin`, `vms`, `storage`, `cluster`, `nas`); empty means every one |
 | `status_vms` | `[]` | This setup's VMs, each `{vmid, name, made_by, start, guest_agent, node, app}`; every other VM is only counted |
 | `status_setup` | `{}` | What the setup has, `{nas, cluster, home_assistant}`, for the report's first line |
 | `status_proxmox_node` | `""` | The Proxmox node's name; empty takes the host's short hostname |
@@ -79,6 +84,8 @@ kubelet, since Talos's guest agent lists no filesystem.
 | `status_cluster_flux_url`, `status_cluster_flux_ref` | `""` | The repository and branch Flux syncs |
 | `status_cluster_pins` | `{}` | The versions pinned, `{talos, kubernetes}` |
 | `status_cluster_request_timeout` | `10` | Seconds kubectl waits for the API server |
+| `status_nas_state` | `{}` | What `truenas_info` returned with its `status` option, or its failure |
+| `status_nas_release` | `""` | The TrueNAS release (major.minor) the NAS's configuration is written for; empty compares none |
 | `status_parallel` | `8` | How many reads run at once on a host |
 | `status_timeout` | `30` | Seconds each read may take |
 | `status_hosts` | `[]` | report: the hosts whose findings it puts together |
@@ -88,13 +95,15 @@ kubelet, since Talos's guest agent lists no filesystem.
 | `status_probe_apps` | `true` | report: whether it asks each app's addresses from this machine |
 | `status_probe_timeout` | `5` | report: seconds each lookup and request may take |
 | `status_admin` | `[]` | report: the admin pages it lists, each `{name, url}` |
-| `status_commands` | `{}` | report: the commands it suggests, by purpose (`upgrade`, `resume` with `{names}`, `talos_upgrade`, `credentials`, `allowlist`, `secrets`) |
+| `status_commands` | `{}` | report: the commands it suggests, by purpose (`upgrade`, `resume` with `{names}`, `talos_upgrade`, `credentials`, `allowlist`, `secrets`, `nas`, `nas_release`, `nas_network`) |
 
-This repository's `status.yml` reads the Proxmox host and the cluster at once (`strategy: free`), then reports, with
-`group_vars/all/status.yml` (the VMs this repo makes, the same the nightly backup covers; the admin pages; the
-commands), `group_vars/proxmox/status.yml` (the installer's storage, its headroom, Debian's reboot flag) and
+This repository's `status.yml` reads the Proxmox host, the cluster and the NAS at once (`strategy: free`), then
+reports, with `group_vars/all/status.yml` (the VMs this repo makes, the same the nightly backup covers; the admin
+pages; the commands), `group_vars/proxmox/status.yml` (the installer's storage, its headroom, Debian's reboot flag),
 `group_vars/kubernetes/status.yml` (the credentials roles/talos writes, the apps as roles/app_scale finds them, the
-worker's user volumes, the settings roles/flux_bootstrap keeps, Alertmanager's pod, the pins). `make status` runs it
+worker's user volumes, the settings roles/flux_bootstrap keeps, Alertmanager's pod, the pins) and
+`group_vars/nas/status.yml` (what roles/truenas's `status` entry point read, and the release that role is written
+for). `make status` runs it
 as a dry run with the stdout callback `callback_plugins/homeserver_status.py`, which prints one line on what was read
 and how long the probes took, then the report.
 

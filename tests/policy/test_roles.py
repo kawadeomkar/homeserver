@@ -1643,25 +1643,51 @@ STATUS_SETUPS = [
 @pytest.mark.parametrize(("local_yml", "extra"), STATUS_SETUPS)
 def test_status_passes_the_argument_specs(tmp_path, local_yml, extra):
     """make status passes roles/status's checks with the tracked configuration and make's TYPE, in each setup: the
-    main entry point's on the Proxmox host and on the cluster's host (which reads nothing without a cluster), the
-    report's on the controller."""
+    main entry point's on the Proxmox host, the cluster's host and the NAS's (which read nothing without a cluster or
+    a NAS), roles/truenas's status entry point's on the NAS's when there is one, the report's on the controller."""
     types = ("-e", json.dumps({"types": " vms,, storage,apps "}))
     rc, out = argspec_pass(example_tree(tmp_path, local_yml), "status.yml", *extra, *types)
     assert rc == 0, out[-3000:]
-    validated = {
-        host
-        for section in out.split("Validating arguments against arg spec 'main'")[1:]
-        for host in re.findall(r"^ok: \[([^\]]+)\]", section.split("TASK [", 1)[0], re.M)
-    }
-    assert validated == {"homeserver", "homeserver-k8s"}, out[-3000:]
+
+    def validated(entry):
+        return {
+            host
+            for section in out.split(f"Validating arguments against arg spec '{entry}'")[1:]
+            for host in re.findall(r"^ok: \[([^\]]+)\]", section.split("TASK [", 1)[0], re.M)
+        }
+
+    assert validated("main") == {"homeserver", "homeserver-k8s", "truenas"}, out[-3000:]
+    nas = local_yml is None or "truenas_static_address" in (local_yml or "")
+    assert validated("status") == ({"truenas"} if nas else set()), out[-3000:]
     assert out.count("Validating arguments against arg spec 'report'") == 1, out[-3000:]
 
 
 def test_status_refuses_a_section_it_does_not_have(tmp_path):
-    rc, out = argspec_pass(example_tree(tmp_path), "status.yml", *CLUSTER_ARGS, "-e", json.dumps({"types": "vms,nas"}))
+    types = json.dumps({"types": "vms,disks"})
+    rc, out = argspec_pass(example_tree(tmp_path), "status.yml", *CLUSTER_ARGS, "-e", types)
     assert rc != 0, out[-3000:]
-    message = "make status has no section nas: TYPE takes apps, admin, vms, storage, cluster, comma-separated."
+    message = "make status has no section disks: TYPE takes apps, admin, vms, storage, cluster, nas, comma-separated."
     assert message in out, out[-3000:]
+
+
+@pytest.mark.parametrize(("local_yml", "source"), [(None, "nas"), (PROXMOX_ONLY_LOCAL_YML, "")])
+def test_status_reads_the_nas_as_its_play_reaches_it(tmp_path, local_yml, source):
+    """make status reads the NAS through roles/truenas's status entry point, with the NAS play's own connection
+    settings (the static address, then the bootstrap one; the pinned certificate), and only with a NAS."""
+    tree = example_tree(tmp_path, local_yml)
+    names = "{'status_source': status_source, 'truenas_api_hosts': truenas_api_hosts}"
+    found = resolve_on(tree, "truenas", names)
+    assert found["status_source"] == source
+    if source:
+        assert found["truenas_api_hosts"] == ["192.0.2.10", "192.0.2.50"]
+    play = yaml.safe_load((ROOT / "status.yml").read_text())[0]
+    assert "nas" in play["hosts"].split(":")
+    imports = [t for t in play["pre_tasks"] if "ansible.builtin.import_role" in t]
+    assert [t["ansible.builtin.import_role"] for t in imports] == [{"name": "truenas", "tasks_from": "status"}]
+    assert "nas_present" in imports[0]["when"]
+    nas_vars = yaml.safe_load((ROOT / "group_vars" / "nas" / "status.yml").read_text())
+    assert "truenas_status" in nas_vars["status_nas_state"]
+    assert "truenas_supported_version" in nas_vars["status_nas_release"]
 
 
 def test_status_reads_the_cluster_as_it_is_built(tmp_path):
@@ -1798,3 +1824,13 @@ def test_status_reads_only_through_status_read():
     report = yaml.safe_load((ROOT / "roles" / "status" / "tasks" / "report.yml").read_text())
     writes = [t for t in tasks_in(report) if {"ansible.builtin.file", "ansible.builtin.copy"} & set(t)]
     assert all("status_report_file" in json.dumps(t) for t in writes), "the report entry point writes elsewhere"
+
+
+def test_the_nas_is_read_with_truenas_info_alone():
+    """roles/truenas's status entry point, which make status runs on the NAS, calls truenas_info alone, the module
+    that only reads, with its status option, without the pool scan, each address tried once, and never fails."""
+    tasks = list(tasks_in(yaml.safe_load((ROOT / "roles" / "truenas" / "tasks" / "status.yml").read_text())))
+    assert [sorted(set(t) - TASK_KEYWORDS) for t in tasks] == [["truenas_info"]]
+    args = tasks[0]["truenas_info"]
+    assert args["status"] is True and args["importable"] is False and args["api_connect_wait"] == 0
+    assert tasks[0]["register"] == "truenas_status" and tasks[0]["failed_when"] is False

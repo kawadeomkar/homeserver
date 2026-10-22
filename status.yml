@@ -7,13 +7,13 @@
 #   make status TYPE=vms,storage
 #   make status JSON=1
 # Each host is read through roles/status, whose module status_read runs every command at once and refuses any that
-# is not on its read list: the Proxmox host over SSH, and the cluster from this machine with kubectl and talosctl,
-# both at the same time (strategy free). The report play then asks each app's addresses from this machine. A host
-# that does not answer is a section of the report that says so, not a failure; a refused setting or command ends the
-# run with no report.
+# is not on its read list: the Proxmox host over SSH, and the cluster from this machine with kubectl and talosctl;
+# the NAS through its API, with roles/truenas's read-only status entry point (one login). All three at the same time
+# (strategy free). The report play then asks each app's addresses from this machine. A host that does not answer is a
+# section of the report that says so, not a failure; a refused setting or command ends the run with no report.
 
 - name: Read the machines
-  hosts: proxmox:kubernetes
+  hosts: proxmox:kubernetes:nas
   strategy: free
   gather_facts: false
   # No any_errors_fatal: Ansible would take a host that does not answer, which every read ignores, for an error and
@@ -40,6 +40,12 @@
         fail_msg: "{{ haos_settings_error | join(' ') }}"
         quiet: true
       tags: [always]
+    # Never fails: a NAS that does not answer is recorded in truenas_status, which roles/status reports.
+    - name: Read the NAS through its API
+      ansible.builtin.import_role:
+        name: truenas
+        tasks_from: status
+      when: "'nas' in group_names and nas_present"
   roles:
     - role: status
 
@@ -48,7 +54,7 @@
   gather_facts: false
   vars:
     status_types: "{{ (types | default('')).split(',') | map('trim') | select | list }}"
-    status_hosts: "{{ groups['proxmox'] | default([]) + groups['kubernetes'] | default([]) }}"
+    status_hosts: "{{ groups['proxmox'] | default([]) + groups['kubernetes'] | default([]) + groups['nas'] | default([]) }}"
     # make status reads its exit code from here, and JSON=1 prints it.
     status_report_file: "{{ playbook_dir }}/.cache/status/report.json"
     status_color: "{{ lookup('ansible.builtin.env', 'STATUS_COLOR') == '1' }}"

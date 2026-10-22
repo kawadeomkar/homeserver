@@ -3,7 +3,7 @@
 # set in inventory group_vars; see README.md.
 
 # What the host the play runs on is: proxmox, the Proxmox host; cluster, the Kubernetes cluster, read from this
-# machine; empty reads nothing.
+# machine; nas, the NAS, from what status_nas_state says; empty reads nothing.
 status_source: ""
 # The report's sections to read and show; empty means every one.
 status_types: []
@@ -48,6 +48,10 @@ status_cluster_flux_ref: ""
 status_cluster_pins: {}
 # Seconds kubectl waits for the API server on each read.
 status_cluster_request_timeout: 10
+# The NAS: what truenas_info returned with its status option, or its failure, and the TrueNAS release (major.minor)
+# its configuration is written for, which a NAS on another is told; empty compares none.
+status_nas_state: {}
+status_nas_release: ""
 # How many reads run at once on a host, and the seconds each may take.
 status_parallel: 8
 status_timeout: 30
@@ -65,5 +69,6 @@ status_probe_timeout: 5
 status_admin: []
 # The commands the report suggests, by purpose: upgrade (the Proxmox host's packages), resume (suspended apps, with
 # {names} for theirs), talos_upgrade, credentials (renewed), allowlist (Traefik's still closed), secrets (an app's
-# missing Secret). One left out is suggested by text alone.
+# missing Secret), nas (the NAS's settings applied again), nas_release (a TrueNAS release its configuration is not
+# written for), nas_network (interface changes never committed). One left out is suggested by text alone.
 status_commands: {}

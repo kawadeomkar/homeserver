@@ -365,7 +365,7 @@ def test_what_needs_attention_and_the_exit_code():
     assert model["attention"][1]["command"] == "make deploy TYPE=proxmox"
     assert model["attention"][2]["text"] == "301 homeserver-worker-1 waits for a restart to apply memory, watchdog"
     assert model["attention"][2]["command"] == "qm reboot 301"
-    assert model["exit"] == 0 and model["types"] == ["apps", "admin", "vms", "storage", "cluster"]
+    assert model["exit"] == 0 and model["types"] == ["apps", "admin", "vms", "storage", "cluster", "nas"]
     # A command not given is suggested by text alone.
     assert fs.report({"proxmox": found()}, SETUP)["attention"][1]["command"] == ""
 
@@ -420,8 +420,8 @@ def test_a_source_not_read_comes_first_and_exits_2():
 def test_types_narrow_the_report():
     model = fs.report({"proxmox": found()}, SETUP, ["storage"])
     assert model["types"] == ["storage"] and model["attention"] == []
-    assert fs.unknown_types(["vms", "apps", "nas"]) == ["nas"]
-    assert fs.types_shown([]) == ["apps", "admin", "vms", "storage", "cluster"]
+    assert fs.unknown_types(["vms", "apps", "nas", "disks"]) == ["disks"]
+    assert fs.types_shown([]) == ["apps", "admin", "vms", "storage", "cluster", "nas"]
     assert fs.types_shown(["storage", "vms"]) == ["vms", "storage"]
 
 
@@ -460,7 +460,9 @@ def test_the_text_says_what_matters():
     assert "+ 1 other VM (9001), 4 cores, 8.0 GiB, 1 running and 1 template (9000), not this repo's" in out
     assert "the host's view: ballooning is off" in out
     assert "disks 68 of 68 GiB budgeted" in out
-    assert out.rstrip().endswith("exit 0 · nothing is wrong · make status TYPE=apps|admin|vms|storage|cluster · JSON=1")
+    assert out.rstrip().endswith(
+        "exit 0 · nothing is wrong · make status TYPE=apps|admin|vms|storage|cluster|nas · JSON=1"
+    )
 
 
 def test_long_messages_wrap_under_their_subject():
@@ -485,7 +487,7 @@ def test_the_text_of_a_host_not_read():
     out = fs.text(fs.report({"proxmox": {"unread": "it did not answer"}}, SETUP), False)
     assert "ATTENTION  1 problem · 0 to do" in out and "could not be read: it did not answer" in out
     assert "VMS" not in out and out.rstrip().endswith(
-        "exit 2 · 1 source not read · make status TYPE=apps|admin|vms|storage|cluster · JSON=1"
+        "exit 2 · 1 source not read · make status TYPE=apps|admin|vms|storage|cluster|nas · JSON=1"
     )
 
 
@@ -1371,3 +1373,377 @@ def test_urls_are_links_in_colour():
 def test_the_full_report_is_json():
     model = full_report()
     assert json.loads(json.dumps(model)) == model
+
+
+# ------------------------------------------------------------------------------------------------ the NAS ---
+
+TIB = 2**40
+NAS_NOW = 1792540800  # 2026-10-21 00:00 UTC
+NAS_SETUP = {"nas": True, "cluster": False, "home_assistant": False}
+NAS_COMMANDS = {
+    "nas": "make deploy TYPE=truenas",
+    "nas_release": "raise truenas_supported_version",
+    "nas_network": "commit them on the NAS",
+}
+HOURLY = {"minute": "0", "hour": "*", "dom": "*", "month": "*", "dow": "*"}
+DAILY = {"minute": "0", "hour": "0", "dom": "*", "month": "*", "dow": "*"}
+WEEKLY = {"minute": "0", "hour": "0", "dom": "*", "month": "*", "dow": "0"}
+
+
+def scan(end="2026-10-12T00:00:00+00:00", state="FINISHED", errors=0, function="SCRUB", percentage=100.0):
+    return {
+        "function": function,
+        "state": state,
+        "start_time": "2026-10-11T21:00:00+00:00",
+        "end_time": end,
+        "percentage": percentage,
+        "errors": errors,
+    }
+
+
+def pool(name, used, available, layout="raidz1", **more):
+    return {
+        "name": name,
+        "status": "ONLINE",
+        "healthy": True,
+        "detail": "",
+        "layout": layout,
+        "used": int(used * TIB),
+        "available": int(available * TIB),
+        "scan": scan(),
+        "scrub": {"threshold": 35, "enabled": True},
+        **more,
+    }
+
+
+def task(dataset, schedule, state="FINISHED", last_run="2026-10-20T23:00:02+00:00", error="", enabled=True):
+    return {
+        "id": 1,
+        "dataset": dataset,
+        "enabled": enabled,
+        "schedule": schedule,
+        "lifetime_value": 2,
+        "lifetime_unit": "DAY",
+        "state": state,
+        "last_run": last_run,
+        "error": error,
+    }
+
+
+def nas_state(pools=None, alerts=(), tasks=None, **more):
+    """What truenas_info returns with status, as roles/truenas's status entry point registers it: the disks (with
+    their serials) and the shares beside the health."""
+    return {
+        "changed": False,
+        "api_host": "192.0.2.10",
+        "version": "25.10.7",
+        "ready": True,
+        "hostname": "truenas",
+        "network_pending_changes": False,
+        "disks": [{"name": "sda", "serial": "SERIAL-MUST-NOT-LEAK", "model": "SSD"}],
+        "services": {"nfs": {"enable": True, "state": "RUNNING"}, "ssh": {"enable": False, "state": "STOPPED"}},
+        "nfs_shares": [{"path": f"/mnt/persistent/{n}", "enabled": True} for n in ("a", "b", "c")]
+        + [{"path": "/mnt/ephemeral/off", "enabled": False}],
+        "status": {
+            "uptime_seconds": 34 * 86400 + 5,
+            "pools": [pool("persistent", 2.2, 4.9), pool("ephemeral", 1.0, 2.6, layout="stripe")]
+            if pools is None
+            else pools,
+            "alerts": list(alerts),
+            "snapshot_tasks": [
+                task("persistent/proxmox/vm", HOURLY),
+                task("persistent/proxmox/vm", DAILY, last_run="2026-10-20T00:00:02+00:00"),
+                task("persistent/nextcloud", HOURLY),
+            ]
+            if tasks is None
+            else tasks,
+        },
+        **more,
+    }
+
+
+def nas_report(state=None, types=(), release="25.10", **found):
+    """The report of the NAS beside a Proxmox host that holds nothing to report."""
+    return fs.report(
+        {"proxmox": {}, "nas": fs.nas(nas_state() if state is None else state, release), **found},
+        NAS_SETUP,
+        types,
+        now=NAS_NOW,
+        commands=NAS_COMMANDS,
+    )
+
+
+def attention(model):
+    return [(a["level"], a["subject"], a["text"], a["command"]) for a in model["attention"]]
+
+
+def test_the_nas_from_truenas_info():
+    found = fs.nas(nas_state(), "25.10")
+    assert {k: found[k] for k in ("name", "address", "version", "release", "ready", "pending_network")} == {
+        "name": "truenas",
+        "address": "192.0.2.10",
+        "version": "25.10.7",
+        "release": "25.10",
+        "ready": True,
+        "pending_network": False,
+    }
+    assert found["uptime"] == 34 * 86400 + 5
+    persistent = found["pools"][0]
+    assert persistent["used"] == int(2.2 * TIB) and persistent["total"] == int(2.2 * TIB) + int(4.9 * TIB)
+    assert persistent["layout"] == "raidz1" and persistent["scan"]["errors"] == 0
+    assert [(t["dataset"], t["every"]) for t in found["snapshots"]] == [
+        ("persistent/proxmox/vm", "hourly"),
+        ("persistent/proxmox/vm", "daily"),
+        ("persistent/nextcloud", "hourly"),
+    ]
+    assert found["nfs"] == {"enabled": True, "state": "RUNNING", "shares": 3}
+    assert "SERIAL-MUST-NOT-LEAK" not in json.dumps(found)
+
+
+@pytest.mark.parametrize(
+    ("schedule", "every"),
+    [(HOURLY, "hourly"), (DAILY, "daily"), (WEEKLY, "weekly"), (DAILY | {"dom": "1"}, "monthly"), ({}, "hourly")],
+)
+def test_how_often_a_snapshot_task_runs(schedule, every):
+    assert fs._every(schedule) == every
+
+
+def test_alerts_lose_their_html_and_dismissed_ones_never_come():
+    alert = {"klass": "X", "level": "warning", "text": "Pool <b>tank</b> state is DEGRADED:<br>one disk &amp; more"}
+    found = fs.nas(nas_state(alerts=[alert | {"datetime": "2026-10-20T08:00:00+00:00"}]))
+    assert found["alerts"] == [
+        {
+            "level": "WARNING",
+            "klass": "X",
+            "text": "Pool tank state is DEGRADED: one disk & more",
+            "since": "2026-10-20T08:00:00+00:00",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("state", "why"),
+    [
+        (
+            {
+                "failed": False,
+                "msg": "TrueNAS did not answer on any of the given addresses",
+                "errors": {"192.0.2.10": "timed out"},
+            },
+            "TrueNAS did not answer on any of the given addresses: 192.0.2.10: timed out",
+        ),
+        (
+            {"failed": False, "msg": "TrueNAS at 192.0.2.10 rejected the API key."},
+            "TrueNAS at 192.0.2.10 rejected the API key",
+        ),
+        ({}, "not read"),
+        ({"api_host": "192.0.2.10"}, "not read"),
+    ],
+)
+def test_a_nas_that_was_not_read(state, why):
+    assert fs.nas(state) == {"unread": why}
+    model = fs.report({"proxmox": {}, "nas": fs.nas(state)}, NAS_SETUP, now=NAS_NOW)
+    assert model["exit"] == 2
+    assert ("unread", "nas", f"the NAS could not be read: {why}", "") in attention(model)
+    out = fs.text(model, False)
+    assert "NAS  not read" in out
+
+
+def test_a_setup_without_a_nas_reads_none_and_shows_none():
+    model = fs.report({}, SETUP, now=NAS_NOW)
+    assert not [a for a in model["attention"] if a["subject"] == "nas"] and model["nas"] == {}
+    assert "NAS" not in fs.text(model, False).replace("Proxmox only", "")
+    model = fs.report({}, NAS_SETUP, now=NAS_NOW)
+    assert ("unread", "nas", "the NAS was not read", "") in attention(model)
+
+
+def test_a_healthy_nas_asks_for_nothing():
+    model = nas_report(types=["nas"])
+    assert model["attention"] == [] and model["exit"] == 0
+    assert model["nas"]["pools"][0]["scanned_ago"] == 9 * 86400
+    assert [t["ago"] for t in model["nas"]["snapshots"]] == [3598, 86398, 3598]
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        pytest.param(
+            nas_state(
+                pools=[
+                    pool(
+                        "persistent",
+                        2.2,
+                        4.9,
+                        status="DEGRADED",
+                        healthy=False,
+                        detail="One or more devices are faulted.",
+                    )
+                ]
+            ),
+            ("problem", "persistent", "the pool is DEGRADED: One or more devices are faulted.", ""),
+            id="degraded",
+        ),
+        pytest.param(
+            nas_state(pools=[pool("persistent", 6.5, 0.5)]),
+            ("problem", "persistent", "the pool is 93% full: 6.5 / 7.0 TiB", ""),
+            id="full",
+        ),
+        pytest.param(
+            nas_state(pools=[pool("persistent", 5.8, 1.2)]),
+            ("todo", "persistent", "the pool is 83% full: 5.8 / 7.0 TiB", ""),
+            id="filling",
+        ),
+        pytest.param(
+            nas_state(pools=[pool("persistent", 2.2, 4.9, scan=scan(errors=3))]),
+            ("problem", "persistent", "its last scrub found 3 errors", ""),
+            id="scrub-errors",
+        ),
+        pytest.param(
+            nas_state(pools=[pool("persistent", 2.2, 4.9, scan=scan(end="2026-09-01T00:00:00+00:00"))]),
+            ("todo", "persistent", "its last scrub was 50 d ago, though its task scrubs every 35 d", ""),
+            id="scrub-overdue",
+        ),
+        pytest.param(
+            nas_state(pools=[pool("persistent", 2.2, 4.9, scrub=None)]),
+            ("todo", "persistent", "no scrub task scrubs it", "make deploy TYPE=truenas"),
+            id="no-scrub-task",
+        ),
+        pytest.param(
+            nas_state(tasks=[task("persistent/nextcloud", HOURLY, state="ERROR", error="out of space")]),
+            ("problem", "snapshots", "the hourly snapshots of persistent/nextcloud failed: out of space", ""),
+            id="snapshots-failed",
+        ),
+        pytest.param(
+            nas_state(alerts=[{"klass": "SMART", "level": "CRITICAL", "text": "Device sda: SMART test failed"}]),
+            ("problem", "nas", "TrueNAS alerts (critical): Device sda: SMART test failed", ""),
+            id="critical-alert",
+        ),
+        pytest.param(
+            nas_state(alerts=[{"klass": "NTP", "level": "WARNING", "text": "NTP health check failed"}]),
+            ("todo", "nas", "TrueNAS alerts (warning): NTP health check failed", ""),
+            id="warning-alert",
+        ),
+        pytest.param(
+            nas_state(services={"nfs": {"enable": True, "state": "STOPPED"}}),
+            (
+                "problem",
+                "nfs",
+                "the NFS service is stopped, so its 3 shares are not served",
+                "make deploy TYPE=truenas",
+            ),
+            id="nfs-stopped",
+        ),
+        pytest.param(
+            nas_state(version="26.04.1"),
+            (
+                "todo",
+                "nas",
+                "the NAS runs TrueNAS 26.04.1, and its configuration is written for 25.10",
+                "raise truenas_supported_version",
+            ),
+            id="another-release",
+        ),
+        pytest.param(
+            nas_state(network_pending_changes=True),
+            ("todo", "nas", "TrueNAS holds interface changes that were never committed", "commit them on the NAS"),
+            id="pending-network",
+        ),
+        pytest.param(
+            nas_state(ready=False),
+            ("problem", "nas", "TrueNAS is not ready: its middleware is still starting", ""),
+            id="not-ready",
+        ),
+    ],
+)
+def test_what_the_nas_needs(state, expected):
+    model = nas_report(state)
+    assert attention(model) == [expected]
+    assert model["exit"] == (1 if expected[0] == "problem" else 0)
+
+
+def test_info_alerts_a_disabled_task_and_a_scrub_under_way_ask_for_nothing():
+    state = nas_state(
+        pools=[pool("persistent", 2.2, 4.9, scan=scan(end=None, state="SCANNING", percentage=45.2))],
+        alerts=[{"klass": "Update", "level": "INFO", "text": "An update is available"}],
+        tasks=[task("persistent/nextcloud", HOURLY, state="ERROR", error="x", enabled=False)],
+    )
+    assert nas_report(state)["attention"] == []
+
+
+def test_the_nas_is_left_out_unless_shown():
+    state = nas_state(ready=False)
+    model = nas_report(state, types=["vms"])
+    assert model["attention"] == [] and "NAS " not in fs.text(model, False)
+    unread = fs.report({"proxmox": {}, "nas": {"unread": "timed out"}}, NAS_SETUP, ["vms"], now=NAS_NOW)
+    assert unread["exit"] == 2
+
+
+def test_the_nas_text():
+    state = nas_state(
+        pools=[
+            pool("persistent", 2.2, 4.9),
+            pool("ephemeral", 2.9, 0.7, layout="stripe", scan=scan(end=None, state="SCANNING", percentage=45.2)),
+        ],
+        alerts=[
+            {
+                "klass": "NTP",
+                "level": "WARNING",
+                "text": "NTP health check failed - No Active NTP peers" + " and more" * 9,
+            },
+            {"klass": "Update", "level": "INFO", "text": "An update is available"},
+        ],
+        tasks=[
+            task("persistent/proxmox/vm", HOURLY),
+            task("persistent/proxmox/vm", DAILY, last_run="2026-10-20T00:00:02+00:00"),
+            task("persistent/nextcloud", HOURLY, state="ERROR", error="out of space"),
+            task("persistent/nextcloud", WEEKLY, enabled=False),
+            task("persistent/photoprism", HOURLY, state="PENDING", last_run=None),
+        ],
+    )
+    out = fs.text(nas_report(state), False)
+    lines = out.splitlines()
+    assert max(len(line) for line in lines) <= 100, out
+    assert "NAS  truenas · TrueNAS 25.10.7 · up 34 d" in out
+    persistent = next(line for line in lines if " persistent " in line and "%" in line)
+    assert persistent.startswith(" Pools      persistent  raidz1  online   ████░░░░░░░░  31%  2.2 / 7.1 TiB  "), out
+    assert persistent.endswith("scrub 9 d ago, 0 errors"), out
+    assert "ephemeral   stripe  online   ██████████░░  81%  2.9 / 3.6 TiB  scrubbing 45%" in out
+    assert " Snapshots  proxmox/vm hourly, daily 59 m ago · nextcloud hourly, weekly (off) failed" in out
+    assert "photoprism hourly not run yet" in out
+    assert " NFS        running · 3 shares" in out
+    alert = next(i for i, line in enumerate(lines) if line.startswith(" Alerts     warning   NTP health check"))
+    assert lines[alert + 1].startswith(" " * 22) and lines[alert + 2].startswith("            info      An update")
+    assert nas_report()["nas"]["alerts"] == [] and " Alerts     none" in fs.text(nas_report(), False)
+
+
+def test_a_notice_shows_its_first_sentence_and_a_warning_its_whole_text():
+    # A pool's feature-flags notice as TrueNAS 25.10.7 words it, seen on a real NAS.
+    advice = (
+        " Upgrading pools is a one-time process that can prevent rolling the system back to an earlier TrueNAS"
+        " version. It is recommended to read the TrueNAS release notes and confirm you need the new ZFS feature flags"
+        " before upgrading a pool."
+    )
+    notice = "New ZFS version or feature flags are available for pool 'persistent'."
+    degraded = (
+        "Pool persistent state is DEGRADED: One or more devices are faulted. The following devices are not healthy"
+    )
+    state = nas_state(
+        alerts=[
+            {"klass": "PoolUpgraded", "level": "NOTICE", "text": notice + advice},
+            {"klass": "VolumeStatus", "level": "WARNING", "text": degraded},
+        ]
+    )
+    model = nas_report(state)
+    lines = fs.text(model, False).splitlines()
+    # The notice on one line, then the warning, whole, wrapped over two.
+    alerts = lines.index(" Alerts     notice    " + notice)
+    assert lines[alerts + 1].startswith("            warning   Pool persistent state is DEGRADED")
+    assert lines[alerts + 2] == " " * 22 + "following devices are not healthy"
+    assert not any("Upgrading pools" in line for line in lines)
+    assert model["nas"]["alerts"][0]["text"] == notice + advice, "the JSON keeps the whole text"
+
+
+def test_the_nas_report_is_json():
+    model = nas_report()
+    assert json.loads(json.dumps(model)) == model
+    assert "SERIAL-MUST-NOT-LEAK" not in json.dumps(model)

@@ -5,8 +5,8 @@ name: homeserver_status
 type: stdout
 short_description: make status's report, without Ansible's task output
 description:
-  - Prints one line saying, for each host the reading play ran on, whether it answered and how long it took, and
-    how long asking the apps' addresses took, then the text of the task that shows the report (status.yml,
+  - Prints one line saying, for each host the reading play ran on, whether it answered and was read and how long
+    it took, and how long asking the apps' addresses took, then the text of the task that shows the report (status.yml,
     roles/status's report entry point).
   - Prints nothing on standard output when STATUS_QUIET is set, for make status JSON=1, which prints the report's
     file instead.
@@ -48,16 +48,27 @@ class CallbackModule(CallbackBase):
     def _seen(self, result, state):
         if not self._reading:
             return
+        # A host that answered but whose source could not be read, such as a NAS that refused the API key: its
+        # findings say why, and the report too.
+        facts = result._result.get("ansible_facts") or {}
+        found = facts.get("status_found") or {}
+        if state == "ok" and any(isinstance(f, dict) and f.get("unread") for f in found.values()):
+            state = "not read"
         host = result._host
         entry = self._hosts.setdefault(host.get_name(), {"label": self._label(host), "state": "ok"})
+        # A host with nothing to read in this setup, such as the NAS's without one, is left out of the line.
+        if facts.get("status_found") == {}:
+            entry["nothing"] = True
         entry["seconds"] = time.monotonic() - self._started
         if entry["state"] == "ok":
             entry["state"] = state
 
     def _flush(self):
         """The line on what was read, once, before the report or at the end of a run that made none."""
-        if self._hosts and not self._quiet:
-            parts = [f"{h['label']} {h['state']} {h['seconds']:.1f} s" for h in self._hosts.values()]
+        parts = [
+            f"{h['label']} {h['state']} {h['seconds']:.1f} s" for h in self._hosts.values() if not h.get("nothing")
+        ]
+        if parts and not self._quiet:
             self._display.display("reading  " + " · ".join(parts) + "\n")
         self._hosts = {}
 

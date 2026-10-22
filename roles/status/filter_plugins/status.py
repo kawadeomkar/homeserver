@@ -1,11 +1,12 @@
 """What make status reports, worked out from what roles/status read, and the report as text.
 
 The role's tasks read each host through status_read and pass the results here: status_proxmox for the Proxmox host,
-status_cluster for the cluster (with status_credentials for its credentials' expiry, read under no_log). The report
-play asks the apps' addresses (status_probe_targets, then the module status_probe), passes what every host found and
-what the probes saw to status_report, then the report to status_text. Everything here is pure: it runs on the
-controller, never connects anywhere, and is unit-tested in tests/unit/test_status_filters.py, with the shapes
-captured from a Proxmox VE 9.2 host and from the cluster on it.
+status_cluster for the cluster (with status_credentials for its credentials' expiry, read under no_log), status_nas
+for what truenas_info read of the NAS with its status option. The report play asks the apps' addresses
+(status_probe_targets, then the module status_probe), passes what every host found and what the probes saw to
+status_report, then the report to status_text. Everything here is pure: it runs on the controller, never connects
+anywhere, and is unit-tested in tests/unit/test_status_filters.py, with the shapes captured from a Proxmox VE 9.2 host
+and from the cluster on it, and the NAS's as TrueNAS 25.10's API reference documents them.
 
 The report is a mapping that JSON=1 prints as it is: every source's findings, the attention list (problems, things
 to do, and sources that could not be read, each with the command that deals with it), and the exit code make status
@@ -14,6 +15,7 @@ configuration (status_commands), so the role names none of this repo's make targ
 """
 
 import base64
+import html
 import json
 import re
 import textwrap
@@ -39,7 +41,7 @@ SMALL_FILESYSTEM = GIB
 # A storage this full is a thing to do, and this full a problem.
 STORAGE_TODO, STORAGE_PROBLEM = 0.8, 0.9
 # The sections make status knows, in the order it shows them.
-TYPES = ("apps", "admin", "vms", "storage", "cluster")
+TYPES = ("apps", "admin", "vms", "storage", "cluster", "nas")
 # A guest's interfaces that are never the address it is reached at: loopback, container bridges, tunnels.
 INNER_INTERFACES = ("lo", "docker", "hassio", "veth", "br-", "cni", "flannel", "tailscale", "virbr")
 
@@ -940,6 +942,112 @@ def credentials(kubeconfig=None, talosconfig=None):
     }
 
 
+# ---------------------------------------------------------------------------------------------- the NAS ---
+
+# TrueNAS's alert levels that are a problem, and the one that is a thing to do; INFO and NOTICE are only listed, by
+# their first sentence: TrueNAS follows it with advice (a pool's feature flags take four lines). A warning or worse
+# keeps its whole text, which may go on to name the devices at fault.
+NAS_ALERT_PROBLEM = ("ERROR", "CRITICAL", "ALERT", "EMERGENCY")
+NAS_ALERT_TODO = ("WARNING",)
+FIRST_SENTENCE = re.compile(r"(.+?[.!?])\s+(?=[A-Z])", re.S)
+# Days past a scrub task's threshold before its pool counts as overdue: the task runs weekly, then waits for that.
+SCRUB_GRACE_DAYS = 8
+
+
+def _plain_text(text):
+    """An alert's text without the HTML TrueNAS formats some with, on one line."""
+    text = re.sub(r"<[^>]+>", "", re.sub(r"<br\s*/?>", " ", str(text or ""), flags=re.I))
+    return " ".join(html.unescape(text).split())
+
+
+def _every(schedule):
+    """How often a periodic snapshot task's cron schedule runs: hourly, daily, weekly or monthly."""
+    schedule = schedule or {}
+    if str(schedule.get("hour", "*")) == "*":
+        return "hourly"
+    if str(schedule.get("dom", "*")) != "*":
+        return "monthly"
+    if str(schedule.get("dow", "*")) != "*":
+        return "weekly"
+    return "daily"
+
+
+def _nas_unread(state):
+    message = str(state.get("msg") or "not read").rstrip(".")
+    errors = state.get("errors")
+    if isinstance(errors, dict) and errors:
+        message += ": " + "; ".join(f"{host}: {why}" for host, why in errors.items())
+    return message
+
+
+def nas(state, release=""):
+    """What the NAS says, from truenas_info with its status option (roles/truenas's status entry point): each pool's
+    health, capacity and last scrub, TrueNAS's alerts, each periodic snapshot task's last run, the NFS service, and
+    the release it runs against `release`, the one its role is written for. A NAS that did not answer, refused the
+    key or presented another certificate than the pinned one is {"unread": why}."""
+    state = state if isinstance(state, dict) else {}
+    health = state.get("status")
+    if not state.get("api_host") or not isinstance(health, dict):
+        return {"unread": _nas_unread(state)}
+    pools = []
+    for pool in health.get("pools") or []:
+        used, available = pool.get("used"), pool.get("available")
+        scan = pool.get("scan") or None
+        pools.append(
+            {
+                "name": str(pool.get("name") or ""),
+                "status": str(pool.get("status") or ""),
+                "healthy": bool(pool.get("healthy")),
+                "detail": str(pool.get("detail") or ""),
+                "layout": str(pool.get("layout") or ""),
+                "used": used or 0,
+                "total": (used or 0) + (available or 0) if used is not None and available is not None else 0,
+                "scan": {
+                    k: scan.get(k) for k in ("function", "state", "start_time", "end_time", "percentage", "errors")
+                }
+                if scan
+                else None,
+                "scrub": pool.get("scrub") or None,
+            }
+        )
+    nfs = (state.get("services") or {}).get("nfs") or {}
+    return {
+        "name": str(state.get("hostname") or ""),
+        "address": str(state["api_host"]),
+        "version": str(state.get("version") or ""),
+        "release": str(release or ""),
+        "ready": bool(state.get("ready")),
+        "pending_network": bool(state.get("network_pending_changes")),
+        "uptime": health.get("uptime_seconds"),
+        "pools": pools,
+        "alerts": [
+            {
+                "level": str(a.get("level") or "").upper(),
+                "klass": str(a.get("klass") or ""),
+                "text": _plain_text(a.get("text")),
+                "since": a.get("datetime") or "",
+            }
+            for a in health.get("alerts") or []
+        ],
+        "snapshots": [
+            {
+                "dataset": str(t.get("dataset") or ""),
+                "enabled": bool(t.get("enabled")),
+                "every": _every(t.get("schedule")),
+                "state": str(t.get("state") or ""),
+                "last_run": t.get("last_run") or "",
+                "error": str(t.get("error") or ""),
+            }
+            for t in health.get("snapshot_tasks") or []
+        ],
+        "nfs": {
+            "enabled": bool(nfs.get("enable")),
+            "state": str(nfs.get("state") or ""),
+            "shares": sum(1 for share in state.get("nfs_shares") or [] if share.get("enabled", True)),
+        },
+    }
+
+
 def _plain(url):
     return "http://" + url.split("://", 1)[1]
 
@@ -1240,6 +1348,71 @@ def _apps_attention(rows, dns, clu, tls, commands, kubeconfig):
     return out
 
 
+def _nas_model(found, now):
+    """The NAS's findings with the ages the report shows: each pool's last scrub and each snapshot task's last run,
+    seconds before `now`."""
+
+    def age(when):
+        seconds = _when(when)
+        return None if seconds is None or not now else max(int(now - seconds), 0)
+
+    pools = []
+    for pool in found.get("pools") or []:
+        scan = pool.get("scan") or {}
+        pools.append(pool | {"scanned_ago": age(scan.get("end_time")) if scan.get("state") == "FINISHED" else None})
+    snapshots = [t | {"ago": age(t["last_run"])} for t in found.get("snapshots") or []]
+    return found | {"pools": pools, "snapshots": snapshots}
+
+
+def _nas_attention(found, commands):
+    out = []
+    if not found["ready"]:
+        out.append(_item("problem", "nas", "TrueNAS is not ready: its middleware is still starting"))
+    release, version = found.get("release"), found.get("version", "")
+    if release and version and ".".join(version.split(".")[:2]) != release:
+        text = f"the NAS runs TrueNAS {version}, and its configuration is written for {release}"
+        out.append(_item("todo", "nas", text, commands.get("nas_release", "")))
+    if found.get("pending_network"):
+        text = "TrueNAS holds interface changes that were never committed"
+        out.append(_item("todo", "nas", text, commands.get("nas_network", "")))
+    for pool in found.get("pools") or []:
+        name = pool["name"]
+        if not pool["healthy"] or pool["status"] != "ONLINE":
+            text = f"the pool is {pool['status'] or 'not healthy'}" + (f": {pool['detail']}" if pool["detail"] else "")
+            out.append(_item("problem", name, text))
+        fraction = pool["used"] / pool["total"] if pool["total"] else 0
+        if fraction >= STORAGE_TODO:
+            text = f"the pool is {fraction:.0%} full: {_sizes(pool['used'], pool['total'])}"
+            out.append(_item("problem" if fraction >= STORAGE_PROBLEM else "todo", name, text))
+        scan, scrub = pool.get("scan") or {}, pool.get("scrub") or {}
+        if scan.get("function") == "SCRUB" and scan.get("state") == "FINISHED" and scan.get("errors"):
+            errors = scan["errors"]
+            text = f"its last scrub found {errors} error{'s' if errors != 1 else ''}"
+            out.append(_item("problem", name, text))
+        if not scrub.get("enabled"):
+            out.append(_item("todo", name, "no scrub task scrubs it", commands.get("nas", "")))
+        elif pool.get("scanned_ago") is not None and scrub.get("threshold"):
+            days = pool["scanned_ago"] // DAY
+            if days > scrub["threshold"] + SCRUB_GRACE_DAYS:
+                text = f"its last scrub was {days} d ago, though its task scrubs every {scrub['threshold']} d"
+                out.append(_item("todo", name, text))
+    for task in found.get("snapshots") or []:
+        if task["enabled"] and task["state"] == "ERROR":
+            text = f"the {task['every']} snapshots of {task['dataset']} failed: {task['error'] or 'no reason given'}"
+            out.append(_item("problem", "snapshots", text))
+    for alert in found.get("alerts") or []:
+        if alert["level"] in NAS_ALERT_PROBLEM + NAS_ALERT_TODO:
+            level = "problem" if alert["level"] in NAS_ALERT_PROBLEM else "todo"
+            out.append(_item(level, "nas", f"TrueNAS alerts ({alert['level'].lower()}): {alert['text']}"))
+    nfs = found.get("nfs") or {}
+    if nfs.get("shares") and nfs.get("state") != "RUNNING":
+        count = nfs["shares"]
+        text = f"the NFS service is {nfs.get('state', '').lower() or 'not running'}, so its {count} share"
+        text += f"{'s are' if count != 1 else ' is'} not served"
+        out.append(_item("problem", "nfs", text, commands.get("nas", "")))
+    return out
+
+
 def _version(text):
     return str(text or "").removeprefix("v")
 
@@ -1353,7 +1526,7 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
     and the exit code. `found` is {source: findings}; a source without findings was never read. `types` narrows the
     sections; empty means every one. `probes` is what status_probe saw, `admin` the admin pages ({name, url}) to
     list, `commands` the commands to suggest by purpose (upgrade, resume with {names}, talos_upgrade, credentials,
-    allowlist, secrets), `now` seconds since the epoch."""
+    allowlist, secrets, nas, nas_release, nas_network), `now` seconds since the epoch."""
     shown, setup, commands = types_shown(types), dict(setup or {}), dict(commands or {})
     found = found or {}
     attention, unread = [], []
@@ -1377,6 +1550,16 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
             unread.append(_item("unread", "cluster", f"the cluster could not be read: {clu['unread']}"))
     clu = clu or {}
     readable = clu and not clu.get("unread")
+    nas_found = found.get("nas")
+    if setup.get("nas"):
+        if nas_found is None:
+            unread.append(_item("unread", "nas", "the NAS was not read"))
+        elif nas_found.get("unread"):
+            unread.append(_item("unread", "nas", f"the NAS could not be read: {nas_found['unread']}"))
+    nas_found = nas_found or {}
+    nas_read = nas_found and not nas_found.get("unread")
+    if nas_read:
+        nas_found = _nas_model(nas_found, now)
     rows = _app_rows(clu if readable else {}, prox, probes)
     dns = _dns(clu, probes) if readable else None
     tls = _tls(clu, probes, now) if readable else None
@@ -1394,6 +1577,8 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
                     attention += _fill_attention(f"{node['name']} /var", fs["used"], fs["total"])
     if "cluster" in shown and readable:
         attention += _cluster_attention(clu, commands)
+    if "nas" in shown and nas_read:
+        attention += _nas_attention(nas_found, commands)
     ranked = unread + [a for a in attention if a["level"] == "problem"] + [a for a in attention if a["level"] == "todo"]
     problems = sum(1 for a in ranked if a["level"] == "problem")
     return {
@@ -1410,6 +1595,7 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
         "proxmox": _with_guest_view(prox, clu if readable else None) or {},
         "volumes": volumes,
         "cluster": clu,
+        "nas": nas_found,
     }
 
 
@@ -1881,6 +2067,91 @@ def _cluster_lines(model):
     return lines
 
 
+def _since(seconds):
+    return "?" if seconds is None else f"{_ago(seconds)} ago"
+
+
+def _sizes(used, total):
+    """Used and total bytes as "2.2 / 7.1 TiB", or in GiB below a TiB."""
+    if total >= 2**40:
+        return f"{used / 2**40:.1f} / {total / 2**40:.1f} TiB"
+    return f"{_gib(used)} / {_gib(total)} GiB"
+
+
+def _scan_text(pool):
+    scan = pool.get("scan") or {}
+    doing = {"SCRUB": "scrubbing", "RESILVER": "resilvering"}.get(scan.get("function"), "scanning")
+    if scan.get("state") == "SCANNING":
+        return f"{doing} {scan.get('percentage') or 0:.0f}%", "y"
+    if not scan or scan.get("function") != "SCRUB" or scan.get("state") != "FINISHED":
+        return "never scrubbed", "d"
+    errors = scan.get("errors") or 0
+    text = f"scrub {_since(pool.get('scanned_ago'))}, {errors} error{'s' if errors != 1 else ''}"
+    return text, "r" if errors else "d"
+
+
+def _nas_lines(model):
+    found = model.get("nas") or {}
+    if not found or found.get("unread"):
+        return [_Line().add("NAS", "h").add("  ").add("not read", "d")]
+    facts = [found["name"], f"TrueNAS {found['version']}" if found["version"] else ""]
+    facts.append(f"up {_uptime(found['uptime'])}" if found.get("uptime") is not None else "")
+    lines = [_Line().add("NAS", "h").add("  ").add(" · ".join(f for f in facts if f), "d")]
+    pools = found.get("pools") or []
+    width = max([len(p["name"]) for p in pools] + [10]) + 2
+    for i, pool in enumerate(pools):
+        line = _Line().add(" ").cell("Pools" if i == 0 else "", 11, "k").cell(pool["name"], width, "b")
+        line.cell(pool["layout"], 8, "d")
+        good = pool["healthy"] and pool["status"] == "ONLINE"
+        line.cell((pool["status"] or "unknown").lower(), 9, "g" if good else "r")
+        if pool["total"]:
+            fraction = pool["used"] / pool["total"]
+            line.add(_bar(fraction), _bar_style(fraction)).add(" ").cell(f"{fraction:.0%}", 4, right=True).add("  ")
+            line.cell(_sizes(pool["used"], pool["total"]), 15)
+        line.add(*_scan_text(pool))
+        lines.append(line)
+    datasets = {}
+    for task in found.get("snapshots") or []:
+        datasets.setdefault(task["dataset"], []).append(task)
+    phrases = []
+    for dataset, tasks in datasets.items():
+        short = dataset.split("/", 1)[1] if "/" in dataset else dataset
+        kinds = ", ".join(t["every"] + ("" if t["enabled"] else " (off)") for t in tasks)
+        failed = [t for t in tasks if t["enabled"] and t["state"] == "ERROR"]
+        ages = [t["ago"] for t in tasks if t["enabled"] and t.get("ago") is not None]
+        if failed:
+            outcome = (" failed", "r")
+        elif ages:
+            outcome = (f" {_since(min(ages))}", "d")
+        else:
+            outcome = (" not run yet", "d")
+        phrases.append([(short, "b"), (f" {kinds}", ""), outcome])
+    if phrases:
+        lines += _phrases("Snapshots", phrases)
+    nfs = found.get("nfs") or {}
+    running = nfs.get("state") == "RUNNING"
+    count = nfs.get("shares") or 0
+    lines += _phrases(
+        "NFS",
+        [
+            [((nfs.get("state") or "unknown").lower(), "g" if running else "r" if count else "d")],
+            [(f"{count} share{'s' if count != 1 else ''}", "")],
+        ],
+    )
+    alerts = found.get("alerts") or []
+    if not alerts:
+        lines += _phrases("Alerts", [[("none", "d")]])
+    for i, alert in enumerate(alerts):
+        style = "r" if alert["level"] in NAS_ALERT_PROBLEM else "y" if alert["level"] in NAS_ALERT_TODO else "d"
+        text = alert["text"]
+        if style == "d" and (first := FIRST_SENTENCE.match(text)):
+            text = first.group(1)
+        for j, part in enumerate(_wrap(text, WIDTH - 22)):
+            line = _Line().add(" ").cell("Alerts" if i == 0 and j == 0 else "", 11, "k")
+            lines.append(line.cell(alert["level"].lower() if j == 0 else "", 10, style).add(part))
+    return lines
+
+
 def _error_lines(errors):
     lines = []
     for error in errors:
@@ -1913,6 +2184,8 @@ def text(model, color=False):
         lines += [*_storage_lines(storages), _Line()]
     if "cluster" in types and clu:
         lines += [*_cluster_lines(model), _Line()]
+    if "nas" in types and (model.get("setup") or {}).get("nas"):
+        lines += [*_nas_lines(model), _Line()]
     lines += _error_lines((prox.get("errors") or []) + (clu.get("errors") or []))
     problems = sum(1 for a in model["attention"] if a["level"] == "problem")
     unread = sum(1 for a in model["attention"] if a["level"] == "unread")
@@ -1933,6 +2206,7 @@ class FilterModule:
         return {
             "status_proxmox": proxmox,
             "status_cluster": cluster,
+            "status_nas": nas,
             "status_credentials": credentials,
             "status_probe_targets": probe_targets,
             "status_unknown_types": unknown_types,

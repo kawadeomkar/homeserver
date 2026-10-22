@@ -48,6 +48,13 @@ re-applied, since TrueNAS keeps those on the boot drive. This repo's full proced
 | `truenas_alerts` | The outgoing mail server (its password compared but never printed), and alert services | `truenas_mail`, `truenas_mail_password`, `truenas_alert_services` |
 | `truenas_services` | Enables, disables, starts and stops services, last | `truenas_services` |
 
+A second entry point, `status` (`tasks_from: status`), is what `make status` runs on the NAS: `truenas_info` with its
+`status` option, which adds each pool's health, capacity, layout and last scrub, TrueNAS's alerts that are not
+dismissed, each snapshot task's last run and the uptime to what it reads, in the same login. It changes nothing, tries
+each address once, and never fails: a NAS that does not answer, refuses the key or presents another certificate than
+the pinned one leaves `truenas_status` without an `api_host`, with why in its `msg`, and the key goes to no other
+server. `roles/status` reports what it says.
+
 `defaults/main.yml` and `meta/argument_specs.yml` describe every variable. Run with `--check --diff`
 first: `tests/integration` runs the role against a fake NAS, which cannot prove the real one behaves the
 same.

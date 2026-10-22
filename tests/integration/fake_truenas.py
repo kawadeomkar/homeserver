@@ -5,8 +5,9 @@ It implements only the methods roles/truenas calls, returns the shapes the real 
 where a non-idempotent role would trip over it: creating a dataset, share, NTP server or scrub
 task that exists, importing a pool that is imported, POSIX ACLs without aclmode DISCARD,
 non-consecutive name servers, a snapshot task for a dataset that does not exist. The periodic snapshot
-tasks, mail and alert services follow the TrueNAS API v25.10 reference (api.truenas.com) rather than a
-capture, and mail.config returns the password as set, as the reference documents. Any other method is an
+tasks, mail and alert services, alert.list, and the pools' health, capacity and scan follow the TrueNAS API v25.10
+reference (api.truenas.com) rather than a capture, times as the API sends them ({"$date": milliseconds}), and
+mail.config returns the password as set, as the reference documents. Any other method is an
 error, so an unexpected call fails the test.
 
 State lives in a JSON file that is re-read before and written after every call, so a test can
@@ -28,7 +29,43 @@ from websockets.asyncio.server import serve
 API_KEY = "1-fake-api-key-for-tests"
 # Stands in for the UI certificate's private key; the tests check it never reaches Ansible output.
 PRIVATE_KEY = "FAKE-PRIVATE-KEY-MUST-NOT-LEAK"
+# Stands in for the machine's serial number, which system.info returns; make status's report never carries it.
+SYSTEM_SERIAL = "FAKE-SYSTEM-SERIAL-MUST-NOT-LEAK"
 BOOT_POOL = "boot-pool"
+TIB = 2**40
+# When the fake's pools were last scrubbed: 2026-10-12 00:00 UTC, three hours long.
+SCRUBBED = 1791763200
+
+
+def date(seconds):
+    """A time as the API sends it."""
+    return {"$date": int(seconds * 1000)}
+
+
+def finished_scrub(end=SCRUBBED + 3 * 3600, errors=0):
+    """pool.query's scan for a scrub that finished at `end` (seconds since the epoch)."""
+    return {
+        "function": "SCRUB",
+        "state": "FINISHED",
+        "start_time": date(end - 3 * 3600),
+        "end_time": date(end),
+        "percentage": 100.0,
+        "bytes_to_process": 2 * TIB,
+        "bytes_processed": 2 * TIB,
+        "bytes_issued": 2 * TIB,
+        "pause": None,
+        "errors": errors,
+        "total_secs_left": None,
+    }
+
+
+def topology(vdev, guid):
+    """pool.query's topology: one data vdev, a RAIDZ of three disks or a disk of its own."""
+    stats = {"read_errors": 0, "write_errors": 0, "checksum_errors": 0}
+    disk = {"type": "DISK", "status": "ONLINE", "stats": stats, "children": []}
+    data = {"name": f"{vdev.lower()}-0", "type": vdev, "guid": guid, "status": "ONLINE", "stats": stats}
+    data["children"] = [disk | {"name": f"disk{i}", "guid": f"{guid}{i}"} for i in range(3)] if vdev != "DISK" else []
+    return {"data": [data], "log": [], "cache": [], "spare": [], "special": [], "dedup": []}
 
 
 class CallError(Exception):
@@ -73,15 +110,27 @@ def initial_state(address):
             "activity": {"type": "DENY", "activities": []},
         },
         "exported_pools": [
-            {"name": "persistent", "guid": "1001", "status": "ONLINE", "hostname": "", "children": []},
+            {
+                "name": "persistent",
+                "guid": "1001",
+                "status": "ONLINE",
+                "hostname": "",
+                "children": [],
+                "vdev": "RAIDZ1",
+            },
             {
                 "name": "ephemeral",
                 "guid": "1002",
                 "status": "ONLINE",
                 "hostname": "",
                 "children": ["ephemeral/jellyfin"],
+                "vdev": "DISK",
             },
         ],
+        # Each pool's root dataset's used and available bytes, which pool.dataset.query reports.
+        "space": {"persistent": [int(2.2 * TIB), int(4.9 * TIB)], "ephemeral": [int(2.3 * TIB), int(1.3 * TIB)]},
+        "uptime_seconds": 2937600.5,
+        "alerts": [],
         "pools": [],
         "datasets": {},
         "scrubs": [],
@@ -202,13 +251,24 @@ class FakeTrueNAS:
 
     # ------------------------------------------------------------------ system
     def m_system_version(self):
-        return "TrueNAS-25.10.7"
+        return "TrueNAS-" + self.s.get("version", "25.10.7")
 
     def m_system_ready(self):
         return True
 
     def m_system_info(self):
-        return {"version": "25.10.7", "hostname": self.s["network"]["hostname"]}
+        return {
+            "version": self.s.get("version", "25.10.7"),
+            "hostname": self.s["network"]["hostname"],
+            "uptime_seconds": self.s.get("uptime_seconds", 0.0),
+            "system_serial": SYSTEM_SERIAL,
+            "system_product": "FAKE",
+            "physmem": 64 * 2**30,
+        }
+
+    # ------------------------------------------------------------------ alerts
+    def m_alert_list(self):
+        return copy.deepcopy(self.s.get("alerts", []))
 
     def m_core_get_jobs(self, filters=None, options=None):
         return [j for j in self.s["jobs"].values() if matches(j, filters)]
@@ -336,6 +396,7 @@ class FakeTrueNAS:
         self.s["exported_pools"].remove(exported)
         pool_id = self.new_id()
         name = exported["name"]
+        used, available = self.s.get("space", {}).get(name, [0, TIB])
         self.s["pools"].append(
             {
                 "id": pool_id,
@@ -343,8 +404,17 @@ class FakeTrueNAS:
                 "guid": guid,
                 "status": "ONLINE",
                 "healthy": True,
+                "warning": False,
+                "status_code": "OK",
+                "status_detail": None,
                 "path": f"/mnt/{name}",
+                "scan": finished_scrub(),
+                "size": int((used + available) * 1.05),
+                "allocated": used,
+                "free": int((used + available) * 1.05) - used,
+                "fragmentation": "2",
                 "autotrim": prop("off"),
+                "topology": topology(exported.get("vdev", "DISK"), guid),
             }
         )
         for ds in [name, *exported["children"]]:
@@ -781,7 +851,18 @@ class FakeTrueNAS:
     PROPERTY_FIELDS = frozenset(DEFAULTS) | {"comments"}
 
     def m_pool_dataset_query(self, filters=None, options=None):
-        return [copy.deepcopy(d) for d in self.s["datasets"].values() if matches(d, filters)]
+        out = [copy.deepcopy(d) for d in self.s["datasets"].values() if matches(d, filters)]
+        # A pool's root dataset reports its space, as every dataset does on the real NAS.
+        for ds in out:
+            if "/" not in ds["id"] and ds["id"] in self.s.get("space", {}):
+                for key, value in zip(("used", "available"), self.s["space"][ds["id"]], strict=True):
+                    ds[key] = {
+                        "parsed": value,
+                        "rawvalue": str(value),
+                        "value": f"{value / TIB:.2f}T",
+                        "source": "NONE",
+                    }
+        return out
 
     def m_pool_dataset_create(self, data):
         data = dict(data)

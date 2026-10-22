@@ -1,5 +1,5 @@
-"""Runs make status, the real status.yml with its callback and make's exit codes, against the fake Proxmox host and
-the fake cluster.
+"""Runs make status, the real status.yml with its callback and make's exit codes, against the fake Proxmox host, the
+fake cluster and the fake NAS.
 
 The playbook, roles, group_vars and Makefile are copied into a scratch tree with a local.yml of a Proxmox-only setup
 with a cluster and Home Assistant, as the policy tests do. The Proxmox host is reached locally with the fake's
@@ -9,8 +9,11 @@ text, the callback's output (one line on what was read, then the report, and no 
 host or in the cluster changed, the apps and their states, the nodes' memory and disks from kubelet in place of
 Proxmox's view, the exit codes (make's own, 0 or 2 as for any failed recipe, and the report's, 1 for a problem, 2 for
 a source that could not be read, 3 for a refused run, on the report's last line and in make's "Error N"), JSON=1,
-another cluster's kubeconfig, and a host that does not answer at all. The apps' probes ask addresses that never
-answer here, under a domain that never resolves (.invalid), so what they find does not depend on the network.
+another cluster's kubeconfig, and a host that does not answer at all. With a NAS (local.yml.example's setup), the NAS
+is read through roles/truenas's status entry point against fake_truenas.py: one login, no change, no secret in the
+report, and a NAS that does not answer or presents another certificate is a source not read. The apps' probes ask
+addresses that never answer here, under a domain that never resolves (.invalid), so what they find does not depend on
+the network.
 
 Run: make test TYPE=idempotence
 """
@@ -36,6 +39,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "tests" / "policy"))
 import fake_pve  # noqa: E402
 import fake_talos  # noqa: E402
+import fake_truenas  # noqa: E402
 from helpers import CLUSTER_VARS, PROXMOX_ONLY_CLUSTER_LOCAL_YML, example_tree  # noqa: E402
 
 GIB = 2**30
@@ -395,12 +399,20 @@ def tree(tmp_path):
     return root
 
 
+# What make passes a make run inside it: make test TYPE=idempotence's own TYPE would reach make status through these.
+MAKE_VARIABLES = {"MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEOVERRIDES", "TYPE", "JSON"}
+
+
 def environment(tree, state, fake=True, **more):
     """The fakes first on PATH (without fake_pve's, when not `fake`: a host without Proxmox's commands), each with
     its state, and HOME the test's own, so that nothing reads the workstation's credentials. SSH shares no
-    connection, whose socket's path under that HOME would be too long."""
+    connection, whose socket's path under that HOME would be too long. Nothing of the make that runs the tests."""
     fakes = [str(HERE / "fake_talos_bin"), *([str(HERE / "fake_pve_bin")] if fake else [])]
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("ANSIBLE_", "STATUS_", "NO_COLOR"))}
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(("ANSIBLE_", "STATUS_", "NO_COLOR")) and k not in MAKE_VARIABLES
+    }
     return env | {
         "ANSIBLE_CONFIG": str(tree / "ansible.cfg"),
         "ANSIBLE_STDOUT_CALLBACK": "homeserver_status",
@@ -534,6 +546,8 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
     # The callback: what was read, then the report, and nothing of Ansible's own.
     lines = out.splitlines()
     assert lines[0].startswith("reading  ") and "proxmox ok " in lines[0] and "cluster ok " in lines[0], out
+    # The NAS's host reads nothing without a NAS, so the line leaves it out.
+    assert " nas " not in lines[0] and "NAS  " not in out, out
     assert "TASK [" not in out and "PLAY RECAP" not in out and "\033[" not in out, out
     assert "VMS  pve · Proxmox VE 9.2.2-1 · kernel 7.0.2-6-pve" in out
     assert "+ 1 other VM (9001), 2 cores, 4.0 GiB, 1 running and 1 template (9000), not this repo's" in out
@@ -542,7 +556,7 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
     assert " Nodes      ● homeserver-cp-1 Ready · ● homeserver-worker-1 Ready · etcd healthy" in out
     assert f" Flux       main@{COMMIT[:7]}, the same as the branch · 5 of 5 Kustomizations ready" in out
     assert " Kubernetes API   https://192.0.2.30:6443" in out
-    assert out.rstrip().endswith("make status TYPE=apps|admin|vms|storage|cluster · JSON=1"), out
+    assert out.rstrip().endswith("make status TYPE=apps|admin|vms|storage|cluster|nas · JSON=1"), out
     assert max(len(line) for line in lines) <= 100, out
 
 
@@ -568,14 +582,14 @@ def test_make_status_exits_with_the_reports_code(tree, tmp_path):
     assert "could not be read: pvesh get /cluster/resources" in out
 
     # A section make status does not have: make refuses it before anything runs.
-    rc, out, err = make_status(tree, state, "TYPE=vms,nas")
-    assert rc == 2 and "make status takes TYPE=apps,admin,vms,storage,cluster, not nas" in err, out + err
+    rc, out, err = make_status(tree, state, "TYPE=vms,disks")
+    assert rc == 2 and "make status takes TYPE=apps,admin,vms,storage,cluster,nas, not disks" in err, out + err
     assert "ATTENTION" not in out and "reading" not in out
 
     # The playbook refuses it too, given by hand: exit 3, the run having failed, and no report.
-    rc, out, err = make_status(tree, state, types="vms,nas")
+    rc, out, err = make_status(tree, state, types="vms,disks")
     assert rc == 2 and make_failed(err, 3), out + err
-    assert "make status has no section nas" in out + err and "the run failed" in err
+    assert "make status has no section disks" in out + err and "the run failed" in err
     assert not (tree / ".cache" / "status" / "report.json").exists()
 
 
@@ -673,3 +687,210 @@ def test_a_host_that_does_not_answer(tree, tmp_path):
     assert "proxmox did not answer" in out.splitlines()[0], out
     assert "the Proxmox host could not be read: " in out and "Connection refused" in out and "VMS" not in out
     assert report_of(tree)["exit"] == 2
+
+
+# ------------------------------------------------------------------------------------------------ the NAS ---
+
+# What roles/truenas's status entry point may ask: truenas_info's reads, nothing that changes the NAS.
+NAS_READS = {
+    "auth.login_with_api_key",
+    "network.configuration.config",
+    "disk.details",
+    "system.info",
+    "system.version",
+    "system.ready",
+    "interface.websocket_interface",
+    "interface.websocket_local_ip",
+    "interface.query",
+    "interface.has_pending_changes",
+    "pool.query",
+    "pool.dataset.query",
+    "service.query",
+    "systemdataset.config",
+    "sharing.nfs.query",
+    "pool.scrub.query",
+    "alert.list",
+    "pool.snapshottask.query",
+}
+
+
+def seed_nas(path, **more):
+    """The NAS as roles/truenas leaves it: both pools imported and scrubbed three days ago, the Nextcloud dataset
+    shared and snapshotted hourly, the last an hour ago, and NFS running."""
+    path.write_text(json.dumps(fake_truenas.initial_state("127.0.0.1")))
+    fake = fake_truenas.FakeTrueNAS(path)
+    fake.load()
+    for guid in ("1001", "1002"):
+        fake._import_pool({"guid": guid})
+    for pool in fake.s["pools"]:
+        pool["scan"] = fake_truenas.finished_scrub(end=time.time() - 3 * 86400)
+    fake.s["datasets"]["persistent/nextcloud"] = fake.new_dataset("persistent/nextcloud", {})
+    fake.m_sharing_nfs_create({"path": "/mnt/persistent/nextcloud", "hosts": ["192.0.2.31"]})
+    fake.m_pool_snapshottask_create(
+        {"dataset": "persistent/nextcloud", "schedule": {"hour": "*"}, "lifetime_value": 2, "lifetime_unit": "DAY"}
+    )
+    fake.s["snapshot_tasks"][-1]["state"] = {"state": "FINISHED", "datetime": fake_truenas.date(time.time() - 3700)}
+    next(s for s in fake.s["services"] if s["service"] == "nfs").update(enable=True, state="RUNNING")
+    fake.s.update(more)
+    fake.s["mutations"] = 0
+    fake.save()
+
+
+@pytest.fixture(scope="module")
+def nas(tmp_path_factory):
+    """fake_truenas.py on a port of its own, with a certificate of its own, as the idempotence tests run it."""
+    work = tmp_path_factory.mktemp("nas")
+    cert, key, state, calls = work / "cert.pem", work / "key.pem", work / "state.json", work / "calls.jsonl"
+    subj = ["-subj", "/CN=localhost", "-days", "1"]
+    subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert, *subj],
+        check=True,
+        capture_output=True,
+    )
+    fingerprint = subprocess.run(
+        ["openssl", "x509", "-in", cert, "-noout", "-fingerprint", "-sha256"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    seed_nas(state)
+    port = free_port()
+    with (work / "fake.log").open("w") as log:
+        proc = subprocess.Popen(
+            [
+                *[sys.executable, HERE / "fake_truenas.py", "--port", str(port), "--cert", cert, "--key", key],
+                *["--state", state, "--call-log", calls],
+            ],
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=1).close()
+                break
+            except OSError:
+                time.sleep(0.2)
+        else:
+            proc.kill()
+            pytest.fail("fake TrueNAS did not start")
+        yield {"port": port, "state": state, "calls": calls, "fingerprint": fingerprint.split("=", 1)[1]}
+        proc.terminate()
+        proc.wait(timeout=10)
+
+
+@pytest.fixture
+def nas_tree(tmp_path):
+    """local.yml.example's setup, a NAS, a cluster and Home Assistant, with the cluster's credentials and state as
+    the tree fixture has them."""
+    root = example_tree(tmp_path / "tree")
+    shutil.copytree(ROOT / "callback_plugins", root / "callback_plugins")
+    shutil.copy(ROOT / "Makefile", root)
+    (root / "run").mkdir()
+    (tmp_path / "home").mkdir()
+    credentials(tmp_path / "talos")
+    seed_cluster(tmp_path / "talos.json")
+    return root
+
+
+def nas_vars(nas, **more):
+    """The fake NAS's address, port, certificate and key, in place of local.yml's and the vault's."""
+    return {
+        "truenas_api_hosts": ["127.0.0.1"],
+        "truenas_api_port": nas["port"],
+        "truenas_api_cert_sha256": nas["fingerprint"],
+        "truenas_api_key": fake_truenas.API_KEY,
+        **more,
+    }
+
+
+def nas_calls(nas):
+    return [json.loads(line)["method"] for line in nas["calls"].read_text().splitlines()]
+
+
+def test_the_nas_is_read_through_its_api(nas_tree, nas, tmp_path):
+    state = tmp_path / "pve.json"
+    seed(state)
+    alert = {
+        "uuid": "1",
+        "source": "SMART",
+        "klass": "SMART",
+        "args": {},
+        "node": "A",
+        "key": "sda",
+        "datetime": fake_truenas.date(time.time() - 600),
+        "last_occurrence": fake_truenas.date(time.time() - 600),
+        "dismissed": False,
+        "mail": None,
+        "text": "Device: %(device)s, %(message)s",
+        "id": "1",
+        "level": "CRITICAL",
+        "formatted": "Device: /dev/sda, Self-Test Log error count increased",
+        "one_shot": False,
+    }
+    seed_nas(nas["state"], alerts=[alert, alert | {"uuid": "2", "level": "WARNING", "dismissed": True}])
+    nas["calls"].write_text("")
+    rc, out, err = make_status(nas_tree, state, **nas_vars(nas))
+    report = report_of(nas_tree)
+    assert rc == 2 and report["exit"] == 1, out + err
+    assert "nas ok " in out.splitlines()[0], out
+    found = report["nas"]
+    assert [(p["name"], p["layout"], p["status"]) for p in found["pools"]] == [
+        ("persistent", "raidz1", "ONLINE"),
+        ("ephemeral", "stripe", "ONLINE"),
+    ]
+    assert found["nfs"] == {"enabled": True, "state": "RUNNING", "shares": 1}
+    assert [(a["level"], a["subject"], a["text"]) for a in report["attention"] if a["subject"] == "nas"] == [
+        ("problem", "nas", "TrueNAS alerts (critical): Device: /dev/sda, Self-Test Log error count increased")
+    ]
+    assert "NAS  truenas · TrueNAS 25.10.7 · up 34 d" in out, out
+    assert " persistent  raidz1  online   ████░░░░░░░░  31%  2.2 / 7.1 TiB  scrub 3 d ago, 0 errors" in out, out
+    assert " Snapshots  nextcloud hourly 1 h ago" in out and " NFS        running · 1 share" in out, out
+    assert "TrueNAS https://192.0.2.10" in " ".join(out.split()), out
+    # One login, nothing but reads, nothing changed, and no secret anywhere.
+    calls = nas_calls(nas)
+    assert calls.count("auth.login_with_api_key") == 1 and set(calls) <= NAS_READS, calls
+    assert json.loads(nas["state"].read_text())["mutations"] == 0
+    written = (nas_tree / ".cache" / "status" / "report.json").read_text()
+    for secret in (fake_truenas.API_KEY, fake_truenas.SYSTEM_SERIAL, fake_truenas.PRIVATE_KEY):
+        assert secret not in out + err + written, secret
+
+
+def test_a_nas_on_another_release_is_a_thing_to_do(nas_tree, nas, tmp_path):
+    state = tmp_path / "pve.json"
+    seed(state)
+    seed_nas(nas["state"], version="26.04.1")
+    rc, out, err = make_status(nas_tree, state, "TYPE=nas", **nas_vars(nas))
+    assert rc == 0, out + err
+    todo = [a for a in report_of(nas_tree)["attention"] if a["subject"] == "nas"]
+    assert [(a["level"], a["text"]) for a in todo] == [
+        ("todo", "the NAS runs TrueNAS 26.04.1, and its configuration is written for 25.10")
+    ]
+    assert todo[0]["command"].startswith("make deploy TYPE=truenas refuses it until truenas_supported_version")
+
+
+@pytest.mark.parametrize(
+    ("given", "why"),
+    [
+        pytest.param({"truenas_api_port": None}, "Connection refused", id="no-answer"),
+        pytest.param(
+            {"truenas_api_cert_sha256": "00" * 32}, "not the pinned one; the API key was not sent", id="another-cert"
+        ),
+    ],
+)
+def test_a_nas_that_is_not_read(nas_tree, nas, tmp_path, given, why):
+    """A NAS that does not answer, or presents another certificate than the pinned one, is a source not read, exit 2,
+    and the key goes nowhere."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    seed_nas(nas["state"])
+    nas["calls"].write_text("")
+    given = {k: (free_port() if v is None else v) for k, v in given.items()}
+    rc, out, err = make_status(nas_tree, state, **nas_vars(nas, **given))
+    report = report_of(nas_tree)
+    assert rc == 2 and report["exit"] == 2, out + err
+    assert "nas not read " in out.splitlines()[0], out
+    unread = next(a for a in report["attention"] if a["subject"] == "nas")
+    assert unread["level"] == "unread" and unread["text"].startswith("the NAS could not be read: ")
+    assert why in unread["text"], unread
+    assert "NAS  not read" in out and "auth.login_with_api_key" not in nas_calls(nas)

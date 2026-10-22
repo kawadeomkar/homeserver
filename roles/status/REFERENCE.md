@@ -22,6 +22,7 @@ Description: Read the homeserver's machines without changing them, and report wh
 - Reads the host the play runs on, as status_source names it, and leaves what it found in the fact status_found for the report entry point. Every command goes through the role's module status_read, which runs them at once and refuses any that is not on its read list.
 - On the Proxmox host (proxmox) it reads the host, its storages and the VMs of status_vms; every other VM is only counted.
 - For the cluster (cluster), on this machine, it reads the nodes, the apps (each Ingress's Service, then the Deployment it selects, and every Deployment a Flux Kustomization under status_cluster_apps_path applies), Flux, the certificates, the nodes' kubelet statistics, Alertmanager's alerts, etcd's state and the newest commit of the branch Flux syncs. It reads the credentials under no_log, keeping only the server the kubeconfig names and when each client certificate expires, and reports another cluster's credentials rather than use them. It never reads a Secret.
+- For the NAS (nas) it reads nothing itself, and works out what status_nas_state says, the result of truenas_info with its status option, which roles/truenas's status entry point reads in one login - the pools' health, capacity and last scrub, TrueNAS's alerts, the snapshot tasks' last runs, the NFS service.
 - A host that does not answer is recorded as such, not a failure, so the report can say so.
 - Refuses a section name that is not one of the report's.
 - The defaults read nothing.
@@ -44,6 +45,8 @@ Description: Read the homeserver's machines without changing them, and report wh
           - proxmox
     
           - cluster
+    
+          - nas
     
   
   
@@ -263,6 +266,26 @@ Description: Read the homeserver's machines without changing them, and report wh
   
   
 
+  - **status_nas_state**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: What truenas_info returned with its status option, or its failure; the NAS's findings.
+  
+  
+  
+
+  - **status_nas_release**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The TrueNAS release (major.minor) the NAS's configuration is written for; empty compares none.
+  
+  
+  
+
   - **status_parallel**
     - **Required**: false
     - **Type**: int
@@ -360,7 +383,7 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Type**: dict
     - **Default**: {}
   
-    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets. One left out is suggested by text alone.
+    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network. One left out is suggested by text alone.
   
   
   
@@ -475,7 +498,7 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Type**: dict
     - **Default**: {}
   
-    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets. One left out is suggested by text alone.
+    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network. One left out is suggested by text alone.
   
   
   
@@ -517,16 +540,18 @@ Description: Read the homeserver's machines without changing them, and report wh
 | [status_cluster_flux_ref](defaults/main.yml#L46)   | str |  |    
 | [status_cluster_pins](defaults/main.yml#L48)   | dict | `{}` |    
 | [status_cluster_request_timeout](defaults/main.yml#L50)   | int | `10` |    
-| [status_parallel](defaults/main.yml#L52)   | int | `8` |    
-| [status_timeout](defaults/main.yml#L53)   | int | `30` |    
-| [status_hosts](defaults/main.yml#L56)   | list | `[]` |    
-| [status_report_file](defaults/main.yml#L57)   | str |  |    
-| [status_color](defaults/main.yml#L58)   | bool | `False` |    
-| [status_quiet](defaults/main.yml#L59)   | bool | `False` |    
-| [status_probe_apps](defaults/main.yml#L62)   | bool | `True` |    
-| [status_probe_timeout](defaults/main.yml#L63)   | int | `5` |    
-| [status_admin](defaults/main.yml#L65)   | list | `[]` |    
-| [status_commands](defaults/main.yml#L69)   | dict | `{}` |    
+| [status_nas_state](defaults/main.yml#L53)   | dict | `{}` |    
+| [status_nas_release](defaults/main.yml#L54)   | str |  |    
+| [status_parallel](defaults/main.yml#L56)   | int | `8` |    
+| [status_timeout](defaults/main.yml#L57)   | int | `30` |    
+| [status_hosts](defaults/main.yml#L60)   | list | `[]` |    
+| [status_report_file](defaults/main.yml#L61)   | str |  |    
+| [status_color](defaults/main.yml#L62)   | bool | `False` |    
+| [status_quiet](defaults/main.yml#L63)   | bool | `False` |    
+| [status_probe_apps](defaults/main.yml#L66)   | bool | `True` |    
+| [status_probe_timeout](defaults/main.yml#L67)   | int | `5` |    
+| [status_admin](defaults/main.yml#L69)   | list | `[]` |    
+| [status_commands](defaults/main.yml#L74)   | dict | `{}` |    
 
 
 
@@ -552,6 +577,7 @@ Description: Read the homeserver's machines without changing them, and report wh
 | Read nothing here | ansible.builtin.set_fact | True |  |
 | Read the Proxmox host | ansible.builtin.include_tasks | True |  |
 | Read the cluster | ansible.builtin.include_tasks | True |  |
+| Work out what the NAS says | ansible.builtin.set_fact | True |  |
 
 #### File: tasks/proxmox.yml
 
@@ -619,7 +645,8 @@ classDef rescue stroke:#665352,stroke-width:2px;
   Check_the_role_s_inputs0-->|Task| Read_nothing_here1[read nothing here<br>When: **status source   length    0**]:::task
   Read_nothing_here1-->|Include task| Read_the_Proxmox_host_proxmox_yml_2[read the proxmox host<br>When: **status source     proxmox**<br>include_task: proxmox yml]:::includeTasks
   Read_the_Proxmox_host_proxmox_yml_2-->|Include task| Read_the_cluster_cluster_yml_3[read the cluster<br>When: **status source     cluster**<br>include_task: cluster yml]:::includeTasks
-  Read_the_cluster_cluster_yml_3-->End
+  Read_the_cluster_cluster_yml_3-->|Task| Work_out_what_the_NAS_says4[work out what the nas says<br>When: **status source     nas**]:::task
+  Work_out_what_the_NAS_says4-->End
 ```
 
 

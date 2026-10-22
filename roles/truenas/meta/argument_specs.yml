@@ -14,30 +14,30 @@ argument_specs:
       - Never destroys, wipes, exports or upgrades a pool, never deletes a dataset, and refuses an
         NFS share without a host or network restriction.
     options:
-      truenas_api_hosts:
+      truenas_api_hosts: &truenas_api_hosts
         type: list
         elements: str
         default: []
         description: Addresses to try in order; the first that answers is used.
-      truenas_api_port:
+      truenas_api_port: &truenas_api_port
         type: int
         default: 443
         description: HTTPS port of the TrueNAS web server.
-      truenas_api_key:
+      truenas_api_key: &truenas_api_key
         type: str
         default: ""
         no_log: true
         description: API key. Keep it in an ansible-vault file.
-      truenas_validate_certs:
+      truenas_validate_certs: &truenas_validate_certs
         type: bool
         default: false
-      truenas_api_cert_sha256:
+      truenas_api_cert_sha256: &truenas_api_cert_sha256
         type: str
         default: ""
         description: >-
           SHA-256 fingerprint of the NAS's certificate; the API key goes only to that server. Required while
           truenas_validate_certs is off.
-      truenas_api_timeout:
+      truenas_api_timeout: &truenas_api_timeout
         type: int
         default: 120
         description: Seconds to wait for one API answer.
@@ -49,7 +49,7 @@ argument_specs:
         type: int
         default: 1800
         description: Seconds to wait for a job such as a pool import.
-      truenas_api_login_wait:
+      truenas_api_login_wait: &truenas_api_login_wait
         type: int
         default: 75
         description: Seconds to wait out TrueNAS's login rate limit (20 logins per 60 s per client).
@@ -185,3 +185,19 @@ argument_specs:
         type: dict
         default: {}
         description: Service name to {enabled, state}; state is started or stopped.
+  status:
+    short_description: Read the NAS's state and health for make status, in one login, changing nothing
+    description:
+      - Runs truenas_info with its status option and records the result in truenas_status, for roles/status to
+        report. Tries each of truenas_api_hosts once, so a NAS that does not answer costs a few seconds.
+      - Never fails. A NAS that does not answer, refuses the API key or presents another certificate than
+        truenas_api_cert_sha256 pins leaves truenas_status without an api_host, with why in its msg, and the key
+        goes to no other server.
+    options:
+      truenas_api_hosts: *truenas_api_hosts
+      truenas_api_port: *truenas_api_port
+      truenas_api_key: *truenas_api_key
+      truenas_validate_certs: *truenas_validate_certs
+      truenas_api_cert_sha256: *truenas_api_cert_sha256
+      truenas_api_timeout: *truenas_api_timeout
+      truenas_api_login_wait: *truenas_api_login_wait

@@ -55,3 +55,8 @@ status_commands:
     the first visits (scripts/runbooks/first-run.md), then kubernetes_ingress_allowed_range in local.yml and make
     deploy TYPE=kubernetes
   secrets: k8s/README-secrets.md says how to make it
+  nas: make deploy TYPE=truenas
+  nas_release: >-
+    make deploy TYPE=truenas refuses it until truenas_supported_version (roles/truenas) is raised, once TrueNAS's API
+    changes are checked
+  nas_network: commit or roll them back on the NAS's Network page; make deploy TYPE=truenas refuses to run until then

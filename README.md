@@ -106,19 +106,21 @@ fakes, which cannot prove the real machines behave the same. Every `make deploy 
 lists and upgrades the Proxmox host, and says when an upgrade of the kernel, its firmware, the CPU's microcode or dbus
 waits for a reboot, which is then done by hand.
 
-`make status` reads the Proxmox host and the cluster, and changes nothing. It shows what needs doing first, each
-with the command that deals with it (an app failing or waiting for its Secret, apps `make suspend` stopped, Traefik's
-allowed range still closed, DNS missing for the apps' names, a reboot an upgrade asked for, upgrades waiting, a VM
-stopped or waiting for a restart, a storage filling up or provisioned beyond its size, a node not Ready, etcd or Flux
-in trouble, the nodes behind the pins, a certificate or credential running out, Alertmanager's firing alerts). Then
-each app (its state, version and URLs, with what each answered from this machine, through Traefik's address whatever
-DNS says), the admin pages, each of this setup's VMs (CPU over the last day, memory and disks: a node's from kubelet,
-Home Assistant's from its guest agent), each storage's use with the worker's own volumes, and the cluster (nodes,
-pins, Flux's commit against the branch, addresses, GPU, TLS, credentials, alerts). `TYPE=apps,admin,vms,storage,cluster`
-shows some sections, and `JSON=1` prints the report as JSON. It exits 0 when nothing is wrong, and otherwise 2, as
-make does for any failed recipe; the report's own code (1 for a problem, 2 when a source could not be read, 3 when the
-run failed) ends its last line and is the `exit` field of `JSON=1`. Another project's VMs on the host are counted,
-never named. It reads no Secret and checks no certificate, and never uses a kubeconfig of another cluster.
+`make status` reads the Proxmox host, the cluster and the NAS, and changes nothing. It shows what needs doing first,
+each with the command that deals with it (an app failing or waiting for its Secret, apps `make suspend` stopped,
+Traefik's allowed range still closed, DNS missing for the apps' names, a reboot an upgrade asked for, upgrades waiting,
+a VM stopped or waiting for a restart, a storage filling up or provisioned beyond its size, a node not Ready, etcd or
+Flux in trouble, the nodes behind the pins, a certificate or credential running out, Alertmanager's firing alerts, a NAS
+pool degraded, filling up or behind on its scrub, a snapshot task failing, TrueNAS's own alerts). Then each app (its
+state, version and URLs, with what each answered from this machine, through Traefik's address whatever DNS says), the
+admin pages, each of this setup's VMs (CPU over the last day, memory and disks: a node's from kubelet, Home Assistant's
+from its guest agent), each storage's use with the worker's own volumes, and the cluster (nodes, pins, Flux's commit
+against the branch, addresses, GPU, TLS, credentials, alerts), and the NAS (pools, snapshot tasks, NFS, alerts).
+`TYPE=apps,admin,vms,storage,cluster,nas` shows some sections, and `JSON=1` prints the report as JSON. It exits 0 when
+nothing is wrong, and otherwise 2, as make does for any failed recipe; the report's own code (1 for a problem, 2 when a
+source could not be read, 3 when the run failed) ends its last line and is the `exit` field of `JSON=1`. Another
+project's VMs on the host are counted, never named. It reads no Secret and checks no certificate, and never uses a
+kubeconfig of another cluster.
 
 To give a playbook a variable for one run, put Ansible's own flags in `ANSIBLE_ARGS`:
 `make deploy TYPE=kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'`, or `ANSIBLE_ARGS='--limit homeserver'` for
