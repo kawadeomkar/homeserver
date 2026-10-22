@@ -8,6 +8,7 @@ real ~/.config/homeserver/setups.
 import os
 import shutil
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -349,3 +350,96 @@ def test_the_store_is_never_inside_the_checkout(root, monkeypatch, capsys):
     assert setups.main(["new", "lab"], root=root) == 1
     assert "inside this checkout" in capsys.readouterr().err
     assert not (root / "setups").exists() and not links(root)
+
+
+# ----------------------------------------------------------------------------------------------------- make ---
+def tree(tmp_path: Path) -> Path:
+    """The Makefile and what make vault runs, copied into a checkout of their own."""
+    checkout = tmp_path / "tree"
+    (checkout / "scripts" / "init").mkdir(parents=True)
+    (checkout / "group_vars" / "all").mkdir(parents=True)
+    for name in ("Makefile", "ansible.cfg", str(wizard.EXAMPLE)):
+        shutil.copy(ROOT / name, checkout / name)
+    for script in ("init.py", "settings.py", "setups.py"):
+        shutil.copy(ROOT / "scripts" / "init" / script, checkout / "scripts" / "init" / script)
+    return checkout
+
+
+# What an outer make (make test TYPE=unit) hands every make below it: its flags, and the variables of its command line,
+# which it puts in the environment too, TYPE among them.
+OUTER_MAKE = {
+    *("MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEOVERRIDES"),
+    *("TYPE", "NAME", "FROM", "SETUPS", "TAGS", "ONLY", "ALL", "ANSIBLE_ARGS", "PYTEST_ARGS", "UPDATE"),
+}
+
+
+def make(checkout: Path, *args: str, **env: str) -> subprocess.CompletedProcess:
+    inherited = {k: v for k, v in os.environ.items() if k not in OUTER_MAKE}
+    return subprocess.run(
+        ["make", "--no-print-directory", *args, f"VENV={sys.prefix}"],
+        cwd=checkout,
+        env={**inherited, "ANSIBLE_CONFIG": str(checkout / "ansible.cfg"), **env},
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_make_vault_makes_lists_and_switches_setups(tmp_path):
+    checkout = tree(tmp_path)
+    store = tmp_path / "setups"
+    for name in ("home", "lab"):
+        made = make(checkout, "vault", "TYPE=new", f"NAME={name}", f"SETUPS={store}")
+        assert made.returncode == 0, made.stdout + made.stderr
+    listed = make(checkout, "vault", "TYPE=list", f"SETUPS={store}")
+    assert listed.returncode == 0 and "*  lab" in listed.stdout and "  home" in listed.stdout, listed.stdout
+    switched = make(checkout, "vault", "TYPE=switch", "NAME=home", f"SETUPS={store}")
+    assert switched.returncode == 0 and "uses setup home now" in switched.stdout, switched.stdout + switched.stderr
+    assert setups.target(checkout / LOCAL) == store / "home" / "local.yml"
+    plain = make(checkout, "vault", "TYPE=new", f"SETUPS={store}")
+    assert plain.returncode != 0 and "uses setup home" in plain.stderr, "never written through a setup's links"
+    nameless = make(checkout, "vault", "TYPE=switch", f"SETUPS={store}")
+    assert nameless.returncode != 0 and "needs NAME" in nameless.stderr
+    both = make(checkout, "vault", "TYPE=list,switch")
+    assert both.returncode != 0 and "one TYPE at a time" in both.stderr
+
+
+def test_make_vault_edits_another_setups_vault_without_switching(tmp_path):
+    checkout = tree(tmp_path)
+    store = tmp_path / "setups"
+    for name in ("lab", "home"):
+        assert make(checkout, "vault", "TYPE=new", f"NAME={name}", f"SETUPS={store}").returncode == 0
+    editor = tmp_path / "editor.py"
+    editor.write_text("import sys\nopen(sys.argv[1], 'w').write('vault_haos_owner_password: edited\\n')\n")
+    edited = make(checkout, "vault", "NAME=lab", f"SETUPS={store}", EDITOR=f"{sys.executable} {editor}")
+    assert edited.returncode == 0, edited.stdout + edited.stderr
+    lab, home = store / "lab", store / "home"
+    assert decrypt(lab / "vault.yml", lab / "vault_pass") == {"vault_haos_owner_password": "edited"}
+    assert decrypt(home / "vault.yml", home / "vault_pass") == {}
+    assert setups.target(checkout / VAULT) == home / "vault.yml", "the checkout keeps its setup"
+
+
+def test_a_playbook_run_names_its_setup_and_stops_on_a_broken_one(tmp_path):
+    checkout = tree(tmp_path)
+    store = tmp_path / "setups"
+    assert make(checkout, "vault", "TYPE=new", "NAME=home", f"SETUPS={store}").returncode == 0
+    planned = make(checkout, "-n", "check", "TYPE=proxmox")
+    assert "-home-check-proxmox.log" in planned.stdout, "the log is named after the setup"
+    (store / "home" / "local.yml").unlink()
+    stopped = make(checkout, "check", "TYPE=proxmox")
+    assert stopped.returncode != 0 and "home, is not whole" in stopped.stderr, stopped.stdout + stopped.stderr
+    assert not (checkout / "logs").exists(), "stopped before anything ran"
+
+
+def test_make_takes_name_from_its_command_line_alone_and_for_make_vault_alone(tmp_path):
+    """A NAME the shell exports (WSL sets it to the machine's name) is not make vault's; and make deploy NAME=lab
+    would deploy the setup the checkout links to, whichever it is, so it is refused."""
+    checkout = tree(tmp_path)
+    store = tmp_path / "setups"
+    made = make(checkout, "vault", "TYPE=new", f"SETUPS={store}", NAME="mybox")
+    assert made.returncode == 0, made.stdout + made.stderr
+    assert not store.exists() and (checkout / VAULT).is_file() and not links(checkout), "the checkout's own vault"
+    refused = make(checkout, "-n", "deploy", "TYPE=proxmox", "NAME=lab")
+    assert refused.returncode != 0 and "NAME and FROM are make vault's" in refused.stderr, refused.stderr
+    stray = make(checkout, "vault", "FROM=current")
+    assert stray.returncode != 0 and "FROM=current is make vault TYPE=new's alone" in stray.stderr, stray.stderr
