@@ -8,8 +8,9 @@ the paths Ansible and make read, each a path no commit ever held, since a checko
 ignored file at a path it tracks: group_vars/all/local.yml, group_vars/all/local.vault.yml and .vault_pass, which
 ansible.cfg names. Setups cannot sit side by side in group_vars/all/, where Ansible reads every .yml file, and a link to
 a missing file is skipped there without a word, as if there were no settings or no secrets: every playbook run first
-checks that the three links point into one setup and that each of its files is there (check). A checkout whose three
-paths are its own files, or missing, uses no setup and works as it always did.
+checks that the three links point into one setup and that each of its files is there (check; make's playbook targets,
+and vars_plugins/setup_links.py for ansible-playbook started any other way). A checkout whose three paths are its own
+files, or missing, uses no setup and works as it always did.
 
   list                    every setup, the checkout's marked: whether its vault opens, its number of keys (never a
                           value), when each file last changed

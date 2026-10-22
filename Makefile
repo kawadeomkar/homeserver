@@ -124,7 +124,8 @@ STAMP   := $(shell date +%Y%m%d-%H%M%S)
 RUN_LOG  = $(LOG_DIR)/$(STAMP)$(if $(SETUP_NAME),-$(SETUP_NAME))-$@$(if $(TYPES),-$(TYPES))$(if $(TAGS),-$(subst $(comma),+,$(TAGS))).log
 # A missing playbook binary means make found a Python other than the project's virtualenv, or one not yet installed;
 # say so, rather than leave the shell's "No such file or directory" and a dangling latest.log. Then the setup: a run
-# names the one it uses, and stops when its links are not whole, which Ansible would pass over without a word.
+# names the one it uses, and stops when its links are not whole, which Ansible would pass over without a word
+# (vars_plugins/setup_links.py stops ansible-playbook started any other way).
 RUN      = @test -x $(PLAYBOOK) || { echo "$(PLAYBOOK) not found: run make install in the project's virtualenv, or point make at it (pyenv local <env>, or VENV=<its path>)" >&2; exit 2; }; \
            $(SETUPS_PY) check && umask 077 && mkdir -p $(LOG_DIR) && ln -sf $(notdir $(RUN_LOG)) $(LOG_DIR)/latest.log \
            && echo "Logging to $(RUN_LOG) (Python environment: $(VENV))" && ANSIBLE_LOG_PATH=$(RUN_LOG) $(PLAYBOOK)
