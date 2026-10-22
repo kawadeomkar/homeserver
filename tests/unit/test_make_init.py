@@ -201,6 +201,35 @@ def test_a_value_yaml_could_misread_is_quoted():
     assert wizard.render("flag", True) == ["flag: true"]
 
 
+def test_an_interrupted_write_leaves_the_file_as_it_was_and_no_copy_behind(tmp_path, monkeypatch):
+    path = tmp_path / ".vault_pass"
+    path.write_text("before\n")
+
+    def interrupted(*_):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(wizard.os, "replace", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        wizard.write_file(path, b"after\n", 0o600)
+    assert path.read_text() == "before\n"
+    assert not wizard.temp_copy(path).exists(), "the copy holding the new password is gone"
+
+
+def test_a_copy_an_earlier_run_left_is_made_anew(tmp_path):
+    path = tmp_path / ".vault_pass"
+    wizard.temp_copy(path).write_text("left behind\n")
+    wizard.write_file(path, b"after\n", 0o600)
+    assert path.read_text() == "after\n" and not wizard.temp_copy(path).exists()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize("path", [wizard.VAULT_PASS, wizard.LOCAL, wizard.VAULT], ids=str)
+def test_git_ignores_the_copies_make_init_writes_through(path):
+    copy = wizard.temp_copy(path)
+    ignored = subprocess.run(["git", "check-ignore", "--no-index", "-q", str(copy)], cwd=ROOT, check=False)
+    assert ignored.returncode == 0, f"git would offer {copy} for a commit"
+
+
 NET = ".".join(["10", "20", "30"])
 
 
@@ -432,6 +461,24 @@ def test_secrets_go_to_the_vault_and_never_to_the_screen(repo):
     assert any("now set." in line for line in console.out)
     assert read_vault(repo) == {"vault_other": "left-alone"}
     assert "vault_truenas_api_key" in console.out[-1].split("STILL REQUIRED")[1]
+
+
+def test_remote_access_requires_the_auth_key_for_the_hosts_first_login(repo):
+    # proxmox.yml refuses a host that is not logged in without the key, after changing it, and a dry run cannot tell.
+    make_vault(repo, {})
+    answers = {
+        "switch:nas": "n",
+        "switch:remote": "y",
+        "switch:cluster": "n",
+        "switch:homeassistant": "n",
+        "proxmox_address": lan(10),
+        "tailscale_advertise_routes": f"{lan(0)}/24",
+    }
+    console = Scripted(answers)
+    init_run(repo, console)
+    assert local(repo)["tailscale_advertise_routes"] == [f"{lan(0)}/24"]
+    required = console.out[-1].split("STILL REQUIRED")[1].split("RECOMMENDED")[0]
+    assert "vault_tailscale_auth_key" in required
 
 
 def test_a_vault_at_its_old_committed_path_is_moved_not_replaced(repo):
