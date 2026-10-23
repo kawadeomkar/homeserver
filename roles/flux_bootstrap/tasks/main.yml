@@ -44,6 +44,10 @@
       {%- for k, v in flux_bootstrap_settings.items() if v is not string -%}
       {%-   set _ = out.append('flux_bootstrap_settings.' ~ k ~ ' must be a string: Flux substitutes text.') -%}
       {%- endfor -%}
+      {%- for name in flux_bootstrap_sync_exclude if name is not match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$') -%}
+      {%-   set _ = out.append('flux_bootstrap_sync_exclude: ' ~ name ~ ' is no Flux Kustomization name (lower-case '
+                               ~ 'letters, digits and dashes).') -%}
+      {%- endfor -%}
       {%- for name in ['flux_bootstrap_kubeconfig', 'flux_bootstrap_age_key_file'] if not lookup('vars', name) -%}
       {%-   set _ = out.append(name ~ ' must be set.') -%}
       {%- endfor -%}

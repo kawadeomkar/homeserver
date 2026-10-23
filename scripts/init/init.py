@@ -503,6 +503,8 @@ class Init:
             self.apply(s, self.ask_value(s, self.current(s), None, lambda t: cfg.parse(s, t), secret=True))
         elif s.kind == "bool":
             self.ask_bool(s)
+        elif s.kind == "app_list":
+            self.ask_app_list(s)
         elif s.kind in ("node_map_ipv4", "node_map_mac"):
             self.ask_node_map(s)
         elif s.kind == "node_sizes":
@@ -527,6 +529,20 @@ class Init:
             raise ValueError("answer y or n")
 
         self.console.say("  Answer y or n.")
+        self.apply(s, self.ask_value(s, self.current(s), None, parse))
+
+    def ask_app_list(self, s: cfg.Setting) -> None:
+        """kubernetes_apps, checked against the groups the playbooks read."""
+        groups = yaml.safe_load((self.root / "group_vars/all/kubernetes.yml").read_text())["kubernetes_app_groups"]
+        self.console.say(f"  The groups: {', '.join(groups)}.")
+
+        def parse(text: str) -> list[str]:
+            entries = cfg.parse(s, text)
+            unknown = [e for e in entries if e not in groups]
+            if unknown:
+                raise ValueError(f"no such group: {unknown[0]}")
+            return entries
+
         self.apply(s, self.ask_value(s, self.current(s), None, parse))
 
     def ask_node_map(self, s: cfg.Setting) -> None:

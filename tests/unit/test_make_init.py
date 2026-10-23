@@ -259,6 +259,8 @@ def fill(value):
         ("mail_security", "tls", "TLS"),
         ("vmid_list", "320 330", [320, 330]),
         ("size_or_none", "0", 0),
+        ("app_list", "media, Nextcloud", ["media", "nextcloud"]),
+        ("app_list", "none", []),
     ],
 )
 def test_answers_are_read_as_the_playbooks_want_them(kind, text, value):
@@ -279,6 +281,7 @@ def test_answers_are_read_as_the_playbooks_want_them(kind, text, value):
         ("vmid", "99"),
         ("positive_int", "0"),
         ("size_or_none", "-1"),
+        ("app_list", ","),
     ],
 )
 def test_a_bad_answer_is_refused(kind, text):
@@ -697,6 +700,16 @@ def test_the_home_assistant_step_names_its_storage_and_keeps_its_content(repo):
     summary = " ".join(console.out[-1].split())
     assert "pvesh get /storage/local-btrfs" in summary and "pvesm set local-btrfs --content" in summary
     assert "--content replaces the whole list" in summary
+
+
+def test_the_apps_a_host_runs_are_named_from_the_groups(repo):
+    """kubernetes_apps lists the groups and refuses a name that is none, so a typo is caught at once rather than by
+    the playbooks' check."""
+    console = Scripted({**first_run_answers(), "kubernetes_apps": ["media, medias", "media homepage"]})
+    init_run(repo, console)
+    assert local(repo)["kubernetes_apps"] == ["media", "homepage"]
+    assert "no such group: medias" in console.text
+    assert any("The groups: media, nextcloud" in line for line in console.out), "the choices are shown"
 
 
 def test_a_size_is_never_zero_but_a_disk_may_be_none(repo):
