@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parents[2]
 TARGETS = "help|install|init|lock|vault|lint|test|fix|check|deploy|suspend|resume|talos-upgrade|etcd-snapshot"
 COMMAND = re.compile(rf"\bmake (-k |TYPE=|({TARGETS})\b)")
 PROGRAM = re.compile(r"""\[\s*["']make["']|\bentry:\s*make\b""")
-# This file, which spells the patterns out, and the Makefile until the commit that removes it.
-EXEMPT = {"tests/policy/test_no_make.py", "Makefile"}
+# This file, which spells the patterns out.
+EXEMPT = {"tests/policy/test_no_make.py"}
 
 
 def tracked() -> list[str]:

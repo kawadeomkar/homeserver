@@ -522,7 +522,7 @@ NO_SECTIONS = {"switch:nas": "n", "switch:remote": "n", "switch:cluster": "n", "
 
 
 def test_a_new_vault_is_made_when_the_person_asks_for_one(repo):
-    """just vault new's work, done in this process: the checkout's tree has no Makefile, and init needs no task
+    """just vault new's work, done in this process: the checkout's tree has no justfile, and init needs no task
     runner to make the vault, which then opens for the secrets asked after it."""
     console = Scripted({"vault-new": "y", **NO_SECTIONS})
     init = init_run(repo, console)
