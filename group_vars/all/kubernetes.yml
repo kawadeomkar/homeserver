@@ -18,7 +18,7 @@ kubernetes_present: >-
      else ((kubernetes_node_addresses | default({}, true)) | length > 0) }}
 
 # Version pins. The Proxmox host downloads the ISO of talos_version, and the nodes' configurations are rendered with
-# all three. talos_kubernetes_version is the Makefile's KUBERNETES_VERSION too (a policy test checks), and talosctl on
+# all three. talos_kubernetes_version is the justfile's kubernetes_version too (a policy test checks), and talosctl on
 # the workstation must have talos_version's major and minor. Bump them together, quarterly.
 talos_version: v1.14.2
 # The configuration contract talosctl renders for, fixed so a newer talosctl renders the same configuration.

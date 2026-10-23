@@ -111,7 +111,7 @@ them), then
 ## Upgrades
 
 1. Bump the pins together in `group_vars/all/kubernetes.yml` (`talos_version`, `talos_contract`,
-   `talos_kubernetes_version`), the Makefile's `KUBERNETES_VERSION` and CI's `TALOSCTL_VERSION` and
+   `talos_kubernetes_version`), the justfile's `kubernetes_version` and CI's `TALOSCTL_VERSION` and
    `TALOSCTL_SHA256`, and upgrade the workstation's `talosctl`. Move to adjacent minor releases only, the latest
    patch of each. With them, what the Image Factory must serve for the new version, since it publishes no checksum:
    `kubernetes_iso_sha256` (`sha256sum` of the new ISO, downloaded from the URL `proxmox_vm_isos` names) and a

@@ -469,12 +469,13 @@ def test_vms_resolve_on_the_proxmox_host(tmp_path, local_yml, nodes, system):
     assert found == nodes
 
 
-def test_talos_pins_match_the_makefile_and_ci():
+def test_talos_pins_match_the_justfile_and_ci():
     """The Kubernetes version Talos runs is the one kubeconform validates the manifests against, and the talosctl CI
     validates the Talos configurations with is the pinned release."""
     pins = yaml.safe_load((ROOT / "group_vars" / "all" / "kubernetes.yml").read_text())
-    makefile = (ROOT / "Makefile").read_text()
-    assert re.search(rf"^KUBERNETES_VERSION \?= {re.escape(str(pins['talos_kubernetes_version']))}$", makefile, re.M)
+    justfile = (ROOT / "justfile").read_text()
+    version = re.escape(str(pins["talos_kubernetes_version"]))
+    assert re.search(rf"^kubernetes_version := '{version}'$", justfile, re.M)
     assert pins["talos_contract"] == ".".join(pins["talos_version"].split(".")[:2])
     ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
     assert "v" + ci["env"]["TALOSCTL_VERSION"] == pins["talos_version"]
