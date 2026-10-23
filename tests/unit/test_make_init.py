@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "init"))
 import init as wizard  # noqa: E402
 import settings as cfg  # noqa: E402
+import setups  # noqa: E402
 
 VAULT_PASSWORD = "a-vault-password-for-the-test"
 
@@ -40,6 +41,7 @@ class Scripted(wizard.Console):
             "age-key": "n",
             "vault-new": "n",
             "have-password": "n",
+            "setup-adopt": "n",
             **(answers or {}),
         }
         self.out: list[str] = []
@@ -76,7 +78,8 @@ class Silent(Scripted):
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
-    """A checkout's files make init reads, with HOME inside it, so the cluster's files are looked for there."""
+    """A checkout's files make init reads, with HOME inside it, so the cluster's files are looked for there, and a
+    store of setups of its own."""
     root = tmp_path / "repo"
     (root / "group_vars").mkdir(parents=True)
     shutil.copytree(
@@ -90,6 +93,7 @@ def repo(tmp_path, monkeypatch):
     (root / "scripts" / "init").mkdir(parents=True)
     shutil.copy(ROOT / "scripts" / "init" / "validate.yml", root / "scripts" / "init" / "validate.yml")
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SETUPS", str(tmp_path / "setups"))
     return root
 
 
@@ -379,6 +383,61 @@ def test_a_section_turned_off_loses_its_settings_only_when_the_person_agrees(rep
     assert "haos_mac" in local(repo), "another section is left alone"
 
 
+@pytest.mark.parametrize(
+    ("text", "on"),
+    [
+        pytest.param("tailscale_enabled: true\n", True, id="enabled"),
+        pytest.param("tailscale_enabled: false\n", False, id="disabled"),
+        pytest.param("tailscale_advertise_routes: [{prefix}]\n", True, id="routes-alone"),
+        pytest.param("", False, id="neither"),
+    ],
+)
+def test_remote_access_is_on_as_the_playbooks_work_it_out(repo, text, on):
+    """As proxmox_tailscale_enabled: tailscale_enabled when it is set, otherwise any routes, which a local.yml from
+    before the switch lists alone."""
+    (repo / "group_vars/all/local.yml").write_text("---\n" + text.format(prefix=f"{lan(0)}/24"))
+    assert wizard.Init(repo, Silent(), full=False, interactive=False).present("remote") is on
+
+
+def test_remote_access_is_switched_on_by_its_question_and_the_routes_are_an_option(repo):
+    """The answer to the switch is tailscale_enabled itself, never asked again. The routes are optional: without them
+    the host joins the tailnet alone, and only the tailnet's policy is left to do by hand."""
+    console = Scripted(
+        {
+            "switch:nas": "n",
+            "switch:remote": "y",
+            "switch:cluster": "n",
+            "switch:homeassistant": "n",
+            "proxmox_address": lan(10),
+            "tailscale_advertise_routes": "-",
+        }
+    )
+    init_run(repo, console)
+    v = local(repo)
+    assert v["tailscale_enabled"] is True and "tailscale_advertise_routes" not in v
+    assert "tailscale_enabled" not in console.topics and "tailscale_advertise_routes" in console.topics
+    summary = console.out[-1]
+    assert "tailscale_advertise_routes" not in summary, "neither required nor recommended"
+    assert "The tailnet's policy in Tailscale's admin console, before the first run" in summary
+    assert "(scripts/runbooks/tailscale.md, section 1)" in summary
+
+
+def test_routes_alone_keep_remote_access_on_until_it_is_turned_off(repo):
+    """A subnet router set up before the switch: Enter keeps it on and writes the switch beside its routes; turned
+    off, and agreed to, both go, so the playbooks see no remote access."""
+    prefix = f"{lan(0)}/24"
+    (repo / "group_vars/all/local.yml").write_text(
+        f"---\nproxmox_address: {lan(10)}\ntailscale_advertise_routes: [{prefix}]\n"
+    )
+    console = Scripted()
+    init_run(repo, console)
+    assert any("join your tailnet" in line and "[Y/n]" in line for line in console.out)
+    assert (local(repo)["tailscale_enabled"], local(repo)["tailscale_advertise_routes"]) == (True, [prefix])
+    assert "sections 1 and 2" in console.out[-1], "with routes, the tailnet's DNS too"
+    init_run(repo, Scripted({"switch:remote": "n", "clear:remote": "y"}))
+    assert not [k for k in local(repo) if k.startswith("tailscale_")]
+
+
 def test_secrets_go_to_the_vault_and_never_to_the_screen(repo):
     make_vault(repo, {"vault_other": "left-alone"})
     api_key = "-".join(["made", "up", "for", "the", "test"])  # built: gitleaks flags a key written out
@@ -411,8 +470,10 @@ def test_secrets_go_to_the_vault_and_never_to_the_screen(repo):
     assert "vault_truenas_api_key" in console.out[-1].split("STILL REQUIRED")[1]
 
 
-def test_remote_access_requires_the_auth_key_for_the_hosts_first_login(repo):
-    # proxmox.yml refuses a host that is not logged in without the key, after changing it, and a dry run cannot tell.
+@pytest.mark.parametrize("routes", [True, False], ids=["subnet-router", "host-only"])
+def test_remote_access_requires_the_auth_key_for_the_hosts_first_login(repo, routes):
+    # proxmox.yml refuses a host that is not logged in without the key, after changing it, and a dry run cannot tell;
+    # a host that joins without routes logs in all the same.
     make_vault(repo, {})
     answers = {
         "switch:nas": "n",
@@ -420,11 +481,11 @@ def test_remote_access_requires_the_auth_key_for_the_hosts_first_login(repo):
         "switch:cluster": "n",
         "switch:homeassistant": "n",
         "proxmox_address": lan(10),
-        "tailscale_advertise_routes": f"{lan(0)}/24",
+        "tailscale_advertise_routes": f"{lan(0)}/24" if routes else "-",
     }
     console = Scripted(answers)
     init_run(repo, console)
-    assert local(repo)["tailscale_advertise_routes"] == [f"{lan(0)}/24"]
+    assert local(repo).get("tailscale_advertise_routes") == ([f"{lan(0)}/24"] if routes else None)
     required = console.out[-1].split("STILL REQUIRED")[1].split("RECOMMENDED")[0]
     assert "vault_tailscale_auth_key" in required
 
@@ -662,3 +723,107 @@ def test_a_size_is_never_zero_but_a_disk_may_be_none(repo):
     assert "give a whole number of at least 1" in console.text
     assert local(repo)["kubernetes_node_sizes"]["homeserver-worker-1"]["cores"] == 4
     assert local(repo)["kubernetes_node_sizes"]["homeserver-worker-1"]["media_disk_gib"] == 0
+
+
+# --------------------------------------------------------------------------------------------- setups ---
+def test_a_write_through_a_link_changes_the_file_it_links_to(tmp_path):
+    stored = tmp_path / "setup" / "local.yml"
+    stored.parent.mkdir()
+    stored.write_text("---\n")
+    link = tmp_path / "local.yml"
+    link.symlink_to(stored)
+    wizard.write_file(link, b"---\nproxmox_address: x\n", 0o600)
+    assert link.is_symlink(), "the link stays"
+    assert stored.read_text() == "---\nproxmox_address: x\n"
+
+
+def flat(text: str) -> str:
+    """The summary without its line breaks, which can fall inside a path."""
+    return " ".join(text.split())
+
+
+def test_the_answers_go_into_the_setup_the_checkout_uses(repo):
+    setup = setups.new(repo, setups.store(), "home", wizard.commented_example(repo))
+    console = Scripted(first_run_answers())
+    init_run(repo, console)
+    assert console.topics[0] == "setup", "the setup is asked for first"
+    assert (repo / "group_vars/all/local.yml").is_symlink()
+    assert yaml.safe_load((setup / "local.yml").read_text())["proxmox_address"] == lan(10)
+    summary = flat(console.out[-1])
+    assert "Setup home: " in summary
+    assert f"Keep copies of the setup's directory, {setup}, the cluster's credentials directory" in summary
+    assert "FROM=current" not in summary
+
+
+def test_the_first_answer_switches_to_another_setup_or_makes_one(repo):
+    where = setups.store()
+    home = setups.new(repo, where, "home", wizard.commented_example(repo))
+    lab = setups.new(repo, where, "lab", wizard.commented_example(repo))
+    init_run(repo, Scripted({**first_run_answers(), "setup": "home"}))
+    assert setups.active(repo) == home
+    assert yaml.safe_load((home / "local.yml").read_text())["proxmox_address"] == lan(10)
+    assert yaml.safe_load((lab / "local.yml").read_text()) is None, "the other setup is left alone"
+    console = Scripted({"setup": ["Not A Name", "spare"], "setup-new": "y"})
+    init_run(repo, console)
+    assert "is no setup's name" in console.text
+    assert setups.active(repo) == where / "spare" and (where / "spare" / "vault_pass").is_file()
+
+
+def test_a_checkout_with_its_own_files_is_offered_to_keep_them_as_a_setup(repo):
+    init_run(repo, Scripted(first_run_answers()))
+    make_vault(repo, {"vault_haos_owner_password": "kept"})
+    before = (repo / "group_vars/all/local.yml").read_text()
+    declined = Scripted()
+    init_run(repo, declined)
+    assert "setup-adopt" in declined.topics and setups.active(repo) is None, "No is the default"
+    assert "FROM=current keeps local.yml" in flat(declined.out[-1])
+    init_run(repo, Scripted({"setup-adopt": "y", "setup-name": "home"}))
+    setup = setups.store() / "home"
+    assert setups.active(repo) == setup
+    assert (setup / "local.yml").read_text() == before
+    assert read_vault(repo) == {"vault_haos_owner_password": "kept"}, "read through its link"
+
+
+def test_a_setup_restored_after_the_first_make_init_is_taken_at_its_first_question(repo):
+    """A first run before the setups came back leaves local.yml setting nothing, which gives way to the setup."""
+    init_run(repo, Silent(), interactive=False)
+    password = b"a-password-of-the-restored-setup"
+    home = setups.make_setup(
+        setups.store(),
+        "home",
+        {
+            "local.yml": b"---\n",
+            "vault.yml": VaultLib([("default", VaultSecret(password))]).encrypt(b"---\n{}\n"),
+            "vault_pass": password + b"\n",
+        },
+    )
+    answers = {"switch:nas": "n", "switch:remote": "n", "switch:cluster": "n", "switch:homeassistant": "n"}
+    console = Scripted({"setup": "home", **answers})
+    init_run(repo, console)
+    assert console.topics[0] == "setup" and setups.active(repo) == home
+    assert "This checkout uses setup home now" in console.text
+
+
+def test_stopped_at_the_setup_question_the_summary_says_what_is_there(repo):
+    setup = setups.new(repo, setups.store(), "home", wizard.commented_example(repo))
+
+    class Stopped(Scripted):
+        def ask(self, prompt: str, topic: str) -> str:
+            raise EOFError
+
+    init = wizard.Init(repo, Stopped(), full=False, interactive=True)
+    init.checks = list
+    with pytest.raises(EOFError):
+        init.run()
+    summary = flat(init.summary())
+    assert "Setup home: " in summary and "unread" not in summary and "make vault TYPE=new" not in summary
+    assert f"Keep copies of the setup's directory, {setup} in your password manager" in summary
+
+
+def test_a_setup_whose_links_are_not_whole_stops_make_init_before_it_writes(repo):
+    setup = setups.new(repo, setups.store(), "home", wizard.commented_example(repo))
+    (setup / "local.yml").unlink()
+    console = Silent()
+    init_run(repo, console, interactive=False)
+    assert not (setup / "local.yml").exists(), "never made anew through the link"
+    assert "home, is not whole" in flat(console.out[-1])

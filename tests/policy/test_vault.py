@@ -50,9 +50,12 @@ def test_the_example_lists_every_secret_the_playbooks_read():
 
 
 def vault_init_tree(tmp_path: Path) -> Path:
-    """The Makefile and ansible.cfg copied into tmp_path, with nowhere a vault yet."""
+    """The Makefile, ansible.cfg and scripts/init/setups.py, which makes the vault, copied into tmp_path, with
+    nowhere a vault yet."""
     for name in ("Makefile", "ansible.cfg"):
         shutil.copy(ROOT / name, tmp_path)
+    (tmp_path / "scripts" / "init").mkdir(parents=True)
+    shutil.copy(ROOT / "scripts" / "init" / "setups.py", tmp_path / "scripts" / "init" / "setups.py")
     (tmp_path / "group_vars" / "all").mkdir(parents=True)
     return tmp_path / VAULT
 
@@ -104,7 +107,7 @@ def test_vault_init_never_replaces_a_vault_it_cannot_open(tmp_path):
     (tmp_path / ".vault_pass").unlink()
     before = vault.read_bytes()
     refused = vault_init(tmp_path)
-    assert refused.returncode != 0 and "may hold your secrets" in refused.stdout, refused.stdout + refused.stderr
+    assert refused.returncode != 0 and "may hold your secrets" in refused.stderr, refused.stdout + refused.stderr
     assert vault.read_bytes() == before and not (tmp_path / ".vault_pass").exists()
     (tmp_path / ".vault_pass").write_text("not the password\n")
     assert vault_init(tmp_path).returncode != 0 and vault.read_bytes() == before
@@ -116,7 +119,7 @@ def test_vault_init_moves_no_vault_but_says_to(tmp_path):
     vault = vault_init_tree(tmp_path)
     (tmp_path / OLD_VAULT).write_text(HEADERS[0] + "6162\n")
     refused = vault_init(tmp_path)
-    assert refused.returncode != 0 and "committed until 2026-10-20" in refused.stdout, refused.stdout + refused.stderr
+    assert refused.returncode != 0 and "committed until 2026-10-20" in refused.stderr, refused.stdout + refused.stderr
     assert not vault.exists() and not (tmp_path / ".vault_pass").exists()
 
 
