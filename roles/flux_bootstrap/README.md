@@ -29,7 +29,7 @@ a real run would install; the diffs need the operator's namespace and its FluxIn
 `flux_bootstrap_sync_exclude` names Flux Kustomizations the sync leaves out, through the FluxInstance's own patches
 (`spec.kustomize.patches`), which the operator applies to the sync Kustomization `flux-system` it renders: one delete,
 whose target names them all in one regular expression (a target that matches nothing is no error). Flux prunes each
-and what it applied, bar objects marked `kustomize.toolkit.fluxcd.io/prune: disabled` and Deployments `make suspend`
+and what it applied, bar objects marked `kustomize.toolkit.fluxcd.io/prune: disabled` and Deployments `just suspend`
 holds, which stay at zero and come back held with their Kustomization. Empty, the FluxInstance carries no patch. A
 real run waits for each one left out to be deleted.
 
@@ -77,5 +77,5 @@ Flux's controllers hold cluster-admin: whoever can merge to the synced branch co
 
 ## Reference
 
-[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make fix TYPE=docs` from the role itself:
+[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `just fix docs` from the role itself:
 its argument specs, defaults and vars, and each tasks file as a table and a flow graph. Never edit it by hand.

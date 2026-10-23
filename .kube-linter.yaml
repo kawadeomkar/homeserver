@@ -1,5 +1,5 @@
 ---
-# kube-linter's configuration (make lint TYPE=manifests): its default checks, minus three that contradict
+# kube-linter's configuration (just lint manifests): its default checks, minus three that contradict
 # deliberate choices, plus the probe checks and two of the repo's own rules. A workload that needs what a check forbids
 # carries an ignore-check.kube-linter.io/<check> annotation saying why. tests/policy/test_k8s.py checks
 # the conventions kube-linter cannot express.
