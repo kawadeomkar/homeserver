@@ -1,0 +1,23 @@
+---
+argument_specs:
+  main:
+    short_description: Put Prometheus's node exporter on a Proxmox VE node, for the addresses that scrape it alone
+    description:
+      - Installs Debian's prometheus-node-exporter, without its recommended collectors, and keeps it enabled and
+        running on port 9100. Upgrades are left to apt's, with every other package.
+      - Only the node itself and proxmox_node_exporter_scrapers may connect, through systemd's IP filter on the
+        exporter's unit (IPAddressDeny=any, IPAddressAllow=), in a drop-in written before the package, whose
+        scripts start the exporter at once. A change to the addresses restarts it.
+      - The defaults change nothing.
+    options:
+      proxmox_node_exporter_scrapers:
+        type: list
+        elements: str
+        default: []
+        description: >-
+          The IPv4 addresses that may scrape the exporter, such as the nodes a Prometheus runs on. Empty, nothing is
+          installed or changed.
+      proxmox_node_exporter_systemd_dir:
+        type: str
+        default: /etc/systemd/system
+        description: Where systemd reads the exporter's drop-in.

@@ -1110,6 +1110,83 @@ def test_proxmox_backup_without_a_nas(tmp_path):
         assert rc != 0 and message in out, out[-3000:]
 
 
+# ---------------------------------------------------------------------------------- Node exporter ---
+
+EXPORTER = "prometheus-node-exporter.service"
+
+
+def exporter_vars(tmp_path, cluster=True):
+    """Variables for the node exporter's test playbook: the fake host's state, a scratch systemd directory, and with a
+    cluster its two nodes, the addresses the exporter lets in."""
+    extra = {
+        "fake_pve_state": str(tmp_path / "pve.json"),
+        "proxmox_node_exporter_systemd_dir": str(tmp_path / "systemd"),
+        "truenas_static_address": "127.0.0.10/24",
+    }
+    return extra | {"kubernetes_node_addresses": NODE_ADDRESSES} if cluster else extra
+
+
+def exporter_dropin(extra):
+    """The drop-in that lets only the scrapers and the host itself reach the exporter."""
+    return Path(extra["proxmox_node_exporter_systemd_dir"]) / f"{EXPORTER}.d" / "10-allowed-addresses.conf"
+
+
+def test_proxmox_node_exporter_role_is_idempotent(tmp_path):
+    """With a cluster: the exporter installed once, after the drop-in that lets in only the cluster's nodes and the
+    host itself is loaded, so it never runs without it; then nothing changes, and drift is corrected once. New
+    addresses restart it with them."""
+    extra = exporter_vars(tmp_path)
+    state = Path(extra["fake_pve_state"])
+
+    result = run("proxmox_node_exporter.yml", extra, check=True)
+    expect(result, "homeserver", changed=True, note="dry run")
+    assert "Would install prometheus-node-exporter" in result[2], result[2][-3000:]
+    assert not state.exists() or read(state)["mutations"] == 0, "the dry run changed the host"
+    assert not exporter_dropin(extra).exists()
+
+    expect(run("proxmox_node_exporter.yml", extra), "homeserver", changed=4, note="first run")
+    result = run("proxmox_node_exporter.yml", extra)
+    expect(result, "homeserver", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")
+    expect(run("proxmox_node_exporter.yml", extra, check=True), "homeserver", changed=0, note="dry run after applying")
+
+    allowed = "[Service]\nIPAddressDeny=any\nIPAddressAllow=localhost 127.0.0.30 127.0.0.31\n"
+    assert exporter_dropin(extra).read_text().endswith(allowed), exporter_dropin(extra).read_text()
+    s = read(state)
+    assert s["packages"]["installed"]["prometheus-node-exporter"] == fake_pve.DEBIAN["prometheus-node-exporter"]
+    # The package's scripts started it, and systemd had the drop-in by then.
+    assert s["units"][EXPORTER]["enabled"] and s["units"][EXPORTER]["active"]
+    assert s["units"][EXPORTER]["started_with"].endswith(allowed), s["units"][EXPORTER]
+
+    # Drift: stopped and disabled by hand. Enabled and started again, once.
+    s["units"][EXPORTER].update(enabled=False, active=False)
+    write(state, s)
+    expect(run("proxmox_node_exporter.yml", extra), "homeserver", changed=2, note="run after drift")
+    expect(run("proxmox_node_exporter.yml", extra), "homeserver", changed=0, note="second run after drift")
+    assert read(state)["units"][EXPORTER]["active"] and read(state)["units"][EXPORTER]["enabled"]
+
+    # The worker at another address: the drop-in rewritten, systemd reloaded and the running exporter restarted.
+    moved = extra | {"kubernetes_node_addresses": NODE_ADDRESSES | {"homeserver-worker-1": "127.0.0.32"}}
+    result = run("proxmox_node_exporter.yml", moved, check=True)
+    expect(result, "homeserver", changed=True, note="dry run with a new address")
+    assert "Would restart it (its addresses changed)" in result[2], result[2][-3000:]
+    expect(run("proxmox_node_exporter.yml", moved), "homeserver", changed=3, note="run with a new address")
+    expect(run("proxmox_node_exporter.yml", moved), "homeserver", changed=0, note="second run with a new address")
+    assert read(state)["units"][EXPORTER]["started_with"].endswith(allowed.replace("127.0.0.31", "127.0.0.32"))
+
+    # A string for the list is refused before anything runs, naming the variable.
+    rc, _, out = run("proxmox_node_exporter.yml", extra | {"proxmox_node_exporter_scrapers": "127.0.0.31"})
+    assert rc != 0 and "proxmox_node_exporter_scrapers must be a list, not a string." in out, out[-3000:]
+
+
+def test_proxmox_node_exporter_without_a_cluster(tmp_path):
+    """Without a cluster there is no Prometheus to serve: nothing is installed, written or run."""
+    extra = exporter_vars(tmp_path, cluster=False)
+    state = Path(extra["fake_pve_state"])
+    for check in (True, False):
+        expect(run("proxmox_node_exporter.yml", extra, check=check), "homeserver", changed=0, note="no cluster")
+    assert not state.exists() and not exporter_dropin(extra).exists()
+
+
 # --------------------------------------------------------------------------------------- The cluster's VMs ---
 
 

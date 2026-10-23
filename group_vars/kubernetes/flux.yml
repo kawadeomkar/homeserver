@@ -38,6 +38,8 @@ flux_bootstrap_age_key_file: "{{ sops_age_key_file | default('~/.config/sops/age
 # EGRESS_DENIED_ADDRESS and PROXMOX_ADDRESS are the hosts no app pod may reach (each app namespace's NetworkPolicy):
 # the NAS, whose NFS exports trust the worker's address, which pods' traffic leaves the node with, and the Proxmox
 # host, whose API and SSH answer the LAN. Without a NAS both are the Proxmox host's (a repeated address is valid).
+# Prometheus, outside the apps' namespaces, also scrapes PROXMOX_ADDRESS for the host's own metrics
+# (roles/proxmox_node_exporter).
 flux_bootstrap_settings: >-
   {{ {'DOMAIN': kubernetes_domain | default(kubernetes_domain_default, true),
       'TZ': kubernetes_timezone,
