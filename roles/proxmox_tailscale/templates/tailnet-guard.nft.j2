@@ -1,16 +1,19 @@
 #!/usr/sbin/nft -f
-# Written by roles/proxmox_tailscale. What tailnet clients may reach through this subnet router, whatever the
+# Written by roles/proxmox_tailscale. What tailnet clients may reach through this node, whatever the
 # tailnet's policy says. Loaded by tailnet-guard.service, which tailscaled requires: reload it, never restart it.
-# The file replaces the whole table at once, and touches no other table.
+# The file replaces the whole table at once, and touches no other table. The tailnet is matched by tailscaled's
+# interface, tailscale0, which the role checks tailscaled has.
 destroy table inet tailnet_guard
 
 table inet tailnet_guard {
-	# The prefixes this node advertises.
+	# The prefixes this node advertises: none on a node that only joins the tailnet.
 	set routes {
 		type ipv4_addr
 		flags interval
 		auto-merge
+{% if proxmox_tailscale_advertise_routes %}
 		elements = { {{ proxmox_tailscale_advertise_routes | join(', ') }} }
+{% endif %}
 	}
 {% if proxmox_tailscale_guard_hosts %}
 
@@ -50,7 +53,7 @@ table inet tailnet_guard {
 {% if proxmox_tailscale_guard_hosts %}
 		iifname "tailscale0" ip daddr @guarded jump tailnet_to_guarded
 {% endif %}
-		# A subnet router forwards nothing it does not advertise.
+		# Nothing else outside the advertised prefixes, of which a node without routes has none.
 		iifname "tailscale0" meta nfproto ipv6 counter name "outside_routes_dropped" drop
 		iifname "tailscale0" ip daddr != @routes counter name "outside_routes_dropped" drop
 		# The LAN never starts a connection into the tailnet; replies to the tailnet's own connections pass.

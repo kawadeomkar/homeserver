@@ -1,0 +1,27 @@
+apiVersion: v1
+data:
+    MYSQL_DATABASE: ENC[AES256_GCM,data:0wU7d/xlSAbpWuSucLJpCw==,iv:TKZx0LnbbvO0/RyTIGfZpksFNhNtRJXDLR3hauDSp44=,tag:DM9aYeDlIDnogkGlHht7QQ==,type:str]
+    MYSQL_PASSWORD: ENC[AES256_GCM,data:brjTTdXYodr3DMcsQ1pMhqNNXJWd2HARLmojcgvQW2fFCe9GNU29Jue0uPg=,iv:9dVeIK4wzorDmBBMZ+rPjWfGioxuIz5T+6QOZIl/zU8=,tag:IempxxoVtLxTyiJS9JvgQw==,type:str]
+    MYSQL_ROOT_PASSWORD: ENC[AES256_GCM,data:x6/u47zKzcYMwqZaHQ8FdwRw/MWpKVY9JNh3ow6TpgMUQOuy4st9Iv8zK9Q=,iv:tTX85AUIAtWPohY36CZ1Z+HKwmSo0tkkSOm1w7y0ojg=,tag:95iJxblZeYHu60yzv6CBvA==,type:str]
+    MYSQL_USER: ENC[AES256_GCM,data:gkoCo7dFlvcQtRydilQyYA==,iv:a+8jUpmAPfaZ3JcaN6pUDx/QZuTpGxOx5OuT5+/CrWY=,tag:igq8lcBoA/9voR1nCehdQQ==,type:str]
+kind: Secret
+metadata:
+    labels:
+        app.kubernetes.io/name: photoprism-db
+    name: photoprism-db
+    namespace: photoprism
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSA4SmQxQjY1TSs2NUs3WmJL
+            b0pQR0QwUFRZMWZURmZmQTZNWnA4OFRiWmlRCnZaS2NWUm5WTGd1UHFBVkg0bVEy
+            UkJjOTVmY0hlOVRVNW5zUjRUbDVCNkkKLS0tIGgrYnNacStHa1JGVkM2OENSWXVs
+            TFlRczQ3VUF2K0dNVUtLNklKcmM4dTAKLrK4t5zhSnL/kMc2j9GQz45zuhvsgHnm
+            XllzRTLoAh1bN3wRWijHMLhNcL65qGNB2h4jrbkujz424Dkxpj3QZQ==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age19jhwvwxawyjzj7yc0ud700dtj5gws77t9pgm8f3zv9kqgssqgpgs5zq4qw
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-10-17T18:00:54Z"
+    mac: ENC[AES256_GCM,data:ZnSv0xi77+FPOBE4nZng+b4rTLs9DwfdV7/mq+M1u2FLIc/MORgX16FgkMDdJkcfQBUZMGK9WJu+Xql6b5kmPw0axASThqJz9j51FtQlK02AeL5tE6ezHjx+OM0ei9ceQNiaLBCD6DSj/i4D6M7gaAeHl+jeBTj0HJuE2RqJZ3w=,iv:MKsxvRBK45HMY/5PCtOXXz2Ee5TlT5/ten1AOgZD624=,tag:oTYtPfHv6PBb7Hwy322zhA==,type:str]
+    version: 3.13.3

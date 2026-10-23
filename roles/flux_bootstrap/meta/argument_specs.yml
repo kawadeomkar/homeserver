@@ -1,0 +1,72 @@
+---
+argument_specs:
+  main:
+    short_description: Hand a Kubernetes cluster to Flux, through the Flux Operator
+    description:
+      - Runs on the controller with kubectl. Installs or upgrades the Flux Operator, and keeps the Secret
+        flux-system/sops-age (the age key), the ConfigMap flux-system/cluster-settings and the FluxInstance flux as
+        configured, each compared with a server-side diff and applied server-side under one field manager, so a
+        key removed from the settings disappears.
+      - Flux 2.9 and later fail a manifest naming a setting that does not exist (strict substitution, on by
+        default), instead of giving it an empty string.
+      - Refuses an age key file that holds anything but one key, or that others can read.
+      - Installs only an install.yaml of the pinned SHA-256, with the operator's image pinned by digest, and gives
+        the FluxInstance an exact Flux release and a manifests artifact pinned by digest, so nothing it installs can
+        change unreviewed.
+      - The defaults do nothing.
+    options:
+      flux_bootstrap_kubeconfig:
+        type: str
+        default: ""
+        description: The cluster's kubeconfig.
+      flux_bootstrap_operator_version:
+        type: str
+        default: ""
+        description: The Flux Operator's release, such as v0.61.0.
+      flux_bootstrap_operator_url:
+        type: str
+        default: https://github.com/controlplaneio-fluxcd/flux-operator/releases/download
+        description: Where the operator's releases are; <url>/<version>/install.yaml is applied.
+      flux_bootstrap_operator_sha256:
+        type: str
+        default: ""
+        description: >-
+          The SHA-256 (hex) install.yaml must have, checked before anything in it is applied. Required with a version.
+      flux_bootstrap_operator_digest:
+        type: str
+        default: ""
+        description: >-
+          The operator image's digest (sha256:...), which its Deployment is given beside the tag. Required with a
+          version.
+      flux_bootstrap_instance:
+        type: dict
+        default: {}
+        description: >-
+          The FluxInstance's exact Flux release (such as 2.9.6), the operator's manifests artifact pinned by digest
+          (oci://...@sha256:...), and the Git url, ref and path.
+      flux_bootstrap_settings:
+        type: dict
+        default: {}
+        description: The cluster-settings ConfigMap's keys and values, all strings.
+      flux_bootstrap_age_key_file:
+        type: str
+        default: ""
+        description: The age private key file that becomes the Secret flux-system/sops-age. One key, mode 0600.
+      flux_bootstrap_wait_timeout:
+        type: str
+        default: 10m
+        description: How long a real run waits for the operator, the FluxInstance and Flux's Kustomizations.
+      flux_bootstrap_sync_exclude:
+        type: list
+        elements: str
+        default: []
+        description: >-
+          The Flux Kustomizations (in flux-system) the FluxInstance's sync leaves out, which prunes them and what they
+          applied, bar objects marked kustomize.toolkit.fluxcd.io/prune disabled. Empty leaves the sync as the
+          repository has it.
+      flux_bootstrap_allow_path_change:
+        type: bool
+        default: false
+        description: >-
+          Let a run move the FluxInstance to another path, which deletes everything the old path applied (Flux
+          prunes it). Without it, a path other than the live one is refused.

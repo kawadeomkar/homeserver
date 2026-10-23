@@ -1,0 +1,61 @@
+---
+# One wave of make suspend or make resume (app_scale_wave): every app in it patched, then waited for, before the next
+# wave. Each patch sets the annotations and the replicas at once (main.yml says why).
+
+- name: wave | Patch each app
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - --kubeconfig
+      - "{{ app_scale_kubeconfig }}"
+      - patch
+      - deployment
+      - "{{ item.name }}"
+      - -n
+      - "{{ item.namespace }}"
+      - --type=merge
+      - --field-manager=homeserver-ansible
+      - -p
+      - "{{ item.patch }}"
+  changed_when: true
+  loop: "{{ app_scale_wave }}"
+  loop_control:
+    label: "{{ item.namespace }}/{{ item.name }} to {{ item.replicas }}"
+
+- name: wave | Wait for each app's pods to stop
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - --kubeconfig
+      - "{{ app_scale_kubeconfig }}"
+      - wait
+      - --for=delete
+      - pod
+      - -l
+      - "{{ item.selector }}"
+      - -n
+      - "{{ item.namespace }}"
+      - --timeout={{ app_scale_timeout }}
+  changed_when: false
+  loop: "{{ app_scale_wave }}"
+  loop_control:
+    label: "{{ item.namespace }}/{{ item.name }}"
+  when: app_scale_state == 'down'
+
+- name: wave | Wait for each app to be available
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - --kubeconfig
+      - "{{ app_scale_kubeconfig }}"
+      - rollout
+      - status
+      - deployment/{{ item.name }}
+      - -n
+      - "{{ item.namespace }}"
+      - --timeout={{ app_scale_timeout }}
+  changed_when: false
+  loop: "{{ app_scale_wave }}"
+  loop_control:
+    label: "{{ item.namespace }}/{{ item.name }}"
+  when: app_scale_state == 'up'

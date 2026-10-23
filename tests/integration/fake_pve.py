@@ -1,9 +1,10 @@
-"""Stand-ins for the Proxmox VE commands roles/proxmox_storage, roles/proxmox_apt and roles/proxmox_backup run,
-for the idempotence tests.
+"""Stand-ins for the Proxmox VE commands roles/proxmox_storage, roles/proxmox_apt, roles/proxmox_backup and
+roles/proxmox_vm run, for the idempotence tests.
 
 `pvesh get /storage`, `pvesh get /nodes/<node>/config`, `pvesh get /nodes/<node>/storage/<id>/status`,
-`pvesm add nfs`, `pvesm set`, `pvenode config set`, `hostname -s`, `apt-get update` and `apt-get dist-upgrade`,
-backed by a JSON file named by $FAKE_PVE_STATE.
+`pvesm add nfs`, `pvesm set`, `pvenode config set`, `systemctl daemon-reload` (counted in the state's
+`daemon_reloads`), `hostname -s`, `apt-get update` and `apt-get dist-upgrade`, backed by a JSON file named by
+$FAKE_PVE_STATE.
 Output follows Proxmox VE 9.2, as captured on a fresh install: `disable` appears only when set, every
 `/storage` entry carries a `digest` of the whole configuration, `content` comes back in an order that
 differs from one listing to the next (it is a hash's order on a real host, so the fake rotates it, and a
@@ -14,12 +15,44 @@ letter and ending with a letter or digit, case not mattering), fails as `pvesm a
 in the state's `inactive` list answers `active: 0` while still enabled, as one whose mount or pool failed to
 come up does, and one whose `nodes` leaves this node out answers `enabled: 0`, as Proxmox does for a storage
 restricted to other cluster nodes. Nothing the role runs changes either. Anything else exits non-zero, so an
-unexpected command fails the test.
+unexpected command fails the test. A state's `storage_total` gives a storage's size in bytes (64 GiB otherwise).
 
 Backup jobs: `pvesh get|create /cluster/backup` and `pvesh get|set /cluster/backup/<id>`, from Proxmox VE 9's
 API schema, not yet captured from a host. A job's prune settings come back as an object and its enabled flag
 as a number; the role reads text as well, in case a real host gives that. Ids follow Proxmox's pve-configid
-rule, and an option the schema lacks fails as it does there. A job's VMIDs start at 100.
+rule, and an option the schema lacks fails as it does there.
+
+VMs: `qm create|set|config|status|start|shutdown` and `qm disk resize`, and pvesh's /nodes/<node>/qemu,
+/nodes/<node>/lxc (the state's `containers`), .../qemu/<id>/config and .../pending, /nodes/<node>/status,
+/nodes/<node>/storage, .../storage/<id>/content (filtered by --content and --vmid; as on Proxmox, files that belong
+to no VMID, such as imports and snippets, match any --vmid, and a container's volumes are listed as rootdir when the
+test seeds them so), .../download-url and /nodes/<node>/tasks/<upid>/status. Written from Proxmox VE 9's API schema
+and documentation, not yet captured from a host: `qm create` refuses a VMID that exists, a disk on a storage that
+does not exist or holds no images, and an ISO that is not there; it names a new disk as Proxmox does,
+vm-<id>-disk-<n> on block storage and <id>/vm-<id>-disk-<n>.<format> on a file or NFS storage, n the next free
+number, an EFI disk 4M; it stores tags lower-cased and sorted and a MAC in upper case, and makes up a MAC when none
+is given. On a running VM, `qm set` leaves what Proxmox cannot change live (cores, CPU, memory, ballooning, the
+watchdog, the agent, the boot order, PCI devices) pending until the next `qm start`, and the configuration pvesh
+returns shows pending values applied, as Proxmox's does by default. Deleting a drive drops it from the boot order,
+and adding it back does not restore it. `qm disk resize` grows only. A download that fails (the state's
+`download_fails`) leaves no file and still exits 0, as pvesh may; only the task's status says it failed.
+`start_fails` makes the next `qm start` fail once and `shutdown_hangs` every `qm shutdown` time out (the guest
+never powers off); both refuse a VM already as asked, as qm does, and `qm start` also refuses a VM one of whose
+drives, the CD-ROM included, names a volume that is not there, as Proxmox does when it activates them. A backup
+job's VMIDs start at 100. The state's `content` holds each storage's volumes, which tests seed with other guests'
+disks and old backups; `node_memory` the node's memory; `pci_mappings` and `usb_mappings` the resource
+mappings that exist.
+
+Images (as on Proxmox VE 9.2, read from its API code): `download-url --content import` takes an .ova, .qcow2, .raw or
+.vmdk; with `--checksum` it needs `--checksum-algorithm`, and the state's `checksum_fails` makes the task fail as a
+mismatch does, storing nothing. A disk given as `<storage>:0,import-from=<volume>` is imported from that volume, or
+from a disk inside an OVA there (`<storage>:import/<name>.ova/<disk>`, its disk `ova_disk_size` bytes, 32 GiB
+otherwise), at the source's size; any other size with import-from is refused, as Proxmox's special syntax requires.
+A disk inside an OVA is extracted first onto the storage `qm create --import-working-storage` names, or the OVA's own,
+which must hold images and have a path, or the creation is refused: the installer's `local` holds no images.
+USB devices (usb0 to usb14) reach a running VM at once (hotplug). `qm guest cmd <id> network-get-interfaces` answers
+for a running VM as the QEMU guest agent does, its NIC with the VM's MAC and the state's `guest_ip` (127.0.0.1
+otherwise), beside the loopback and a Docker bridge; `agent_down` counts calls that fail first, as while it boots.
 
 apt-get reads the deb822 .sources files in $FAKE_PVE_SOURCES_DIR, the directory the role is given. `update`
 fails with 401 Unauthorized, as the real one does, when an enterprise.proxmox.com repository is still
@@ -178,7 +211,7 @@ def get_storage_status(state, node, sid, opts):
     restricted = "nodes" in entry and NODE not in entry["nodes"].split(",")
     enabled = not entry.get("disable") and not restricted
     active = enabled and sid not in state.get("inactive", [])
-    total = 64 * 2**30 if active else 0
+    total = state.get("storage_total", {}).get(sid, 64 * 2**30) if active else 0
     # content in the latest listing's order: counting status reads too would change the order the next
     # listing shows, which the content-order test depends on.
     return {
@@ -273,9 +306,463 @@ def set_backup_job(state, jid, opts):
     state["mutations"] += 1
 
 
+# ---------------------------------------------------------------------------------------------- VMs ---
+# Settings Proxmox cannot change on a running VM with its default hotplug setting (network, disk, usb): they wait,
+# pending, for the next start. The configuration read back shows them at once.
+COLD = ("cores", "cpu", "memory", "balloon", "watchdog", "agent", "boot", "sockets", "machine", "bios", "scsihw", "vga")
+VM_OPTIONS = {
+    "name",
+    "ostype",
+    "machine",
+    "bios",
+    "efidisk0",
+    "cpu",
+    "sockets",
+    "cores",
+    "memory",
+    "balloon",
+    "scsihw",
+    "net0",
+    "agent",
+    "serial0",
+    "vga",
+    "watchdog",
+    "onboot",
+    "startup",
+    "ide2",
+    "boot",
+    "tags",
+}
+BLOCK_TYPES = ("lvmthin", "lvm", "zfspool")
+
+
+def vm_option(name):
+    return name in VM_OPTIONS or re.fullmatch(r"scsi([0-9]|[12][0-9]|30)|hostpci([0-9]|1[0-5])|usb([0-9]|1[0-4])", name)
+
+
+def size_text(size):
+    for unit, factor in (("T", 2**40), ("G", 2**30), ("M", 2**20), ("K", 2**10)):
+        if size % factor == 0:
+            return f"{size // factor}{unit}"
+    return str(size)
+
+
+def parse_size(text):
+    found = re.fullmatch(r"(\d+)([KMGT]?)", text)
+    if not found:
+        fail(f"400 Parameter verification failed.\nsize: unable to parse size '{text}'")
+    return int(found.group(1)) * {"": 1, "K": 2**10, "M": 2**20, "G": 2**30, "T": 2**40}[found.group(2)]
+
+
+def storage_entry(state, sid):
+    entry = next((s for s in state["storage"] if s["storage"] == sid), None)
+    if entry is None:
+        fail(f"storage '{sid}' does not exist")
+    return entry
+
+
+def new_disk(state, vmid, slot, value):
+    """A disk given as <storage>:<size in GiB>[,...]: allocate a volume, as Proxmox names it on that storage, and
+    return the disk as the configuration then shows it."""
+    head, _, rest = value.partition(",")
+    sid, _, size = head.partition(":")
+    entry = storage_entry(state, sid)
+    if "images" not in entry["content"].split(","):
+        fail(f"storage '{sid}' does not support vm images")
+    opts = dict(item.split("=", 1) for item in rest.split(",") if item)
+    source = opts.pop("import-from", None)
+    working = state.get("import_working_storage")
+    if source is not None and ".ova/" in source:
+        # A disk inside an OVA is extracted first, onto a storage that holds images and has a path.
+        extraction = storage_entry(state, working or source.split(":", 1)[0])
+        if "images" not in extraction["content"].split(",") or not extraction.get("path"):
+            fail(
+                f"400 Parameter verification failed.\n{'import-working-storage' if working else slot}: import working "
+                f"storage '{extraction['storage']}' does not support 'images' content type or is not file based."
+            )
+    if source is not None:
+        if size != "0":
+            fail(
+                f"400 Parameter verification failed.\n{slot}: 'import-from' requires special syntax - "
+                "use <storage ID>:0,import-from=<source>"
+            )
+        size = str(import_size(state, source) // 2**30)
+    content = state.setdefault("content", {}).setdefault(sid, [])
+    taken = {v["volid"] for v in content}
+    number = 0
+    while any(f"vm-{vmid}-disk-{number}" in volid for volid in taken):
+        number += 1
+    if entry["type"] in BLOCK_TYPES:
+        volid, fmt = f"{sid}:vm-{vmid}-disk-{number}", "raw"
+    else:
+        fmt = opts.pop("format", entry.get("format", "raw"))
+        volid = f"{sid}:{vmid}/vm-{vmid}-disk-{number}.{fmt}"
+    opts.pop("format", None)
+    nbytes = 4 * 2**20 if slot == "efidisk0" else parse_size(f"{size}G")
+    content.append({"volid": volid, "content": "images", "vmid": int(vmid), "size": nbytes, "format": fmt})
+    return ",".join([volid, *(f"{k}={v}" for k, v in sorted(opts.items())), f"size={size_text(nbytes)}"])
+
+
+def import_size(state, source):
+    """The size of what a disk is imported from: a volume, or a disk inside an OVA (<storage>:import/<x>.ova/<disk>)."""
+    found = re.fullmatch(r"([^:]+):import/([^/]+\.ova)/([^/]+\.(qcow2|raw|vmdk))", source)
+    volid = f"{found.group(1)}:import/{found.group(2)}" if found else source
+    entry = next((v for vols in state.get("content", {}).values() for v in vols if v["volid"] == volid), None)
+    if entry is None:
+        fail(f"volume '{volid}' does not exist")
+    return state.get("ova_disk_size", 32 * 2**30) if found else entry["size"]
+
+
+def tags_text(value):
+    return ";".join(sorted({tag.strip().lower() for tag in re.split(r"[;, ]", value) if tag.strip()}))
+
+
+def vm_of(state, vmid):
+    vm = state.get("vms", {}).get(str(vmid))
+    if vm is None:
+        fail(f"Configuration file 'nodes/{NODE}/qemu-server/{vmid}.conf' does not exist")
+    return vm
+
+
+def mac_for(vmid, index=0):
+    """A MAC Proxmox would generate: its own prefix, then bytes of its choosing."""
+    return ":".join(["BC", "24", "11", f"{int(vmid) // 256 % 256:02X}", f"{int(vmid) % 256:02X}", f"{index:02X}"])
+
+
+def checked_value(state, vmid, key, value):
+    """An option's value as the configuration stores it."""
+    if re.fullmatch(r"scsi\d+|efidisk0", key) and re.fullmatch(r"[^:,]+:\d+(,.*)?", value):
+        return new_disk(state, vmid, key, value)
+    if re.fullmatch(r"scsi\d+", key):
+        # An existing volume with new options: Proxmox writes its size back itself.
+        volid, *opts = value.split(",")
+        volume = next((v for vols in state.get("content", {}).values() for v in vols if v["volid"] == volid), None)
+        if volume is None:
+            fail(f"volume '{volid}' does not exist")
+        opts = [o for o in opts if not o.startswith("size=")]
+        return ",".join([volid, *opts, f"size={size_text(volume['size'])}"])
+    if key == "tags":
+        return tags_text(value)
+    if key == "ide2":
+        volid = value.split(",", 1)[0]
+        if volid not in ("none", "cdrom") and not any(
+            v["volid"] == volid for vols in state.get("content", {}).values() for v in vols
+        ):
+            fail(f"volume '{volid}' does not exist")
+    if key == "net0":
+        model, _, rest = value.partition(",")
+        name, _, mac = model.partition("=")
+        return f"{name}={(mac or mac_for(vmid)).upper()},{rest}"
+    if key.startswith("hostpci"):
+        mapping = dict(item.split("=", 1) for item in value.split(",") if "=" in item).get("mapping")
+        if mapping and mapping not in state.get("pci_mappings", []):
+            fail(f"no such resource mapping '{mapping}'")
+    if key.startswith("usb"):
+        device = dict(item.split("=", 1) for item in value.split(",") if "=" in item)
+        if not re.fullmatch(
+            r"[0-9a-fA-F]{4}:[0-9a-fA-F]{4}|\d+-\d+(\.\d+)*", device.get("host", "")
+        ) and not device.get("mapping"):
+            fail(f"400 Parameter verification failed.\n{key}: invalid format - {value}")
+        if device.get("mapping") and device["mapping"] not in state.get("usb_mappings", []):
+            fail(f"no such resource mapping '{device['mapping']}'")
+    return value
+
+
+def qm(state, args):
+    verb = args[0]
+    if verb == "create":
+        vmid, opts = args[1], options(args[2:])
+        # A parameter of the command, not a VM option: where every disk the command imports from an OVA is extracted.
+        state["import_working_storage"] = opts.pop("import-working-storage", None)
+        if vmid in state.setdefault("vms", {}):
+            fail(f"unable to create VM {vmid} - VM {vmid} already exists on node '{NODE}'")
+        unknown = [name for name in opts if not vm_option(name) and name != "start"]
+        if unknown:
+            fail(f"400 Parameter verification failed.\n{unknown[0]}: property is not defined in schema")
+        opts.pop("start", None)
+        config = {key: checked_value(state, vmid, key, value) for key, value in opts.items()}
+        state.pop("import_working_storage", None)
+        state["vms"][vmid] = {"config": config, "pending": {}, "status": "stopped"}
+    elif verb == "set":
+        vmid, opts = args[1], options(args[2:])
+        vm = vm_of(state, vmid)
+        unknown = [name for name in opts if not vm_option(name) and name != "delete"]
+        if unknown:
+            fail(f"400 Parameter verification failed.\n{unknown[0]}: property is not defined in schema")
+        running = vm["status"] == "running"
+        for key in [k for k in opts.pop("delete", "").split(",") if k]:
+            if running and (key in COLD or key.startswith("hostpci")):
+                vm["pending"][key] = None
+            else:
+                vm["config"].pop(key, None)
+                # Proxmox drops a deleted drive from the boot order, and adding one back never restores it.
+                order = vm["config"].get("boot", "").removeprefix("order=").split(";")
+                if key in order:
+                    kept = [device for device in order if device != key]
+                    vm["config"]["boot"] = "order=" + ";".join(kept)
+        for key, value in opts.items():
+            value = checked_value(state, vmid, key, value)
+            if running and (key in COLD or key.startswith("hostpci")):
+                vm["pending"][key] = value
+            else:
+                vm["config"][key] = value
+    elif verb == "config":
+        vm = vm_of(state, args[1])
+        for key, value in sorted(applied(vm).items()):
+            print(f"{key}: {value}")
+        return
+    elif verb == "status":
+        print(f"status: {vm_of(state, args[1])['status']}")
+        return
+    elif verb == "guest" and args[1:2] == ["cmd"] and args[3:] == ["network-get-interfaces"]:
+        vm = vm_of(state, args[2])
+        if vm["status"] != "running":
+            fail(f"VM {args[2]} is not running")
+        if state.get("agent_down", 0) > 0:
+            state["agent_down"] -= 1
+            save(state)
+            fail("QEMU guest agent is not running")
+        # The loopback's and Docker's MACs and addresses are built here: gitleaks flags them written out.
+        mac = configured_mac(applied(vm)).lower()
+        print(
+            json.dumps(
+                [
+                    {
+                        "name": "lo",
+                        "hardware-address": ":".join(["00"] * 6),
+                        "ip-addresses": [{"ip-address-type": "ipv4", "ip-address": "127.0.0.1", "prefix": 8}],
+                    },
+                    {
+                        "name": "enp0s18",
+                        "hardware-address": mac,
+                        "ip-addresses": [
+                            {"ip-address-type": "ipv4", "ip-address": state.get("guest_ip", "127.0.0.1"), "prefix": 24},
+                            {"ip-address-type": "ipv6", "ip-address": "fe80" + "::1", "prefix": 64},
+                        ],
+                    },
+                    {
+                        "name": "hassio",
+                        "hardware-address": ":".join(["02", "42", "ac", "1e", "20", "01"]),
+                        "ip-addresses": [
+                            {"ip-address-type": "ipv4", "ip-address": ".".join(["172", "30", "32", "1"]), "prefix": 23}
+                        ],
+                    },
+                ],
+                indent=2,
+            )
+        )
+        return
+    elif verb == "start":
+        vm = vm_of(state, args[1])
+        if vm["status"] == "running":
+            fail(f"VM {args[1]} already running")
+        if state.get("start_fails"):
+            state["start_fails"] = False
+            save(state)
+            fail(f"start failed: QEMU exited with code 1 (VM {args[1]})")
+        # Proxmox activates every drive's volume before it starts a VM, the CD-ROM's too.
+        volumes = {v["volid"] for vols in state.get("content", {}).values() for v in vols}
+        for key, value in sorted(applied(vm).items()):
+            volid = value.split(",", 1)[0]
+            if re.fullmatch(r"(ide|sata|scsi|virtio)\d+|efidisk0", key) and ":" in volid and volid not in volumes:
+                fail(f"volume '{volid}' does not exist")
+        vm["config"] = applied(vm)
+        vm["pending"] = {}
+        vm["status"] = "running"
+    elif verb == "shutdown":
+        vm = vm_of(state, args[1])
+        if args[2:] not in ([], ["--timeout", args[-1]]):
+            fail(f"400 unable to parse option {args[2]}")
+        if vm["status"] != "running":
+            fail(f"VM {args[1]} not running")
+        if state.get("shutdown_hangs"):
+            fail(f"VM quit/powerdown failed - got timeout (VM {args[1]})")
+        vm["status"] = "stopped"
+    elif verb == "disk" and args[1:2] == ["resize"]:
+        vmid, slot, size = args[2], args[3], args[4]
+        vm = vm_of(state, vmid)
+        if slot not in vm["config"]:
+            fail(f"disk '{slot}' does not exist")
+        volid, _, rest = vm["config"][slot].partition(",")
+        opts = dict(item.split("=", 1) for item in rest.split(",") if item)
+        current = parse_size(opts["size"])
+        wanted = current + parse_size(size[1:]) if size.startswith("+") else parse_size(size)
+        if wanted < current:
+            fail(f"shrinking disks is not supported (VM {vmid}, {slot})")
+        opts["size"] = size_text(wanted)
+        vm["config"][slot] = ",".join([volid, *(f"{k}={v}" for k, v in sorted(opts.items()))])
+        for volume in state["content"][volid.split(":")[0]]:
+            if volume["volid"] == volid:
+                volume["size"] = wanted
+    else:
+        fail(f"fake qm: unsupported {args}")
+    state["mutations"] += 1
+
+
+def configured_mac(config):
+    model, _, _ = config.get("net0", "").partition(",")
+    return model.partition("=")[2]
+
+
+def applied(vm):
+    """A VM's configuration with its pending changes applied, as Proxmox returns it by default."""
+    config = dict(vm["config"])
+    for key, value in vm["pending"].items():
+        if value is None:
+            config.pop(key, None)
+        else:
+            config[key] = value
+    return config
+
+
+# As pvesh returns a configuration: whole numbers as numbers, everything else as text.
+NUMERIC = ("cores", "sockets", "balloon", "onboot")
+
+
+def shown_config(config):
+    return {k: int(v) if k in NUMERIC and str(v).isdigit() else v for k, v in config.items()}
+
+
+def get_lxc(state, node, opts):
+    """The node's containers, which tests seed in the state's `containers`."""
+    check_node(node)
+    no_options(opts)
+    return [
+        {"vmid": int(c["vmid"]), "name": c.get("name", ""), "status": c.get("status", "stopped")}
+        for c in state.get("containers", [])
+    ]
+
+
+def get_qemu(state, node, opts):
+    check_node(node)
+    no_options(opts)
+    return [
+        {
+            "vmid": int(vmid),
+            "name": vm["config"].get("name", f"VM {vmid}"),
+            "status": vm["status"],
+            "maxmem": int(str(applied(vm).get("memory", "512")).split("=")[-1]) * 2**20,
+        }
+        for vmid, vm in sorted(state.get("vms", {}).items())
+    ]
+
+
+def get_vm_config(state, node, vmid, opts):
+    check_node(node)
+    no_options(opts)
+    config = shown_config(applied(vm_of(state, vmid)))
+    return {**config, "digest": hashlib.sha1(json.dumps(config, sort_keys=True).encode()).hexdigest()}
+
+
+def get_vm_pending(state, node, vmid, opts):
+    check_node(node)
+    no_options(opts)
+    vm = vm_of(state, vmid)
+    out = []
+    for key in sorted(set(vm["config"]) | set(vm["pending"])):
+        entry = {"key": key}
+        if key in vm["config"]:
+            entry["value"] = shown_config({key: vm["config"][key]})[key]
+        if key in vm["pending"]:
+            if vm["pending"][key] is None:
+                entry["delete"] = 1
+            else:
+                entry["pending"] = shown_config({key: vm["pending"][key]})[key]
+        out.append(entry)
+    return out
+
+
+def get_node_status(state, node, opts):
+    check_node(node)
+    no_options(opts)
+    memory = state.get("node_memory", {"total": 64 * 2**30, "used": 4 * 2**30})
+    return {"memory": {**memory, "free": memory["total"] - memory["used"]}, "cpuinfo": {"cpus": 8}}
+
+
+def get_node_storage(state, node, opts):
+    check_node(node)
+    no_options(opts)
+    out = []
+    for entry in state["storage"]:
+        status = get_storage_status(state, node, entry["storage"], {})
+        out.append({"storage": entry["storage"], **status})
+    return out
+
+
+def get_content(state, node, sid, opts):
+    check_node(node)
+    storage_entry(state, sid)
+    unknown = set(opts) - {"content", "vmid"}
+    if unknown:
+        fail(f"400 Parameter verification failed.\n{sorted(unknown)[0]}: property is not defined in schema")
+    volumes = state.get("content", {}).get(sid, [])
+    if "content" in opts:
+        volumes = [v for v in volumes if v["content"] == opts["content"]]
+    if "vmid" in opts:
+        # As Proxmox lists them: files that belong to no VMID (imports, snippets) match any --vmid.
+        volumes = [v for v in volumes if "vmid" not in v or str(v["vmid"]) == opts["vmid"]]
+    return volumes
+
+
+def download_url(state, node, sid, opts):
+    check_node(node)
+    entry = storage_entry(state, sid)
+    if set(opts) - {"content", "filename", "url", "checksum", "checksum-algorithm"} or not {
+        "content",
+        "filename",
+        "url",
+    } <= set(opts):
+        fail(f"400 Parameter verification failed: {sorted(opts)}")
+    if ("checksum" in opts) != ("checksum-algorithm" in opts):
+        fail("400 Parameter verification failed.\nchecksum: requires option(s): checksum-algorithm")
+    if opts["content"] not in entry["content"].split(","):
+        fail(f"storage '{sid}' does not support content type '{opts['content']}'")
+    if opts["content"] == "import" and not re.fullmatch(r"[a-zA-Z0-9\-.+=_]+\.(ova|qcow2|raw|vmdk)", opts["filename"]):
+        fail(f"invalid filename or wrong extension: {opts['filename']}")
+    volid = f"{sid}:{opts['content']}/{opts['filename']}"
+    content = state.setdefault("content", {}).setdefault(sid, [])
+    if any(v["volid"] == volid for v in content):
+        fail(f"refusing to override existing file '{opts['filename']}'")
+    upid = f"UPID:{NODE}:0000{len(state.get('tasks', {})):04X}:00000000:00000000:download:{opts['filename']}:root@pam:"
+    # What was asked, the checksum among it: the fake has no file to check it against.
+    state.setdefault("downloads", []).append(dict(opts))
+    failed = state.get("download_fails")
+    mismatch = "checksum" in opts and state.get("checksum_fails")
+    exitstatus = "download failed: 404 Not Found" if failed else "OK"
+    if mismatch and not failed:
+        exitstatus = f"checksum mismatch: got '{'0' * 64}' != expect '{opts['checksum']}'"
+    state.setdefault("tasks", {})[upid] = {"status": "stopped", "exitstatus": exitstatus}
+    # Kept for the tests, which check what the role asked Proxmox to verify; Proxmox keeps no such record.
+    state.setdefault("checksums", {})[opts["filename"]] = [opts.get("checksum-algorithm"), opts.get("checksum")]
+    if exitstatus == "OK":
+        fmt = opts["filename"].rsplit(".", 1)[-1]
+        content.append({"volid": volid, "content": opts["content"], "size": 100 * 2**20, "format": fmt})
+    state["mutations"] += 1
+    # pvesh prints a worker's UPID once it has finished, and exits 0 whatever the worker's own result.
+    print(upid)
+
+
+def get_task_status(state, node, upid, opts):
+    check_node(node)
+    no_options(opts)
+    task = state.get("tasks", {}).get(upid)
+    if task is None:
+        fail(f"no such task '{upid}'")
+    return {"upid": upid, "type": "download", **task}
+
+
 ROUTES = [
     (re.compile(r"/storage"), {"get": get_storage}),
     (re.compile(r"/nodes/([^/]+)/config"), {"get": get_node_config}),
+    (re.compile(r"/nodes/([^/]+)/status"), {"get": get_node_status}),
+    (re.compile(r"/nodes/([^/]+)/qemu"), {"get": get_qemu}),
+    (re.compile(r"/nodes/([^/]+)/lxc"), {"get": get_lxc}),
+    (re.compile(r"/nodes/([^/]+)/qemu/(\d+)/config"), {"get": get_vm_config}),
+    (re.compile(r"/nodes/([^/]+)/qemu/(\d+)/pending"), {"get": get_vm_pending}),
+    (re.compile(r"/nodes/([^/]+)/storage"), {"get": get_node_storage}),
+    (re.compile(r"/nodes/([^/]+)/storage/([^/]+)/content"), {"get": get_content}),
+    (re.compile(r"/nodes/([^/]+)/storage/([^/]+)/download-url"), {"create": download_url}),
+    (re.compile(r"/nodes/([^/]+)/tasks/([^/]+)/status"), {"get": get_task_status}),
     (re.compile(r"/nodes/([^/]+)/storage/([^/]+)/status"), {"get": get_storage_status}),
     (re.compile(r"/cluster/backup"), {"get": get_backup_jobs, "create": create_backup_job}),
     (re.compile(r"/cluster/backup/([^/]+)"), {"get": get_backup_job, "set": set_backup_job}),
@@ -414,6 +901,12 @@ def apt_get(state, args):
         fail(f"fake apt-get: unsupported {args}")
 
 
+def systemctl(state, args):
+    if args != ["daemon-reload"]:
+        fail(f"fake systemctl: unsupported {args}")
+    state["daemon_reloads"] = state.get("daemon_reloads", 0) + 1
+
+
 def hostname(state, args):
     if args != ["-s"]:
         fail(f"fake hostname: unsupported {args}")
@@ -426,8 +919,10 @@ def main():
     tools = {
         "pvesh": pvesh,
         "pvesm": pvesm,
+        "qm": qm,
         "pvenode": pvenode,
         "hostname": hostname,
+        "systemctl": systemctl,
         "apt-get": apt_get,
     }
     tools[tool](state, args)

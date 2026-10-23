@@ -1,0 +1,75 @@
+---
+# Each node's machine configuration, rendered into the scratch directory (talos_workspace, which holds
+# secrets.yaml) by talosctl gen config: the patches for every node, then for its role, then its own, each passed
+# inline (--config-patch takes the YAML itself), so none is written to disk. Takes
+# talos_render: [{name, role, version, contract, kubernetes_version, install_image, patches}]. A local render, so it
+# runs in check mode too. tests/talos_validate.yml renders through this file as well, for make lint TYPE=talos.
+
+# The pod network talosctl gives a cluster, asked for rather than written out: the patches can use it as
+# talos_pod_subnets (this repository's firewall lets it reach the kubelet and the metrics on a node).
+- name: render | Render a configuration with talosctl's defaults
+  ansible.builtin.command:
+    argv:
+      - talosctl
+      - gen
+      - config
+      - "{{ talos_cluster_name }}"
+      - "{{ talos_endpoint }}"
+      - --with-secrets
+      - "{{ talos_workspace }}/secrets.yaml"
+      - --talos-version
+      - "{{ talos_contract }}"
+      - --output-types
+      - controlplane
+      - -o
+      - "{{ talos_workspace }}/defaults.yaml"
+      - --force
+      - --with-docs=false
+      - --with-examples=false
+  changed_when: false
+  check_mode: false
+
+- name: render | Keep the pod network it gives
+  ansible.builtin.set_fact:
+    talos_pod_subnets: "{{ (_network | first | default({}, true)).podSubnets | default([]) }}"
+  vars:
+    _network: >-
+      {{ lookup('ansible.builtin.file', talos_workspace ~ '/defaults.yaml') | from_yaml_all | select('mapping')
+         | selectattr('kind', 'defined') | selectattr('kind', 'eq', 'KubeNetworkConfig') | list }}
+
+- name: render | Refuse a configuration without a pod network
+  ansible.builtin.assert:
+    that: talos_pod_subnets | length > 0
+    fail_msg: >-
+      talosctl gen config wrote no KubeNetworkConfig with podSubnets: this talosctl renders configurations of a form
+      the role does not know.
+    quiet: true
+
+- name: render | Render each node's configuration
+  ansible.builtin.command:
+    argv: >-
+      {%- set argv = ['talosctl', 'gen', 'config', talos_cluster_name, talos_endpoint,
+                      '--with-secrets', talos_workspace ~ '/secrets.yaml', '--talos-version', item.contract,
+                      '--kubernetes-version', item.kubernetes_version, '--install-image', item.install_image,
+                      '--with-docs=false', '--with-examples=false'] -%}
+      {#- A set inside a for loop ends with the loop in Jinja, so the list is extended in place. -#}
+      {%- for san in talos_extra_sans -%}{%- set _ = argv.extend(['--additional-sans', san]) -%}{%- endfor -%}
+      {%- for p in talos_patches_common -%}
+      {%-   set _ = argv.extend(['--config-patch', p]) -%}
+      {%- endfor -%}
+      {%- for p in talos_patches_controlplane -%}
+      {%-   set _ = argv.extend(['--config-patch-control-plane', p]) -%}
+      {%- endfor -%}
+      {%- for p in talos_patches_worker -%}
+      {%-   set _ = argv.extend(['--config-patch-worker', p]) -%}
+      {%- endfor -%}
+      {%- for p in item.patches | default([]) -%}
+      {%-   set _ = argv.extend(['--config-patch', p]) -%}
+      {%- endfor -%}
+      {{ argv + ['--output-types', item.role, '-o', talos_workspace ~ '/' ~ item.name ~ '.yaml', '--force'] }}
+  no_log: true
+  changed_when: false
+  check_mode: false
+  loop: "{{ talos_render }}"
+  loop_control:
+    label: "{{ item.name }}"

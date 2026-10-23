@@ -1,0 +1,189 @@
+---
+# This cluster's Talos configuration, applied by roles/talos from kubernetes.yml's second play. The version pins
+# (talos_version, talos_contract, talos_kubernetes_version) are in group_vars/all/kubernetes.yml, since the Proxmox
+# play reads them too; the nodes' addresses come from local.yml.
+talos_cluster_name: homeserver
+# The secrets bundle (talosctl gen secrets): every key of the cluster, so never in a repository, this public one least
+# of all, even encrypted. It lives with the cluster's credentials, mode 0600, with a copy in your password manager
+# (scripts/runbooks/talos.md); kubernetes_settings_error refuses it in the vault.
+talos_secrets_file: "{{ talos_config_dir }}/secrets.yaml"
+# Outside the repository: talosconfig, kubeconfig, the record of the bootstrap and the etcd snapshots. Back it up
+# with the age key (scripts/runbooks/talos.md). One per cluster: a test host's local.yml names its own
+# (kubernetes_talos_config_dir), and the role refuses a directory holding another cluster's credentials.
+talos_config_dir: >-
+  {{ (kubernetes_talos_config_dir | default('', true) or lookup('ansible.builtin.env', 'HOME') ~ '/.talos/homeserver')
+     | ansible.builtin.expanduser }}
+
+# The schematics the nodes boot: the QEMU guest agent, and with the iGPU passed through, Intel's i915 driver and
+# firmware. No CPU microcode in a VM: the host applies it.
+talos_schematics:
+  base: [siderolabs/qemu-guest-agent]
+  gpu: [siderolabs/qemu-guest-agent, siderolabs/i915]
+
+kubernetes_controlplane: "{{ kubernetes_nodes | selectattr('role', 'equalto', 'controlplane') | first }}"
+talos_endpoint: "https://{{ kubernetes_node_addresses[kubernetes_controlplane.name] | trim }}:6443"
+# Names the API can later be reached by, set before the first build (local.yml's kubernetes_api_sans).
+talos_extra_sans: "{{ kubernetes_api_sans | default([], true) }}"
+
+# Each node: its hostname, and the volumes on its data and media disks. The worker gets the GPU schematic and a label
+# for the GPU plugin when local.yml names the host's iGPU mapping. Disks are found by the by-id link QEMU names after
+# their slot (kubernetes_disk_slots, group_vars/all/kubernetes.yml).
+talos_nodes: >-
+  {%- set out = [] -%}
+  {%- for n in kubernetes_nodes -%}
+  {%-   set gpu = kubernetes_gpu_mapping | default('', true) and n.name == kubernetes_data_node -%}
+  {%-   set patches = ['apiVersion: v1alpha1\nkind: HostnameConfig\nhostname: ' ~ n.name ~ '\nauto: "off"\n'] -%}
+  {%-   for volume, slot, size in [('local-path-provisioner', kubernetes_disk_slots.data, n.data_disk_gib | default(0)),
+                                   ('media', kubernetes_disk_slots.media, n.media_disk_gib | default(0))] if size | int > 0 -%}
+  {%-     set _ = patches.append('apiVersion: v1alpha1\nkind: UserVolumeConfig\nname: ' ~ volume ~ '\nprovisioning:\n'
+                                 ~ '  diskSelector:\n    match: "!system_disk && disk.symlinks.exists(s, s.endsWith(\'_'
+                                 ~ 'drive-' ~ slot ~ '\'))"\n  minSize: 10GiB\n  grow: true\nfilesystem:\n  type: xfs\n') -%}
+  {%-   endfor -%}
+  {%-   if gpu -%}
+  {%-     set _ = patches.append('apiVersion: v1alpha1\nkind: KubeNodeConfig\nlabels:\n  homeserver.internal/gpu: intel\n') -%}
+  {%-   endif -%}
+  {%-   set _ = out.append({'name': n.name, 'role': n.role, 'address': kubernetes_node_addresses[n.name] | trim,
+                            'schematic': 'gpu' if gpu else 'base', 'patches': patches}) -%}
+  {%- endfor -%}
+  {{ out }}
+
+# Every node: installed on the disk in the system disk's slot (its by-id link ends in _drive-scsi0), wiped first; the
+# VM's i6300esb watchdog armed, so a hung node is reset within two minutes; and the firewall.
+talos_patches_common: "{{ [talos_patch_install, talos_patch_watchdog] + talos_patches_firewall_common }}"
+talos_patch_install: |
+  apiVersion: v1alpha1
+  kind: UnattendedInstallConfig
+  provisioning:
+    diskSelector:
+      match: "disk.symlinks.exists(s, s.endsWith('_drive-{{ kubernetes_disk_slots.system }}'))"
+    wipe: true
+talos_patch_watchdog: |
+  apiVersion: v1alpha1
+  kind: WatchdogTimerConfig
+  device: /dev/watchdog0
+  timeout: 2m
+
+# The nodes' ingress firewall. Whatever no rule lets in is dropped, except what Talos always lets in: established
+# connections, ICMP, traffic between pods and services, and pods' DNS queries to the node. It filters only what is
+# addressed to the node itself, never what kube-proxy forwards to pods, so the load balancers' addresses (Traefik,
+# Frigate) are untouched. The Talos API (50000) and the Kubernetes API (6443) answer the whole LAN: both require a
+# client certificate, and the workstation's address changes. The rest answers the nodes alone, and the pod network
+# where Prometheus scrapes it: etcd, the kubelet, Flannel's VXLAN, MetalLB's memberlist, and the metrics that need
+# no credentials (etcd's, node-exporter's, kube-proxy's). Blocked with them: kube-proxy's health checks, among them
+# the node port Kubernetes gives Traefik's Service for its local endpoints, and kube-network-policies' metrics. The pod
+# network is talosctl's default, which roles/talos asks talosctl for as it renders (talos_pod_subnets): a pod reaches
+# its own node's address from it, while a pod on another node reaches it from that node's address.
+talos_firewall_anywhere: [{subnet: 0.0.0.0/0}, {subnet: "::/0"}]
+# The cluster's nodes, from kubernetes_nodes rather than every line of kubernetes_node_addresses.
+talos_firewall_nodes: >-
+  {%- set out = [] -%}
+  {%- for n in kubernetes_nodes -%}
+  {%-   set _ = out.append({'subnet': (kubernetes_node_addresses[n.name] | trim) ~ '/32'}) -%}
+  {%- endfor -%}
+  {{ out }}
+talos_firewall_nodes_and_pods: >-
+  {%- set out = talos_firewall_nodes | list -%}
+  {%- for subnet in talos_pod_subnets | default([]) -%}{%- set _ = out.append({'subnet': subnet}) -%}{%- endfor -%}
+  {{ out }}
+talos_firewall_controlplane: [{subnet: "{{ kubernetes_node_addresses[kubernetes_controlplane.name] | trim }}/32"}]
+talos_patches_firewall_common:
+  - |
+    apiVersion: v1alpha1
+    kind: NetworkDefaultActionConfig
+    ingress: block
+  - |
+    apiVersion: v1alpha1
+    kind: NetworkRuleConfig
+    name: talos-api
+    portSelector: {ports: [50000], protocol: tcp}
+    ingress: {{ talos_firewall_anywhere | to_json }}
+  - |
+    apiVersion: v1alpha1
+    kind: NetworkRuleConfig
+    name: kubelet
+    portSelector: {ports: [10250], protocol: tcp}
+    ingress: {{ talos_firewall_nodes_and_pods | to_json }}
+  - |
+    apiVersion: v1alpha1
+    kind: NetworkRuleConfig
+    name: node-metrics
+    portSelector: {ports: [9100, 10249], protocol: tcp}
+    ingress: {{ talos_firewall_nodes_and_pods | to_json }}
+  - |
+    apiVersion: v1alpha1
+    kind: NetworkRuleConfig
+    name: flannel-vxlan
+    portSelector: {ports: [4789], protocol: udp}
+    ingress: {{ talos_firewall_nodes | to_json }}
+  - |
+    apiVersion: v1alpha1
+    kind: NetworkRuleConfig
+    name: metallb-memberlist-tcp
+    portSelector: {ports: [7946], protocol: tcp}
+    ingress: {{ talos_firewall_nodes | to_json }}
+  - |
+    apiVersion: v1alpha1
+    kind: NetworkRuleConfig
+    name: metallb-memberlist-udp
+    portSelector: {ports: [7946], protocol: udp}
+    ingress: {{ talos_firewall_nodes | to_json }}
+talos_patches_firewall_controlplane:
+  - |
+    apiVersion: v1alpha1
+    kind: NetworkRuleConfig
+    name: kubernetes-api
+    portSelector: {ports: [6443], protocol: tcp}
+    ingress: {{ talos_firewall_anywhere | to_json }}
+  - |
+    apiVersion: v1alpha1
+    kind: NetworkRuleConfig
+    name: trustd
+    portSelector: {ports: [50001], protocol: tcp}
+    ingress: {{ talos_firewall_nodes | to_json }}
+  - |
+    apiVersion: v1alpha1
+    kind: NetworkRuleConfig
+    name: etcd
+    portSelector: {ports: [2379-2380], protocol: tcp}
+    ingress: {{ talos_firewall_controlplane | to_json }}
+  - |
+    apiVersion: v1alpha1
+    kind: NetworkRuleConfig
+    name: controlplane-metrics
+    portSelector: {ports: [2381, 10257, 10259], protocol: tcp}
+    ingress: {{ talos_firewall_nodes_and_pods | to_json }}
+# The control plane's components serve their metrics beyond localhost, for kube-prometheus-stack. Set before the
+# first build: etcd reads its settings only when it starts, so a later change waits for a restart of etcd by hand.
+# Flannel runs with its network policy agent. The control plane keeps Talos's taint and the label that keeps load
+# balancers off it in both setups: the worker runs the apps.
+talos_patches_controlplane: >-
+  {{ talos_patches_controlplane_metrics + [talos_patch_network_policies] + talos_patches_firewall_controlplane }}
+# Flannel with kube-network-policies, which enforces NetworkPolicy objects: without it Kubernetes accepts them and
+# nothing applies them, so every pod reaches every other pod's ports and, through the node's address, the NAS
+# (k8s/apps/*/network-policy.yaml). The control plane renders the cluster's CNI manifests, so it alone needs it.
+talos_patch_network_policies: |
+  apiVersion: v1alpha1
+  kind: KubeFlannelCNIConfig
+  kubeNetworkPoliciesEnabled: true
+talos_patches_controlplane_metrics:
+  - |
+    apiVersion: v1alpha1
+    kind: KubeControllerManagerConfig
+    extraArgs:
+      bind-address: 0.0.0.0
+  - |
+    apiVersion: v1alpha1
+    kind: KubeSchedulerConfig
+    extraArgs:
+      bind-address: 0.0.0.0
+  - |
+    apiVersion: v1alpha1
+    kind: KubeProxyConfig
+    config:
+      metricsBindAddress: 0.0.0.0:10249
+  - |
+    cluster:
+      etcd:
+        extraArgs:
+          listen-metrics-urls: http://0.0.0.0:2381
+talos_patches_worker: []

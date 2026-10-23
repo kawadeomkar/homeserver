@@ -4,18 +4,22 @@ From a fresh Proxmox host: a dry run changes nothing and says what it would do; 
 loads the guard, turns on forwarding and logs the node in, in that order; a second run and a dry run after it change
 nothing; drift is corrected by one run and left alone by the next. Also: a node stopped by hand is brought back up
 without a key, a stopped tailscaled is started again after the guard, a logged-out node without a key is refused,
-the key never reaches an argument list or Ansible's output, an upgrade is installed only when asked for, the guard
-protects the NAS's address with a NAS and nothing without one, is reloaded and never restarted, and refuses Debian's
-nftables service. The role runs with this repo's own configuration (group_vars/proxmox/tailscale.yml) and RFC 5737
+the key never reaches an argument list or Ansible's output, an upgrade is installed only when asked for (this repo
+leaves it to proxmox_apt), the guard protects every address the NAS is given with a NAS and nothing without one, is
+reloaded and never restarted, conflicts with Debian's nftables service and refuses it enabled or running, and a
+tailscaled without the interface the guard filters is refused before it logs in. With tailscale_enabled and no
+routes, the node joins the tailnet alone, its guard loaded with no routes and forwarding left as it is; routes taken
+out are withdrawn. The role runs with this repo's own configuration (group_vars/proxmox/tailscale.yml) and RFC 5737
 addresses.
 
-Run: make test-idempotence
+Run: make test TYPE=idempotence
 """
 
 import json
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 HERE = Path(__file__).resolve().parent
@@ -26,6 +30,7 @@ from test_idempotence import changed_tasks, expect, read, run, write  # noqa: E4
 PLAYBOOK = "proxmox_tailscale.yml"
 ROUTE = "192.0.2.0/24"
 NAS = "192.0.2.10"
+BOOTSTRAP = "192.0.2.50"
 # Built from pieces so this file holds nothing gitleaks would take for a key.
 AUTH_KEY = "-".join(["tskey", "auth", "kTEST" + "CNTRL", "notarealkeynotarealkey"])
 
@@ -59,10 +64,13 @@ def tailscale_vars(tmp_path, nas=True, **more):
 
 
 def settled(tmp_path, nas=True, **more):
-    """A host this repo's configuration has already been applied to, twice."""
+    """A host this repo's configuration has already been applied to. test_tailscale_role_is_idempotent proves that
+    one run settles a host with a NAS and the default variables; any other setup gets a second run here that proves
+    the same for it."""
     extra = tailscale_vars(tmp_path, nas, **more)
     expect(run(PLAYBOOK, extra), "homeserver", changed=True, note="first run")
-    expect(run(PLAYBOOK, extra), "homeserver", changed=0, note="second run")
+    if not nas or more:
+        expect(run(PLAYBOOK, extra), "homeserver", changed=0, note="second run")
     return extra, Path(extra["fake_tailscale_state"])
 
 
@@ -76,6 +84,11 @@ def change(path, edit):
 def position(calls, prefix):
     """Where the first call starting with `prefix` is."""
     return next(i for i, call in enumerate(calls) if call[: len(prefix)] == prefix)
+
+
+def routes_set(table):
+    """The body of the guard's set of advertised routes."""
+    return table.split("set routes {", 1)[1].split("}", 1)[0]
 
 
 def test_tailscale_role_is_idempotent(tmp_path):
@@ -117,6 +130,8 @@ def test_tailscale_role_is_idempotent(tmp_path):
     assert s["units"]["tailnet-guard.service"] == {"enabled": True, "active": True}
     assert s["loads"] == ["start tailnet-guard.service"] and s["restarts"] == 0
     assert NAS + " . tcp . 443" in s["table"] and "ip daddr @guarded jump tailnet_to_guarded" in s["table"]
+    unit = (Path(extra["proxmox_tailscale_systemd_dir"]) / "tailnet-guard.service").read_text()
+    assert "Conflicts=nftables.service" in unit and "nftables.service" in unit.split("Before=")[1].splitlines()[0]
     dropin = Path(extra["proxmox_tailscale_systemd_dir"]) / "tailscaled.service.d" / "10-tailnet-guard.conf"
     assert (
         "Requires=tailnet-guard.service" in dropin.read_text() and "After=tailnet-guard.service" in dropin.read_text()
@@ -129,6 +144,7 @@ def test_tailscale_role_is_idempotent(tmp_path):
     forwarding = position(calls, ["sysctl", "-p"])
     login = position(calls, ["tailscale", "up"])
     assert guard < forwarding < login, "the guard must load before forwarding, and both before the login"
+    assert position(calls, ["ip", "-o", "link", "show", "dev", "tailscale0"]) < login, "the login came before the check"
     assert position(calls, ["nft", "-c", "-f"]) < guard, "the guard's file was not checked before it was installed"
     key_file = next(arg for arg in calls[login] if arg.startswith("--auth-key=file:")).split(":", 1)[1]
     assert not Path(key_file).exists(), "the auth key's file was left on the host"
@@ -230,13 +246,55 @@ def test_tailscale_role_needs_an_auth_key(tmp_path):
     assert not any(call[:2] == ["tailscale", "up"] for call in read(Path(extra["fake_tailscale_state"]))["calls"])
 
 
-def test_tailscale_role_without_routes_does_nothing(tmp_path):
-    """Without tailscale_advertise_routes in local.yml, the role runs no command, dry or real."""
+def test_tailscale_role_without_the_flag_or_routes_does_nothing(tmp_path):
+    """Without tailscale_enabled or tailscale_advertise_routes in local.yml, the role runs no command, dry or real."""
     extra = tailscale_vars(tmp_path, tailscale_advertise_routes=[])
     for check in (True, False):
         expect(run(PLAYBOOK, extra, check=check), "homeserver", changed=0, note="run without routes")
     assert read(Path(extra["fake_tailscale_state"]))["calls"] == []
     assert list((tmp_path / "sources").iterdir()) == []
+
+
+def test_tailscale_role_without_routes_joins_the_node_alone(tmp_path):
+    """tailscale_enabled without routes: the dry run says what it would do and changes nothing; the run installs
+    Tailscale, loads the guard with an empty routes set, and logs the node in advertising none, leaving forwarding
+    off and its file unwritten; the runs after it change nothing."""
+    extra = tailscale_vars(tmp_path, tailscale_advertise_routes=[], tailscale_enabled=True)
+    path = Path(extra["fake_tailscale_state"])
+
+    result = run(PLAYBOOK, extra, check=True)
+    expect(result, "homeserver", changed=True, note="dry run on a fresh host")
+    assert read(path)["mutations"] == 0, "the dry run changed the fake host"
+    assert "Would log the node in with the auth key" in result[2], result[2][-3000:]
+    assert "IPv4 forwarding is off" not in result[2], result[2][-3000:]
+
+    result = run(PLAYBOOK, extra)
+    expect(result, "homeserver", changed=True, note="first run")
+    s = read(path)
+    assert s["node"]["backend"] == "Running" and s["node"]["tags"] == ["tag:homeserver"]
+    assert s["node"]["prefs"]["advertise-routes"] == ""
+    assert s["units"]["tailnet-guard.service"] == {"enabled": True, "active": True}
+    assert "elements" not in routes_set(s["table"]) and "ip daddr != @routes" in s["table"]
+    assert s["sysctl"]["net.ipv4.ip_forward"] == "0" and not Path(extra["proxmox_tailscale_sysctl_file"]).exists()
+    assert not any(call[:2] == ["sysctl", "-p"] for call in s["calls"]), "forwarding was turned on without routes"
+    assert "Nothing for the admin console to fix." in result[2], result[2][-3000:]
+
+    for check in (False, True):
+        result = run(PLAYBOOK, extra, check=check)
+        expect(result, "homeserver", changed=0, note=f"{'dry run' if check else 'run'} once applied")
+
+
+def test_tailscale_role_withdraws_routes_taken_out(tmp_path):
+    """A subnet router whose routes local.yml takes out, keeping tailscale_enabled: one run withdraws them and reloads
+    the guard with none, leaving forwarding as it was; the next run changes nothing."""
+    extra, path = settled(tmp_path)
+    alone = extra | {"tailscale_advertise_routes": [], "tailscale_enabled": True}
+    expect(run(PLAYBOOK, alone), "homeserver", changed=True, note="run without the routes")
+    s = read(path)
+    assert s["node"]["prefs"]["advertise-routes"] == ""
+    assert "elements" not in routes_set(s["table"]) and s["loads"][-1] == "reload tailnet-guard.service"
+    assert s["sysctl"]["net.ipv4.ip_forward"] == "1" and Path(extra["proxmox_tailscale_sysctl_file"]).exists()
+    expect(run(PLAYBOOK, alone), "homeserver", changed=0, note="run after withdrawing them")
 
 
 def test_tailscale_role_reports_what_the_console_must_fix(tmp_path):
@@ -260,14 +318,15 @@ def test_tailscale_role_reports_what_the_console_must_fix(tmp_path):
 
 
 def test_tailscale_role_upgrades_tailscale(tmp_path):
-    """A newer release in the repository: a dry run on lists that know it reports it, the run installs it and reports
-    the versions (the package restarting tailscaled), and with upgrades off nothing is upgraded."""
+    """A newer release in the repository: this repo's configuration, which leaves upgrades to proxmox_apt, upgrades
+    nothing; with upgrades on, a dry run on lists that know it reports it, and the run installs it and reports the
+    versions (the package restarting tailscaled)."""
     extra, path = settled(tmp_path)
     change(path, lambda state: state["packages"]["repository"].update(tailscale="1.104.2"))
-    no_upgrade = extra | {"proxmox_tailscale_upgrade": False}
-    expect(run(PLAYBOOK, no_upgrade), "homeserver", changed=0, note="run with upgrades off")
+    expect(run(PLAYBOOK, extra), "homeserver", changed=0, note="run with upgrades left to proxmox_apt")
     assert read(path)["packages"]["installed"]["tailscale"] == "1.104.1"
 
+    extra |= {"proxmox_tailscale_upgrade": True}
     result = run(PLAYBOOK, extra, check=True)
     expect(result, "homeserver", changed=True, note="dry run with a newer release in the lists")
     assert "Would install or upgrade: tailscale 1.104.1 → 1.104.2" in result[2], result[2][-3000:]
@@ -280,33 +339,59 @@ def test_tailscale_role_upgrades_tailscale(tmp_path):
 
 
 def test_tailscale_guard_follows_the_setup(tmp_path):
-    """Without a NAS the guard has no guarded hosts and keeps its other rules. Changing the allowed ports reloads the
-    guard, never restarts it, and leaves tailscaled alone."""
+    """Without a NAS the guard has no guarded hosts and keeps its other rules. A NAS known only by its bootstrap
+    address, whose shares are exported though no storage mounts them, is guarded at that address, and once it has its
+    static address too, at both. Changing the allowed ports reloads the guard, never restarts it, and leaves
+    tailscaled alone."""
     extra, path = settled(tmp_path, nas=False)
     table = read(path)["table"]
     assert "guarded" not in table and "ip daddr != @routes" in table and "ct state != { established, related }" in table
 
-    more = extra | {"truenas_static_address": NAS + "/24"}
-    expect(run(PLAYBOOK, more), "homeserver", changed=True, note="run with a NAS")
-    ports = more | {"proxmox_tailscale_guard_allow": ["tcp/443", "tcp/80"]}
+    bootstrap = extra | {"truenas_bootstrap_address": BOOTSTRAP}
+    expect(run(PLAYBOOK, bootstrap), "homeserver", changed=True, note="run with only the NAS's bootstrap address")
+    assert BOOTSTRAP + " . tcp . 443" in read(path)["table"]
+    both = bootstrap | {"truenas_static_address": NAS + "/24"}
+    expect(run(PLAYBOOK, both), "homeserver", changed=True, note="run with the NAS's static address too")
+    table = read(path)["table"]
+    assert NAS + " . tcp . 443" in table and BOOTSTRAP + " . tcp . 443" in table
+    ports = both | {"proxmox_tailscale_guard_allow": ["tcp/443", "tcp/80"]}
     expect(run(PLAYBOOK, ports), "homeserver", changed=True, note="run with another allowed port")
     s = read(path)
-    assert NAS + " . tcp . 80" in s["table"]
-    assert s["loads"] == ["start tailnet-guard.service"] + ["reload tailnet-guard.service"] * 2
+    assert NAS + " . tcp . 80" in s["table"] and BOOTSTRAP + " . tcp . 80" in s["table"]
+    assert s["loads"] == ["start tailnet-guard.service"] + ["reload tailnet-guard.service"] * 3
     assert s["restarts"] == 0 and not any(call[:2] == ["systemctl", "restart"] for call in s["calls"])
     expect(run(PLAYBOOK, ports), "homeserver", changed=0, note="run after the reload")
 
 
-def test_tailscale_guard_refuses_debians_nftables_service(tmp_path):
-    """An enabled nftables.service would flush the guard at boot: the run stops before writing the guard."""
+@pytest.mark.parametrize(
+    "nftables",
+    [
+        pytest.param({"enabled": True, "active": True}, id="enabled"),
+        pytest.param({"enabled": False, "active": True}, id="running"),
+    ],
+)
+def test_tailscale_guard_refuses_debians_nftables_service(tmp_path, nftables):
+    """An enabled nftables.service would flush the guard at boot, and starting the guard while one runs would stop it,
+    which flushes every table: the run stops before writing the guard."""
     extra = tailscale_vars(tmp_path)
-    change(
-        Path(extra["fake_tailscale_state"]),
-        lambda state: state["units"].update({"nftables.service": {"enabled": True, "active": True}}),
-    )
+    change(Path(extra["fake_tailscale_state"]), lambda state: state["units"].update({"nftables.service": nftables}))
     rc, _, out = run(PLAYBOOK, extra)
     assert rc != 0 and "flush ruleset" in out, out[-3000:]
     assert not Path(extra["proxmox_tailscale_guard_file"]).exists()
+
+
+@pytest.mark.parametrize("tun", ["userspace-networking", "tailscale1"])
+def test_tailscale_role_refuses_a_tailscaled_the_guard_cannot_see(tmp_path, tun):
+    """tailscaled started with --tun naming another interface would forward past the guard, and with userspace
+    networking connects from the node itself: the run stops before the node logs in, naming the interface, and so
+    does a dry run once tailscaled is running."""
+    extra = tailscale_vars(tmp_path)
+    path = Path(extra["fake_tailscale_state"])
+    change(path, lambda state: state.update(tun=tun))
+    for check in (False, True):
+        rc, _, out = run(PLAYBOOK, extra, check=check)
+        assert rc != 0 and "without the interface tailscale0" in out, out[-3000:]
+    assert not any(call[:2] == ["tailscale", "up"] for call in read(path)["calls"]), "the node logged in"
 
 
 def test_tailscale_settings_take_flag_names():

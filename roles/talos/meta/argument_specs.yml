@@ -1,0 +1,145 @@
+---
+argument_specs:
+  main:
+    short_description: Install Talos Linux on nodes in maintenance mode, keep their configuration, and bootstrap the cluster
+    description:
+      - Runs on the controller with talosctl. Renders each node's machine configuration from the secrets bundle and
+        the patches, installs it on a node in maintenance mode and waits until its install status reads
+        installed, and applies configuration drift to a configured node without rebooting it (Talos 1.14 applies
+        any configuration that way); after a change to the control plane it says how to restart etcd.
+      - Renders a configured node with the versions it runs, never the pins, so a pin bump changes nothing until
+        the upgrade entry point moves the node; a pending upgrade is reported.
+      - Bootstraps etcd once, recording it in talos_config_dir. With that record and etcd not running, it refuses
+        to bootstrap again, which would make a new, empty cluster, unless talos_allow_bootstrap.
+      - With that record, refuses to install a node in maintenance mode that talos_reinstall does not name, since
+        the configuration it would send holds the cluster's keys and nothing proves who answers at the address.
+      - Writes talosconfig and kubeconfig to talos_config_dir, outside the repository, and renews their client
+        certificates before they expire. Refuses a talosconfig or kubeconfig there of another cluster (another
+        endpoint, or another CA than the secrets bundle's).
+      - Checks that every user volume the patches declare is ready once the cluster is healthy.
+      - The defaults do nothing. README.md describes each variable.
+    options: &talos_options
+      talos_cluster_name:
+        type: str
+        default: ""
+        description: The cluster's name.
+      talos_endpoint:
+        type: str
+        default: ""
+        description: The Kubernetes API endpoint, https://<control plane address>:6443.
+      talos_extra_sans:
+        type: list
+        elements: str
+        default: []
+        description: Extra names for the API server's certificate.
+      talos_version:
+        type: str
+        default: ""
+        description: The Talos version a node is installed with, such as v1.14.2.
+      talos_contract:
+        type: str
+        default: ""
+        description: The configuration contract talosctl renders for, such as v1.14.
+      talos_kubernetes_version:
+        type: str
+        default: ""
+        description: The Kubernetes version a cluster is built with, such as 1.37.1.
+      talos_secrets_file:
+        type: str
+        default: ""
+        description: The file holding the secrets bundle (talosctl gen secrets), mode 0600, outside the repository.
+      talos_nodes:
+        type: list
+        elements: dict
+        default: []
+        description: Nodes, each with name, role (controlplane or worker), address, schematic and patches.
+      talos_schematics:
+        type: dict
+        default: {}
+        description: Image Factory schematics by name, each a list of official system extensions.
+      talos_image_factory_url:
+        type: str
+        default: https://factory.talos.dev
+        description: The Image Factory, asked for each schematic's id.
+      talos_patches_common:
+        type: list
+        elements: str
+        default: []
+        description: Configuration patches for every node, as YAML documents in strings.
+      talos_patches_controlplane:
+        type: list
+        elements: str
+        default: []
+        description: Configuration patches for control planes.
+      talos_patches_worker:
+        type: list
+        elements: str
+        default: []
+        description: Configuration patches for workers.
+      talos_config_dir:
+        type: str
+        default: ""
+        description: >-
+          Where talosconfig, kubeconfig, the bootstrapped marker and etcd snapshots live, outside the repository; one
+          directory per cluster.
+      talos_renew_before_days:
+        type: int
+        default: 30
+        description: Renew client certificates that expire within this many days.
+      talos_health_timeout:
+        type: str
+        default: 10m
+        description: How long talosctl health waits.
+      talos_probe_retries:
+        type: int
+        default: 30
+        description: How many times a real run asks a node that does not answer yet.
+      talos_probe_delay:
+        type: int
+        default: 10
+        description: Seconds between those questions.
+      talos_install_retries:
+        type: int
+        default: 60
+        description: How many times a real run reads an installing node's status before giving up.
+      talos_allow_bootstrap:
+        type: bool
+        default: false
+        description: Bootstrap etcd again although this cluster was bootstrapped before, making a new, empty cluster.
+      talos_reinstall:
+        type: list
+        elements: str
+        default: []
+        description: >-
+          The nodes, by name, that may be installed although the cluster was bootstrapped before (a list, or names
+          joined by commas). A node in maintenance mode takes its configuration, the cluster's keys with it, from
+          whoever sends it, unauthenticated, so once the cluster exists the role sends it only to a node named here.
+      talos_schematic_pins:
+        type: dict
+        default: {}
+        description: >-
+          Each schematic's id, by its name in talos_schematics: the Image Factory's answer is refused otherwise. Empty
+          checks nothing.
+      talos_installer_digests:
+        type: dict
+        default: {}
+        description: >-
+          The digest of each installer image, by "<schematic id>:<version>", which the nodes are given beside the
+          tag. Once set, every schematic in use at talos_version must have one.
+      talos_keep_rendered:
+        type: bool
+        default: false
+        description: >-
+          Keep each node's rendered configuration in talos_config_dir/rendered/ (mode 0600; it holds the secrets),
+          to compare by hand with talosctl apply-config --dry-run, until the next run without it, which removes
+          them.
+  upgrade:
+    short_description: Move the running nodes to the pinned Talos and Kubernetes versions
+    description:
+      - Takes an etcd snapshot, upgrades each node whose Talos version or schematic differs from the pins, control
+        planes first, then Kubernetes with talosctl upgrade-k8s. In check mode it shows the plan and the Kubernetes
+        upgrade's own dry run.
+    options: *talos_options
+  etcd-snapshot:
+    short_description: Take an etcd snapshot into talos_config_dir/etcd
+    options: *talos_options

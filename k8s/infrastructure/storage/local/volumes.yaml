@@ -1,0 +1,104 @@
+---
+# The same volumes as with a NAS, under the same names, as directories on the node: the media library and the
+# recordings on its media disk (never backed up), or on its data volume when local.yml keeps them there; the users'
+# files and the photos on the data volume, which the nightly VM backup covers. Retained when the claim goes, and never
+# pruned. directories.yaml makes the directories.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: media
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  capacity:
+    storage: 1Ti
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef:
+    namespace: media
+    name: media
+  local:
+    path: "${MEDIA_LOCAL_PATH}"
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["${DATA_NODE}"]
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nextcloud-data
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  capacity:
+    storage: 1Ti
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef:
+    namespace: nextcloud
+    name: nextcloud-data
+  local:
+    path: "/var/mnt/local-path-provisioner/static/nextcloud-data"
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["${DATA_NODE}"]
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: photoprism-media
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  capacity:
+    storage: 1Ti
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef:
+    namespace: photoprism
+    name: photoprism-media
+  local:
+    path: "/var/mnt/local-path-provisioner/static/photoprism-media"
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["${DATA_NODE}"]
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: frigate-media
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  capacity:
+    storage: 500Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef:
+    namespace: frigate
+    name: frigate-media
+  local:
+    path: "${FRIGATE_LOCAL_PATH}"
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["${DATA_NODE}"]

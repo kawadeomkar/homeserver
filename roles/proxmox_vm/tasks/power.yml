@@ -1,0 +1,72 @@
+---
+# tasks_from: power. Shuts the VMs of proxmox_vm_power_vmids down (stopped) or starts them (running), with qm: make
+# suspend and make resume for Home Assistant's VM. A shutdown is the guest's own, through ACPI or its agent, never a
+# forced stop: one that does not finish within proxmox_vm_power_timeout seconds fails the run and leaves the VM running.
+# A VM already as asked is left alone, and nothing else about any VM changes. The main entry point starts a stopped VM
+# marked start, and so does the host at boot for one marked onboot: a VM shut down here stays down until then.
+
+- name: power | Check the role's inputs
+  ansible.builtin.assert:
+    that: proxmox_vm_power_vmids | map('int') | select('>', 0) | list | length == proxmox_vm_power_vmids | length
+    fail_msg: proxmox_vm_power_vmids must be VMIDs.
+    quiet: true
+  tags: [always]
+  when: proxmox_vm_power | length > 0
+
+- name: power | Bring the VMs to their state
+  when: proxmox_vm_power | length > 0 and proxmox_vm_power_vmids | length > 0
+  block:
+    - name: power | Read each VM's state
+      ansible.builtin.command:
+        argv: [qm, status, "{{ item }}"]
+      register: proxmox_vm_power_found
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      loop: "{{ proxmox_vm_power_vmids }}"
+
+    - name: power | Refuse a VM that does not exist
+      ansible.builtin.assert:
+        that: _missing | length == 0
+        fail_msg: >-
+          VM {{ _missing | join(', ') }} does not exist on this host
+          ({{ proxmox_vm_power_found.results | selectattr('rc', '!=', 0) | map(attribute='stderr') | map('trim')
+              | join('; ') }}).
+        quiet: true
+      vars:
+        _missing: "{{ proxmox_vm_power_found.results | selectattr('rc', '!=', 0) | map(attribute='item') | list }}"
+
+    - name: power | Work out which VMs to change
+      ansible.builtin.set_fact:
+        proxmox_vm_power_todo: >-
+          {{ proxmox_vm_power_found.results
+             | rejectattr('stdout', 'equalto', 'status: ' ~ proxmox_vm_power)
+             | map(attribute='item') | list }}
+
+    - name: power | Shut each VM down
+      ansible.builtin.command:
+        argv: [qm, shutdown, "{{ item }}", --timeout, "{{ proxmox_vm_power_timeout }}"]
+      changed_when: true
+      loop: "{{ proxmox_vm_power_todo }}"
+      when: proxmox_vm_power == 'stopped' and not ansible_check_mode
+
+    - name: power | Start each VM
+      ansible.builtin.command:
+        argv: [qm, start, "{{ item }}"]
+      changed_when: true
+      loop: "{{ proxmox_vm_power_todo }}"
+      when: proxmox_vm_power == 'running' and not ansible_check_mode
+
+    # A dry run reports here what a real run changes above.
+    - name: power | Say what was done
+      ansible.builtin.debug:
+        msg: "{{ _said | select | join(' ') }}"
+      changed_when: ansible_check_mode and proxmox_vm_power_todo | length > 0
+      vars:
+        _left: "{{ proxmox_vm_power_vmids | difference(proxmox_vm_power_todo) }}"
+        _verb: >-
+          {{ ('Would shut down' if ansible_check_mode else 'Shut down') if proxmox_vm_power == 'stopped'
+             else ('Would start' if ansible_check_mode else 'Started') }}
+        _said:
+          - "{{ (_verb ~ ' VM ' ~ proxmox_vm_power_todo | join(', ') ~ '.') if proxmox_vm_power_todo else '' }}"
+          - "{{ ('VM ' ~ _left | join(', ') ~ ' already ' ~ proxmox_vm_power ~ '.') if _left else '' }}"

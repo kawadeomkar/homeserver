@@ -1,0 +1,18 @@
+---
+# talos-upgrade.yml's play against the fakes (see talos.yml).
+- name: Upgrade the fake cluster
+  hosts: kubernetes
+  gather_facts: false
+  vars_files:
+    - ../../group_vars/all/storage.yml
+    - ../../group_vars/all/kubernetes.yml
+    - ../../group_vars/kubernetes/talos.yml
+  environment:
+    PATH: "{{ playbook_dir }}/fake_talos_bin:{{ lookup('ansible.builtin.env', 'PATH') }}"
+    FAKE_TALOS_STATE: "{{ fake_talos_state }}"
+    FAKE_TALOS_PYTHON: "{{ ansible_playbook_python }}"
+  tasks:
+    - name: Upgrade the nodes, then Kubernetes
+      ansible.builtin.include_role:
+        name: talos
+        tasks_from: "{{ talos_entry | default('upgrade') }}"

@@ -1,0 +1,69 @@
+---
+# How this cluster is handed to Flux, applied by roles/flux_bootstrap after roles/talos. Flux then syncs this
+# repository's k8s/clusters/<setup> and applies everything below it.
+flux_bootstrap_kubeconfig: "{{ talos_config_dir }}/kubeconfig"
+# The Flux Operator, and through it Flux, which runs with cluster-admin rights: each pinned so that nothing moves
+# unreviewed. A bump changes each pair together (CLAUDE.md): the release with its install.yaml's SHA-256 (sha256sum
+# of the downloaded file) and its image's digest (crane digest ghcr.io/controlplaneio-fluxcd/flux-operator:<version>),
+# and the Flux release with the manifests artifact holding it (crane digest
+# ghcr.io/controlplaneio-fluxcd/flux-operator-manifests:latest, read on the day of the bump).
+flux_bootstrap_operator_version: v0.61.0
+flux_bootstrap_operator_sha256: 550ebc8eec5fae00e55336cf5403a60846c51174095df3d8ca541b48481662af
+flux_bootstrap_operator_digest: sha256:71041d9fff7f7b05f1a8123ebe73c73b7b156f4aacfe1e8e19b5aa953a98892c
+flux_bootstrap_instance:
+  version: "2.9.6"
+  artifact: oci://ghcr.io/controlplaneio-fluxcd/flux-operator-manifests@sha256:41223e96853ea6817d12aa8cf5dc43de49b7abab6892bb12ab39190cc12bba0c
+  # The repository this cluster syncs, from local.yml: it has no default, since Flux applies whatever it holds with
+  # cluster-admin rights, and a fork must sync its own (kubernetes_settings_error refuses it missing).
+  url: "{{ flux_sync_url }}"
+  # main, the one protected branch. A validation branch for a test cluster comes from local.yml, with
+  # flux_sync_ref_unprotected (kubernetes_settings_error refuses it without).
+  ref: "{{ flux_sync_ref | default('refs/heads/main', true) }}"
+  path: "k8s/clusters/{{ 'nas' if nas_present else 'local' }}"
+# This cluster's own key, in a file of its own: the whole file goes into the cluster.
+flux_bootstrap_age_key_file: "{{ sops_age_key_file | default('~/.config/sops/age/homeserver.agekey', true) | expanduser }}"
+
+# The settings every Flux Kustomization substitutes (${NAME}): strings only. Addresses come from local.yml and never
+# appear in a manifest. With a NAS, its address, pools and the media dataset; without one, where the media and
+# camera recordings live on the worker: its media disk (Talos's media volume, /var/mnt/media), or its data volume when
+# local.yml keeps them there (kubernetes_media_on_data_volume), so one set of manifests serves both. HAOS_URL,
+# Home Assistant OS's address for Homepage's tile, only when local.yml sets haos_url. HOMEPAGE_SERVICES, the sections
+# of Homepage's services.yaml in order (k8s/apps/homepage/tiles/): the groups this host runs but Homepage itself
+# (kubernetes_apps_enabled, group_vars/all/kubernetes.yml), then Home Assistant's when haos_url is set. Prometheus keeps
+# less history without a NAS, whose host is usually the smaller.
+# With the host's iGPU passed to the worker (local.yml's kubernetes_gpu_mapping), Jellyfin and Frigate ask for it
+# (GPU_I915 1) and Frigate detects on it; without, they ask for none (a limit of 0 schedules anywhere) and use the CPU.
+# INGRESS_ALLOWED_RANGE is who Traefik serves: local.yml's kubernetes_ingress_allowed_range, set once every app's
+# first-run setup is done, and until then the loopback address, which no client has (scripts/runbooks/first-run.md).
+# EGRESS_DENIED_ADDRESS and PROXMOX_ADDRESS are the hosts no app pod may reach (each app namespace's NetworkPolicy):
+# the NAS, whose NFS exports trust the worker's address, which pods' traffic leaves the node with, and the Proxmox
+# host, whose API and SSH answer the LAN. Without a NAS both are the Proxmox host's (a repeated address is valid).
+flux_bootstrap_settings: >-
+  {{ {'DOMAIN': kubernetes_domain | default(kubernetes_domain_default, true),
+      'TZ': kubernetes_timezone,
+      'LB_RANGE': kubernetes_lb_range | string,
+      'LB_TRAEFIK_IP': kubernetes_lb_traefik_ip | string,
+      'LB_FRIGATE_IP': kubernetes_lb_frigate_ip | string,
+      'DATA_NODE': kubernetes_data_node,
+      'HOMEPAGE_SERVICES': (kubernetes_apps_enabled | reject('eq', 'homepage') | list
+                            + (['home'] if haos_url | default('', true) else [])) | join(' ')}
+     | combine({'NAS_ADDRESS': nas_address, 'NAS_POOL_PERSISTENT': nas_pools.persistent,
+                'NAS_POOL_EPHEMERAL': nas_pools.ephemeral,
+                'MEDIA_DATASET': vm_storage_mount_root ~ '/' ~ nas_pools.ephemeral ~ '/jellyfin'} if nas_present else
+               {'MEDIA_LOCAL_PATH': '/var/mnt/media/library' if kubernetes_media_disk
+                                    else '/var/mnt/local-path-provisioner/static/media',
+                'FRIGATE_LOCAL_PATH': '/var/mnt/media/frigate' if kubernetes_media_disk
+                                      else '/var/mnt/local-path-provisioner/static/frigate-media'})
+     | combine({'GPU_I915': '1' if kubernetes_gpu_mapping | default('', true) else '0',
+                'FRIGATE_DETECTOR_DEVICE': 'GPU' if kubernetes_gpu_mapping | default('', true) else 'CPU'})
+     | combine({'PROMETHEUS_RETENTION': '15d' if nas_present else '7d',
+                'PROMETHEUS_RETENTION_SIZE': '15GB' if nas_present else '5GB',
+                'INGRESS_ALLOWED_RANGE': kubernetes_ingress_allowed_range | default('127.0.0.1/32', true) | string | trim,
+                'EGRESS_DENIED_ADDRESS': (nas_address if nas_present else proxmox_address) | string | trim,
+                'PROXMOX_ADDRESS': proxmox_address | string | trim})
+     | combine({'HAOS_URL': haos_url} if haos_url | default('', true) else {}) }}
+
+# The Flux Kustomizations of the groups this host leaves out, which roles/flux_bootstrap drops from the sync: Flux
+# prunes them and what they applied, bar the claims and namespaces marked never to be pruned, so the data stays.
+flux_bootstrap_sync_exclude: >-
+  {{ kubernetes_app_groups | reject('in', kubernetes_apps_enabled) | map('regex_replace', '^', 'apps-') | list }}

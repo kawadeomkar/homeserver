@@ -1,0 +1,125 @@
+---
+# Hands the cluster to Flux from the controller, with kubectl: the Flux Operator, then the age key, the cluster's
+# settings and the FluxInstance, which the operator turns into Flux syncing this repository. Each object is
+# compared with a server-side diff and applied server-side under one field manager. The FluxInstance is owned
+# here, not in Git: it differs per setup and per fork.
+
+# Needs no connection, so it runs under every tag, and a dry run of the configuration alone catches it.
+- name: Check the role's inputs
+  ansible.builtin.assert:
+    that: _errors | length == 0
+    fail_msg: "{{ _errors | join(' ') }}"
+    quiet: true
+  tags: [always]
+  when: flux_bootstrap_operator_version | length > 0
+  vars:
+    _errors: >-
+      {%- set out = [] -%}
+      {%- if flux_bootstrap_operator_version is not match('^v\d+\.\d+\.\d+$') -%}
+      {%-   set _ = out.append('flux_bootstrap_operator_version must be a release such as v0.61.0.') -%}
+      {%- endif -%}
+      {%- if flux_bootstrap_operator_sha256 is not match('^[0-9a-f]{64}$') -%}
+      {%-   set _ = out.append('flux_bootstrap_operator_sha256 must be the SHA-256 of the release\'s install.yaml, 64 '
+                               ~ 'lower-case hex digits.') -%}
+      {%- endif -%}
+      {%- if flux_bootstrap_operator_digest is not match('^sha256:[0-9a-f]{64}$') -%}
+      {%-   set _ = out.append('flux_bootstrap_operator_digest must be the digest of the operator\'s image, '
+                               ~ 'sha256:<64 hex digits>.') -%}
+      {%- endif -%}
+      {%- for key in ['version', 'artifact', 'url', 'ref', 'path'] if not flux_bootstrap_instance[key] | default('', true) -%}
+      {%-   set _ = out.append('flux_bootstrap_instance needs ' ~ key ~ '.') -%}
+      {%- endfor -%}
+      {%- if flux_bootstrap_instance.version | default('') | string is not match('^\d+\.\d+\.\d+$') -%}
+      {%-   set _ = out.append('flux_bootstrap_instance.version must be an exact Flux release such as 2.9.6: a range '
+                               ~ 'would let the operator move Flux unreviewed.') -%}
+      {%- endif -%}
+      {%- if flux_bootstrap_instance.artifact | default('') is not match('^oci://[^@\s]+@sha256:[0-9a-f]{64}$') -%}
+      {%-   set _ = out.append('flux_bootstrap_instance.artifact must be the operator\'s manifests artifact pinned by '
+                               ~ 'digest, oci://<repository>@sha256:<64 hex digits>.') -%}
+      {%- endif -%}
+      {%- if flux_bootstrap_instance.url | default('') is not match('^https://[^<>\s]+$') -%}
+      {%-   set _ = out.append('flux_bootstrap_instance.url must be the https URL of the Git repository to sync, with no '
+                               ~ 'placeholder left in it.') -%}
+      {%- endif -%}
+      {%- for k, v in flux_bootstrap_settings.items() if v is not string -%}
+      {%-   set _ = out.append('flux_bootstrap_settings.' ~ k ~ ' must be a string: Flux substitutes text.') -%}
+      {%- endfor -%}
+      {%- for name in flux_bootstrap_sync_exclude if name is not match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$') -%}
+      {%-   set _ = out.append('flux_bootstrap_sync_exclude: ' ~ name ~ ' is no Flux Kustomization name (lower-case '
+                               ~ 'letters, digits and dashes).') -%}
+      {%- endfor -%}
+      {%- for name in ['flux_bootstrap_kubeconfig', 'flux_bootstrap_age_key_file'] if not lookup('vars', name) -%}
+      {%-   set _ = out.append(name ~ ' must be set.') -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Hand the cluster to Flux
+  when: flux_bootstrap_operator_version | length > 0
+  block:
+    # The whole file goes into the cluster, so it must hold this cluster's key alone: never sops's shared keys.txt,
+    # which may hold other projects' keys. Only counts are read, never the key.
+    - name: Look at the age key file
+      ansible.builtin.stat:
+        path: "{{ flux_bootstrap_age_key_file }}"
+      register: flux_bootstrap_age_key
+
+    - name: Count the keys and other lines in it
+      ansible.builtin.command:
+        argv: "{{ ['grep'] + item + [flux_bootstrap_age_key_file] }}"
+      register: flux_bootstrap_age_lines
+      changed_when: false
+      check_mode: false
+      failed_when: flux_bootstrap_age_lines.rc > 1
+      when: flux_bootstrap_age_key.stat.exists
+      loop:
+        - [-c, '^AGE-SECRET-KEY-']
+        - [-cvE, '^(#|AGE-SECRET-KEY-|$)']
+      loop_control:
+        label: "{{ item[1] }}"
+
+    - name: Refuse an age key file that is not one key, or that others can read
+      ansible.builtin.assert:
+        that:
+          - flux_bootstrap_age_key.stat.exists
+          - flux_bootstrap_age_key.stat.mode == '0600'
+          - flux_bootstrap_age_lines.results[0].stdout | int == 1
+          - flux_bootstrap_age_lines.results[1].stdout | int == 0
+        fail_msg: >-
+          {{ flux_bootstrap_age_key_file }} must exist, be readable by you alone (mode 0600), and hold exactly one
+          AGE-SECRET-KEY line and nothing else but comments: the whole file goes into the cluster. Make one for this
+          cluster alone with age-keygen -o <file> (scripts/runbooks/talos.md), never sops's shared keys.txt.
+        quiet: true
+
+    - name: Look for the kubeconfig
+      ansible.builtin.stat:
+        path: "{{ flux_bootstrap_kubeconfig }}"
+      register: flux_bootstrap_kubeconfig_file
+
+    - name: Refuse to run without a kubeconfig
+      ansible.builtin.assert:
+        that: flux_bootstrap_kubeconfig_file.stat.exists or ansible_check_mode
+        fail_msg: >-
+          No kubeconfig at {{ flux_bootstrap_kubeconfig }}: roles/talos writes it into talos_config_dir once the cluster
+          is bootstrapped.
+        quiet: true
+
+    - name: Read the Flux Operator
+      ansible.builtin.command:
+        argv: [kubectl, --kubeconfig, "{{ flux_bootstrap_kubeconfig }}", get, deployment, flux-operator, -n, flux-system, -o, json]
+      register: flux_bootstrap_operator
+      changed_when: false
+      check_mode: false
+      failed_when: flux_bootstrap_operator.rc != 0 and 'NotFound' not in flux_bootstrap_operator.stderr and not ansible_check_mode
+      when: flux_bootstrap_kubeconfig_file.stat.exists
+
+    # Before the cluster or the operator exists, a dry run can only say what a real run would do: the objects'
+    # server-side diffs need the flux-system namespace and the FluxInstance's CRD, which the operator brings.
+    - name: Say what would be installed
+      ansible.builtin.debug:
+        msg: Would install the Flux Operator {{ flux_bootstrap_operator_version }}, then create sops-age, cluster-settings and the FluxInstance.
+      changed_when: true
+      when: ansible_check_mode and (flux_bootstrap_operator is skipped or flux_bootstrap_operator.rc != 0)
+
+    - name: Keep the operator, the age key, the settings and the FluxInstance as configured
+      when: flux_bootstrap_operator is not skipped and (flux_bootstrap_operator.rc == 0 or not ansible_check_mode)
+      ansible.builtin.import_tasks: objects.yml

@@ -5,7 +5,7 @@ identifier and the repository's own scans stay clean. They sit under the paths t
 expect (roles/, k8s/, tests/, ...) and are scanned from that root, as a directory and as a git commit:
 the range scan in CI and the pre-push hook use git mode.
 
-Marked `gitleaks`: `make test-gitleaks-rules` runs these with gitleaks from PATH, `make test` does not.
+Marked `gitleaks`: `make test TYPE=gitleaks` runs these with gitleaks from PATH, `make test TYPE=policy` does not.
 Without gitleaks they are skipped locally and fail in CI.
 """
 
@@ -99,6 +99,12 @@ FIXTURES = [
     ("vault_pass.txt", "x\n", {"sensitive-file"}),
     ("group_vars/all/local.yml", "x: 1\n", {"sensitive-file"}),
     ("group_vars/all/local.yml.bak", "x: 1\n", {"sensitive-file"}),
+    ("group_vars/all/local.vault.yml", "$ANSIBLE_VAULT;1.1;AES256\n6162\n", {"sensitive-file"}),
+    ("group_vars/all/vault.yml", "$ANSIBLE_VAULT;1.1;AES256\n6162\n", {"sensitive-file"}),
+    # make init's copies of the three, left by a run killed while writing (scripts/init/init.py, temp_copy)
+    (".vault_pass.init-tmp", "x\n", {"sensitive-file"}),
+    ("group_vars/all/local.yml.init-tmp", "x: 1\n", {"sensitive-file"}),
+    ("group_vars/all/local.vault.yml.init-tmp", "$ANSIBLE_VAULT;1.1;AES256\n6162\n", {"sensitive-file"}),
     ("inventory", "[nas]\n", {"sensitive-file"}),
     ("inventory.ini", "[nas]\n", {"sensitive-file"}),
     ("notes/MACHINES.md", "machines\n", {"sensitive-file"}),
@@ -175,18 +181,20 @@ FIXTURES = [
         "truenas_api_cert_sha256: " + colons(*(["AA", "BB", "CC", "DD"] * 8)) + "\n",
         set(),
     ),
-    # Must not match: the files each rule allows
+    # A token stub at the old homepage path matches too: no plain Secret under k8s/ is allowed any more.
     (
         "k8s/homepage/secret.yaml",
         "apiVersion: v1\n" + SECRET_KIND + "\ntype: kubernetes.io/service-account-token\n",
-        set(),
+        {"k8s-plaintext-secret"},
     ),
+    # Must not match: the files each rule allows
     ("k8s/demo/creds.sops.yaml", SECRET_KIND + "\n", set()),
     # Must match: no SealedSecrets here, so a name with "sealed" in it is allowed nothing, and JSON is read too.
     ("k8s/demo/unsealed-creds.yaml", SECRET_KIND + "\n", {"k8s-plaintext-secret"}),
     ("k8s/demo/creds.json", '{"apiVersion": "v1", "kind": "Secret"}\n', {"k8s-plaintext-secret"}),
     ("k8s/demo/creds.example.yaml", SECRET_KIND + "\n", set()),
     ("inventory.example", "[nas]\n", set()),
+    ("group_vars/all/local.vault.yml.example", "# vault_truenas_api_key: <the key>\n", set()),
     # Must not match: an inventory below the root (only the root one is never committed), with loopback
     ("tests/demo/inventory.ini", "[nas]\n", set()),
     ("molecule/demo/inventory/hosts.yml", "ansible_host: " + dotted("127", "0", "0", "20") + "\n", set()),

@@ -1,0 +1,47 @@
+---
+# Each problem gets its own sentence, naming the variable to change. Needs no connection and no talosctl, so it
+# runs under every tag, and a dry run of the configuration alone catches it.
+- name: validate | Check the role's inputs
+  ansible.builtin.assert:
+    that: _errors | length == 0
+    fail_msg: "{{ _errors | join(' ') }}"
+    quiet: true
+  tags: [always]
+  when: talos_nodes | length > 0
+  vars:
+    _errors: >-
+      {%- set out = [] -%}
+      {%- set roles = talos_nodes | map(attribute='role', default='') | list -%}
+      {%- if roles | select('eq', 'controlplane') | list | length != 1 -%}
+      {%-   set _ = out.append('talos_nodes needs exactly one node with role controlplane.') -%}
+      {%- endif -%}
+      {%- if roles | reject('in', ['controlplane', 'worker']) | list -%}
+      {%-   set _ = out.append('A node in talos_nodes has a role other than controlplane or worker.') -%}
+      {%- endif -%}
+      {%- for n in talos_nodes if not n.address | default('', true) or not n.name | default('', true) -%}
+      {%-   set _ = out.append('Each node in talos_nodes needs a name and an address; ' ~ (n.name | default('one'))
+                               ~ ' lacks one.') -%}
+      {%- endfor -%}
+      {%- for n in talos_nodes if n.schematic | default('') not in talos_schematics -%}
+      {%-   set _ = out.append('Node ' ~ n.name | default('?') ~ "'s schematic " ~ n.schematic | default('(none)')
+                               ~ ' is not in talos_schematics.') -%}
+      {%- endfor -%}
+      {%- for name in ['talos_cluster_name', 'talos_endpoint', 'talos_version', 'talos_contract',
+                       'talos_kubernetes_version', 'talos_config_dir', 'talos_secrets_file'] if not lookup('vars', name) -%}
+      {%-   set _ = out.append(name ~ ' must be set.') -%}
+      {%- endfor -%}
+      {%- if talos_version and talos_contract and (talos_version | talos_minor) != talos_contract -%}
+      {%-   set _ = out.append('talos_contract ' ~ talos_contract ~ ' is not talos_version ' ~ talos_version
+                               ~ "'s major and minor.") -%}
+      {%- endif -%}
+      {%- set repo = playbook_dir | realpath -%}
+      {%- if talos_config_dir and ((talos_config_dir | realpath) == repo
+                                   or (talos_config_dir | realpath).startswith(repo ~ '/')) -%}
+      {%-   set _ = out.append('talos_config_dir must be outside the repository: it holds talosconfig and kubeconfig, '
+                               ~ 'which give full control of the cluster.') -%}
+      {%- endif -%}
+      {%- if talos_secrets_file and ((talos_secrets_file | realpath).startswith(repo ~ '/')) -%}
+      {%-   set _ = out.append('talos_secrets_file must be outside the repository: the secrets bundle holds every key of '
+                               ~ 'the cluster, and a commit would publish it.') -%}
+      {%- endif -%}
+      {{ out }}

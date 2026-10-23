@@ -1,109 +1,103 @@
-# Secrets required by these manifests
+# Kubernetes secrets
 
-Plaintext `Secret` manifests are **not** committed to this repo, and `.gitignore` blocks
-`k8s/**/*secret*.yaml` so they cannot be added by accident. Four such files were removed in the commit
-that added this document — they held base64 values (base64 is encoding, not encryption) and, in
-photoprism's case, invalid placeholders that made `kubectl apply` fail outright.
+Every Kubernetes Secret in this repository is a `*.sops.yaml` file encrypted with [SOPS](https://getsops.io) for the
+cluster's age key. `roles/flux_bootstrap` keeps the key in the cluster as the Secret `flux-system/sops-age`, and
+Flux decrypts a Secret as it applies it only in a Kustomization that says so: each one listed under
+`k8s/clusters/<setup>/` must carry `decryption: {provider: sops, secretRef: {name: sops-age}}`. The Flux Operator's
+own root Kustomization, which syncs that directory, decrypts nothing and substitutes nothing, so a Secret never goes
+in the directory itself. Ansible's secrets stay in Ansible Vault (`group_vars/all/local.vault.yml`, git-ignored); never put a
+Kubernetes Secret there.
 
-Nothing here has ever been deployed, so no credential needed rotating. What the deletion does mean:
-**nextcloud and photoprism cannot be deployed until their Secrets are supplied by a real mechanism.**
+Only the values are encrypted (`data`, `stringData`), so a diff shows which keys changed. A plaintext Secret
+manifest is never committed: `.gitignore` blocks `k8s/**/*secret*.yaml` outside the safe kinds, gitleaks refuses one
+anywhere under `k8s/`, and since gitleaks allows every `*.sops.yaml`, `scripts/ci/check-sops-staged.sh` refuses one
+that was never encrypted, before it is committed (the pre-commit hook), before it is pushed and in CI.
 
-## One deliberate exception
+## The key
 
-`k8s/homepage/secret.yaml` stays tracked. It is a `kubernetes.io/service-account-token` Secret — an
-annotation-only request whose token is populated by the cluster, so it carries no credential material.
-Note `.gitignore` does not untrack files that are already tracked, so editing it continues to work; the
-new rule only stops *new* plaintext Secret manifests from being added.
+One age key, for this cluster alone, in a file of its own: `~/.config/sops/age/homeserver.agekey`, mode 0600, with a
+copy in the password manager. Flux gets the whole file, so it must never be a keyring holding other projects' keys.
 
-## Intended mechanism
-
-**SOPS + age**, decided as part of the Proxmox/Talos migration and deliberately not implemented yet —
-the layout depends on the GitOps tool (Flux/Argo), and an `.sops.yaml` written now would be rewritten.
-Rationale: no in-cluster controller to bootstrap, and `talhelper` already wants an age key for Talos
-machine secrets, so one key type covers both concerns.
-
-Whichever mechanism is chosen, the age/private key must **not** live in the repo it decrypts, and needs
-a documented backup location — the cluster cannot reconcile encrypted manifests without it.
-
-Until then, create them by hand with the commands below, or skip the two services.
-
-### Creating them by hand
-
-The namespace must exist first (`kubectl apply -f k8s/<service>/0-namespace.yaml`). Single-quote every
-value: the photoprism DSN contains `&`, `(`, and `)`, which the shell would otherwise interpret.
-
-```sh
-kubectl -n nextcloud create secret generic nextcloud-db-secret \
-  --from-literal=MYSQL_ROOT_PASSWORD='...' \
-  --from-literal=MYSQL_DATABASE='nextcloud' \
-  --from-literal=MYSQL_USER='nextcloud' \
-  --from-literal=MYSQL_PASSWORD='...'
-
-kubectl -n photoprism create secret generic photoprism-db-secret \
-  --from-literal=MYSQL_ROOT_PASSWORD='...' \
-  --from-literal=MYSQL_DATABASE='photoprism' \
-  --from-literal=MYSQL_USER='photoprism' \
-  --from-literal=MYSQL_PASSWORD='...'
-
-kubectl -n photoprism create secret generic photoprism-secrets \
-  --from-literal=PHOTOPRISM_ADMIN_PASSWORD='...' \
-  --from-literal=PHOTOPRISM_DATABASE_DSN='photoprism:...@tcp(photoprism-mariadb-service.photoprism.svc.cluster.local:3306)/photoprism?charset=utf8mb4,utf8&parseTime=true'
+```bash
+mkdir -p ~/.config/sops/age && chmod 700 ~/.config/sops/age
+age-keygen -o ~/.config/sops/age/homeserver.agekey && chmod 600 ~/.config/sops/age/homeserver.agekey
+age-keygen -y ~/.config/sops/age/homeserver.agekey     # the public key: put it in .sops.yaml as `age:`
+export SOPS_AGE_KEY_FILE=~/.config/sops/age/homeserver.agekey   # in the shell profile: sops on macOS reads no ~/.config
 ```
 
-Committing a filled-in Secret manifest is blocked by `.gitignore` (`k8s/**/*secret*.yaml`, both cases,
-since git globs are case-sensitive). Exempted as safe-by-construction: `*.sops.yaml`, `*sealed*.yaml`,
-`*.example.yaml`, `*.template.yaml`, `externalsecret*.yaml`, `secretstore*.yaml`. Note filename rules
-cannot catch an extensionless private key (an SSH key named `rpi`, say) — a secret scanner is the real
-control, filed as `REPO-3` in `docs/ISSUES.md`.
+**A fork encrypts for its own key**: replace `.sops.yaml`'s recipient with yours, and make every Secret anew; this
+repository's files decrypt only with its owner's key.
 
-## What each Secret must contain
+## Making a Secret
 
-All four references use `envFrom.secretRef`, i.e. every key in the Secret is injected as an environment
-variable. Key names therefore matter to the container, not to the manifest.
+Generate each password on the spot and never print it: the command below renders the Secret with kubectl, labels it
+with its app's name (`tests/policy/test_k8s.py` wants every object under `k8s/apps/` labelled), and hands it to sops
+on stdin, so the plaintext never touches the disk or the terminal. `--filename-override` makes sops apply
+`.sops.yaml`'s rule for that path.
 
-### `nextcloud-db-secret` — namespace `nextcloud`
+```bash
+file=k8s/apps/nextcloud/nextcloud-db.sops.yaml
+kubectl create secret generic nextcloud-db -n nextcloud --dry-run=client -o yaml \
+  --from-literal=MYSQL_ROOT_PASSWORD="$(openssl rand -base64 24)" \
+  --from-literal=MYSQL_DATABASE=nextcloud \
+  --from-literal=MYSQL_USER=nextcloud \
+  --from-literal=MYSQL_PASSWORD="$(openssl rand -base64 24)" \
+  | kubectl label --local -f - app.kubernetes.io/name=nextcloud-db -o yaml \
+  | sops --encrypt --input-type yaml --output-type yaml --filename-override "$file" /dev/stdin > "$file"
+```
 
-Consumed by both `deployment.yaml` (the `lscr.io/linuxserver/nextcloud` app) and `statefulset.yaml`
-(the `linuxserver/mariadb` database).
+Then list the file in its directory's `kustomization.yaml` `resources`, and commit it. Edit one later with
+`sops <file>`, which decrypts it into your editor and encrypts it again on save. Read one with `sops -d <file>`.
 
-| Key | Consumed by |
-|---|---|
-| `MYSQL_ROOT_PASSWORD` | mariadb |
-| `MYSQL_DATABASE` | mariadb |
-| `MYSQL_USER` | mariadb |
-| `MYSQL_PASSWORD` | mariadb |
+**One password in two Secrets**, as PhotoPrism's database password is (in `photoprism-db` and `photoprism`): generate
+it once into a shell variable, use it in both commands, and unset it. It never reaches the disk or the terminal.
 
-The deleted file also carried `NEXTCLOUD_ADMIN` and `NEXTCLOUD_ADMIN_PASSWORD`. **Do not recreate them:**
-`lscr.io/linuxserver/nextcloud` ignores both — it documents only `PUID`/`PGID`/`TZ`/`UMASK`, and the admin
-account is created in the web setup wizard. (Even the official image spells it `NEXTCLOUD_ADMIN_USER`.)
-`linuxserver/mariadb` additionally treats `MYSQL_DATABASE`/`MYSQL_USER`/`MYSQL_PASSWORD` as all-or-none:
-supply all three or none of them.
+```bash
+db_password="$(openssl rand -base64 24)"
+file=k8s/apps/photoprism/photoprism-db.sops.yaml
+kubectl create secret generic photoprism-db -n photoprism --dry-run=client -o yaml \
+  --from-literal=MYSQL_ROOT_PASSWORD="$(openssl rand -base64 24)" \
+  --from-literal=MYSQL_DATABASE=photoprism \
+  --from-literal=MYSQL_USER=photoprism \
+  --from-literal=MYSQL_PASSWORD="$db_password" \
+  | kubectl label --local -f - app.kubernetes.io/name=photoprism-db -o yaml \
+  | sops --encrypt --input-type yaml --output-type yaml --filename-override "$file" /dev/stdin > "$file"
+file=k8s/apps/photoprism/photoprism.sops.yaml
+kubectl create secret generic photoprism -n photoprism --dry-run=client -o yaml \
+  --from-literal=PHOTOPRISM_ADMIN_PASSWORD="$(openssl rand -base64 24)" \
+  --from-literal=PHOTOPRISM_DATABASE_PASSWORD="$db_password" \
+  | kubectl label --local -f - app.kubernetes.io/name=photoprism -o yaml \
+  | sops --encrypt --input-type yaml --output-type yaml --filename-override "$file" /dev/stdin > "$file"
+unset db_password
+```
 
-### `photoprism-db-secret` — namespace `photoprism`
+Read a value afterwards, PhotoPrism's admin password say, with `sops -d --extract
+'["data"]["PHOTOPRISM_ADMIN_PASSWORD"]' k8s/apps/photoprism/photoprism.sops.yaml | base64 -d` (kubectl writes the
+values base64-encoded, under `data`), or set your own in its place.
 
-Consumed by `mariadb-deployment.yaml` (image `mariadb:11.4.12`). The deleted file carried all four of these
-plus two `NEXTCLOUD_*` leftovers copied from nextcloud — a real copy-paste, but a harmless one, since the
-MariaDB entrypoint simply ignores the extras. (An earlier version of this document and of PR #3 claimed
-the database "would never have initialised"; that was wrong.) It needs the standard four:
+## The Secrets the apps need
 
-`MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`
+| File | Secret | Keys |
+|---|---|---|
+| `k8s/apps/nextcloud/nextcloud-db.sops.yaml` | `nextcloud/nextcloud-db` | `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE` (`nextcloud`), `MYSQL_USER` (`nextcloud`), `MYSQL_PASSWORD` |
+| `k8s/apps/photoprism/photoprism-db.sops.yaml` | `photoprism/photoprism-db` | `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE` and `MYSQL_USER` both exactly `photoprism` (its Deployment names them), `MYSQL_PASSWORD` |
+| `k8s/apps/photoprism/photoprism.sops.yaml` | `photoprism/photoprism` | `PHOTOPRISM_ADMIN_PASSWORD`, `PHOTOPRISM_DATABASE_PASSWORD` (equal to `photoprism-db`'s `MYSQL_PASSWORD`: above) |
+| `k8s/apps/frigate/frigate.sops.yaml` | `frigate/frigate` | `FRIGATE_RTSP_PASSWORD` (the camera restreams' password, user `admin`), and the cameras' and MQTT's hosts and credentials as `FRIGATE_*` variables |
+| `k8s/apps/media/filebrowser.sops.yaml` | `media/filebrowser` | `FILEBROWSER_ADMIN_PASSWORD`, `FILEBROWSER_JWT_TOKEN_SECRET` |
 
-### `photoprism-secrets` — namespace `photoprism`
+Every app reads its Secret with `envFrom`, so every key becomes an environment variable: the names matter to the
+container. Until an app's Secret exists, its pods wait for it, and its Flux Kustomization does not become ready;
+the other groups are not held up. A SOPS file the cluster cannot decrypt, encrypted for another age key, fails its
+whole Flux Kustomization, every app of the group, and nothing else.
 
-Consumed by `statefulset.yaml` (image `photoprism/photoprism`). Two conflicting definitions of this
-Secret existed (`1-secret-photoprism.yaml` with `data:`, `secret.yaml` with `stringData:`), so which one
-won depended on apply order.
-
-| Key | Notes |
-|---|---|
-| `PHOTOPRISM_ADMIN_PASSWORD` | initial admin login |
-| `PHOTOPRISM_DATABASE_DSN` | must point at the in-cluster DB, e.g. `user:pass@tcp(photoprism-mariadb-service.photoprism.svc.cluster.local:3306)/photoprism?charset=utf8mb4,utf8&parseTime=true` — note the Service is `photoprism-mariadb-service` (`service-db.yaml:4`); `photoprism-mariadb` is the *Deployment* name and will not resolve |
-
-Keep the DSN credentials consistent with `MYSQL_USER`/`MYSQL_PASSWORD`/`MYSQL_DATABASE` above.
-
-## Supplying the Secret is not the only thing blocking photoprism
-
-`k8s/photoprism/mariadb-deployment.yaml` runs `runAsUser: 1000` against upstream `mariadb`, whose
-entrypoint expects uid 999 (or root) to initialise the data directory — so the pod will still fail after
-the Secret exists. Tracked as part of `K8S-3` in `docs/ISSUES.md`. Nothing here has ever been deployed, so
-photoprism should be treated as an unfinished service rather than a regression.
+- **nextcloud-db**: `linuxserver/mariadb` treats `MYSQL_DATABASE`, `MYSQL_USER` and `MYSQL_PASSWORD` as all or
+  none. The Nextcloud admin account is made in the web setup wizard: MySQL/MariaDB, database host `nextcloud-db`,
+  database name and user as `MYSQL_DATABASE` and `MYSQL_USER` (`nextcloud`), and `MYSQL_PASSWORD` (`sops -d` reads
+  it); the LinuxServer.io image reads no admin variables.
+- **photoprism-db** and **photoprism**: PhotoPrism builds its database connection from `PHOTOPRISM_DATABASE_*`, the
+  server, name and user set in its Deployment and the password from this Secret, so keep it equal to
+  `photoprism-db`'s `MYSQL_PASSWORD`.
+- **frigate**: its configuration names no camera and no address (this repository is public); Frigate expands
+  `{FRIGATE_<NAME>}` in camera inputs and go2rtc streams from these variables. `FRIGATE_RTSP_PASSWORD` guards the
+  restreams `frigate-rtsp` publishes on the LAN (`rtsp://admin:<password>@<LB_FRIGATE_IP>:8554/<camera>`): without
+  it, any device on the network could watch every camera, so Frigate does not start until it is set.

@@ -1,8 +1,8 @@
 ---
 # Tailscale's own Debian repository and its packages. The signing key is downloaded once, as Tailscale's
 # instructions do; the tailscale-archive-keyring package then owns the same file and brings a new key through apt.
-# Upgrades are this role's own (proxmox_tailscale_upgrade), not Tailscale's updater, which on Debian runs apt on its
-# own schedule and works only with a tailscale.list file.
+# Upgrades come through apt, with proxmox_tailscale_upgrade or with an upgrade of the whole node, never through
+# Tailscale's updater, which on Debian runs apt on its own schedule and works only with a tailscale.list file.
 
 # The release is read from the node rather than configured, so a reinstall on a newer Proxmox gets that release's
 # repository.

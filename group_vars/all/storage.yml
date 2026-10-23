@@ -17,7 +17,8 @@ nas_present: "{{ (truenas_static_address | default('', true) | trim | length > 0
 # so a section with every value blank still means no NAS. It also refuses nas_present given on the command
 # line, as in -e nas_present=false: that makes it the string "false", which counts as true. With a NAS, it refuses
 # alert mail TrueNAS would refuse: a mail server without a sender address (truenas_mail_from, or truenas_mail_user
-# when that is an address), and an alert address without a mail server to send through.
+# when that is an address), and an alert address without a mail server to send through; and vm_backup_storage,
+# which only a setup without a NAS reads.
 nas_section_error: >-
   {%- set given = {'truenas_api_cert_sha256': truenas_api_cert_sha256 | default(''),
                    'truenas_gateway': truenas_gateway | default(''),
@@ -43,6 +44,10 @@ nas_section_error: >-
   {%-   set _ = mail.append('group_vars/all/local.yml sets truenas_alert_email but no truenas_mail_server for the '
                             ~ 'alerts to go through: set it, or remove the alert address.') -%}
   {%- endif -%}
+  {%- if vm_backup_storage | default('', true) -%}
+  {%-   set _ = mail.append('group_vars/all/local.yml sets vm_backup_storage, which is for a setup without a NAS: with '
+                            ~ 'one, the nightly backup goes to the NAS. Remove it.') -%}
+  {%- endif -%}
   {{ 'nas_present is worked out from the NAS addresses in group_vars/all/local.yml, not set: given with -e it '
      ~ 'is a string, which counts as true whatever it says. To run without a NAS, delete the TrueNAS section '
      ~ 'there or leave its values blank.' if nas_present is not boolean else
@@ -52,8 +57,8 @@ nas_section_error: >-
      ~ 'truenas_bootstrap_address, which usually means one of them is misspelt. Correct it, or delete the '
      ~ 'whole TrueNAS section to run without a NAS.' }}
 
-# The NAS's address, for whatever mounts its shares, such as Proxmox's NFS storages. Its static address, never
-# the bootstrap one, which is a DHCP lease the NAS play replaces. Empty without a NAS.
+# The NAS's address, for whatever mounts its shares: Proxmox's NFS storages and the cluster's volumes. Its static
+# address, never the bootstrap one, which is a DHCP lease the NAS play replaces. Empty without a NAS.
 nas_address: "{{ truenas_static_address | default('', true) | trim | split('/') | first }}"
 
 # Where TrueNAS mounts its pools.
@@ -67,10 +72,13 @@ nas_pools:
   persistent: "{{ truenas_pool_persistent | default('persistent', true) | trim }}"
   ephemeral: "{{ truenas_pool_ephemeral | default('ephemeral', true) | trim }}"
 
-# Without a NAS, the ephemeral class uses the storage the Proxmox installer created: local-lvm on an LVM
-# install, or whatever local.yml names as proxmox_local_vm_storage (local-zfs on a ZFS install). It is
-# read here and never set: a group_vars/all/ directory is read alphabetically and the last file wins, so a
-# value set in this file would silently override local.yml's.
+# The storage the Proxmox installer created, for the VM disks that stay on the host: local-lvm on an LVM install,
+# or whatever local.yml names as proxmox_local_vm_storage (local-zfs on a ZFS install), a blank value counting as
+# unset. Without a NAS it is the ephemeral class, and the only VM storage there is; in both setups the cluster's
+# system disks go on it (group_vars/all/kubernetes.yml). proxmox_local_vm_storage is read here and never set: a
+# group_vars/all/ directory is read alphabetically and the last file wins, so a value set in this file would
+# silently override local.yml's.
+vm_storage_installer: "{{ (proxmox_local_vm_storage | default('', true) | string | trim) or 'local-lvm' }}"
 
 # Every VM class this layout knows: the dataset holding its disks and the Proxmox storage id for it. Ids say
 # who owns a storage and what it is for, never what is behind it, so a project told an id learns nothing
@@ -84,7 +92,7 @@ vm_storage_classes:
   # the storage the Proxmox installer created, and the only VM storage there is.
   ephemeral:
     dataset: "{{ nas_pools.ephemeral }}/proxmox/vm"
-    proxmox_id: "{{ 'homeserver-ephemeral' if nas_present else proxmox_local_vm_storage | default('local-lvm') }}"
+    proxmox_id: "{{ 'homeserver-ephemeral' if nas_present else vm_storage_installer }}"
 vm_storage: "{{ vm_storage_classes if nas_present else {'ephemeral': vm_storage_classes.ephemeral} }}"
 
 # Space on the ephemeral pool kept for the VMs, with a NAS: a ZFS reservation on the dataset above both the
@@ -92,6 +100,12 @@ vm_storage: "{{ vm_storage_classes if nas_present else {'ephemeral': vm_storage_
 # never fill it under them. The quota caps the VMs; this guarantees them room. Bytes, or a binary suffix (200G);
 # null keeps none. Size it to what the VMs need, such as the sum of the project pools' quotas.
 vm_storage_ephemeral_reservation: null
+
+# The most the persistent VMs' disks may take on the redundant pool, their snapshots included, with a NAS: a quota
+# on the persistent class's dataset, in GiB. The pool also holds the VMs' backups, which a full pool would stop,
+# and a thin qcow2 disk only grows. The cluster's settings check refuses a worker data disk above three quarters of
+# it, leaving the rest for its snapshots and the other persistent VMs. Set here, not in local.yml.
+vm_storage_persistent_quota_gib: 1024
 
 # The VMs' backups, with a NAS: a dataset on the redundant pool, exported to the Proxmox host and mounted as a
 # storage that holds backups only. Without a NAS, the backups go wherever local.yml's vm_backup_storage says.

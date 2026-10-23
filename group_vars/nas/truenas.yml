@@ -43,13 +43,15 @@ truenas_ntp_server_defaults: {iburst: true, burst: false, prefer: false, minpoll
 # 64K records match qcow2's cluster size and waste no padding on a five-wide RAIDZ1 at ashift 12.
 # POSIX ACLs (which TrueNAS pairs with aclmode DISCARD) suit root-owned disk images served to a
 # Linux client; the pools' roots carry NFSv4 ACLs from TrueNAS CORE.
-truenas_datasets: "{{ truenas_datasets_vm_classes + truenas_datasets_vm_consumers }}"
+truenas_datasets: "{{ truenas_datasets_vm_classes + truenas_datasets_vm_consumers + truenas_datasets_kubernetes }}"
 truenas_datasets_vm_classes:
   - name: "{{ vm_storage.persistent.dataset | dirname }}"
     properties: {compression: LZ4, atime: "OFF", acltype: POSIX, aclmode: DISCARD}
   - name: "{{ vm_storage.persistent.dataset }}"
-    # There is no UPS, so persistent VMs keep synchronous writes synchronous.
-    properties: {sync: STANDARD, recordsize: 64K}
+    # There is no UPS, so persistent VMs keep synchronous writes synchronous. The quota (group_vars/all/storage.yml)
+    # caps the VMs' disks and their snapshots, so a disk that fills never fills the pool under the backups.
+    properties: >-
+      {{ {'sync': 'STANDARD', 'recordsize': '64K', 'quota': (vm_storage_persistent_quota_gib | int) * 1073741824} }}
   - name: "{{ vm_storage_backup.dataset }}"
     # vzdump archives: large files written once. Never a snapshot task: it holds backups already.
     properties: {sync: STANDARD, recordsize: 1M}
@@ -75,22 +77,42 @@ truenas_datasets_vm_consumers: >-
   {%-   set _ = out.append({'name': c.dataset, 'properties': props}) -%}
   {%- endfor -%}
   {{ out }}
+# The datasets the Kubernetes cluster mounts (kubernetes_nas_datasets, group_vars/all/kubernetes.yml), with a
+# cluster only. Large files, so 1M records. An entry that is not managed is created only when it is missing (after
+# its pool was lost and made anew, say), since its share cannot be made without it, and is otherwise left exactly
+# as it is: its properties and NFSv4 ACLs are the owner's.
+truenas_datasets_kubernetes: >-
+  {%- set out = [] -%}
+  {%- for d in kubernetes_nas_datasets if kubernetes_present -%}
+  {%-   set props = {'compression': 'LZ4', 'atime': 'OFF', 'acltype': 'POSIX', 'aclmode': 'DISCARD',
+                     'sync': d.sync | default('DISABLED'), 'recordsize': '1M', 'quota': d.quota | default(0)} -%}
+  {%-   set _ = out.append({'name': d.name, 'properties': props} | combine({} if d.managed else {'create_only': true})) -%}
+  {%- endfor -%}
+  {{ out }}
 
 # ----------------------------------------------------------------- snapshots ---
-# The persistent VMs' disks keep hourly snapshots for a day and daily for a week, no longer: they hold whole VM
-# disks, whose scratch data older snapshots would pin, and the nightly VM backup keeps the longer history.
-# Nothing on the ephemeral pool is ever snapshotted. The daily task keeps a snapshot even when nothing was written
-# since the last one: it fires at midnight with an hourly one, and TrueNAS destroys a batch of snapshots that are
-# all empty unless a task in it allows empty ones, so on a dataset left alone after 23:00 no daily snapshot would
-# ever survive. An empty snapshot costs nothing; the hourly ones still skip them.
+# The cluster's irreplaceable datasets keep hourly snapshots for 2 days, daily for 30 and weekly for 12 weeks.
+# The persistent VMs' disks keep hourly for a day and daily for a week, no longer: they hold a worker's whole data
+# disk, whose scratch data (transcodes, compactions) older snapshots would pin, and the nightly VM backup keeps
+# the longer history. Nothing on the ephemeral pool is ever snapshotted. The daily and weekly tasks keep a snapshot
+# even when nothing was written since the last one: they fire at midnight with an hourly one, and TrueNAS destroys a
+# batch of snapshots that are all empty unless a task in it allows empty ones, so on a dataset left alone after 23:00
+# no daily or weekly snapshot would ever survive. An empty snapshot costs nothing; the hourly ones still skip them.
 truenas_snapshot_tasks: >-
   {%- set hourly = {'naming_schema': 'hourly-%Y-%m-%d_%H-%M', 'lifetime_unit': 'DAY', 'allow_empty': false,
                     'schedule': {'minute': '00', 'hour': '*', 'dom': '*', 'month': '*', 'dow': '*'}} -%}
   {%- set daily = {'naming_schema': 'daily-%Y-%m-%d_%H-%M', 'lifetime_unit': 'DAY', 'allow_empty': true,
                    'schedule': {'minute': '00', 'hour': '00', 'dom': '*', 'month': '*', 'dow': '*'}} -%}
+  {%- set weekly = {'naming_schema': 'weekly-%Y-%m-%d_%H-%M', 'lifetime_unit': 'WEEK', 'allow_empty': true,
+                    'schedule': {'minute': '00', 'hour': '00', 'dom': '*', 'month': '*', 'dow': '7'}} -%}
   {%- set common = {'recursive': false, 'enabled': true} -%}
   {%- set out = [common | combine(hourly, {'dataset': vm_storage.persistent.dataset, 'lifetime_value': 1}),
                  common | combine(daily, {'dataset': vm_storage.persistent.dataset, 'lifetime_value': 7})] -%}
+  {%- for d in kubernetes_nas_datasets if kubernetes_present and d.snapshots -%}
+  {%-   set _ = out.extend([common | combine(hourly, {'dataset': d.name, 'lifetime_value': 2}),
+                            common | combine(daily, {'dataset': d.name, 'lifetime_value': 30}),
+                            common | combine(weekly, {'dataset': d.name, 'lifetime_value': 12})]) -%}
+  {%- endfor -%}
   {{ out }}
 
 # ----------------------------------------------------------------------- NFS ---
@@ -99,9 +121,9 @@ truenas_nfs_settings:
   protocols: [NFSV3, NFSV4]
   # Only requests from privileged ports (NFS's "secure"), which only root on a client can open. NFS with sec=sys
   # trusts a client's address, and the shares map root to root: on a device of their own an attacker is root anyway,
-  # but no unprivileged process on a client can speak NFS. TrueNAS's default, kept as it is.
+  # but no unprivileged process on the Proxmox host or a node can speak NFS. TrueNAS's default, kept as it is.
   allow_nonroot: false
-truenas_nfs_shares: "{{ truenas_nfs_shares_vm_classes + truenas_nfs_shares_vm_consumers }}"
+truenas_nfs_shares: "{{ truenas_nfs_shares_vm_classes + truenas_nfs_shares_vm_consumers + truenas_nfs_shares_kubernetes }}"
 truenas_nfs_shares_vm_classes:
   - path: "{{ vm_storage_mount_root }}/{{ vm_storage.persistent.dataset }}"
     comment: Proxmox disks, persistent VMs
@@ -113,6 +135,15 @@ truenas_nfs_shares_vm_consumers: >-
   {%- set out = [] -%}
   {%- for c in vm_storage_consumers -%}
   {%-   set _ = out.append({'path': vm_storage_mount_root ~ '/' ~ c.dataset, 'comment': 'Proxmox disks, ' ~ c.proxmox_id}) -%}
+  {%- endfor -%}
+  {{ out }}
+# Each dataset the cluster mounts, to the worker alone, which runs the apps. Root stays root over these shares too
+# (the defaults below), which is how each app's pod makes its own mount point uid 1000.
+truenas_nfs_shares_kubernetes: >-
+  {%- set out = [] -%}
+  {%- for d in kubernetes_nas_datasets if kubernetes_present -%}
+  {%-   set _ = out.append({'path': vm_storage_mount_root ~ '/' ~ d.name, 'comment': 'Kubernetes, ' ~ (d.name | basename),
+                            'hosts': [kubernetes_node_addresses[kubernetes_worker.name] | string | trim]}) -%}
   {%- endfor -%}
   {{ out }}
 # Only the Proxmox host may mount the VM and backup shares, and it writes disk images and backups as root.

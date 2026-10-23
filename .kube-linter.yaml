@@ -1,9 +1,13 @@
 ---
-# kube-linter's configuration (make lint-kube-linter): its default checks, minus three that contradict
-# deliberate choices, plus two of the repo's own rules. A workload that needs what a check forbids
+# kube-linter's configuration (make lint TYPE=manifests): its default checks, minus three that contradict
+# deliberate choices, plus the probe checks and two of the repo's own rules. A workload that needs what a check forbids
 # carries an ignore-check.kube-linter.io/<check> annotation saying why. tests/policy/test_k8s.py checks
 # the conventions kube-linter cannot express.
 checks:
+  # Every workload is probed (CLAUDE.md): a run-once Job says why it is not.
+  include:
+    - no-liveness-probe
+    - no-readiness-probe
   exclude:
     # LinuxServer images write to their root filesystem.
     - no-read-only-root-fs
@@ -13,13 +17,6 @@ checks:
     # unset-memory-request below requires the requests instead. The default unset-cpu-requirements
     # already requires CPU requests, and only those.
     - unset-memory-requirements
-  # The hand-written monitoring tree is replaced by kube-prometheus-stack once the cluster exists, and is
-  # left untouched until then (TODO.md).
-  ignorePaths:
-    - k8s/prometheus/**
-    - k8s/grafana/**
-    - k8s/node-exporter/**
-    - k8s/kube-state-metrics/**
 customChecks:
   - name: no-pull-always
     description: imagePullPolicy Always defeats tag pinning (CLAUDE.md)

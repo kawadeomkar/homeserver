@@ -1,0 +1,128 @@
+---
+# tasks_from: upgrade. The only way a running node moves to new pins (make talos-upgrade): an etcd snapshot, then
+# each node whose Talos release or schematic differs from the pins, control plane first, then Kubernetes. A dry run
+# (make check TYPE=talos-upgrade) shows the plan and Kubernetes's own dry run, deprecated APIs included; read it first.
+# talosctl upgrade drains the node first (no PodDisruptionBudget can block it here) and waits for it to come back.
+- name: upgrade | Check the role's inputs
+  ansible.builtin.import_tasks: validate.yml
+
+- name: upgrade | Move the cluster to the pins
+  when: talos_nodes | length > 0
+  block:
+    - name: upgrade | Prepare
+      ansible.builtin.import_tasks: prepare.yml
+
+    - name: upgrade | Refuse to upgrade a cluster that is not all up
+      ansible.builtin.assert:
+        that: talos_state.values() | rejectattr('state', 'eq', 'configured') | list | length == 0 and talos_running_kubernetes | default('', true) | length > 0
+        fail_msg: >-
+          Every node must be configured and the cluster's Kubernetes version readable to upgrade; run make deploy TYPE=kubernetes
+          first. Nodes: {{ talos_state.values() | map(attribute='name') | zip(talos_state.values() | map(attribute='state')) | list }}.
+        quiet: true
+
+    - name: upgrade | Work out what moves
+      ansible.builtin.set_fact:
+        talos_upgrades: >-
+          {%- set out = [] -%}
+          {%- for n in [talos_controlplane] + talos_workers -%}
+          {%-   set s = talos_state[n.name] -%}
+          {%-   if s.tag != talos_version or s.running_schematic != talos_schematic_ids[n.schematic] -%}
+          {%-     set _ = out.append(s | combine({'image': talos_installer | talos_installer_image(
+                    talos_schematic_ids[n.schematic], talos_version, talos_installer_digests)})) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
+        talos_kubernetes_upgrade: "{{ talos_running_kubernetes != talos_kubernetes_version }}"
+
+    - name: upgrade | Show the plan
+      ansible.builtin.debug:
+        msg: >-
+          {{ {'nodes': _nodes, 'kubernetes': (talos_running_kubernetes ~ ' -> ' ~ talos_kubernetes_version)
+              if talos_kubernetes_upgrade else 'up to date (' ~ talos_running_kubernetes ~ ')'} }}
+      changed_when: ansible_check_mode and (talos_upgrades | length > 0 or talos_kubernetes_upgrade)
+      vars:
+        _nodes: >-
+          {%- set out = {} -%}
+          {%- for n in talos_state.values() -%}
+          {%-   set u = talos_upgrades | selectattr('name', 'eq', n.name) | list -%}
+          {#-   The image's tag, after its pinned digest is set aside. -#}
+          {%-   set tagged = (u[0].image if u else '').split('@')[0] -%}
+          {%-   set _ = out.update({n.name: ('Talos ' ~ n.tag ~ ' -> ' ~ tagged.split(':')[-1] ~ ', schematic '
+                                       ~ (n.running_schematic or '?')[:8] ~ ' -> ' ~ tagged.split('/')[-1][:8])
+                                      if u else 'up to date (Talos ' ~ n.tag ~ ')'}) -%}
+          {%- endfor -%}
+          {{ out }}
+
+    # Kubernetes's own dry run: what upgrade-k8s would change, deprecated APIs included. Read-only.
+    - name: upgrade | Dry-run the Kubernetes upgrade
+      ansible.builtin.command:
+        argv:
+          - talosctl
+          - --talosconfig
+          - "{{ talos_workspace }}/talosconfig"
+          - -e
+          - "{{ talos_controlplane.address }}"
+          - -n
+          - "{{ talos_controlplane.address }}"
+          - upgrade-k8s
+          - --to
+          - "{{ talos_kubernetes_version }}"
+          - --dry-run
+          # talosctl pulls the new images onto every node first, dry run or not, unless told otherwise.
+          - --pre-pull-images=false
+      register: talos_k8s_dry_run
+      changed_when: false
+      check_mode: false
+      when: ansible_check_mode and talos_kubernetes_upgrade
+
+    - name: upgrade | Show the Kubernetes upgrade's dry run
+      ansible.builtin.debug:
+        msg: "{{ (talos_k8s_dry_run.stdout ~ '\n' ~ talos_k8s_dry_run.stderr).splitlines() }}"
+      when: talos_k8s_dry_run is not skipped
+
+    - name: upgrade | Snapshot etcd first
+      ansible.builtin.import_tasks: snapshot.yml
+      when: talos_upgrades | length > 0 or talos_kubernetes_upgrade
+
+    # One node at a time, control plane first, each waiting for the cluster's health before the next goes down.
+    - name: upgrade | Upgrade Talos, control plane first
+      ansible.builtin.include_tasks: upgrade-node.yml
+      loop: "{{ talos_upgrades }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # Pre-pulls the images, updates each node's configuration and the bootstrap manifests (kube-proxy, CoreDNS),
+    # which a plain configuration change would not.
+    - name: upgrade | Upgrade Kubernetes
+      ansible.builtin.command:
+        argv:
+          - talosctl
+          - --talosconfig
+          - "{{ talos_workspace }}/talosconfig"
+          - -e
+          - "{{ talos_controlplane.address }}"
+          - -n
+          - "{{ talos_controlplane.address }}"
+          - upgrade-k8s
+          - --to
+          - "{{ talos_kubernetes_version }}"
+      changed_when: true
+      when: talos_kubernetes_upgrade
+
+    - name: upgrade | Wait for the cluster to be healthy
+      ansible.builtin.command:
+        argv: >-
+          {{ ['talosctl', '--talosconfig', talos_workspace ~ '/talosconfig', '-e', talos_controlplane.address,
+              '-n', talos_controlplane.address, 'health', '--wait-timeout', talos_health_timeout,
+              '--control-plane-nodes', talos_controlplane.address]
+             + (['--worker-nodes', talos_workers | map(attribute='address') | join(',')] if talos_workers else []) }}
+      changed_when: false
+      when: not ansible_check_mode and (talos_upgrades | length > 0 or talos_kubernetes_upgrade)
+  always:
+    - name: upgrade | Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ talos_workspace }}"
+        state: absent
+      changed_when: false
+      check_mode: false
+      when: talos_workspace is defined

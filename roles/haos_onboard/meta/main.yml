@@ -1,0 +1,14 @@
+---
+galaxy_info:
+  author: homeserver contributors
+  namespace: homeserver
+  role_name: haos_onboard
+  description: Give a new Home Assistant its owner account before anyone else on the network can
+  # The repo has no licence file; the role is not published.
+  license: none
+  min_ansible_version: "2.21"
+  platforms:
+    - name: Debian
+      versions:
+        - all
+dependencies: []

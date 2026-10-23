@@ -1,0 +1,10 @@
+---
+# Objects that need the controllers' definitions (CRDs) or namespaces, applied once infra-controllers is ready:
+# MetalLB's address pool and Traefik's middlewares (the allowlist and HSTS). The cluster's CA is in
+# k8s/infrastructure/tls, so that a cluster that cannot decrypt it still gets these. Never a Namespace: each lives
+# with its controller.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - metallb.yaml
+  - traefik.yaml

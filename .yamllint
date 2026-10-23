@@ -1,7 +1,7 @@
 ---
 extends: default
 
-# The defaults, plus the committed example of the git-ignored local.yml.
+# The defaults, plus the committed examples of the git-ignored local.yml and vault.
 yaml-files:
   - "*.yaml"
   - "*.yml"
@@ -15,6 +15,7 @@ ignore: |
   .claude/
   docs/
   k8s/
+  group_vars/all/local.vault.yml
   group_vars/all/vault.yml
 
 rules:

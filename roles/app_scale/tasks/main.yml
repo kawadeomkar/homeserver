@@ -1,0 +1,113 @@
+---
+# Scales the cluster's apps to zero and back from the controller, with kubectl: make suspend and make resume. An app is
+# a Deployment that a Flux Kustomization under app_scale_path applies; a group, the apps of one namespace. Down sets
+# Flux's kustomize.toolkit.fluxcd.io/reconcile: disabled on each, which kustomize-controller reads on the object in
+# the cluster and then neither applies nor prunes it, records its replicas in app_scale_annotation and scales it to
+# zero, in one patch; up restores the replicas and removes both, and Flux takes the app back. Apps labelled
+# app_scale_late_label (their databases) stop after the others and start before them. Claims, Services, Ingresses
+# and the platform are left alone. The parsing and the plan are a filter plugin (filter_plugins/app_scale.py).
+
+- name: Check the role's inputs
+  ansible.builtin.assert:
+    that: _errors | length == 0
+    fail_msg: "{{ _errors | join(' ') }}"
+    quiet: true
+  tags: [always]
+  when: app_scale_state | length > 0
+  vars:
+    _errors: >-
+      {%- set out = [] -%}
+      {%- for name in ['app_scale_kubeconfig', 'app_scale_server', 'app_scale_path', 'app_scale_annotation']
+            if not lookup('vars', name) -%}
+      {%-   set _ = out.append(name ~ ' must be set.') -%}
+      {%- endfor -%}
+      {%- if app_scale_late_label and app_scale_late_label is not match('^[^=\s]+=[^=\s]+$') -%}
+      {%-   set _ = out.append('app_scale_late_label must be one label as key=value, or empty.') -%}
+      {%- endif -%}
+      {{ out }}
+
+- name: Scale the apps
+  when: app_scale_state | length > 0
+  block:
+    - name: Look for the kubeconfig
+      ansible.builtin.stat:
+        path: "{{ app_scale_kubeconfig }}"
+      register: app_scale_kubeconfig_file
+
+    - name: Refuse to run without a kubeconfig
+      ansible.builtin.assert:
+        that: app_scale_kubeconfig_file.stat.exists
+        fail_msg: >-
+          No kubeconfig at {{ app_scale_kubeconfig }}: roles/talos writes it there once the cluster is bootstrapped
+          (make deploy TYPE=kubernetes).
+        quiet: true
+
+    # The kubeconfig holds the cluster's admin key: it is read under no_log, and only its server kept. Another
+    # cluster's, such as the home cluster's on a test host whose local.yml leaves kubernetes_talos_config_dir unset,
+    # would stop that cluster's apps.
+    - name: Read the server the kubeconfig names
+      ansible.builtin.set_fact:
+        app_scale_kubeconfig_server: >-
+          {{ ((lookup('ansible.builtin.file', app_scale_kubeconfig) | from_yaml).clusters | default([{}], true))[0]
+             .cluster.server | default('') }}
+      no_log: true
+
+    - name: Refuse another cluster's kubeconfig
+      ansible.builtin.assert:
+        that: app_scale_kubeconfig_server == app_scale_server
+        fail_msg: >-
+          {{ app_scale_kubeconfig }} names the server {{ app_scale_kubeconfig_server or 'none' }}, not
+          {{ app_scale_server }}: it is another cluster's. A second cluster keeps its credentials in a directory of
+          its own (kubernetes_talos_config_dir in its local.yml, scripts/runbooks/talos.md).
+        quiet: true
+
+    - name: Read the Flux Kustomizations and the Deployments
+      ansible.builtin.command:
+        argv: [kubectl, --kubeconfig, "{{ app_scale_kubeconfig }}", get, "{{ item }}", -A, -o, json]
+      register: app_scale_read
+      changed_when: false
+      check_mode: false
+      loop: [kustomizations, deployments]
+
+    - name: Work out what to do
+      ansible.builtin.set_fact:
+        app_scale_plan: >-
+          {{ app_scale_read.results[1].stdout
+             | app_scale_apps(app_scale_read.results[0].stdout, app_scale_path, app_scale_late_label,
+                              app_scale_annotation)
+             | app_scale_plan(app_scale_state, app_scale_only, app_scale_other_names, app_scale_annotation) }}
+
+    - name: Refuse a name that is no app or group
+      ansible.builtin.assert:
+        that: app_scale_plan.unknown | length == 0
+        fail_msg: >-
+          No app or group is called {{ app_scale_plan.unknown | join(', ') }}. The apps:
+          {{ app_scale_plan.apps | join(', ') or 'none' }}; the groups: {{ app_scale_plan.groups | join(', ') or 'none' }}{{
+          ('; besides them, ' ~ app_scale_other_names | join(', ')) if app_scale_other_names else '' }}.
+        quiet: true
+
+    - name: Stop or start the apps, a wave at a time
+      ansible.builtin.include_tasks: wave.yml
+      loop: "{{ app_scale_plan.waves }}"
+      loop_control:
+        loop_var: app_scale_wave
+        label: "{{ app_scale_wave | map(attribute='name') | join(', ') }}"
+      when: not ansible_check_mode
+
+    # A dry run reports here what a real run changes above.
+    - name: Say what was done
+      ansible.builtin.debug:
+        msg: >-
+          {% if app_scale_plan.order %}{{ _verb }}, in this order: {{ app_scale_plan.order | join(', then ') }}.
+          {% endif -%}
+          {% if app_scale_state == 'down' %}{% if app_scale_plan.unchanged %}Already down:
+          {{ app_scale_plan.unchanged | join(', ') }}. {% endif -%}
+          {{ 'Flux leaves them alone until make resume.' if app_scale_plan.order or app_scale_plan.unchanged
+             else 'No app to stop.' }}
+          {%- else %}{{ 'Flux takes them back at its next reconciliation.' if app_scale_plan.order
+                        else 'No app is down.' }}{% endif %}
+      changed_when: ansible_check_mode and app_scale_plan.order | length > 0
+      vars:
+        _verb: >-
+          {{ ('Would stop' if ansible_check_mode else 'Stopped') if app_scale_state == 'down'
+             else ('Would start' if ansible_check_mode else 'Started') }}

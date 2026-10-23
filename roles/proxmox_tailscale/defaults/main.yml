@@ -2,7 +2,11 @@
 # Neutral defaults: with nothing else set, the role changes nothing. What the node advertises, how it joins and
 # what the guard protects are configuration, set in inventory group_vars; see README.md.
 
-# The LAN prefixes the node advertises to the tailnet, IPv4, in CIDR form. Empty, the role does nothing at all.
+# Run Tailscale on the node at all. False, the role does nothing. True without routes, the node joins the tailnet as a
+# device of its own; with routes, it is also the LAN's subnet router.
+proxmox_tailscale_enabled: false
+# The LAN prefixes the node advertises to the tailnet, IPv4, in CIDR form, which need proxmox_tailscale_enabled. Empty,
+# the node advertises none and forwards nothing from the tailnet.
 proxmox_tailscale_advertise_routes: []
 # The tags the node joins with, each tag:<name>. A tagged node's key never expires.
 proxmox_tailscale_tags: []
@@ -10,7 +14,8 @@ proxmox_tailscale_tags: []
 proxmox_tailscale_auth_key: ""
 # Preferences kept on every run with `tailscale set`, by its flag names, such as accept-dns: false.
 proxmox_tailscale_settings: {}
-# Upgrade Tailscale to the repository's latest release on every run. False only ever installs it.
+# Upgrade Tailscale to the repository's latest release on every run. False leaves an installed release alone, though an
+# upgrade of the whole node, such as roles/proxmox_apt's, still upgrades it.
 proxmox_tailscale_upgrade: false
 # LAN hosts that trust this node by its address, which tailnet clients may reach only on
 # proxmox_tailscale_guard_allow, whatever the tailnet's policy says.

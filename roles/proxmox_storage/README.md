@@ -27,6 +27,9 @@ used: it only creates storage, never corrects it, and has no format option.
 | `proxmox_storage_enabled` | `true` | Enabled state |
 | `proxmox_storage_node` | `""` | Node name; empty means the host's short hostname |
 | `proxmox_storage_startall_delay` | `null` | Seconds to wait at boot before starting VMs (0-300); null leaves it alone |
+| `proxmox_storage_startall_wait` | `[]` | Storage ids the start at boot then waits for, until each is active |
+| `proxmox_storage_startall_wait_timeout` | `600` | The longest that wait lasts, in seconds |
+| `proxmox_storage_systemd_dir` | `/etc/systemd/system` | Where the wait's drop-in for `pve-guests.service` goes |
 
 A disk imported with `import-from` keeps the source image's format whatever the storage default says.
 Whatever imports images must ask for `format=qcow2` itself.
@@ -40,6 +43,14 @@ storage that cannot be activated or is restricted to other cluster nodes, and th
 naming it and the reason. The installer creates `local-lvm` on an LVM install and `local-zfs` on a ZFS
 one; `local` holds ISOs and backups and cannot take VM disks. The role does not create storage.
 
+Proxmox starts each guest marked start-on-boot once, from `pve-guests.service`, after the node's delay. A VM whose
+disk is on a storage that is not active then fails to start and is never tried again, so after a power cut a VM on
+a NAS that boots more slowly than the delay stays down. With `proxmox_storage_startall_wait`, a drop-in
+(`pve-guests.service.d/proxmox-storage-wait.conf`) holds the start, after the delay, until each of those storages is
+active in `pvesm status` (which mounts an NFS storage as it reads it), for at most
+`proxmox_storage_startall_wait_timeout` seconds, then lets the guests start whatever the storages say. The unit has
+no start timeout of its own. The role reloads systemd when it writes or removes the drop-in.
+
 ## Examples
 
 A NAS's shares as VM-disk storage:
@@ -52,6 +63,7 @@ proxmox_storage_nfs:
   - id: nas-vm
     export: /mnt/tank/vm
 proxmox_storage_startall_delay: 120
+proxmox_storage_startall_wait: [nas-vm]
 ```
 
 No NAS: VM disks stay on the storage the installer created, which the role only checks:
@@ -67,5 +79,5 @@ run only for real.
 
 ## Reference
 
-[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make docs` from the role itself:
+[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make fix TYPE=docs` from the role itself:
 its argument specs, defaults and vars, and each tasks file as a table and a flow graph. Never edit it by hand.

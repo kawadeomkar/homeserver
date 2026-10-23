@@ -6,10 +6,18 @@
 # the old one if the new one fails, and unlike a restart does not reach tailscaled through its Requires=.
 
 # Debian's own nftables.service loads /etc/nftables.conf, which begins with `flush ruleset`: enabled, it would
-# remove the guard at every boot and reload. It ships disabled, and stays so.
-- name: guard | Read whether Debian's nftables service is enabled
+# remove the guard at every boot and reload. It ships disabled, and stays so. The guard's unit conflicts with it, so
+# starting it later stops the guard and tailscaled first; and starting the guard while it runs would stop it, which
+# flushes every table, Tailscale's and Proxmox's included. So it is refused running as well as enabled, and anything
+# but stopped counts as running, starting or reloading included.
+- name: guard | Read whether Debian's nftables service is enabled and running
   ansible.builtin.command:
-    argv: [systemctl, is-enabled, nftables.service]
+    argv: "{{ item }}"
+  loop:
+    - [systemctl, is-enabled, nftables.service]
+    - [systemctl, is-active, nftables.service]
+  loop_control:
+    label: "{{ item | join(' ') }}"
   register: proxmox_tailscale_nftables_service
   changed_when: false
   failed_when: false
@@ -17,11 +25,15 @@
 
 - name: guard | Refuse Debian's nftables service
   ansible.builtin.assert:
-    that: proxmox_tailscale_nftables_service.stdout | trim not in ['enabled', 'enabled-runtime']
+    that:
+      - proxmox_tailscale_nftables_service.results[0].stdout | trim not in ['enabled', 'enabled-runtime']
+      - proxmox_tailscale_nftables_service.results[1].stdout | trim in ['inactive', 'failed']
     fail_msg: >-
-      nftables.service is enabled. At every boot and reload it loads /etc/nftables.conf, which on Debian begins with
-      `flush ruleset` and would remove the tailnet guard. Disable it (systemctl disable nftables), and keep any rules
-      it held in a table of their own.
+      nftables.service is enabled or running. It loads /etc/nftables.conf, which on Debian begins with `flush ruleset`
+      and would remove the tailnet guard. Move any rules it held into a table of their own, loaded by a unit of their
+      own, then run `systemctl disable --now nftables` at the console (stopping it flushes every table) and run again.
+      If tailscaled is running, stop it first (systemctl stop tailscaled): the guard's table may already be gone, and
+      the next run starts tailscaled again once the guard is loaded.
     quiet: true
 
 - name: guard | Create the guard's directories

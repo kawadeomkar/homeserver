@@ -1,0 +1,32 @@
+---
+# Layer 2 only: the speaker answers ARP for the addresses of infrastructure/configs' pool. The chart's default BGP
+# backend, frr-k8s, is off. The chart sets no requests, and a pod without any is the first evicted under memory
+# pressure, taking the LoadBalancer addresses with it.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: metallb
+  namespace: metallb-system
+spec:
+  interval: 1h
+  chartRef:
+    kind: OCIRepository
+    name: metallb
+  values:
+    frrk8s:
+      enabled: false
+    # Each image by its version and digest (CLAUDE.md): a chart bump changes both here too.
+    controller:
+      image:
+        tag: v0.16.1@sha256:f51ab515de9ccd20dc3dccb093e48df8adddac019326c456f449e55ba91b6420
+      resources:
+        requests:
+          cpu: 10m
+          memory: 64Mi
+    speaker:
+      image:
+        tag: v0.16.1@sha256:16561e96531e1852d5c229ad7fae6e994dcfa983ff7f4de6b6208b34a4e2ddbc
+      resources:
+        requests:
+          cpu: 10m
+          memory: 64Mi

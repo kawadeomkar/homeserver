@@ -51,3 +51,18 @@ argument_specs:
       proxmox_storage_startall_delay:
         type: int
         description: Start-on-boot delay in seconds (0-300). Unset or null leaves the node's setting alone.
+      proxmox_storage_startall_wait:
+        type: list
+        elements: str
+        default: []
+        description: >-
+          Storage ids the guests' start at boot waits for, after the delay, until each is active: a drop-in for
+          pve-guests.service. Empty, there is none, and one the role wrote is removed.
+      proxmox_storage_startall_wait_timeout:
+        type: int
+        default: 600
+        description: The longest that wait lasts, in seconds; then the guests start whatever the storages say.
+      proxmox_storage_systemd_dir:
+        type: str
+        default: /etc/systemd/system
+        description: Where the drop-in goes, in pve-guests.service.d/.

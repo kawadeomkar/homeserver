@@ -1,0 +1,12 @@
+# FileBrowser Quantum's configuration (FILEBROWSER_CONFIG). The admin password and the JWT secret come from the
+# Secret media/filebrowser as environment variables. A template, not a manifest: kustomize's configMapGenerator
+# makes the ConfigMap from it.
+http:
+  port: 8080
+  # Behind Traefik, which sets X-Forwarded-*.
+  trustProxyHeaders: true
+server:
+  sources:
+    - path: /data
+  database:
+    path: /home/filebrowser/data/database.sqlite

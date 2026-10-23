@@ -160,6 +160,30 @@ class TestDrift:
         _, _, refused = pv.drift(vm(**({"disks": disks} if disks else {})), config(**extra))
         assert len(refused) == 1 and message in refused[0]
 
+    def test_a_disk_s_serial_and_backup_flag_are_set_on_the_same_volume(self):
+        """A disk's serial and whether backups include it are options of its volume: set again on it, keeping the
+        others, never a new disk."""
+        disks = [{"slot": "scsi0", "storage": "local-lvm", "size_gib": 32, "serial": "sys", "backup": False}]
+        options, resize, refused = pv.drift(vm(disks=disks), config())
+        assert options == ["--scsi0", "local-lvm:vm-300-disk-1,discard=on,ssd=1,serial=sys,backup=0"]
+        assert (resize, refused) == ([], [])
+        renamed = config(scsi0="local-lvm:vm-300-disk-1,backup=0,discard=on,serial=old,size=32G,ssd=1")
+        options, _, _ = pv.drift(vm(), renamed)
+        assert options == ["--scsi0", "local-lvm:vm-300-disk-1,discard=on,ssd=1,serial=sys"]
+        assert pv.drift(vm(disks=disks), config(scsi0=options[1] + ",backup=0,size=32G")) == ([], [], [])
+        assert pv.drift(vm(), config(scsi0="local-lvm:vm-300-disk-1,backup=1,serial=sys,size=32G")) == ([], [], [])
+
+    def test_an_unused_volume_holds_back_a_new_disk(self):
+        """A restore over a VM keeps the disks its backup excluded as unusedN: the slot they held is never filled
+        with a new, empty disk while they may hold its data."""
+        disks = [*vm()["disks"], {"slot": "scsi2", "storage": "local-lvm", "size_gib": 100, "backup": False}]
+        options, _, refused = pv.drift(vm(disks=disks), config(unused0="local-lvm:vm-300-disk-3"))
+        assert options == []
+        assert len(refused) == 1 and "keeps unused0 (local-lvm:vm-300-disk-3), unused" in refused[0]
+        assert "qm set 300 --scsi2 <volume>" in refused[0] and "qm disk unlink 300 --idlist <unusedN>" in refused[0]
+        options, _, refused = pv.drift(vm(disks=disks), config())
+        assert options == ["--scsi2", "local-lvm:100,discard=on,ssd=1,backup=0"] and refused == []
+
     def test_the_boot_order_is_put_back_last(self):
         """Proxmox drops a deleted drive from the boot order and never adds a disk back, so a system disk replaced by
         hand leaves the VM booting its CD-ROM; the order is corrected after the disk it names is added."""
@@ -203,7 +227,9 @@ class TestPlan:
         backup = {"volid": "local:backup/vzdump-qemu-300.vma.zst", "content": "backup", "vmid": 300}
         result = pv.plan([vm()], facts(qemu=[], volumes={"300": [backup]}))
         assert result["create"] == [] and "qmrestore <archive> 300" in result["errors"][0]
-        assert "make kubernetes ANSIBLE_ARGS='-e proxmox_vm_ignore_existing_volumes=true'" in result["errors"][0]
+        assert "the play again with -e proxmox_vm_ignore_existing_volumes=true" in result["errors"][0]
+        named = pv.plan([vm()], facts(qemu=[], volumes={"300": [backup]}, rebuild_command="make vms ANSIBLE_ARGS=x"))
+        assert "run make vms ANSIBLE_ARGS=x" in named["errors"][0]
         assert "qm set" not in result["errors"][0], "a missing VM has no configuration to attach a disk to"
         ignored = pv.plan([vm()], facts(qemu=[], volumes={"300": [backup]}, ignore_existing_volumes=True))
         assert ignored["errors"] == [] and [c["vmid"] for c in ignored["create"]] == ["300"]
@@ -276,6 +302,34 @@ class TestPlan:
         )
         assert allowed["errors"] == []
 
+    @pytest.mark.parametrize(("sid", "kind"), [("local-zfs", "zfspool"), ("local", "dir"), ("local-btrfs", "btrfs")])
+    def test_a_storage_the_host_shares_keeps_headroom(self, sid, kind):
+        """A ZFS storage's size shrinks as the host's own datasets on the pool grow, and a directory's or BTRFS
+        storage's is its filesystem's, which the host's own files share: the headroom stays out of the budget there,
+        and only there. Sparse disks on a directory or BTRFS would otherwise fill the host's root filesystem."""
+        storage = [s for s in STORAGE if s["storage"] != sid] + [{"storage": sid, "type": kind, "content": "images"}]
+        disks = [{"slot": "scsi0", "storage": sid, "size_gib": 32}]
+        on_it = {"qemu": [], "configs": {}, "storage_config": storage, "contents": {sid: []}}
+        fits = pv.plan([vm(disks=disks, efidisk_storage=sid)], facts(**on_it, totals={sid: 40 * GIB}))
+        assert fits["errors"] == []
+        kept = pv.plan(
+            [vm(disks=disks, efidisk_storage=sid)],
+            facts(**on_it, totals={sid: 40 * GIB}, host_headroom=16 * GIB),
+        )
+        assert kept["errors"] == [
+            f"{sid}: its disks would be provisioned at 32 GiB (0 GiB there now, 32 GiB more for proxmox_vm_vms), "
+            "more than its 40 GiB less the 16 GiB kept for the host's own files (proxmox_vm_host_headroom_gib). A "
+            "full storage gives every VM on it I/O errors: make the disks smaller, free space, or set "
+            "proxmox_vm_allow_overcommit in local.yml"
+        ]
+        thin = pv.plan(
+            [vm()],
+            facts(
+                qemu=[], configs={}, contents={"local-lvm": []}, totals={"local-lvm": 40 * GIB}, host_headroom=16 * GIB
+            ),
+        )
+        assert thin["errors"] == []
+
     def test_a_storage_not_thin_is_not_budgeted(self):
         disks = [{"slot": "scsi0", "storage": "nas", "size_gib": 900}]
         storage = [*STORAGE, {"storage": "nas", "type": "nfs", "content": "images"}]
@@ -334,7 +388,7 @@ class TestInputs:
         assert "needs a vmid of its own" in pv.input_errors([vm(), vm(name="node-2")], [])[0]
 
     def test_strings_for_lists(self):
-        assert pv.input_errors("vm", []) == ["proxmox_vm_vms and proxmox_vm_isos must be lists."]
+        assert pv.input_errors("vm", []) == ["proxmox_vm_vms, proxmox_vm_isos and proxmox_vm_imports must be lists."]
 
 
 def test_old_isos_are_listed_for_removal():
@@ -347,3 +401,123 @@ def test_old_isos_are_listed_for_removal():
     isos = [{"storage": "local", "filename": "talos-v1.14.2-ce4c9805-metal-amd64.iso"}]
     attached = ["local:iso/talos-v1.13.0-ce4c9805-metal-amd64.iso,media=cdrom"]
     assert pv.unused_isos(volumes, isos, attached) == ["local:iso/talos-v1.14.1-ce4c9805-metal-amd64.iso"]
+
+
+# ------------------------------------------------------------------------- imported disks and USB devices ---
+
+OVA = "local:import/haos_ova-18.3.ova/home-assistant.vmdk"
+
+
+def imported(**more):
+    """A VM whose system disk is imported from an image, as Home Assistant OS's is."""
+    disk = {"slot": "scsi0", "storage": "local-lvm", "size_gib": 32, "import_from": OVA}
+    return vm(vmid=310, name="homeassistant", iso=None, tags=["haos"], disks=[disk]) | more
+
+
+class TestImportsAndUsb:
+    def test_an_imported_disk_is_created_from_its_image(self):
+        argv = pv.create_argv(imported())
+        assert argv[argv.index("--scsi0") + 1] == f"local-lvm:0,import-from={OVA},discard=on,ssd=1"
+        assert "--ide2" not in argv
+
+    def test_usb_devices_by_id_or_mapping(self):
+        settings = pv.wanted_settings(imported(usb=[{"host": "10c4:EA60"}, {"mapping": "zwave", "usb3": True}]))
+        assert settings["usb0"] == "host=10c4:EA60" and settings["usb1"] == "mapping=zwave,usb3=1"
+        argv = pv.create_argv(imported(usb=[{"host": "10c4:ea60"}]))
+        assert argv[argv.index("--usb0") + 1] == "host=10c4:ea60"
+
+    def test_a_usb_device_compares_however_written(self):
+        assert pv.normalised("usb0", "host=10C4:EA60,usb3=0") == pv.normalised("usb0", "host=10c4:ea60")
+        assert pv.normalised("usb0", "host=10c4:ea60,usb3=1") != pv.normalised("usb0", "host=10c4:ea60")
+
+    def test_usb_devices_are_added_and_removed(self):
+        current = config(scsi0="local-lvm:vm-310-disk-1,discard=on,size=32G,ssd=1", usb1="host=1a86:55d4")
+        options, _, refused = pv.drift(imported(usb=[{"host": "10c4:ea60"}]), current)
+        assert options[options.index("--usb0") + 1] == "host=10c4:ea60"
+        assert options[-2:] == ["--delete", "usb1"] and refused == []
+
+    def test_a_missing_imported_disk_is_refused_not_imported_again(self):
+        current = {k: v for k, v in config().items() if k != "scsi0"}
+        _, _, refused = pv.drift(imported(), current)
+        assert any("imports only when it creates the VM" in r and "vm-restore.md" in r for r in refused), refused
+
+    def test_a_created_disk_smaller_than_configured_is_grown(self):
+        grown = imported(disks=[{"slot": "scsi0", "storage": "local-lvm", "size_gib": 64, "import_from": OVA}])
+        configs = {"310": config(scsi0="local-lvm:vm-310-disk-1,discard=on,size=32G,ssd=1")}
+        assert pv.growth([grown], configs) == [{"vmid": "310", "name": "homeassistant", "slot": "scsi0", "size": "64G"}]
+        assert pv.growth([imported()], configs) == []
+        assert pv.growth([grown], {}) == [], "a VM not just created is the plan's to grow"
+
+    @pytest.mark.parametrize(
+        ("change", "message"),
+        [
+            ({"usb": [{"host": "10c4"}]}, "is neither vendor:product"),
+            ({"usb": [{"host": "10c4:ea60", "mapping": "x"}]}, "needs either host (vendor:product) or mapping"),
+            ({"usb": [{}]}, "needs either host (vendor:product) or mapping"),
+            ({"usb": "10c4:ea60"}, "usb must be a list of at most 15 devices"),
+            (
+                {"disks": [{"slot": "scsi0", "storage": "a", "size_gib": 32, "import_from": "haos.ova"}]},
+                "must be a volume id",
+            ),
+        ],
+    )
+    def test_bad_inputs(self, change, message):
+        errors = pv.input_errors([imported(**change)], [], [])
+        assert any(message in error for error in errors), errors
+
+    def test_an_image_needs_its_checksum(self):
+        image = {"storage": "local", "filename": "haos_ova-18.3.ova", "url": "https://example.org/haos.ova"}
+        assert pv.input_errors([imported(usb=[{"host": "1-1.2"}])], [], [image | {"sha256": "a" * 64}]) == []
+        errors = pv.input_errors([imported()], [], [image | {"sha256": "abc"}])
+        assert any("needs sha256, the file's SHA-256" in error for error in errors), errors
+        assert any("needs storage, filename, url and sha256" in e for e in pv.input_errors([], [], [{"url": "x"}]))
+
+
+def test_old_images_are_listed_for_removal():
+    volumes = [{"volid": "local:import/haos_ova-18.2.ova"}, {"volid": "local:import/haos_ova-18.3.ova"}]
+    images = [{"storage": "local", "filename": "haos_ova-18.3.ova", "content": "import"}]
+    assert pv.unused_isos(volumes, images, []) == ["local:import/haos_ova-18.2.ova"]
+
+
+EXTRACTION_STORAGE = [
+    {"storage": "local", "type": "dir", "path": "/var/lib/vz", "content": "iso,import,backup"},
+    {"storage": "local-lvm", "type": "lvmthin", "content": "images,rootdir"},
+    {"storage": "nas-vm", "type": "nfs", "path": "/mnt/pve/nas-vm", "content": "images"},
+]
+
+
+class TestExtraction:
+    """A disk inside an OVA is extracted first, onto a storage that holds images and has a path (Proxmox VE 9.2's
+    PVE/API2/Qemu.pm): the OVA's own unless the VM's import_working_storage names another, which qm create takes as a
+    parameter of the command, never of the disk."""
+
+    def test_the_working_storage_is_passed(self):
+        vm = imported(import_working_storage="nas-vm")
+        argv = pv.create_argv(vm)
+        assert argv[argv.index("--import-working-storage") + 1] == "nas-vm"
+        assert "import-working-storage" not in argv[argv.index("--scsi0") + 1]
+        assert pv.extraction_problem(vm, vm["disks"][0], EXTRACTION_STORAGE, False, []) is None
+        assert "--import-working-storage" not in pv.create_argv(
+            vm | {"disks": [{"slot": "scsi0", "storage": "a", "size_gib": 1}]}
+        )
+
+    def test_a_storage_without_images_or_a_path_is_refused(self):
+        vm = imported()
+        problem = pv.extraction_problem(vm, vm["disks"][0], EXTRACTION_STORAGE, False, [])
+        assert "pvesm set local --content backup,import,iso,images" in problem, problem
+        block = imported(import_working_storage="local-lvm")
+        problem = pv.extraction_problem(block, block["disks"][0], EXTRACTION_STORAGE, False, [])
+        assert "needs images in its content and a path" in problem, problem
+
+    def test_a_plain_image_needs_no_extraction(self):
+        disk = {"slot": "scsi0", "storage": "local-lvm", "size_gib": 32, "import_from": "local:import/os.qcow2"}
+        assert pv.extraction_problem(imported(), disk, EXTRACTION_STORAGE, False, []) is None
+
+    def test_the_plan_refuses_before_creating(self):
+        found = pv.plan([imported()], facts(qemu=[], configs={}, pending={}, storage_config=EXTRACTION_STORAGE))
+        assert found["create"] == [] and any("cannot take the disk Proxmox extracts" in e for e in found["errors"])
+
+    def test_a_pending_working_storage_passes_a_dry_run(self):
+        vm = imported(import_working_storage="nas")
+        assert pv.extraction_problem(vm, vm["disks"][0], EXTRACTION_STORAGE, True, ["nas"]) is None
+        assert "does not exist" in pv.extraction_problem(vm, vm["disks"][0], EXTRACTION_STORAGE, False, ["nas"])
