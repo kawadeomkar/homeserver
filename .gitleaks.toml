@@ -16,10 +16,11 @@ keywords = ["10.", "172.", "192.168.", "100.", "169.254."]
 [[rules]]
 id = "ipv4-literal"
 description = "IPv4 literal in code, tests, manifests, scripts or documentation: use a variable, and RFC 5737 in examples"
-# molecule/ and .config/molecule/ are where Molecule role tests will go. CI scans a change with its
-# target's rules, so they must be covered before the first one is added. Markdown anywhere: a public address
-# written in a runbook identifies this network as much as one in a task.
-path = '''^(roles/|group_vars/|host_vars/|tests/|molecule/|\.config/molecule/|k8s/|scripts/|\.github/|inventory\.example$|[^/]+\.ya?ml$|ansible\.cfg$|Makefile$)|(^|/)[^/]+\.md$'''
+# molecule/ and .config/molecule/ are where Molecule role tests will go, and justfile is the task runner's file
+# that is to replace the Makefile. CI scans a change with its target's rules, so each must be covered before the
+# first one is added. Markdown anywhere: a public address written in a runbook identifies this network as much as
+# one in a task.
+path = '''^(roles/|group_vars/|host_vars/|tests/|molecule/|\.config/molecule/|k8s/|scripts/|\.github/|inventory\.example$|[^/]+\.ya?ml$|ansible\.cfg$|Makefile$|justfile$)|(^|/)[^/]+\.md$'''
 regex = '''\b((?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3})\b'''
 secretGroup = 1
   [[rules.allowlists]]
