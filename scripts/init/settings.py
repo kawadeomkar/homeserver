@@ -111,6 +111,11 @@ def _list_of(parse):
     return parse_list
 
 
+def _app_list(text: str) -> list[str]:
+    """kubernetes_apps: app groups, or none for the platform alone. init.py checks them against the groups."""
+    return [] if text.strip().lower() == "none" else _list_of(str.lower)(text)
+
+
 def _mac(text: str) -> str:
     text = text.strip().lower().replace("-", ":")
     if not re.fullmatch(r"[0-9a-f][26ae](:[0-9a-f]{2}){5}", text):
@@ -326,6 +331,7 @@ PARSERS = {
     "owner_password": _owner_password,
     "positive_int": _count,
     "size_or_none": _size_or_none,
+    "app_list": _app_list,
 }
 
 # Composite kinds, asked part by part: node_map (each node's value, of fields' kind), node_sizes, haos_size,
@@ -601,6 +607,14 @@ SETTINGS: tuple[Setting, ...] = (
         help="Without a NAS, the worker's every size is required (the defaults fit the home host): at least 4 cores, "
         "12 GiB of memory, a 32 GiB system disk and an 11 GiB data disk, with a media disk (11 GiB or more) unless the "
         "media stay on the data volume.",
+    ),
+    S(
+        "kubernetes_apps",
+        "cluster",
+        "app_list",
+        "The app groups this host runs, when not every one, or none",
+        popular=True,
+        help="Unset, every app runs. A small worker can run a few: a pod that does not fit it stays Pending.",
     ),
     S(
         "kubernetes_media_on_data_volume",

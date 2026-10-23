@@ -56,6 +56,14 @@ argument_specs:
         type: str
         default: 10m
         description: How long a real run waits for the operator, the FluxInstance and Flux's Kustomizations.
+      flux_bootstrap_sync_exclude:
+        type: list
+        elements: str
+        default: []
+        description: >-
+          The Flux Kustomizations (in flux-system) the FluxInstance's sync leaves out, which prunes them and what they
+          applied, bar objects marked kustomize.toolkit.fluxcd.io/prune disabled. Empty leaves the sync as the
+          repository has it.
       flux_bootstrap_allow_path_change:
         type: bool
         default: false

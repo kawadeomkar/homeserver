@@ -10,7 +10,9 @@ nothing.
   readable by its owner alone, since the whole file goes into the cluster: never a keyring shared with other
   projects.
 - **`flux-system/cluster-settings`**: a ConfigMap of `flux_bootstrap_settings`, which Flux Kustomizations
-  substitute into their manifests (`postBuild.substituteFrom`). Strings only. A key removed here disappears.
+  substitute into their manifests (`postBuild.substituteFrom`). Strings only. A key removed here disappears. It is
+  labelled `reconcile.fluxcd.io/watch: Enabled`, so a change reconciles each Kustomization that reads it at once,
+  rather than at its next interval.
 - **The FluxInstance `flux`**: an exact Flux release, built from the operator's manifests artifact pinned by
   digest, and the Git repository, branch and path it syncs. From Flux 2.9,
   kustomize-controller substitutes strictly by default, so a manifest naming a setting that does not exist fails
@@ -23,6 +25,13 @@ The operator is installed from its release's `install.yaml` only once the file h
 Each object is compared with `kubectl diff --server-side` and applied with `kubectl apply --server-side`, both
 under the field manager `homeserver-ansible`, only when it differs. A dry run before the operator exists says what
 a real run would install; the diffs need the operator's namespace and its FluxInstance definition.
+
+`flux_bootstrap_sync_exclude` names Flux Kustomizations the sync leaves out, through the FluxInstance's own patches
+(`spec.kustomize.patches`), which the operator applies to the sync Kustomization `flux-system` it renders: one delete,
+whose target names them all in one regular expression (a target that matches nothing is no error). Flux prunes each
+and what it applied, bar objects marked `kustomize.toolkit.fluxcd.io/prune: disabled` and Deployments `make suspend`
+holds, which stay at zero and come back held with their Kustomization. Empty, the FluxInstance carries no patch. A
+real run waits for each one left out to be deleted.
 
 A FluxInstance that already syncs another path is refused, in a dry run too, before anything is applied: Flux
 prunes what the new path lacks, so moving it deletes everything the old one applied, the apps' volumes with
@@ -49,6 +58,7 @@ Never install Flux through Talos's `KubeExternalManifestConfig`: Talos re-applie
 | `flux_bootstrap_settings` | `{}` | The `cluster-settings` ConfigMap's keys and values, all strings |
 | `flux_bootstrap_age_key_file` | `""` | The age key file; one key, mode 0600 |
 | `flux_bootstrap_wait_timeout` | `10m` | How long a real run waits for the operator, the FluxInstance and the Kustomizations |
+| `flux_bootstrap_sync_exclude` | `[]` | The Flux Kustomizations the sync leaves out |
 | `flux_bootstrap_allow_path_change` | `false` | Let a run move the FluxInstance to another path, deleting what the old one applied |
 
 ## Example
