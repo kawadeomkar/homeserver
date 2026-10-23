@@ -1437,8 +1437,39 @@ def test_tailscale_guard_follows_the_setup(tmp_path, local_yml, guarded):
 
 
 @pytest.mark.parametrize(
+    ("local_yml", "enabled", "routes"),
+    [
+        pytest.param(PROXMOX_ONLY_LOCAL_YML, False, [], id="neither"),
+        pytest.param(PROXMOX_ONLY_LOCAL_YML + "tailscale_enabled: true\n", True, [], id="flag-alone"),
+        pytest.param(PROXMOX_ONLY_LOCAL_YML + TAILSCALE_LOCAL_YML, True, ["192.0.2.0/24"], id="routes-alone"),
+    ],
+)
+def test_tailscale_turns_on_with_its_flag_or_routes(tmp_path, local_yml, enabled, routes):
+    """tailscale_enabled in local.yml turns Tailscale on, the host then joining the tailnet alone, and routes without
+    it turn it on too, the host then also the subnet router; with neither, it stays off."""
+    tree = example_tree(tmp_path, local_yml)
+    assert resolve_on(tree, "homeserver", "proxmox_tailscale_enabled") is enabled
+    assert resolve_on(tree, "homeserver", "proxmox_tailscale_advertise_routes") == routes
+
+
+@pytest.mark.parametrize(
     ("given", "refusal"),
     [
+        pytest.param(
+            {"tailscale_enabled": "false"},
+            'proxmox_tailscale_enabled must be true or false, not "false"',
+            id="enabled-string",
+        ),
+        pytest.param(
+            {"tailscale_enabled": False},
+            "proxmox_tailscale_advertise_routes lists routes, but proxmox_tailscale_enabled is false",
+            id="routes-while-off",
+        ),
+        pytest.param(
+            {"tailscale_enabled": True, "tailscale_advertise_routes": [], "proxmox_tailscale_tags": []},
+            "proxmox_tailscale_tags must name at least one tag",
+            id="no-tag-without-routes",
+        ),
         pytest.param(
             {"tailscale_advertise_routes": "192.0.2.0/24"},
             "proxmox_tailscale_advertise_routes must be a list, not a string.",

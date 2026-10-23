@@ -122,12 +122,14 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 - [ ] Pick a quota for `claude-on-proxmox-ephemeral` (`quota` on its `vm_storage_consumers` entry, in bytes or
       with a binary suffix such as `200G`); the parent's 1 TiB applies meanwhile
 - [ ] Turn on remote access through the host's Tailscale (`scripts/runbooks/tailscale.md`):
-      - the tailnet's policy first, its allow-all rule deleted, the NAS limited to tcp/443 and its tests passing;
-      - split DNS;
+      - the tailnet's policy first, its allow-all rule deleted and its tests passing (with routes, the NAS limited
+        to tcp/443);
+      - with routes, split DNS;
       - two-factor for `root@pam`;
-      - a one-off tagged key in the vault, and `tailscale_advertise_routes` in `local.yml`;
+      - a one-off tagged key in the vault, and `tailscale_enabled` (and, for the subnet router,
+        `tailscale_advertise_routes`) in `local.yml`;
       - `make check TYPE=proxmox` and `make deploy TYPE=proxmox` from home;
-      - the checks from outside, each control alone.
+      - the checks from outside, with routes each control alone.
 
       Then compare `tailscale status --json` and `tailscale get --json` on the host with `fake_tailscale.py`, which
       was written from a 1.102 client, and fix the fake where they differ. Check too that `ip -o link show dev
