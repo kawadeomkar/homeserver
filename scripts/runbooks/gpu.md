@@ -4,8 +4,8 @@ The host's Intel iGPU can go whole to the worker, in either setup, where Jellyfi
 it. Whether a host has one is per hardware, so it is `local.yml`'s `kubernetes_gpu_mapping`, never a tracked
 setting. With it set:
 
-- `make kubernetes` gives that node's VM the PCI device (`hostpci0`), the `gpu` schematic, which adds Intel's i915
-  driver, and the label `homeserver.internal/gpu: intel`;
+- `make deploy TYPE=kubernetes` gives that node's VM the PCI device (`hostpci0`), the `gpu` schematic, which adds
+  Intel's i915 driver, and the label `homeserver.internal/gpu: intel`;
 - Flux runs Intel's GPU plugin (`infra-gpu`) on the labelled node alone; it offers `gpu.intel.com/i915` to two
   pods at a time;
 - the cluster settings ask for the device: `GPU_I915` `1`, and `FRIGATE_DETECTOR_DEVICE` `GPU`.
@@ -69,8 +69,8 @@ of the host it is done again (`REBUILD.md`). Commands on the Proxmox host run as
    kubernetes_gpu_mapping: igpu
    ```
 
-2. `make check-kubernetes`, then `make kubernetes`. Expect the worker's VM to gain `hostpci0`, reported as
-   waiting for a restart; its Talos node to report a pending upgrade to the `gpu` schematic; and the
+2. `make check TYPE=kubernetes`, then `make deploy TYPE=kubernetes`. Expect the worker's VM to gain `hostpci0`, reported
+   as waiting for a restart; its Talos node to report a pending upgrade to the `gpu` schematic; and the
    cluster-settings to change. From here until step 4 is done, Jellyfin and Frigate wait in Pending for a device
    nothing offers yet: expected.
 3. **Restart the VM by hand.** Proxmox adds a PCI device only to a VM it starts, so a reboot from inside is not
@@ -82,8 +82,8 @@ of the host it is done again (`REBUILD.md`). Commands on the Proxmox host run as
    kubectl uncordon homeserver-worker-1                                           # once it is Ready
    ```
 
-4. `make check-talos-upgrade`, then `make talos-upgrade`: the same Talos release with the new schematic, so the
-   node reboots into i915. `make kubernetes` afterwards shows no change.
+4. `make check TYPE=talos-upgrade`, then `make talos-upgrade`: the same Talos release with the new schematic, so the
+   node reboots into i915. `make deploy TYPE=kubernetes` afterwards shows no change.
 
 ## 3. Checks
 
@@ -113,6 +113,6 @@ work yet:
 
 ## Taking it away
 
-Unset `kubernetes_gpu_mapping`, then `make kubernetes` (the VM loses `hostpci0`), restart the VM by hand as above,
-and `make talos-upgrade` back to the base schematic. Set Frigate's detector device back to `CPU`. The mapping and
+Unset `kubernetes_gpu_mapping`, then `make deploy TYPE=kubernetes` (the VM loses `hostpci0`), restart the VM by hand as
+above, and `make talos-upgrade` back to the base schematic. Set Frigate's detector device back to `CPU`. The mapping and
 the `vfio-pci` binding on the host can stay.

@@ -1,0 +1,161 @@
+---
+# Spins the deployments down until make resume: every app scaled to zero, with Flux told to leave it there, then Home
+# Assistant's VM shut down. Check first, and narrow it with ONLY (comma-separated: an app such as jellyfin, a group
+# such as media, or homeassistant):
+#   make check TYPE=suspend
+#   make suspend ONLY=jellyfin,nextcloud
+# The data stays, and so do the platform (Flux, Traefik, monitoring) and the cluster's VMs, unless ALL=1 shuts those
+# VMs down too, after everything else: the worker, then the control plane, so the whole cluster with them. Without a
+# cluster, or without Home Assistant, its play ends by itself.
+# An inventory made before the cluster has no kubernetes group, and the apps' play would match no host and end
+# without a word: refused here instead, as kubernetes.yml refuses it.
+- name: Refuse a cluster without the kubernetes inventory group
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Refuse a cluster without the kubernetes inventory group
+      ansible.builtin.assert:
+        that: not kubernetes_present or (groups['kubernetes'] | default([]) | length == 1)
+        fail_msg: >-
+          The inventory needs the kubernetes group with its one host: add [kubernetes] and homeserver-k8s to
+          inventory, as in inventory.example.
+        quiet: true
+      tags: [always]
+
+- name: Spin the apps down
+  hosts: kubernetes
+  gather_facts: false
+  vars:
+    # make's ONLY, comma-separated names, passed as -e '{"only": "<names>"}', and its ALL, as {"cluster_vms": true}.
+    only_names: "{{ (only | default('')).split(',') | map('trim') | select | list }}"
+  pre_tasks:
+    - name: Refuse ALL with ONLY
+      ansible.builtin.assert:
+        that: not (cluster_vms | default(false) | bool) or only_names | length == 0
+        fail_msg: ALL=1 stops everything, the cluster's VMs last, so it takes no ONLY.
+        quiet: true
+      tags: [always]
+    - name: Refuse NAS settings that come without a NAS address
+      ansible.builtin.assert:
+        that: nas_section_error | length == 0
+        fail_msg: "{{ nas_section_error }}"
+        quiet: true
+      tags: [always]
+    - name: Refuse an incomplete Kubernetes section
+      ansible.builtin.assert:
+        that: kubernetes_settings_error | length == 0
+        fail_msg: "{{ kubernetes_settings_error | join(' ') }}"
+        quiet: true
+      tags: [always]
+    - name: Say why the cluster is skipped
+      ansible.builtin.debug:
+        msg: No kubernetes_node_addresses in group_vars/all/local.yml, so this setup has no cluster.
+      when: not kubernetes_present
+      tags: [always]
+    - name: Skip the cluster when local.yml names no nodes
+      ansible.builtin.meta: end_host
+      when: not kubernetes_present
+      tags: [always]
+    # So that make suspend ONLY=homeassistant needs no answer from the cluster.
+    - name: Leave the apps alone when ONLY names Home Assistant alone
+      ansible.builtin.meta: end_host
+      when: only_names == ['homeassistant'] and haos_present
+      tags: [always]
+  roles:
+    - role: app_scale
+      vars:
+        app_scale_state: down
+        # Accepted in ONLY besides the apps and groups: Home Assistant, which the next play takes.
+        app_scale_other_names: "{{ ['homeassistant'] if haos_present else [] }}"
+        app_scale_only: "{{ only_names }}"
+
+# A play of its own on the Proxmox host. The apps' play, whose failure ends the run before this one, has refused any
+# name it does not know; without a cluster, this play does. The shutdown is the guest's own, never a forced stop.
+- name: Shut Home Assistant's VM down
+  hosts: proxmox
+  gather_facts: false
+  vars:
+    # make's ONLY, as in the apps' play.
+    only_names: "{{ (only | default('')).split(',') | map('trim') | select | list }}"
+  pre_tasks:
+    - name: Refuse NAS settings that come without a NAS address
+      ansible.builtin.assert:
+        that: nas_section_error | length == 0
+        fail_msg: "{{ nas_section_error }}"
+        quiet: true
+      tags: [always]
+    - name: Refuse an incomplete Kubernetes section
+      ansible.builtin.assert:
+        that: kubernetes_settings_error | length == 0
+        fail_msg: "{{ kubernetes_settings_error | join(' ') }}"
+        quiet: true
+      tags: [always]
+    - name: Refuse an incomplete Home Assistant section
+      ansible.builtin.assert:
+        that: haos_settings_error | length == 0
+        fail_msg: "{{ haos_settings_error | join(' ') }}"
+        quiet: true
+      tags: [always]
+    - name: Refuse a name this setup does not have
+      ansible.builtin.assert:
+        that: kubernetes_present or _unknown | length == 0
+        fail_msg: >-
+          This setup has no cluster, so make suspend knows no {{ _unknown | join(', ') }}{{
+          ': only homeassistant' if haos_present else ', nor any other name: it has no Home Assistant either' }}.
+        quiet: true
+      tags: [always]
+      vars:
+        _unknown: "{{ only_names | difference(['homeassistant'] if haos_present else []) }}"
+    - name: Say why Home Assistant is skipped
+      ansible.builtin.debug:
+        msg: No haos_mac in group_vars/all/local.yml, so this setup has no Home Assistant VM.
+      when: not haos_present
+      tags: [always]
+    - name: Skip Home Assistant when local.yml names no MAC for it
+      ansible.builtin.meta: end_host
+      when: not haos_present
+      tags: [always]
+    - name: Leave Home Assistant alone when ONLY names others
+      ansible.builtin.meta: end_host
+      when: only_names | length > 0 and 'homeassistant' not in only_names
+      tags: [always]
+  tasks:
+    - name: Shut Home Assistant's VM down
+      ansible.builtin.import_role:
+        name: proxmox_vm
+        tasks_from: power
+      vars:
+        proxmox_vm_power: stopped
+        proxmox_vm_power_vmids: ["{{ haos_vm_vmid | int }}"]
+
+# ALL=1 alone: the cluster's VMs, once the apps are down and Home Assistant's VM with them. Each shutdown is the
+# guest's own, which Talos takes as an orderly one, never a forced stop; the worker goes first and the control plane
+# last, each in turn (kubernetes_power_order). A VM is started again only by make resume ALL=1, make deploy
+# TYPE=kubernetes, or the host's own boot, for one marked onboot.
+- name: Shut the cluster's VMs down
+  hosts: proxmox
+  gather_facts: false
+  pre_tasks:
+    - name: Leave the cluster's VMs alone without ALL=1
+      ansible.builtin.meta: end_host
+      when: not (cluster_vms | default(false) | bool)
+      tags: [always]
+    - name: Say why the cluster's VMs are skipped
+      ansible.builtin.debug:
+        msg: No kubernetes_node_addresses in group_vars/all/local.yml, so this setup has no cluster.
+      when: not kubernetes_present
+      tags: [always]
+    - name: Skip them when local.yml names no nodes
+      ansible.builtin.meta: end_host
+      when: not kubernetes_present
+      tags: [always]
+  tasks:
+    - name: Shut the cluster's VMs down, the control plane last
+      ansible.builtin.import_role:
+        name: proxmox_vm
+        tasks_from: power
+      vars:
+        proxmox_vm_power: stopped
+        proxmox_vm_power_vmids: "{{ kubernetes_power_order }}"
+        # A worker stops its pods first.
+        proxmox_vm_power_timeout: 600

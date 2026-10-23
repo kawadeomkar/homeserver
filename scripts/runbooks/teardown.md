@@ -1,14 +1,14 @@
 # Taking the cluster down again
 
 How to remove a Kubernetes cluster this repository built, such as a test deployment, and everything it brought
-with it, leaving the NAS and the Proxmox host as they were before `make kubernetes`. Nothing here runs by itself;
-do it in this order, top to bottom. Commands on the Proxmox host run as root; addresses and MACs are in
+with it, leaving the NAS and the Proxmox host as they were before `make deploy TYPE=kubernetes`. Nothing here runs by
+itself; do it in this order, top to bottom. Commands on the Proxmox host run as root; addresses and MACs are in
 `group_vars/all/local.yml`.
 
 What stays, since it is not the cluster's: the storage ids under their class names (`homeserver-persistent`,
 `homeserver-ephemeral`, the project pools) and `homeserver-backup`, the NAS's `proxmox/backup` and project datasets,
-the package upgrades `make proxmox` installed, and the age key's public half in `.sops.yaml` (harmless without the
-key).
+the package upgrades `make deploy TYPE=proxmox` installed, and the age key's public half in `.sops.yaml` (harmless
+without the key).
 
 ## 1. Keep what you want from the apps
 
@@ -38,7 +38,7 @@ qm destroy 300 --purge 1 --destroy-unreferenced-disks 1
 ```
 
 `--purge` also takes the VMs out of the `vm-nightly` backup job and of HA. Then remove their backups, which would
-otherwise make `make kubernetes` refuse to build the VMs anew (`proxmox_vm` reads leftovers as a rebuild):
+otherwise make `make deploy TYPE=kubernetes` refuse to build the VMs anew (`proxmox_vm` reads leftovers as a rebuild):
 
 ```bash
 pvesm list homeserver-backup --vmid 300; pvesm list homeserver-backup --vmid 301    # without a NAS: vm_backup_storage
@@ -56,16 +56,16 @@ The `vm-nightly` job stays, covering `vm_backup_extra_vmids` if any; with none, 
 rm -rf ~/.talos/homeserver                   # or kubernetes_talos_config_dir: the secrets bundle, talosconfig, kubeconfig, the bootstrap record, etcd snapshots
 ```
 
-In `group_vars/all/local.yml`, delete the Kubernetes section (every `kubernetes_*`, `flux_*` and `sops_*`
-setting): without node addresses the NAS and Proxmox plays leave the cluster's parts alone, and
-`make kubernetes` ends by itself. The secrets bundle went with the directory: a new cluster gets a new one, and so
-does the password manager's copy. Keep the age key (`~/.config/sops/age/homeserver.agekey`) only if the SOPS files under `k8s/` stay; they
-decrypt with it alone.
+In `group_vars/all/local.yml`, delete the Kubernetes section (every `kubernetes_*`, `flux_*`, `sops_*` and
+`haos_url` setting): without node addresses the NAS and Proxmox plays leave the cluster's parts alone, and
+`make deploy TYPE=kubernetes` ends by itself. The secrets bundle went with the directory: a new cluster gets a new one,
+and so does the password manager's copy. Keep the age key (`~/.config/sops/age/homeserver.agekey`) only if the SOPS
+files under `k8s/` stay; they decrypt with it alone.
 
 ## 4. The NAS (with a NAS)
 
 The NAS role creates and never deletes, so this part is by hand, the one exception to "every change goes through
-the role", and needs the owner. With the Kubernetes section gone from `local.yml`, `make check-truenas` shows
+the role", and needs the owner. With the Kubernetes section gone from `local.yml`, `make check TYPE=truenas` shows
 nothing to add back; it then lists what remains for you to remove in the TrueNAS UI (below with the default pool
 names, `persistent` and `ephemeral`: yours if `local.yml` renames them):
 
@@ -86,5 +86,5 @@ block.
 
 ## 6. Check
 
-`make check-truenas` and `make check-proxmox` report `changed=0`, `make check-kubernetes` says this setup has no
-cluster, and `qm list` shows neither VM.
+`make check TYPE=truenas` and `make check TYPE=proxmox` report `changed=0`, `make check TYPE=kubernetes` says this setup
+has no cluster, and `qm list` shows neither VM.

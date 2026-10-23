@@ -1,0 +1,20 @@
+---
+# suspend.yml's and resume.yml's play: roles/app_scale with this repo's own configuration, against fake_talos_bin/'s
+# kubectl. Loads what the kubernetes host's groups would, by name; apps_state stands for the state each playbook sets.
+- name: Spin the fake cluster's apps down or up
+  hosts: kubernetes
+  gather_facts: false
+  vars_files:
+    - ../../group_vars/all/storage.yml
+    - ../../group_vars/all/kubernetes.yml
+    - ../../group_vars/kubernetes/talos.yml
+    - ../../group_vars/kubernetes/apps.yml
+  environment:
+    PATH: "{{ playbook_dir }}/fake_talos_bin:{{ lookup('ansible.builtin.env', 'PATH') }}"
+    FAKE_TALOS_STATE: "{{ fake_talos_state }}"
+    FAKE_TALOS_PYTHON: "{{ ansible_playbook_python }}"
+  roles:
+    - role: app_scale
+      vars:
+        app_scale_state: "{{ apps_state }}"
+        app_scale_only: "{{ (only | default('')).split(',') | map('trim') | select | list }}"

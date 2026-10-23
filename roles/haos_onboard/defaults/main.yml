@@ -1,0 +1,19 @@
+---
+# Neutral defaults: with nothing else set, the role does nothing. See README.md.
+
+# The Home Assistant OS VM on this Proxmox host, by VMID; 0 means none.
+haos_onboard_vmid: 0
+# Its MAC, which picks its address out of what the QEMU guest agent reports. Or its address, given outright.
+haos_onboard_mac: ""
+haos_onboard_address: ""
+haos_onboard_port: 8123
+# The owner account the role creates while onboarding is open: display name, username and password. Never printed.
+haos_onboard_name: ""
+haos_onboard_username: ""
+haos_onboard_password: ""
+haos_onboard_language: en
+# How long a real run waits for the guest agent to report an address (a boot), and for Home Assistant to answer its
+# onboarding API (on the first boot, Home Assistant OS downloads Home Assistant first: up to half an hour).
+haos_onboard_agent_retries: 40
+haos_onboard_retries: 120
+haos_onboard_delay: 15

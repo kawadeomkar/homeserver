@@ -1,4 +1,4 @@
-# Coverage of the roles' Python under `make test`: a report, not a gate. It sees only the in-process
+# Coverage of the roles' Python under `make test TYPE=unit`: a report, not a gate. It sees only the in-process
 # tests; the idempotence tests run the modules inside ansible-playbook, out of its reach. Each directory
 # is named, since coverage lists files that no test imports only from the directories given here.
 [run]
@@ -7,6 +7,7 @@ source =
     roles/truenas/module_utils
     roles/proxmox_vm/filter_plugins
     roles/talos/filter_plugins
+    roles/haos_onboard/filter_plugins
 branch = true
 
 [report]

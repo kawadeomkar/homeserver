@@ -1,10 +1,11 @@
 # Restoring a VM from its nightly backup
 
 The `vm-nightly` job (`roles/proxmox_backup`, configured in `group_vars/proxmox/backup.yml`) backs up the
-cluster's VMs every night at 02:00, with a NAS to `homeserver-backup` on the NAS's redundant pool, without one
-to the storage `local.yml` names as `vm_backup_storage`. It keeps seven daily and four weekly backups, and also
-covers any VM named in `vm_backup_extra_vmids`, such as Home Assistant's. A node's media disk carries
-`backup=0` and is never backed up.
+cluster's VMs and Home Assistant's (VM 310) every night at 02:00, with a NAS to `homeserver-backup` on the NAS's
+redundant pool, without one to the storage `local.yml` names as `vm_backup_storage`. It keeps seven daily and four
+weekly backups, and also covers any VM named in `vm_backup_extra_vmids`. After a restore,
+`make deploy TYPE=homeassistant` starts Home Assistant's VM as `make deploy TYPE=kubernetes` does the cluster's, and
+leaves Home Assistant itself alone. A node's media disk carries `backup=0` and is never backed up.
 
 Three procedures: the drill, which proves a backup restores without touching the running cluster, a real restore
 after losing the Proxmox host or its boot disk, and one VM restored on a host that is still running. Commands run
@@ -40,14 +41,14 @@ datasets. So the drill restores to a scratch VMID, with a new MAC, and never let
 
 ## A real restore, after losing the Proxmox host or its boot disk
 
-The run order after a reinstall is `make truenas`, `make proxmox`, **this restore**, then `make kubernetes`
-(`REBUILD.md`). Done out of order it fails safe: `proxmox_vm` refuses to create a VM whose VMID still has disks
-or backups, naming them and this runbook, and `talos` refuses to bootstrap a cluster it has bootstrapped
-before, rather than building an empty cluster over the old data.
+The run order after a reinstall is `make deploy TYPE=truenas`, `make deploy TYPE=proxmox`, **this restore**, then
+`make deploy TYPE=kubernetes` (`REBUILD.md`). Done out of order it fails safe: `proxmox_vm` refuses to create a VM whose
+VMID still has disks or backups, naming them and this runbook, and `talos` refuses to bootstrap a cluster it has
+bootstrapped before, rather than building an empty cluster over the old data.
 
-1. **Get the backup storage back.** With a NAS, `make proxmox` adds `homeserver-backup` again. Without one,
+1. **Get the backup storage back.** With a NAS, `make deploy TYPE=proxmox` adds `homeserver-backup` again. Without one,
    re-add the USB disk or Proxmox Backup Server by hand, under the same id as before (`vm_backup_storage`), and
-   **before** `make proxmox`, which refuses a backup storage that does not exist. A USB disk goes back as a
+   **before** `make deploy TYPE=proxmox`, which refuses a backup storage that does not exist. A USB disk goes back as a
    checked mount point:
 
    ```bash
@@ -66,7 +67,7 @@ before, rather than building an empty cluster over the old data.
    ```
 
 3. **Restore the worker** the same way, as VMID 301. Without a NAS its data disk comes back from the backup, as of
-   02:00, and its media disk, never backed up, is lost: `make kubernetes` adds it again, empty, and once the cluster
+   02:00, and its media disk, never backed up, is lost: `make deploy TYPE=kubernetes` adds it again, empty, and once the cluster
    is up, `kubectl -n local-path-storage delete job static-volume-directories` has Flux make the library's and the
    recordings' directories on it again (the restored Job ran before, on the old disk). With a NAS its data
    disk lives on `homeserver-persistent`, on the NAS, so it survived the host and is newer than the backup: after
@@ -78,15 +79,15 @@ before, rather than building an empty cluster over the old data.
    qm set 301 --scsi1 <volid>,discard=on,ssd=1,serial=talos-data,format=qcow2
    ```
 
-4. **Leave them stopped, and run `make check-kubernetes`, then `make kubernetes`.** Do not start them by hand:
-   their CD-ROM names the Talos ISO in `local`, which was on the lost boot disk, and Proxmox refuses to start a
-   VM one of whose drives is missing. `make kubernetes` downloads the ISO again, corrects the CD-ROM to it, and
-   starts the stopped VMs, which boot from their system disks. The dry run cannot reach the stopped nodes and
+4. **Leave them stopped, and run `make check TYPE=kubernetes`, then `make deploy TYPE=kubernetes`.** Do not start them
+   by hand: their CD-ROM names the Talos ISO in `local`, which was on the lost boot disk, and Proxmox refuses to start a
+   VM one of whose drives is missing. `make deploy TYPE=kubernetes` downloads the ISO again, corrects the CD-ROM to it,
+   and starts the stopped VMs, which boot from their system disks. The dry run cannot reach the stopped nodes and
    says it would install them; the real run waits for them to answer, finds them configured with a running
    etcd, and neither installs nor bootstraps. `talosctl health` and `kubectl get nodes` confirm the cluster.
 5. **A deliberate fresh build** over old backups, instead of a restore, needs
-   `make kubernetes ANSIBLE_ARGS='-e proxmox_vm_ignore_existing_volumes=true'` (make's own `-e` passes nothing
-   to Ansible). Move the old backups aside first: the nightly job's pruning would delete them within one to four
+   `make deploy TYPE=kubernetes ANSIBLE_ARGS='-e proxmox_vm_ignore_existing_volumes=true'` (make's own `-e` passes
+   nothing to Ansible). Move the old backups aside first: the nightly job's pruning would delete them within one to four
    weeks.
 
 ## Without a backup
@@ -96,7 +97,7 @@ the bootstrap marker in `~/.talos/homeserver` remembers the old one; it also let
 wait in maintenance mode):
 
 ```bash
-make kubernetes ANSIBLE_ARGS='-e proxmox_vm_ignore_existing_volumes=true -e talos_allow_bootstrap=true'
+make deploy TYPE=kubernetes ANSIBLE_ARGS='-e proxmox_vm_ignore_existing_volumes=true -e talos_allow_bootstrap=true'
 ```
 
 Flux recreates every app. With a NAS, its datasets (Nextcloud's and PhotoPrism's files, media, recordings) keep their
@@ -108,12 +109,12 @@ rebuild gives VM 301 a new, empty data disk beside it, so swap the old one in be
 run the VMs' play alone first (`--limit homeserver`), then the rest.
 
 ```bash
-make kubernetes ANSIBLE_ARGS='-e proxmox_vm_ignore_existing_volumes=true --limit homeserver'
+make deploy TYPE=kubernetes ANSIBLE_ARGS='-e proxmox_vm_ignore_existing_volumes=true --limit homeserver'
 qm stop 301
 pvesm list homeserver-persistent --vmid 301      # the old data disk, and the new one (the higher number)
 qm set 301 --scsi1 <old volid>,discard=on,ssd=1,serial=talos-data,format=qcow2
 qm disk unlink 301 --idlist unused0 --force 1    # the new, empty one
-make kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'
+make deploy TYPE=kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'
 ```
 
 Talos finds the old volume by its label and mounts it as it is. The new cluster's claims get new directories on
@@ -131,7 +132,7 @@ plane, to take etcd back to last night (`dead-worker.md` says what that costs).
 While the VM is defined, `qmrestore <archive> <vmid>` refuses, and with `--force` it replaces the VM and every
 disk it owns, with the backup's copies: the worker's data disk too, on the NAS or not, which is newer than the
 backup. A disk marked `backup=0` (the worker's media disk without a NAS) is not in the backup and comes back
-unattached, as `unusedN`, while `make kubernetes` would add a new, empty one in its place. So park each disk worth keeping on a placeholder VM first, where the restore cannot reach it, and put it
+unattached, as `unusedN`, while `make deploy TYPE=kubernetes` would add a new, empty one in its place. So park each disk worth keeping on a placeholder VM first, where the restore cannot reach it, and put it
 back afterwards. For the worker, with its data disk (`scsi1`):
 
 ```bash
@@ -148,5 +149,5 @@ qm destroy 9302
 
 Without a NAS, park `scsi2`, the media disk, the same way, always, and `scsi1` only if the data disk is good
 (otherwise the backup's copy, from last night, is what comes back). The control plane, VM 300, has its system disk
-alone: `qm stop 300`, then `qmrestore <newest archive of 300> 300 --force`. Then `make check-kubernetes` and `make
-kubernetes`, which start the VM. Not yet tried on a real host; try it on a test host first.
+alone: `qm stop 300`, then `qmrestore <newest archive of 300> 300 --force`. Then `make check TYPE=kubernetes` and
+`make deploy TYPE=kubernetes`, which start the VM. Not yet tried on a real host; try it on a test host first.

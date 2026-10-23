@@ -15,6 +15,8 @@ audit of the tree before the cluster was built.
 
 - [ ] Reserve every node's address in the router's DHCP, for its MAC (`kubernetes_node_macs`): the NAS's exports
       trust the worker's address, so a device that leases it reads the cluster's shares as root
+- [ ] Reserve Home Assistant's address for its MAC (`haos_mac`), with the hostname `homeassistant`, and point
+      `haos_url` at that name (`scripts/runbooks/haos.md`)
 - [ ] A servers VLAN for the NAS, the Proxmox host and the nodes, which the IoT and Wi-Fi devices cannot reach: NFS
       with sec=sys trusts addresses, and the nightly VM backups on the NAS hold the cluster's keys and etcd
       (CLAUDE.md, Landmines). Then narrow `kubernetes_ingress_allowed_range` to the clients' VLAN
@@ -39,7 +41,7 @@ audit of the tree before the cluster was built.
       page leaves its eight stage tags blank. Both are reported upstream (docsible#137, docsible#138) and still
       on its main branch, which fixes multi-line comments in tables (docsible#135) and `!unsafe` tags
       (docsible#134), unreleased. With a release that has them, bump the pin, think again about `--comments`,
-      check whether #137 and #138 are fixed too, and run `make docs`
+      check whether #137 and #138 are fixed too, and run `make fix TYPE=docs`
 
 ## TrueNAS
 
@@ -55,7 +57,7 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       2. Destroy the pool in the TrueNAS UI. The role never destroys a pool.
       3. In `local.yml`, remove `truenas_pool_persistent`, key the five disk serials under `persistent`, and
          set `truenas_pool_allow_create: true`.
-      4. Run `make check-truenas`, then `make truenas`.
+      4. Run `make check TYPE=truenas`, then `make deploy TYPE=truenas`.
       5. Remove `truenas_pool_allow_create`.
 
       This is the first real run of the role's pool creation, which no test exercises. Leave the `ephemeral`
@@ -108,27 +110,61 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 
 ## Proxmox
 
-- [ ] `make proxmox` says when the host needs a reboot and leaves it to a person. Once the Talos VMs exist,
+- [ ] `make deploy TYPE=proxmox` says when the host needs a reboot and leaves it to a person. Once the Talos VMs exist,
       decide how that reboot is done: drain the cluster first, or let Proxmox stop the VMs and start them
       again after the boot delay
-- [ ] Move the home host to the owner-and-class storage ids, once, by hand: check with `pvesm list` that
-      `truenas-persistent` and `truenas-ephemeral` hold no volume, `pvesm remove` both (until they are gone
-      every run refuses, naming them), then `make check`, `make site` twice, and grant `claude-on-proxmox`'s
-      token its pool
-      (`pveum aclmod /storage/claude-on-proxmox-ephemeral …`, the line from that project's README). Nothing
-      in `claude-on-proxmox` changes: its `local.yml` for this host sets `proxmox_storage` to the id
+- [ ] After the home host's next reboot, remove the two empty mount points the old ids left behind,
+      `/mnt/pve/truenas-persistent` and `/mnt/pve/truenas-ephemeral`. `pvesm remove` does not unmount an NFS
+      storage, so until that reboot both exports stay mounted a second time, at paths nothing uses
 - [ ] Pick a quota for `claude-on-proxmox-ephemeral` (`quota` on its `vm_storage_consumers` entry, in bytes or
       with a binary suffix such as `200G`); the parent's 1 TiB applies meanwhile
 - [ ] Turn on remote access through the host's Tailscale (`scripts/runbooks/tailscale.md`):
-      - the tailnet's policy first, its allow-all rule deleted, the NAS limited to tcp/443 and its tests passing;
-      - split DNS;
+      - the tailnet's policy first, its allow-all rule deleted and its tests passing (with routes, the NAS limited
+        to tcp/443);
+      - with routes, split DNS;
       - two-factor for `root@pam`;
-      - a one-off tagged key in the vault, and `tailscale_advertise_routes` in `local.yml`;
-      - `make check-proxmox` and `make proxmox` from home;
-      - the checks from outside, each control alone.
+      - a one-off tagged key in the vault, and `tailscale_enabled` (and, for the subnet router,
+        `tailscale_advertise_routes`) in `local.yml`;
+      - `make check TYPE=proxmox` and `make deploy TYPE=proxmox` from home;
+      - the checks from outside, with routes each control alone.
 
       Then compare `tailscale status --json` and `tailscale get --json` on the host with `fake_tailscale.py`, which
-      was written from a 1.102 client, and fix the fake where they differ
+      was written from a 1.102 client, and fix the fake where they differ. Check too that `ip -o link show dev
+      tailscale0` succeeds as soon as `tailscale status` answers, before the login, which the role's interface check
+      assumes from tailscaled's source. And at the console, while no one needs remote access, check the guard's
+      `Conflicts=`, which only systemd's documentation vouches for: `systemctl start nftables` must stop tailscaled
+      before the flush (`journalctl -u tailscaled -u nftables -n 20` shows tailscaled stopping first); then
+      `systemctl stop nftables`, and `make deploy TYPE=proxmox` brings the guard and tailscaled back
+- [ ] A `make` target that prints the tailnet's policy for this setup as JSON, to copy and paste into the admin
+      console's Access controls: section 1 of `scripts/runbooks/tailscale.md` rendered from `local.yml` (the LAN's
+      prefix from `tailscale_advertise_routes`, the NAS's addresses, the Proxmox host's, the tag from
+      `proxmox_tailscale_tags`), with or without a NAS, and its `tests` with the owner's login (asked for, or a
+      `local.yml` setting). The console saves the whole policy at once, so the output says which sections to merge
+      into a policy that already has others, such as another project's tags and grants (`claude-on-proxmox`'s
+      `tag:claude-vm`), rather than replace it. The runbook's section 1 then points at the target instead of its
+      placeholder JSON
+
+## Bringing the apps up
+
+Once the cluster is built and Flux syncs it (`scripts/runbooks/talos.md`). Merge app by app, or suspend the app
+Kustomizations and resume one at a time, in this order: homepage; prowlarr, sonarr, radarr, sabnzbd, seerr and
+filebrowser; jellyfin; nextcloud and photoprism; frigate. Each must start, survive `kubectl delete pod` and a node
+reboot (`talosctl reboot -n <worker>`), keep its data, and come back from a VM backup once, by the isolated drill
+(`scripts/runbooks/vm-restore.md`).
+
+- [ ] With a NAS, before the media apps import anything: move the media dataset's content into the apps' layout and
+      fix its ownership once (`README.md`, Manifests). Check first that its NFSv4 ACLs let uid 1000 write over NFS
+      with root mapped to root, and that `chown-mount` can chown its mount point
+- [ ] The TrueNAS CORE snapshot of 2024 on the media dataset pins every block the move replaces: decide with the
+      "TrueNAS CORE leftovers" item whether to delete it, through the role
+- [ ] After each app's first start, its own steps through a port forward (`scripts/runbooks/first-run.md`), then
+      `kubernetes_ingress_allowed_range` to open the LAN; Frigate's cameras after
+- [ ] With an Intel iGPU in the host, pass it to the worker for Jellyfin and Frigate
+      (`scripts/runbooks/gpu.md`), and run that runbook's checks: the render node's group inside the pods, and
+      that without a GPU both apps still schedule
+- [ ] Check that LinuxServer.io's images start with `allowPrivilegeEscalation: false`, which their s6 init has not
+      been seen to need. (Frigate 0.17's form under `go2rtc` is settled: it fills in `{FRIGATE_...}` only in streams
+      and the RTSP user and password, and go2rtc expands `${...}` everywhere else, from its environment.)
 
 ## Removed with the Ubuntu host layer
 

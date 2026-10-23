@@ -38,11 +38,12 @@ def mac(number):
     return ":".join(["02", "00", "00", "00", "00", f"{number:02x}"])
 
 
-# What local.yml.example's placeholders need before a run accepts them: a MAC for each node, and a repository
-# for Flux. The example's own <mac> and <you> are refused on purpose.
+# What local.yml.example's placeholders need before a run accepts them: a MAC for each node and for Home
+# Assistant's VM, and a repository for Flux. The example's own <mac> and <you> are refused on purpose.
 CLUSTER_VARS = {
     "kubernetes_node_macs": {"homeserver-cp-1": mac(1), "homeserver-worker-1": mac(2)},
     "flux_sync_url": "https://example.invalid/homeserver.git",
+    "haos_mac": mac(9),
 }
 CLUSTER_ARGS = ("-e", json.dumps(CLUSTER_VARS))
 
@@ -76,9 +77,11 @@ def blank_nas_local_yml():
 
 def example_tree(tmp_path, local_yml=None):
     """The roles, group_vars and playbooks copied into tmp_path, with local.yml.example or `local_yml` as
-    local.yml, and an ansible.cfg that names no vault password file."""
+    local.yml, no vault (at its path now or its old one), and an ansible.cfg that names no vault password file."""
     for name in ["roles", "group_vars"]:
-        shutil.copytree(ROOT / name, tmp_path / name, ignore=shutil.ignore_patterns("local.yml", "vault.yml"))
+        shutil.copytree(
+            ROOT / name, tmp_path / name, ignore=shutil.ignore_patterns("local.yml", "local.vault.yml", "vault.yml")
+        )
     for playbook in ROOT.glob("*.yml"):
         shutil.copy(playbook, tmp_path)
     shutil.copy(ROOT / "inventory.example", tmp_path)

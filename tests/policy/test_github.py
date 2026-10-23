@@ -7,6 +7,8 @@ also lets a job be skipped only if it is skipped on pushes alone, so no pull req
 """
 
 import json
+import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -56,16 +58,42 @@ def test_gate_allows_skipping_only_jobs_that_run_on_every_pull_request():
     assert conditional == dict.fromkeys(skippable, "github.event_name == 'pull_request'")
 
 
+def makefile_types(target):
+    """The types the Makefile's <target>_TYPES lists."""
+    match = re.search(rf"^{target}_TYPES\s*:=(.*)$", (ROOT / "Makefile").read_text(), re.M)
+    assert match, f"the Makefile has no {target}_TYPES"
+    return match.group(1).split()
+
+
+def test_ci_runs_every_lint_and_test_type():
+    """make lint and make test each run every type without TYPE, while CI splits them between its jobs by TYPE; a type
+    added to the Makefile and to no job would run locally and never gate a pull request."""
+    ran = {"lint": set(), "test": set()}
+    for job in workflow()["jobs"].values():
+        for step in job.get("steps", []):
+            for line in step.get("run", "").splitlines():
+                if not line.startswith("make "):
+                    continue
+                words = shlex.split(line)
+                goals = [word for word in words[1:] if not word.startswith("-") and "=" not in word]
+                types = [word.split("=", 1)[1] for word in words if word.startswith("TYPE=")]
+                for goal in set(goals) & set(ran):
+                    assert types, f"CI runs make {goal} without TYPE, so its jobs would repeat each other: {line}"
+                    ran[goal].update(types[-1].replace("k8s", ",".join(makefile_types("k8s"))).split(","))
+    for goal, types in ran.items():
+        assert types == set(makefile_types(goal)), goal
+
+
 def test_every_idempotence_test_runs_once():
     """The test job's matrix skips the tests marked cluster and the cluster job runs only those, split into shares
     that together hold each once, so each runs, on the matrix's Pythons or on one runner, and none twice."""
     jobs = workflow()["jobs"]
 
     def commands(job):
-        return [step["run"] for step in jobs[job]["steps"] if "make test-idempotence" in step.get("run", "")]
+        return [step["run"] for step in jobs[job]["steps"] if "make test TYPE=idempotence" in step.get("run", "")]
 
-    assert commands("test") == ["make test-idempotence PYTEST_ARGS='-m \"not cluster\"'"]
-    assert commands("cluster") == ['make test-idempotence PYTEST_ARGS="-m cluster --shard $SHARD"']
+    assert commands("test") == ["make test TYPE=idempotence PYTEST_ARGS='-m \"not cluster\"'"]
+    assert commands("cluster") == ['make test TYPE=idempotence PYTEST_ARGS="-m cluster --shard $SHARD"']
     shards = jobs["cluster"]["strategy"]["matrix"]["shard"]
     assert shards == [f"{k}/{len(shards)}" for k in range(1, len(shards) + 1)]
 
