@@ -63,6 +63,15 @@ simulation's `Inst <package> [<old>] (<new> ...)`, without the old version for a
 `Unpacking <package> (<new>) over (<old>) ...`, without `over` for a new one. With the state's `dpkg_fails` set,
 dist-upgrade unpacks everything and then fails as dpkg does when a package's script fails, with apt's error and
 exit status 100.
+
+`apt-get install` installs from Debian's own repository (`DEBIAN`), which apt knows whatever $FAKE_PVE_SOURCES_DIR
+holds, as a real host's debian.sources is always there, and from the package lists; it needs -y and
+DEBIAN_FRONTEND=noninteractive, and a package apt does not know fails with exit status 100. Installing one with a unit
+runs its scripts as a real install does: the unit is enabled and started. `dpkg-query --show
+--showformat=${db:Status-Status} <package>` prints `installed`, and fails as dpkg-query does for a package it has
+never seen. `systemctl daemon-reload` also reads the drop-ins under $FAKE_PVE_SYSTEMD_DIR, when it is set, and a unit
+started or restarted keeps the drop-ins it started with (`started_with`), so a test can tell what a running service
+was started with; `is-enabled`, `is-active`, `enable` and `restart` answer for the units installed packages bring.
 """
 
 import hashlib
@@ -93,6 +102,11 @@ PACKAGES = {
     },
     "lists": {},
 }
+
+
+# Debian's own packages, by version, and the unit each brings.
+DEBIAN = {"prometheus-node-exporter": "1.9.0-1"}
+UNITS = {"prometheus-node-exporter": "prometheus-node-exporter.service"}
 
 
 def fresh_state():
@@ -897,14 +911,79 @@ def apt_get(state, args):
                 print("E: Sub-process /usr/bin/dpkg returned an error code (1)", file=sys.stderr)
                 save(state)
                 sys.exit(100)
+    elif verbs[:1] == ["install"] and len(verbs) > 1:
+        if "-y" not in flags or os.environ.get("DEBIAN_FRONTEND") != "noninteractive":
+            fail("fake apt-get: install would stop to ask: it needs -y and DEBIAN_FRONTEND=noninteractive")
+        known = DEBIAN | packages["lists"]
+        unknown = [name for name in verbs[1:] if name not in known]
+        if unknown:
+            save(state)
+            print(f"E: Unable to locate package {unknown[0]}", file=sys.stderr)
+            sys.exit(100)
+        new = {name: known[name] for name in verbs[1:] if name not in packages["installed"]}
+        print(f"0 upgraded, {len(new)} newly installed, 0 to remove and 0 not upgraded.")
+        for name, version in sorted(new.items()):
+            print(f"Unpacking {name} ({version}) ...")
+            packages["installed"][name] = version
+            if name in UNITS:
+                state.setdefault("units", {})[UNITS[name]] = {"enabled": True}
+                start(state, UNITS[name])
+        if new:
+            state["mutations"] += 1
     else:
         fail(f"fake apt-get: unsupported {args}")
 
 
+def dpkg_query(state, args):
+    if len(args) != 3 or args[:2] != ["--show", "--showformat=${db:Status-Status}"]:
+        fail(f"fake dpkg-query: unsupported {args}")
+    if args[2] not in state["packages"]["installed"]:
+        print(f"dpkg-query: no packages found matching {args[2]}", file=sys.stderr)
+        sys.exit(1)
+    print("installed", end="")
+
+
+def dropins():
+    """The drop-ins under $FAKE_PVE_SYSTEMD_DIR, by unit: what a daemon-reload reads."""
+    directory = os.environ.get("FAKE_PVE_SYSTEMD_DIR")
+    out = {}
+    for path in sorted(Path(directory).glob("*.d/*.conf")) if directory else []:
+        out[path.parent.name[: -len(".d")]] = out.get(path.parent.name[: -len(".d")], "") + path.read_text()
+    return out
+
+
+def start(state, name):
+    state["units"][name].update(active=True, started_with=state.get("loaded_dropins", {}).get(name, ""))
+
+
 def systemctl(state, args):
-    if args != ["daemon-reload"]:
+    if args == ["daemon-reload"]:
+        state["daemon_reloads"] = state.get("daemon_reloads", 0) + 1
+        if os.environ.get("FAKE_PVE_SYSTEMD_DIR"):
+            state["loaded_dropins"] = dropins()
+        return
+    if len(args) != 2:
         fail(f"fake systemctl: unsupported {args}")
-    state["daemon_reloads"] = state.get("daemon_reloads", 0) + 1
+    verb, name = args
+    unit = state.get("units", {}).get(name)
+    if verb == "is-active":
+        print("active" if unit and unit.get("active") else "inactive")
+        sys.exit(0 if unit and unit.get("active") else 3)
+    if verb == "is-enabled" and unit is None:
+        print(f"Failed to get unit file state for {name}: No such file or directory", file=sys.stderr)
+        sys.exit(1)
+    if unit is None:
+        fail(f"Failed to {verb} {name}: Unit {name} not found.")
+    if verb == "is-enabled":
+        print("enabled" if unit["enabled"] else "disabled")
+        sys.exit(0 if unit["enabled"] else 1)
+    if verb == "enable":
+        unit["enabled"] = True
+    elif verb == "restart":
+        start(state, name)
+    else:
+        fail(f"fake systemctl: unsupported {args}")
+    state["mutations"] += 1
 
 
 def hostname(state, args):
@@ -924,6 +1003,7 @@ def main():
         "hostname": hostname,
         "systemctl": systemctl,
         "apt-get": apt_get,
+        "dpkg-query": dpkg_query,
     }
     tools[tool](state, args)
     save(state)
