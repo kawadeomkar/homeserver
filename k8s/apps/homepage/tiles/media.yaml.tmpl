@@ -27,21 +27,3 @@
         icon: filebrowser
         href: https://filebrowser.${DOMAIN}/
         siteMonitor: http://filebrowser.media.svc.cluster.local:8080/health
-- Cloud:
-    - Nextcloud:
-        icon: nextcloud
-        href: https://nextcloud.${DOMAIN}/
-        siteMonitor: http://nextcloud.nextcloud.svc.cluster.local/status.php
-    - PhotoPrism:
-        icon: photoprism
-        href: https://photoprism.${DOMAIN}/
-        siteMonitor: http://photoprism.photoprism.svc.cluster.local:2342/api/v1/status
-- Home:
-    # Home Assistant OS, a VM of its own outside the cluster; local.yml's haos_url, when set.
-    - Home Assistant:
-        icon: home-assistant
-        href: ${HAOS_URL:=}
-    - Frigate:
-        icon: frigate
-        href: https://frigate.${DOMAIN}/
-        siteMonitor: http://frigate.frigate.svc.cluster.local:8971/

@@ -1,5 +1,5 @@
 ---
-# The pull-request gate. The linters, test, cluster, kubernetes and leaks jobs split between them what a local
+# The pull-request gate. The lint, docs, test, cluster, kubernetes and leaks jobs split between them what a local
 # `make lint test` runs (tests/policy/test_github.py checks that each of its types runs here),
 # from the hash-locked toolchain, and ci-success is the one check for the "Protect main" ruleset to
 # require (its body is .github/rulesets/main.json, applied through the API). No job holds a secret, and
@@ -74,10 +74,36 @@ jobs:
           VIRTUAL_ENV="$RUNNER_TEMP/venv" make install
       # CI has no vault (it is git-ignored) and no .vault_pass: make gives ansible-lint a placeholder
       # password file, since ansible.cfg names one.
-      # -k: report every failing linter, not only the first. The tests run in the test job, the Kubernetes checks in
-      # the kubernetes job.
-      - name: the lock, yamllint, ansible-lint, ruff, module documentation and role references, GitHub config schemas
-        run: make -k lint TYPE=lock,yaml,ansible,python,docs,github
+      # -k: report every failing linter, not only the first. The documentation is the docs job's, the tests the test
+      # job's, the Kubernetes checks the kubernetes job's.
+      - name: the lock, yamllint, ansible-lint, ruff, GitHub config schemas
+        run: make -k lint TYPE=lock,yaml,ansible,python,github
+
+  # Every role's REFERENCE.md is what docsible generates from the role, and every module's documentation parses. A job
+  # of its own, so a page left stale fails a check named for it, within a minute, without waiting for ansible-lint.
+  # The pre-commit hook writes the pages for a commit that changes a role; make fix TYPE=docs writes them by hand.
+  docs:
+    name: docs
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Install Poetry
+        run: pipx install "poetry==${POETRY_VERSION}"
+      - name: Install the locked tooling
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "VIRTUAL_ENV=$RUNNER_TEMP/venv" >> "$GITHUB_ENV"
+          VIRTUAL_ENV="$RUNNER_TEMP/venv" make install
+      - name: Role references and module documentation
+        run: make lint TYPE=docs
 
   test:
     name: test (python ${{ matrix.python }})
@@ -288,7 +314,7 @@ jobs:
   ci-success:
     name: ci-success
     if: always()
-    needs: [lint, test, cluster, kubernetes, leaks, workflows, dependency-review]
+    needs: [lint, docs, test, cluster, kubernetes, leaks, workflows, dependency-review]
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions: {}

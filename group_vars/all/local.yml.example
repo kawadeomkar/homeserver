@@ -150,6 +150,11 @@ flux_sync_url: https://github.com/<you>/homeserver.git
 # kubernetes_node_sizes:
 #   homeserver-worker-1: {cores: 6, memory_mib: 24576, system_disk_gib: 64, data_disk_gib: 150, media_disk_gib: 1000}
 #   homeserver-cp-1: {cores: 2, memory_mib: 4096, system_disk_gib: 32}
+# The app groups this host runs; unset, every one: media (Jellyfin, Seerr,
+# Sonarr, Radarr, Prowlarr, SABnzbd, FileBrowser), nextcloud, photoprism,
+# frigate and homepage. Leaving one out stops it and keeps its data. A small
+# worker can run a few, say:
+# kubernetes_apps: [media, nextcloud, homepage]
 # Without a NAS and with no room for a media disk: keep the media and camera
 # recordings on the data volume, where they are backed up and share its space.
 # Nothing caps them there: a growing library, SABnzbd's downloads or Frigate's
