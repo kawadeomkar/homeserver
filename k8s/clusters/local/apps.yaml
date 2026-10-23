@@ -1,6 +1,7 @@
 ---
 # The apps, one Flux Kustomization per group, each once MetalLB's pool and the static volumes are in place. Both setups
-# run the same apps; on a small test host, stop the heavy ones with make suspend (scripts/runbooks/talos.md).
+# list every group; a host runs those local.yml's kubernetes_apps names (all of them unless it says), and
+# roles/flux_bootstrap has the sync leave out the rest.
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:

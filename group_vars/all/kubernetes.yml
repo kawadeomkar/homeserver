@@ -47,7 +47,7 @@ talos_installer_digests:
 kubernetes_iso_storage: local
 
 # The cluster's shape, the same in both setups: a control plane that runs Talos, etcd and the API alone, and a worker
-# that runs every app and holds their data disk. Only where the worker's disks live depends on the NAS: its data disk
+# that runs the apps and holds their data disk. Only where the worker's disks live depends on the NAS: its data disk
 # on the NAS with one, and with an optional media disk on the host's own storage without one
 # (group_vars/proxmox/vms.yml). The sizes fit the home host; local.yml's kubernetes_node_sizes changes them per node,
 # never here, and without a NAS it must size the worker to the host. Whether the worker gets the host's iGPU is per
@@ -82,6 +82,17 @@ kubernetes_power_order: >-
   {{ kubernetes_nodes | rejectattr('role', 'equalto', 'controlplane') | map(attribute='vmid') | list
      + kubernetes_nodes | selectattr('role', 'equalto', 'controlplane') | map(attribute='vmid') | list }}
 
+# The app groups, each a namespace that the Flux Kustomization apps-<group> applies, in the order Homepage lists them
+# (group_vars/kubernetes/flux.yml). tests/policy/test_k8s.py checks them against k8s/clusters/*/apps.yaml.
+kubernetes_app_groups: [media, nextcloud, photoprism, frigate, homepage]
+# The groups this host runs, in that order: every one, unless local.yml's kubernetes_apps names some. An empty list
+# runs the platform alone. A name that is no group is left out here and refused by kubernetes_settings_error.
+kubernetes_apps_enabled: >-
+  {%- set chosen = kubernetes_apps | default(none) -%}
+  {{ kubernetes_app_groups if chosen is none
+     else kubernetes_app_groups | select('in', chosen if chosen is iterable and chosen is not string
+                                                       and chosen is not mapping else []) | list }}
+
 # The apps answer at <app>.<domain>, unless local.yml names another domain (kubernetes_domain).
 kubernetes_domain_default: homeserver.internal
 kubernetes_timezone: America/Los_Angeles
@@ -101,10 +112,10 @@ kubernetes_data_storage: "{{ vm_storage_classes.persistent.proxmox_id if nas_pre
 #   - without a cluster, the section's other settings: what a misspelt kubernetes_node_addresses looks like;
 #   - with a cluster, node addresses that are not a mapping or not the cluster's two nodes, two nodes with one
 #     address or one MAC, a node without a locally administered MAC, no repository for Flux to sync or one not
-#     over HTTPS, a branch other than main without flux_sync_ref_unprotected, MetalLB's addresses missing or not
-#     IPv4, a LoadBalancer address outside MetalLB's range or used twice, a node address inside that range, an
-#     allowed ingress range that is not an IPv4 CIDR, a proxmox_address that is not IPv4 (the apps'
-#     NetworkPolicies deny it), the API's extra names given as a string, sizes that are not whole numbers, a node
+#     over HTTPS, a branch other than main without flux_sync_ref_unprotected, kubernetes_apps other than a list of
+#     groups, MetalLB's addresses missing or not IPv4, a LoadBalancer address outside MetalLB's range or used
+#     twice, a node address inside that range, an allowed ingress range that is not an IPv4 CIDR, a
+#     proxmox_address that is not IPv4 (the apps' NetworkPolicies deny it), the API's extra names given as a string, sizes that are not whole numbers, a node
 #     without cores or memory, a data or media disk under 11 GiB (its Talos volume takes 10, the partition table a
 #     little more), a system disk under the 10 GiB Talos installs on, a worker's under 32 GiB (every app's image), a
 #     control plane with a data or media disk or under 2 GiB of memory, and a worker without a data disk, where the
@@ -134,7 +145,8 @@ kubernetes_settings_error: >-
                    'flux_sync_ref': flux_sync_ref | default(''),
                    'flux_sync_ref_unprotected': flux_sync_ref_unprotected | default(''),
                    'kubernetes_ingress_allowed_range': kubernetes_ingress_allowed_range | default(''),
-                   'haos_url': haos_url | default('')}
+                   'haos_url': haos_url | default(''),
+                   'kubernetes_apps': kubernetes_apps | default('')}
                   | dict2items | selectattr('value') | map(attribute='key') | list -%}
   {%- if kubernetes_present is not boolean -%}
   {%-   set _ = out.append('kubernetes_present is worked out from kubernetes_node_addresses in group_vars/all/local.yml, '
@@ -220,6 +232,14 @@ kubernetes_settings_error: >-
   {%-     set _ = out.append("The apps' NetworkPolicies keep every pod off the Proxmox host by its IPv4 address, but "
                              ~ 'proxmox_address in group_vars/all/local.yml is ' ~ (pve or 'not set')
                              ~ ": give the host's IPv4 address there.") -%}
+  {%-   endif -%}
+  {%-   set chosen = kubernetes_apps | default(none) -%}
+  {%-   set unknown = (chosen | map('string') | reject('in', kubernetes_app_groups) | list)
+                      if chosen is iterable and chosen is not string and chosen is not mapping else [] -%}
+  {%-   if chosen is not none and (chosen is string or chosen is mapping or chosen is not iterable or unknown) -%}
+  {%-     set _ = out.append('kubernetes_apps must be a list of the app groups this host runs, such as [media, '
+                             ~ 'homepage]' ~ ((', and there is no group ' ~ unknown | join(', ')) if unknown else '')
+                             ~ '. The groups: ' ~ kubernetes_app_groups | join(', ') ~ '.') -%}
   {%-   endif -%}
   {%-   set lb = ['kubernetes_lb_range', 'kubernetes_lb_traefik_ip', 'kubernetes_lb_frigate_ip']
                | reject('in', given) | list -%}
@@ -363,7 +383,7 @@ kubernetes_settings_error: >-
                       | list -%}
   {%-     if unsized -%}
   {%-       set _ = out.append('Without a NAS, the cluster runs on a host the default sizes were not chosen for: '
-                               ~ 'kubernetes_node_sizes must give ' ~ worker_shape.name ~ ', which runs every app, '
+                               ~ 'kubernetes_node_sizes must give ' ~ worker_shape.name ~ ', which runs the apps, '
                                ~ unsized | join(', ') ~ '. The apps and the platform request about 4 vCPU and 10 GiB '
                                ~ 'together, so give it at least 4 cores, 12 GiB and a 32 GiB system disk, more for transcoding and photo '
                                ~ 'indexing. ' ~ cp_shape.name ~ ' keeps 2 cores, 4 GiB and a 32 GiB system disk '
