@@ -30,6 +30,7 @@ roles/truenas/           configures the NAS through its API: address, pools, dat
 roles/proxmox_apt/       sets Proxmox's package repositories (no subscription), upgrades it on every run, and says when it needs a reboot
 roles/proxmox_storage/   adds the NAS's shares to Proxmox as qcow2 VM-disk storage, or checks its own storage
 roles/proxmox_backup/    keeps the nightly vzdump job of the VMs
+roles/proxmox_node_exporter/ puts Prometheus's node exporter on the Proxmox host, for the cluster's Prometheus alone
 roles/proxmox_vm/        creates the cluster's VMs and Home Assistant's, and keeps the settings it manages
 roles/haos_onboard/      gives a new Home Assistant its owner account before anyone else on the network can
 roles/talos/             installs Talos on the VMs, keeps their configuration, bootstraps etcd once, upgrades on request
@@ -416,7 +417,9 @@ a merged change reaches the cluster without anyone running anything. To see what
 `flux get kustomizations` (KUBECONFIG as in `scripts/runbooks/talos.md`).
 
 Monitoring is kube-prometheus-stack: Grafana answers at `https://grafana.<domain>`, with the admin password the
-chart generated (CLAUDE.md, Monitoring, says how to read it).
+chart generated (CLAUDE.md, Monitoring, says how to read it). The Proxmox host is on the Node Exporter dashboards
+beside the nodes, by its address, once `just deploy proxmox` has run with the cluster in `local.yml`: its CPU and
+memory across every guest, its disks, temperatures and systemd units.
 
 Secrets are SOPS files (`k8s/README-secrets.md`); an app whose Secret you have not made yet waits for it. Each
 app's first visit, through a port forward, is `scripts/runbooks/first-run.md`: the wizards and logins, Jellyfin's

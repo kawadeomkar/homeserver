@@ -1,0 +1,10 @@
+---
+# Neutral defaults: with nothing else set, the role changes nothing. The addresses are configuration, set in
+# inventory group_vars; see README.md.
+
+# The IPv4 addresses that may scrape the exporter: with the node itself, its only clients. Empty, the role installs
+# and changes nothing.
+proxmox_node_exporter_scrapers: []
+
+# Where systemd reads the drop-in that keeps the exporter to them. A test points it elsewhere.
+proxmox_node_exporter_systemd_dir: /etc/systemd/system

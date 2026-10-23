@@ -1,0 +1,19 @@
+---
+# roles/proxmox_node_exporter with this repo's own configuration, run against the fake apt-get, dpkg-query and
+# systemctl in fake_pve_bin/. A playbook of its own, not part of proxmox.yml, which the other tests run many times.
+# The cluster's nodes come from the test as extra vars, and the drop-in goes to the scratch directory it passes as
+# proxmox_node_exporter_systemd_dir, which the fake systemctl reads at each daemon-reload.
+- name: Put the node exporter on the fake Proxmox host
+  hosts: proxmox
+  gather_facts: false
+  vars_files:
+    - ../../group_vars/all/storage.yml
+    - ../../group_vars/all/kubernetes.yml
+    - ../../group_vars/proxmox/node_exporter.yml
+  environment:
+    PATH: "{{ playbook_dir }}/fake_pve_bin:{{ lookup('ansible.builtin.env', 'PATH') }}"
+    FAKE_PVE_STATE: "{{ fake_pve_state }}"
+    FAKE_PVE_PYTHON: "{{ ansible_playbook_python }}"
+    FAKE_PVE_SYSTEMD_DIR: "{{ proxmox_node_exporter_systemd_dir }}"
+  roles:
+    - role: proxmox_node_exporter
