@@ -181,7 +181,7 @@ help: ## Show this help
 	  init "$(init_TYPES): every optional setting too" \
 	  vault "$(vault_TYPES)" \
 	  "" "new: with NAME, a setup of that name, empty, which the checkout then uses (FROM=current: of its own files);" \
-	  "" "     without NAME, an empty vault in the checkout, and a .vault_pass if there is none" \
+	  "" "     without NAME, the vault in the checkout, every key empty, and a .vault_pass if there is none" \
 	  "" "list: every setup, the one this checkout uses marked; switch: this checkout to setup NAME" \
 	  lint "$(lint_TYPES)" "" "k8s: $(k8s_TYPES)" \
 	  test "$(test_TYPES)" \
@@ -257,12 +257,13 @@ vault/list:
 vault/switch:
 	@$(SETUPS_PY) switch '$(NAME)'
 
-# With NAME, a setup of that name, which the checkout then uses: local.yml with every setting commented out, an empty
-# vault and a random password (FROM=current: this checkout's own three files, moved into it).
+# With NAME, a setup of that name, which the checkout then uses: local.yml with every setting commented out, a vault
+# with every key empty and a random password (FROM=current: this checkout's own three files, moved into it).
 # Without NAME, the vault in the checkout itself. Every run decrypts the vault, so it and .vault_pass must exist, and
 # both are yours alone: neither is ever committed (.gitignore; README.md, Setups and the vault). This makes what is
-# missing: a random .vault_pass readable by its owner alone, and an empty vault encrypted with it, both encrypted
-# before either is written. A vault that already opens with .vault_pass is left alone, and one that does not is
+# missing: a random .vault_pass readable by its owner alone, and the vault encrypted with it, both encrypted before
+# either is written. A new vault is group_vars/all/local.vault.yml.example: every key the playbooks read, each empty
+# (unset) under a comment saying what it is for. A vault that already opens with .vault_pass is left alone, and one that does not is
 # refused, since it may hold your secrets with their password lost; so is a checkout that still has the vault's old,
 # committed place, whose vault moves rather than a new one being made beside it, and one that uses a setup, whose
 # links this would write through (scripts/init/setups.py). Without ansible-vault it stops before anything else.

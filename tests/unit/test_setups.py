@@ -27,10 +27,12 @@ PASSWORD = "a-vault-password-for-the-test"
 
 @pytest.fixture
 def root(tmp_path, monkeypatch):
-    """A checkout holding what setups.py reads: local.yml.example, and nothing of a setup yet."""
+    """A checkout holding what setups.py reads: local.yml.example and the vault's template, and nothing of a setup
+    yet."""
     checkout = tmp_path / "checkout"
     (checkout / "group_vars" / "all").mkdir(parents=True)
-    shutil.copy(ROOT / wizard.EXAMPLE, checkout / wizard.EXAMPLE)
+    for example in (wizard.EXAMPLE, setups.VAULT_TEMPLATE):
+        shutil.copy(ROOT / example, checkout / example)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("SETUPS", str(tmp_path / "setups"))
     return checkout
@@ -48,6 +50,12 @@ def vault_text(data: dict, password: str = PASSWORD) -> bytes:
 def decrypt(vault: Path, password_file: Path) -> dict:
     secret = VaultSecret(password_file.read_bytes().strip())
     return yaml.safe_load(VaultLib([("default", secret)]).decrypt(vault.read_bytes()))
+
+
+def is_template(vault: Path, password_file: Path) -> bool:
+    """The vault the template makes: its text whole, comments and all, each key empty."""
+    plain = VaultLib([("default", VaultSecret(password_file.read_bytes().strip()))]).decrypt(vault.read_bytes())
+    return plain.decode() == (ROOT / setups.VAULT_TEMPLATE).read_text()
 
 
 def own_files(root: Path, local: str = "---\nkubernetes_domain: home.internal\n", password: str = PASSWORD) -> None:
@@ -82,7 +90,7 @@ def test_a_new_setup_is_whole_readable_by_its_owner_alone_and_used(root, where):
     for file, rel in setups.FILES.items():
         assert stat.S_IMODE((setup / file).stat().st_mode) == 0o600, file
         assert (root / rel).is_symlink() and setups.target(root / rel) == setup / file, rel
-    assert decrypt(setup / "vault.yml", setup / "vault_pass") == {}, "an empty vault that opens with its password"
+    assert is_template(setup / "vault.yml", setup / "vault_pass"), "the template, opening with its password"
     password = (setup / "vault_pass").read_text()
     assert len(password.strip()) == 64 and password.endswith("\n")
     assert yaml.safe_load((root / LOCAL).read_text()) is None, "every setting commented out: the playbooks read none"
@@ -303,10 +311,20 @@ def test_list_marks_the_setup_in_use_and_shows_no_secret(root, where):
     setups.switch(root, where, "home")
     text = setups.listing(root, where)
     rows = {line.split()[1] if line.startswith("*") else line.split()[0]: line for line in text.splitlines()[2:]}
-    assert rows["home"].startswith("*") and "opens, 2 keys" in rows["home"]
-    assert not rows["lab"].startswith("*") and "opens, 0 keys" in rows["lab"]
+    assert rows["home"].startswith("*") and "opens, 2 keys set" in rows["home"]
+    assert not rows["lab"].startswith("*") and "opens, 0 keys set" in rows["lab"]
     assert "no vault_pass" in rows["old"]
     assert secret not in text and PASSWORD not in text
+
+
+def test_list_counts_the_keys_a_vault_sets_not_those_left_empty(root, where):
+    setup = setups.new(root, where, "home", wizard.commented_example(root))
+    assert "opens, 0 keys set" in setups.listing(root, where), "the template sets nothing"
+    template = (root / setups.VAULT_TEMPLATE).read_text()
+    filled = template.replace('vault_haos_owner_password: ""', "vault_haos_owner_password: owner-password-of-the-test")
+    assert filled != template
+    (setup / "vault.yml").write_bytes(setups.encrypt(filled, (setup / "vault_pass").read_bytes().strip()))
+    assert "opens, 1 key set" in setups.listing(root, where)
 
 
 def test_list_says_what_a_checkout_without_a_setup_can_do(root, where):
@@ -340,7 +358,7 @@ def test_the_command_line_makes_a_setup_of_the_example(root, capsys):
 
 def test_without_a_name_new_makes_the_checkouts_own_vault(root, capsys):
     assert setups.main(["new"], root=root) == 0
-    assert decrypt(root / VAULT, root / VAULT_PASS) == {}
+    assert is_template(root / VAULT, root / VAULT_PASS)
     assert not links(root) and stat.S_IMODE((root / VAULT_PASS).stat().st_mode) == 0o600
     assert setups.main(["new"], root=root) == 0 and "nothing to do" in capsys.readouterr().out
 
@@ -359,7 +377,13 @@ def tree(tmp_path: Path) -> Path:
     (checkout / "scripts" / "init").mkdir(parents=True)
     (checkout / "group_vars" / "all").mkdir(parents=True)
     (checkout / "vars_plugins").mkdir()
-    for name in ("Makefile", "ansible.cfg", str(wizard.EXAMPLE), "vars_plugins/setup_links.py"):
+    for name in (
+        "Makefile",
+        "ansible.cfg",
+        str(wizard.EXAMPLE),
+        str(setups.VAULT_TEMPLATE),
+        "vars_plugins/setup_links.py",
+    ):
         shutil.copy(ROOT / name, checkout / name)
     for script in ("init.py", "settings.py", "setups.py"):
         shutil.copy(ROOT / "scripts" / "init" / script, checkout / "scripts" / "init" / script)
@@ -416,7 +440,7 @@ def test_make_vault_edits_another_setups_vault_without_switching(tmp_path):
     assert edited.returncode == 0, edited.stdout + edited.stderr
     lab, home = store / "lab", store / "home"
     assert decrypt(lab / "vault.yml", lab / "vault_pass") == {"vault_haos_owner_password": "edited"}
-    assert decrypt(home / "vault.yml", home / "vault_pass") == {}
+    assert is_template(home / "vault.yml", home / "vault_pass")
     assert setups.target(checkout / VAULT) == home / "vault.yml", "the checkout keeps its setup"
 
 

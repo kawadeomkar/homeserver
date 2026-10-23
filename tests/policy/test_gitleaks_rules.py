@@ -194,7 +194,7 @@ FIXTURES = [
     ("k8s/demo/creds.json", '{"apiVersion": "v1", "kind": "Secret"}\n', {"k8s-plaintext-secret"}),
     ("k8s/demo/creds.example.yaml", SECRET_KIND + "\n", set()),
     ("inventory.example", "[nas]\n", set()),
-    ("group_vars/all/local.vault.yml.example", "# vault_truenas_api_key: <the key>\n", set()),
+    ("group_vars/all/local.vault.yml.example", 'vault_truenas_api_key: ""\n', set()),
     # Must not match: an inventory below the root (only the root one is never committed), with loopback
     ("tests/demo/inventory.ini", "[nas]\n", set()),
     ("molecule/demo/inventory/hosts.yml", "ansible_host: " + dotted("127", "0", "0", "20") + "\n", set()),

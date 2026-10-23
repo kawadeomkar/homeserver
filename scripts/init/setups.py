@@ -12,13 +12,15 @@ checks that the three links point into one setup and that each of its files is t
 and vars_plugins/setup_links.py for ansible-playbook started any other way). A checkout whose three paths are its own
 files, or missing, uses no setup and works as it always did.
 
-  list                    every setup, the checkout's marked: whether its vault opens, its number of keys (never a
+  list                    every setup, the checkout's marked: whether its vault opens, how many keys it sets (never a
                           value), when each file last changed
   switch NAME             link NAME's files in
-  new NAME                a setup: local.yml.example with every setting commented out, an empty vault and a random
-                          password, readable by their owner alone; then switch to it
+  new NAME                a setup: local.yml.example with every setting commented out, local.vault.yml.example with
+                          every key empty as its vault, and a random password, readable by their owner alone; then
+                          switch to it
   new NAME --from current this checkout's own three files moved into a new setup, and links left in their place
-  new                     the checkout's own vault, what it lacks of it: a random .vault_pass and an empty vault
+  new                     the checkout's own vault, what it lacks of it: a random .vault_pass and the vault, from
+                          local.vault.yml.example
   check                   which setup a playbook run uses, or stop when its links are broken
   name                    the setup's name alone, for the run's log; nothing for the checkout's own files
   edit NAME               ansible-vault edit on NAME's vault, with NAME's password, without switching
@@ -58,8 +60,11 @@ MAKES = {
 OLD_VAULT = Path("group_vars/all/vault.yml")
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 NAME_RULE = "lower-case letters, digits and dashes, such as home or lab"
-EMPTY_VAULT = "---\n{}\n"
+# What a new vault starts as: every key the playbooks read, each empty and explained.
+VAULT_TEMPLATE = Path("group_vars/all/local.vault.yml.example")
 _KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\s*:", re.M)
+# A key left empty, as the template leaves each: unset for every playbook that reads it.
+_EMPTY_KEY = re.compile(r"""^[A-Za-z_][A-Za-z0-9_]*\s*:[ \t]*(?:""|'')[ \t]*(?:#.*)?$""", re.M)
 
 
 class Refused(Exception):
@@ -136,14 +141,22 @@ def encrypt(text: str, password: bytes, vault_id: str | None = None) -> bytes:
     return VaultLib([("default", secret)]).encrypt(text.encode(), secret=secret, vault_id=vault_id)
 
 
+def vault_template(root: Path) -> str:
+    """The text a new vault is encrypted from."""
+    return (root / VAULT_TEMPLATE).read_text()
+
+
 def vault_keys(vault: Path, password_file: Path) -> int | None:
-    """How many keys a vault holds, None when it does not open with the password. The keys are counted in the
-    decrypted text, never parsed or shown."""
+    """How many keys a vault sets, those left empty aside; None when it does not open with the password. The keys are
+    counted in the decrypted text, never parsed or shown."""
     try:
         plain = decrypt(vault.read_bytes(), password_file.read_bytes().strip())
     except OSError:
         return None
-    return None if plain is None else len(_KEY.findall(plain.decode(errors="replace")))
+    if plain is None:
+        return None
+    text = plain.decode(errors="replace")
+    return len(_KEY.findall(text)) - len(_EMPTY_KEY.findall(text))
 
 
 def problems(setup: Path) -> list[str]:
@@ -325,7 +338,7 @@ def switch(root: Path, where: Path, name: str) -> bool:
 
 
 def new(root: Path, where: Path, name: str, local_text: str) -> Path:
-    """A setup of local_text, an empty vault and a random password, which the checkout then uses."""
+    """A setup of local_text, the vault's template and a random password, which the checkout then uses."""
     unused(where, name)
     refuse_old_vault(root)
     refuse_own_files(root)
@@ -335,7 +348,7 @@ def new(root: Path, where: Path, name: str, local_text: str) -> Path:
         name,
         {
             "local.yml": local_text.encode(),
-            "vault.yml": encrypt(EMPTY_VAULT, password.encode()),
+            "vault.yml": encrypt(vault_template(root), password.encode()),
             "vault_pass": f"{password}\n".encode(),
         },
     )
@@ -374,11 +387,11 @@ def adopt(root: Path, where: Path, name: str) -> Path:
 
 def own_vault(root: Path) -> str:
     """make vault TYPE=new without NAME: what the checkout lacks of a vault of its own, a random .vault_pass readable
-    by its owner alone and an empty vault encrypted with it. A vault that opens with .vault_pass is left alone, and one
-    that does not is refused, since it may hold the person's secrets with their password lost; so is one at the old,
-    committed path, which moves rather than a new one being made beside it, and a setup, whose links this would write
-    through. A .vault_pass without a vault is kept, and the vault encrypted with it. Both are encrypted before either
-    is written."""
+    by its owner alone and the vault's template encrypted with it. A vault that opens with .vault_pass is left alone,
+    and one that does not is refused, since it may hold the person's secrets with their password lost; so is one at the
+    old, committed path, which moves rather than a new one being made beside it, and a setup, whose links this would
+    write through. A .vault_pass without a vault is kept, and the vault encrypted with it. Both are encrypted before
+    either is written."""
     current = active(root)
     if current is not None:
         raise Refused(
@@ -405,11 +418,14 @@ def own_vault(root: Path) -> str:
     else:
         password = secrets.token_hex(32).encode()
         made = password + b"\n"
-    data = encrypt(EMPTY_VAULT, password)
+    data = encrypt(vault_template(root), password)
     if made:
         write_new(password_file, made)
     write_new(vault, data)
-    return f"Made {FILES['vault.yml']}, encrypted with .vault_pass. Keep a copy of both in your password manager."
+    return (
+        f"Made {FILES['vault.yml']}, every key empty, encrypted with .vault_pass: make init or make vault fills them "
+        "in. Keep a copy of both in your password manager."
+    )
 
 
 def edit(where: Path, name: str) -> int:
@@ -450,7 +466,7 @@ def vault_state(setup: Path) -> str:
     keys = vault_keys(setup / "vault.yml", setup / "vault_pass")
     if keys is None:
         return "does not open"
-    return f"opens, {keys} key{'' if keys == 1 else 's'}"
+    return f"opens, {keys} key{'' if keys == 1 else 's'} set"
 
 
 def listing(root: Path, where: Path) -> str:
@@ -539,9 +555,9 @@ def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
 
             setup = new(root, where, args.name, init.commented_example(root))
             print(
-                f"Made setup {args.name} ({shown(setup)}): local.yml with every setting commented out, an empty vault "
-                "and its password, readable by you alone. This checkout uses it now, and make init asks for its "
-                "settings. Keep a copy of the directory in your password manager."
+                f"Made setup {args.name} ({shown(setup)}): local.yml with every setting commented out, a vault with "
+                "every key empty and its password, readable by you alone. This checkout uses it now, and make init "
+                "asks for its settings and secrets. Keep a copy of the directory in your password manager."
             )
     except Refused as e:
         print(e, file=sys.stderr)
