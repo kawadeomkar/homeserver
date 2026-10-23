@@ -939,8 +939,12 @@ class Init:
             False,
             "vault-new",
         ):
-            result = run(["make", "vault", "TYPE=new", f"VENV={sys.prefix}"], cwd=self.root)
-            self.console.say(textwrap.indent((result.stdout + result.stderr).strip(), "  "))
+            # What make vault TYPE=new runs, in this process: no task runner needed, and a refusal is said, not raised.
+            try:
+                said = setups.own_vault(self.root)
+            except (setups.Refused, OSError) as e:
+                said = str(e)
+            self.console.say(textwrap.indent(said, "  "))
             self.vault.open()
 
     # ------------------------------------------------------------------------------------------------ run ---

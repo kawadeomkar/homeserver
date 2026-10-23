@@ -518,6 +518,32 @@ def test_a_vault_password_that_does_not_open_the_vault_is_not_kept(repo):
     assert "That password does not open the vault." in console.text
 
 
+NO_SECTIONS = {"switch:nas": "n", "switch:remote": "n", "switch:cluster": "n", "switch:homeassistant": "n"}
+
+
+def test_a_new_vault_is_made_when_the_person_asks_for_one(repo):
+    """make vault TYPE=new's work, done in this process: the checkout's tree has no Makefile, and init needs no task
+    runner to make the vault, which then opens for the secrets asked after it."""
+    console = Scripted({"vault-new": "y", **NO_SECTIONS})
+    init = init_run(repo, console)
+    for path in (repo / ".vault_pass", repo / wizard.VAULT):
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600, path
+    assert f"Made {wizard.VAULT}, encrypted with .vault_pass" in console.text
+    assert init.vault.is_open and init.vault.doc.values() == {}
+    assert "vault is missing" not in console.out[-1] and "has no password" not in console.out[-1]
+
+
+def test_a_new_vault_never_replaces_one_that_may_hold_secrets(repo):
+    """A vault that no .vault_pass opens is refused, as make vault TYPE=new refuses it: said, and nothing written."""
+    make_vault(repo, {"vault_other": "x"})
+    (repo / ".vault_pass").unlink()
+    before = (repo / wizard.VAULT).read_bytes()
+    console = Scripted({"vault-new": "y", **NO_SECTIONS})
+    init_run(repo, console)
+    assert "does not open with .vault_pass, so it may hold your secrets" in console.text
+    assert (repo / wizard.VAULT).read_bytes() == before and not (repo / ".vault_pass").exists()
+
+
 def test_a_new_local_yml_is_the_example_with_every_setting_commented_out(repo):
     console = Silent()
     init_run(repo, console, interactive=False)
