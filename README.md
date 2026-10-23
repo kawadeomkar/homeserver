@@ -232,7 +232,8 @@ Ids say who owns a storage and what it is for, never what is behind it: `homeser
 `homeserver-ephemeral` for this repo's two VM classes, `<project>-ephemeral` for a project's pool. An id does
 not change with the backend. Renaming one is a migration: the role never removes a storage and refuses to
 mount an export under a second id, so the old id comes out by hand first (`pvesm remove <id>`, once
-`pvesm list <id>` shows nothing on it); until then a dry run refuses and names both ids. This repo manages
+`pvesm list <id>` shows nothing on it); until then a dry run refuses and names both ids. `pvesm remove` leaves
+the old id's NFS mount in place until the host reboots. This repo manages
 no Proxmox users or permissions, and a project never gets `Datastore.Allocate`: in Proxmox that right,
 granted on `/storage` for creating a storage, also allows changing or removing every other one. One cosmetic
 effect: the GUI's "Create VM" wizard preselects the first storage by id, so with a NAS it preselects a
