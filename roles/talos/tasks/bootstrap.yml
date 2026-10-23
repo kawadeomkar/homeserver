@@ -42,7 +42,7 @@
       its control plane lost its etcd. Bootstrapping now would make a new, empty cluster. Restore etcd from a
       snapshot (talosctl bootstrap --recover-from=<snapshot>; snapshots are in {{ talos_config_dir }}/etcd/), or
       restore the VM from its backup (scripts/runbooks/vm-restore.md), or, for a new cluster on purpose, run
-      make deploy TYPE=kubernetes ANSIBLE_ARGS='-e talos_allow_bootstrap=true'.
+      just deploy kubernetes -e talos_allow_bootstrap=true.
     quiet: true
   when: talos_etcd is not skipped
 

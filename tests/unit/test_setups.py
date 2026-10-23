@@ -147,9 +147,9 @@ def test_switch_and_new_never_replace_a_file_of_the_checkouts_own(root, where):
     own_files(root)
     before = {rel: (root / rel).read_bytes() for rel in setups.FILES.values()}
     stored(where, "lab")
-    with pytest.raises(setups.Refused, match="FROM=current"):
+    with pytest.raises(setups.Refused, match="--from current"):
         setups.switch(root, where, "lab")
-    with pytest.raises(setups.Refused, match="FROM=current"):
+    with pytest.raises(setups.Refused, match="--from current"):
         setups.new(root, where, "spare", "---\n")
     assert {rel: (root / rel).read_bytes() for rel in setups.FILES.values()} == before
     assert not links(root) and not (where / "spare").exists()
@@ -189,14 +189,14 @@ def test_files_that_are_not_whole_are_never_adopted(root, where):
     with pytest.raises(setups.Refused, match=r"does not open with \.vault_pass"):
         setups.adopt(root, where, "home")
     (root / LOCAL).unlink()
-    with pytest.raises(setups.Refused, match="make init writes it"):
+    with pytest.raises(setups.Refused, match="just init writes it"):
         setups.adopt(root, where, "home")
     assert not (where / "home").exists() and not links(root)
     assert (root / VAULT).is_file() and not (root / VAULT).is_symlink(), "the files stay where they were"
 
 
 def test_a_local_yml_that_sets_nothing_gives_way_to_a_setup(root, where):
-    """make init's first run writes local.yml with every setting commented out, and a setup restored after it still
+    """just init's first run writes local.yml with every setting commented out, and a setup restored after it still
     links in, since nothing is lost; a local.yml that sets anything is refused by name."""
     (root / LOCAL).write_text(wizard.commented_example(root))
     lab = setups.new(root, where, "lab", "---\n")
@@ -246,7 +246,7 @@ def test_a_move_cut_short_is_finished_by_switching_to_its_setup(root, where):
     for file in ("local.yml", "vault.yml"):
         (root / setups.FILES[file]).unlink()
         (root / setups.FILES[file]).symlink_to(setup / file)
-    with pytest.raises(setups.Refused, match=r"\.vault_pass is a file of this checkout's own.*NAME=home finishes"):
+    with pytest.raises(setups.Refused, match=r"\.vault_pass is a file of this checkout's own.*switch home finishes"):
         setups.check(root)
     assert setups.switch(root, where, "home") is True
     assert setups.active(root) == setup
@@ -312,16 +312,16 @@ def test_list_marks_the_setup_in_use_and_shows_no_secret(root, where):
 def test_list_says_what_a_checkout_without_a_setup_can_do(root, where):
     assert "No setups in" in setups.listing(root, where)
     own_files(root)
-    assert "FROM=current" in setups.listing(root, where)
+    assert "--from current" in setups.listing(root, where)
 
 
 # ------------------------------------------------------------------------------------------------------ cli ---
 @pytest.mark.parametrize(
     ("argv", "says"),
     [
-        (["switch"], "needs NAME=<setup>"),
+        (["switch"], "needs a setup's name"),
         (["new", "--from", "current"], "which needs a name"),
-        (["new", "home", "--from", "elsewhere"], "FROM takes current alone"),
+        (["new", "home", "--from", "elsewhere"], "--from takes current alone"),
         (["edit", "nope"], "There is no setup nope"),
     ],
 )

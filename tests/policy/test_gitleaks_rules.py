@@ -5,7 +5,7 @@ identifier and the repository's own scans stay clean. They sit under the paths t
 expect (roles/, k8s/, tests/, ...) and are scanned from that root, as a directory and as a git commit:
 the range scan in CI and the pre-push hook use git mode.
 
-Marked `gitleaks`: `make test TYPE=gitleaks` runs these with gitleaks from PATH, `make test TYPE=policy` does not.
+Marked `gitleaks`: `just test gitleaks` runs these with gitleaks from PATH, `just test policy` does not.
 Without gitleaks they are skipped locally and fail in CI.
 """
 
@@ -103,7 +103,7 @@ FIXTURES = [
     ("group_vars/all/local.yml.bak", "x: 1\n", {"sensitive-file"}),
     ("group_vars/all/local.vault.yml", "$ANSIBLE_VAULT;1.1;AES256\n6162\n", {"sensitive-file"}),
     ("group_vars/all/vault.yml", "$ANSIBLE_VAULT;1.1;AES256\n6162\n", {"sensitive-file"}),
-    # make init's copies of the three, left by a run killed while writing (scripts/init/init.py, temp_copy)
+    # just init's copies of the three, left by a run killed while writing (scripts/init/init.py, temp_copy)
     (".vault_pass.init-tmp", "x\n", {"sensitive-file"}),
     ("group_vars/all/local.yml.init-tmp", "x: 1\n", {"sensitive-file"}),
     ("group_vars/all/local.vault.yml.init-tmp", "$ANSIBLE_VAULT;1.1;AES256\n6162\n", {"sensitive-file"}),

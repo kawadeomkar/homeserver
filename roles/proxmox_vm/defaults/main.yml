@@ -30,8 +30,8 @@ proxmox_vm_host_headroom_gib: 0
 # A missing VM whose VMID still has disks or backups somewhere is refused: it is being rebuilt, and would get new,
 # empty disks beside the old ones. True builds it new anyway.
 proxmox_vm_ignore_existing_volumes: false
-# How to run the role again with proxmox_vm_ignore_existing_volumes, which that refusal names: the play's own make
-# target, say. Empty: the play again with -e proxmox_vm_ignore_existing_volumes=true.
+# How to run the role again with proxmox_vm_ignore_existing_volumes, which that refusal names: the play's own just
+# recipe, say. Empty: the play again with -e proxmox_vm_ignore_existing_volumes=true.
 proxmox_vm_rebuild_command: ""
 # The Proxmox node's name. Empty means the host's short hostname, which is what Proxmox uses.
 proxmox_vm_node: ""

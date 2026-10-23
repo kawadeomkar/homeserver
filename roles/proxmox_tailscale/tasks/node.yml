@@ -142,7 +142,7 @@
     fail_msg: >-
       The node is not logged in to a tailnet, and proxmox_tailscale_auth_key is empty. Make a one-off, pre-approved
       auth key tagged {{ proxmox_tailscale_tags | join(', ') }} in Tailscale's admin console, set it (in this repo:
-      vault_tailscale_auth_key in the vault, with make vault; scripts/runbooks/tailscale.md), and run again.
+      vault_tailscale_auth_key in the vault, with just vault; scripts/runbooks/tailscale.md), and run again.
     quiet: true
 
 # The key goes to the node in a file only root can read, and to tailscale as --auth-key=file:<path>, so it never

@@ -1,6 +1,6 @@
 ---
-# make lint TYPE=talos: renders the nodes of each setup through roles/talos's own render tasks (render.yml, which
-# make deploy TYPE=kubernetes runs) from this repo's configuration, and validates every configuration with
+# just lint talos: renders the nodes of each setup through roles/talos's own render tasks (render.yml, which
+# just deploy kubernetes runs) from this repo's configuration, and validates every configuration with
 # `talosctl validate --mode metal --strict`, which catches a misspelt field a render alone lets through.
 # Placeholder addresses and a throwaway secrets bundle; nothing connects anywhere. talosctl comes from PATH.
 - name: Render and validate the Talos configurations

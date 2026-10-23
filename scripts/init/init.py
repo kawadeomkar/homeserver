@@ -1,17 +1,17 @@
-"""make init: ask for the settings a deployment needs, write them, and say what is still missing.
+"""just init: ask for the settings a deployment needs, write them, and say what is still missing.
 
 Settings go in group_vars/all/local.yml and secrets in the vault (group_vars/all/local.vault.yml, opened with
 .vault_pass), both git-ignored, one top-level key at a time, so the rest of each file and its comments stay as they are.
 Each answer is written at once: stopping halfway keeps what was answered. A setting already set is shown, and Enter
-keeps it, so make init can be run again to change a setting or fill in one that was skipped. Secrets are never shown,
+keeps it, so just init can be run again to change a setting or fill in one that was skipped. Secrets are never shown,
 only whether they are set.
 
 A new local.yml is local.yml.example with every setting commented out, so the playbooks read nothing from it until
-a setting is answered. One an older make init copied from the example loses the example's own values the same way,
+a setting is answered. One an older just init copied from the example loses the example's own values the same way,
 and keeps whatever was changed.
 
-A plain run asks for the required and recommended settings and the popular optional ones; --full (make init
-TYPE=full) asks for every one. It ends with a summary: what is still required (settings left unset, what the
+A plain run asks for the required and recommended settings and the popular optional ones; --full (just init
+--full) asks for every one. It ends with a summary: what is still required (settings left unset, what the
 playbooks' own checks would refuse, files the cluster needs, tools), then the steps only done by hand.
 
 Its first question is the setup, when there is one to choose (scripts/init/setups.py): the three files of one machine
@@ -115,7 +115,7 @@ class YamlKeys:
         return None
 
     def _to_block_style(self) -> None:
-        """A mapping written in flow style, such as the {} make vault TYPE=new encrypts, as one line per key: a key
+        """A mapping written in flow style, such as the {} just vault new encrypts, as one line per key: a key
         added after a flow mapping would not parse."""
         start = next(
             (i for i, line in enumerate(self.lines) if line.strip() and not line.startswith(("#", "---"))), None
@@ -417,7 +417,7 @@ class Init:
                 self.local.set(s.key, answer, self.order)
                 self.save_local()
         except EditError as e:
-            where = "the vault: make vault" if s.secret else str(LOCAL)
+            where = "the vault: just vault" if s.secret else str(LOCAL)
             self.console.say(f"  Not saved: {e}. Change it by hand in {where}.")
 
     def unset_local(self, key: str) -> bool:
@@ -746,7 +746,7 @@ class Init:
 
     def offer_removal(self, s: cfg.Setting) -> None:
         """A setting this setup does not read: the playbooks refuse some (vm_backup_storage with a NAS, an alert
-        address without a mail server), and make init would never ask for it again, so it offers to delete it."""
+        address without a mail server), and just init would never ask for it again, so it offers to delete it."""
         if s.key not in self.values:
             return
         value = self.values[s.key]
@@ -822,7 +822,7 @@ class Init:
     def choose_setup(self) -> None:
         """The setup the answers go into, asked before anything is read: Enter keeps the one the checkout uses, a name
         switches to that setup or makes it. A checkout with files of its own is offered to keep them as a setup; one
-        with neither files nor setups is asked nothing. A local.yml that sets nothing, as the first make init writes it,
+        with neither files nor setups is asked nothing. A local.yml that sets nothing, as the first just init writes it,
         gives way to a setup; files that hold more are refused by name, and Enter keeps them."""
         try:
             where = setups.store(self.root)
@@ -884,7 +884,7 @@ class Init:
             "\nThis checkout keeps its own local.yml, vault and .vault_pass. Kept as a named setup instead, in "
             f"{setups.shown(where)}, they can be switched with another machine's"
             + (f" ({', '.join(found)})" if found else "")
-            + ": make vault TYPE=switch."
+            + ": just vault switch."
         )
         if not self.yes_no("Keep them as a setup?", False, "setup-adopt"):
             return
@@ -935,11 +935,11 @@ class Init:
         if self.vault.state == "not moved" or self.setup:
             return  # a vault to move, or a setup's, which is restored rather than replaced
         if self.yes_no(
-            "Make a new vault instead, empty, with a new password (make vault TYPE=new)?",
+            "Make a new vault instead, empty, with a new password (just vault new)?",
             False,
             "vault-new",
         ):
-            # What make vault TYPE=new runs, in this process: no task runner needed, and a refusal is said, not raised.
+            # What just vault new runs, in this process: no task runner needed, and a refusal is said, not raised.
             try:
                 said = setups.own_vault(self.root)
             except (setups.Refused, OSError) as e:
@@ -949,7 +949,7 @@ class Init:
 
     # ------------------------------------------------------------------------------------------------ run ---
     def start_local(self) -> None:
-        """local.yml without local.yml.example's own values: written when it is new or a terminal runs make init;
+        """local.yml without local.yml.example's own values: written when it is new or a terminal runs just init;
         otherwise only read so, and the summary says what the file still holds."""
         new = not self.local_path.exists()
         dropped = self.drop_example_values()
@@ -1006,12 +1006,12 @@ class Init:
         if self.interactive:
             self.console.say(
                 "Each setting shows its value: Enter keeps it, - clears it, ? explains it. Every answer is saved at "
-                "once, so you can stop at any time and run make init again later."
+                "once, so you can stop at any time and run just init again later."
                 + (
                     ""
                     if self.full
                     else " This asks for the required settings and the popular optional ones; "
-                    "make init TYPE=full asks for every one."
+                    "just init --full asks for every one."
                 )
             )
             self.offer_vault()
@@ -1032,7 +1032,7 @@ class Init:
         """What the playbooks' own settings checks say: validate.yml, run on this machine alone. A check is a message
         (nas_section_error) or a list of them (the others), empty when it passes."""
         playbook = Path(sys.executable).parent / "ansible-playbook"
-        with tempfile.TemporaryDirectory(prefix="make-init-") as scratch:
+        with tempfile.TemporaryDirectory(prefix="init-") as scratch:
             out = Path(scratch) / "checks.json"
             result = run(
                 [str(playbook), str(VALIDATE), "-e", json.dumps({"init_checks_file": str(out)})],
@@ -1086,15 +1086,15 @@ class Init:
         notes: list[str] = []
 
         if not (self.root / INVENTORY).is_file():
-            required.append("inventory is missing: make init copies it from inventory.example")
+            required.append("inventory is missing: just init copies it from inventory.example")
         if not self.vault.is_open:
             required.append(
                 f"The vault {self.vault_problem()}: "
                 + (
                     f"restore the setup's files, {setups.shown(self.setup)}, from your password manager"
                     if self.setup
-                    else "restore it and .vault_pass from your password manager, or make new ones with make vault "
-                    "TYPE=new (README.md, Setups and the vault)"
+                    else "restore it and .vault_pass from your password manager, or make new ones with just vault "
+                    "new (README.md, Setups and the vault)"
                 )
             )
         for s in cfg.SETTINGS:
@@ -1114,7 +1114,7 @@ class Init:
         if self.examples_left:
             required.append(
                 f"local.yml still holds local.yml.example's own values for {', '.join(self.examples_left)}, which the "
-                "playbooks would read as real ones: make init in a terminal comments them out and asks for them"
+                "playbooks would read as real ones: just init in a terminal comments them out and asks for them"
             )
 
         if on["cluster"]:
@@ -1166,7 +1166,7 @@ class Init:
         for s in cfg.SETTINGS:
             unread = on[s.section] and not s.secret and not self.applies(s) and has_value(v.get(s.key))
             if unread and not any(s.key in m for m in refused):
-                notes.append(f"local.yml sets {s.key}, but {self.unread(s)}: make init offers to delete it")
+                notes.append(f"local.yml sets {s.key}, but {self.unread(s)}: just init offers to delete it")
 
         if not self.ssh:
             manual.append(
@@ -1196,7 +1196,7 @@ class Init:
             if not has_value(v.get("kubernetes_ingress_allowed_range")):
                 manual.append(
                     "After the first build, each app's first visit through a port forward, then "
-                    "kubernetes_ingress_allowed_range and make deploy TYPE=kubernetes (scripts/runbooks/first-run.md)"
+                    "kubernetes_ingress_allowed_range and just deploy kubernetes (scripts/runbooks/first-run.md)"
                 )
             manual.append("Trust the cluster's CA on each device (scripts/runbooks/tls.md)")
             if has_value(v.get("kubernetes_gpu_mapping")):
@@ -1226,7 +1226,7 @@ class Init:
         manual.append(f"Keep copies of {listed} in your password manager, and update them when they change")
         if not self.setup and self.adoptable(self.vault.is_open):
             notes.append(
-                "make vault TYPE=new NAME=<name> FROM=current keeps local.yml, the vault and .vault_pass as a named "
+                "just vault new <name> --from current keeps local.yml, the vault and .vault_pass as a named "
                 "setup outside the checkout, to switch between machines (README.md, Setups and the vault)"
             )
 
@@ -1234,17 +1234,17 @@ class Init:
             more = [s for s in cfg.SETTINGS if on[s.section] and self.applies(s) and not self.asked(s)]
             if more:
                 notes.append(
-                    f"make init TYPE=full also asks for {len(more)} more optional setting{'s' if len(more) > 1 else ''}"
+                    f"just init --full also asks for {len(more)} more optional setting{'s' if len(more) > 1 else ''}"
                 )
 
         nexts = []
         if on["nas"]:
-            nexts.append("make check TYPE=truenas && make deploy TYPE=truenas")
-        nexts.append("make check TYPE=proxmox && make deploy TYPE=proxmox")
+            nexts.append("just check truenas && just deploy truenas")
+        nexts.append("just check proxmox && just deploy proxmox")
         if on["homeassistant"]:
-            nexts.append("make check TYPE=homeassistant && make deploy TYPE=homeassistant")
+            nexts.append("just check homeassistant && just deploy homeassistant")
         if on["cluster"]:
-            nexts.append("make check TYPE=kubernetes && make deploy TYPE=kubernetes")
+            nexts.append("just check kubernetes && just deploy kubernetes")
 
         parts = [cfg.SECTIONS[s] for s in cfg.SECTIONS if on[s]]
         name = f" {self.setup.name}" if self.setup else ""
@@ -1258,7 +1258,7 @@ class Init:
             ("STILL REQUIRED", required, "x"),
             ("THE PLAYBOOKS' CHECKS WOULD STOP WITH", refused, "x"),
             ("RECOMMENDED", recommended, "-"),
-            ("BY HAND, WHICH make init CANNOT CHECK", manual, "-"),
+            ("BY HAND, WHICH just init CANNOT CHECK", manual, "-"),
             ("NOTES", notes, "-"),
             ("THEN, IN THIS ORDER", nexts, " "),
         ]

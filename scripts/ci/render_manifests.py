@@ -1,4 +1,4 @@
-"""Build each setup's manifests as Flux applies them, settings substituted, for make lint TYPE=manifests.
+"""Build each setup's manifests as Flux applies them, settings substituted, for just lint manifests.
 
 kube-linter decodes every object into Kubernetes's own types and silently skips one it cannot decode. A resource
 limit of "${GPU_I915}" is not a quantity until Flux substitutes it, so linting the files as they are would leave
