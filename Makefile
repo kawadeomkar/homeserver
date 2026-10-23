@@ -3,7 +3,7 @@
 # Every Python tool comes from the project's virtualenv, so the versions locked in
 # poetry.lock are the ones that run, here and in CI (.github/workflows/ci.yml). Poetry, kubeconform,
 # kube-linter and gitleaks are the exceptions: they come from PATH (pipx or Homebrew locally; CI pins each
-# version, and each binary's checksum), as does openssl, which the idempotence tests and make vault TYPE=new use.
+# version, and each binary's checksum), as does openssl, which the idempotence tests use.
 # The virtualenv is yours to make and keep, wherever you keep them (pyenv virtualenv, python3 -m venv): make never
 # creates one, and make install fills it from the lock. make uses the active one (VIRTUAL_ENV, set by
 # `pyenv activate <env>` or `source <env>/bin/activate`); otherwise the virtualenv python3 runs from, but only when
@@ -56,7 +56,7 @@ space   := $(empty) $(empty)
 TYPES   := $(strip $(subst $(comma), ,$(TYPE)))
 TYPED   := init vault lint test fix check deploy
 init_TYPES  := full
-vault_TYPES := new
+vault_TYPES := new list switch
 lint_TYPES  := lock yaml ansible python docs github manifests charts talos
 # make lint TYPE=k8s: the Kubernetes checks, the ones that need kubeconform, kustomize, helm, kube-linter or talosctl.
 lint_ALIASES := k8s
@@ -70,6 +70,7 @@ define check_types
 $(if $(filter $(1),$(TYPED)),,$(error make $(1) takes no TYPE))
 $(if $(filter-out $($(1)_TYPES) $($(1)_ALIASES),$(TYPES)),$(error make $(1) takes TYPE=$(call list,$($(1)_TYPES) $($(1)_ALIASES)), not $(call list,$(filter-out $($(1)_TYPES) $($(1)_ALIASES),$(TYPES)))))
 $(if $(and $(filter check deploy,$(1)),$(word 2,$(TYPES))),$(error make $(1) runs one playbook: one TYPE at a time))
+$(if $(and $(filter vault,$(1)),$(word 2,$(TYPES))),$(error make vault does one thing: one TYPE at a time))
 endef
 ifneq ($(TYPES),)
 $(foreach goal,$(MAKECMDGOALS),$(eval $(call check_types,$(goal))))
@@ -94,16 +95,39 @@ ALL_ARGS := $(if $(ALL),-e '{"cluster_vms": true}',)
 # (make's own -e is not that: it is make's --environment-overrides, and passes nothing to Ansible).
 ANSIBLE_ARGS ?=
 PLAYBOOK := $(BIN)/ansible-playbook
+# Setups (scripts/init/setups.py): each machine's local.yml, vault and .vault_pass, kept together in a store outside the
+# checkout, SETUPS or $XDG_CONFIG_HOME/homeserver/setups (~/.config/homeserver/setups without it), and the one the
+# checkout uses linked in at group_vars/all/local.yml, VAULT and .vault_pass. NAME names a setup for make vault, and
+# FROM=current makes this checkout's own files one, with TYPE=new alone. Both come from make's command line alone,
+# never the environment, where a shell may have put a NAME of its own (WSL sets it to the machine's name); and both are
+# make vault's alone: any other target runs with the setup the checkout links to, so make deploy NAME=lab is refused
+# rather than run with another setup.
+NAME   :=
+FROM   :=
+SETUPS ?=
+ifneq ($(SETUPS),)
+export SETUPS
+endif
+ifneq ($(NAME)$(FROM),)
+NOT_VAULT := $(filter-out vault vault/% help,$(MAKECMDGOALS))
+$(if $(NOT_VAULT),$(error NAME and FROM are make vault's: make $(firstword $(NOT_VAULT)) runs with the setup this checkout links to, so link the one you mean in first, make vault TYPE=switch NAME=<setup>))
+$(if $(and $(FROM),$(filter-out new,$(or $(TYPES),edit))),$(error FROM=current is make vault TYPE=new's alone: make vault TYPE=new NAME=<name> FROM=current))
+endif
+SETUPS_PY   = $(BIN)/python scripts/init/setups.py
+# The setup the checkout links to, for the log's name: asked of setups.py once, when a playbook run's recipe is read.
+SETUP_NAME  = $(eval SETUP_NAME := $$(shell $(SETUPS_PY) name 2>/dev/null))$(SETUP_NAME)
 # Every playbook run is also written to its own log (git-ignored: it holds addresses), named after
-# the target, TYPE and TAGS, e.g. logs/20261004-210501-deploy-truenas-truenas_network.log. logs/latest.log
-# points at the newest. The API key never appears: the modules mark it no_log.
+# the setup, the target, TYPE and TAGS, e.g. logs/20261004-210501-home-deploy-truenas-truenas_network.log.
+# logs/latest.log points at the newest. The API key never appears: the modules mark it no_log.
 LOG_DIR ?= logs
 STAMP   := $(shell date +%Y%m%d-%H%M%S)
-RUN_LOG  = $(LOG_DIR)/$(STAMP)-$@$(if $(TYPES),-$(TYPES))$(if $(TAGS),-$(subst $(comma),+,$(TAGS))).log
+RUN_LOG  = $(LOG_DIR)/$(STAMP)$(if $(SETUP_NAME),-$(SETUP_NAME))-$@$(if $(TYPES),-$(TYPES))$(if $(TAGS),-$(subst $(comma),+,$(TAGS))).log
 # A missing playbook binary means make found a Python other than the project's virtualenv, or one not yet installed;
-# say so, rather than leave the shell's "No such file or directory" and a dangling latest.log.
+# say so, rather than leave the shell's "No such file or directory" and a dangling latest.log. Then the setup: a run
+# names the one it uses, and stops when its links are not whole, which Ansible would pass over without a word
+# (vars_plugins/setup_links.py stops ansible-playbook started any other way).
 RUN      = @test -x $(PLAYBOOK) || { echo "$(PLAYBOOK) not found: run make install in the project's virtualenv, or point make at it (pyenv local <env>, or VENV=<its path>)" >&2; exit 2; }; \
-           umask 077 && mkdir -p $(LOG_DIR) && ln -sf $(notdir $(RUN_LOG)) $(LOG_DIR)/latest.log \
+           $(SETUPS_PY) check && umask 077 && mkdir -p $(LOG_DIR) && ln -sf $(notdir $(RUN_LOG)) $(LOG_DIR)/latest.log \
            && echo "Logging to $(RUN_LOG) (Python environment: $(VENV))" && ANSIBLE_LOG_PATH=$(RUN_LOG) $(PLAYBOOK)
 # check and deploy run the playbook TYPE names, or site.yml, every one in order, without it.
 TYPE_PLAYBOOK = $(if $(TYPES),$(TYPES),site).yml
@@ -155,7 +179,10 @@ help: ## Show this help
 	@printf '\nTYPE narrows a target to part of what it does (several, comma-separated; check and deploy take one):\n'
 	@printf '  \033[36m%-14s\033[0m %s\n' \
 	  init "$(init_TYPES): every optional setting too" \
-	  vault "$(vault_TYPES): an empty vault of your own, and a .vault_pass if there is none (restore both instead if you have them)" \
+	  vault "$(vault_TYPES)" \
+	  "" "new: with NAME, a setup of that name, empty, which the checkout then uses (FROM=current: of its own files);" \
+	  "" "     without NAME, an empty vault in the checkout, and a .vault_pass if there is none" \
+	  "" "list: every setup, the one this checkout uses marked; switch: this checkout to setup NAME" \
 	  lint "$(lint_TYPES)" "" "k8s: $(k8s_TYPES)" \
 	  test "$(test_TYPES)" \
 	  fix "$(fix_TYPES)" \
@@ -169,6 +196,9 @@ help: ## Show this help
 	  'ONLY=<names>' 'suspend, resume, check TYPE=suspend|resume: some apps, groups or homeassistant' \
 	  'ALL=1' "suspend, resume, check TYPE=suspend|resume: the cluster's VMs too" \
 	  'ANSIBLE_ARGS=<args>' "every playbook: more for ansible-playbook, e.g. '-e talos_allow_bootstrap=true'" \
+	  'NAME=<setup>' 'vault: the setup to make, to switch to, or (without TYPE) whose vault to edit' \
+	  'FROM=current' "vault TYPE=new: this checkout's own local.yml, vault and .vault_pass become setup NAME" \
+	  'SETUPS=<dir>' 'vault, init: where the setups are kept (default: ~/.config/homeserver/setups, or $$XDG_CONFIG_HOME/...)' \
 	  'VENV=<path>' "every target: the project's virtualenv (default: the active one, else python3's here)"
 
 ##@ Setup
@@ -202,42 +232,43 @@ lock: ## Update poetry.lock after editing pyproject.toml
 	$(ENV_FOUND)
 	$(POETRY_RUN) $(if $(UPDATE),update --lock $(UPDATE),lock)
 
-# The vault: git-ignored, at a path no commit ever held. Until 2026-10-20 it was committed at OLD_VAULT.
+# The vault: git-ignored, at a path no commit ever held. Until 2026-10-20 it was committed as
+# group_vars/all/vault.yml.
 VAULT     := group_vars/all/local.vault.yml
-OLD_VAULT := group_vars/all/vault.yml
 
-.PHONY: vault vault/edit vault/new
-vault: vault/$(if $(TYPES),$(TYPES),edit) ## Edit the vault's secrets (addresses go in local.yml), then lint it
+.PHONY: vault vault/edit vault/new vault/list vault/switch
+vault: vault/$(if $(TYPES),$(TYPES),edit) ## Edit the vault's secrets (addresses go in local.yml), then lint them; NAME= another setup's
 
+# With NAME, another setup's vault, with its own password, and the checkout keeps the setup it uses; the lint reads
+# the checkout's setup alone, so it is left out.
 vault/edit:
+ifneq ($(NAME),)
+	@$(SETUPS_PY) edit '$(NAME)'
+else
+	@$(SETUPS_PY) check
 	@test -f $(VAULT) || { echo "There is no $(VAULT): restore it from your password manager, or make vault TYPE=new"; exit 1; }
 	$(BIN)/ansible-vault edit $(VAULT)
 	@$(MAKE) --no-print-directory lint TYPE=ansible
+endif
 
-# Every run decrypts the vault, so it and .vault_pass must exist, and both are yours alone: neither is ever
-# committed (.gitignore; README.md, The vault). This makes what is missing: a random .vault_pass readable by its
-# owner alone, and an empty vault encrypted with it. A vault that already opens with .vault_pass is left alone, and
-# one that does not is refused, since it may hold your secrets with their password lost; so is a checkout that still
-# has the vault's old, committed place, whose vault moves rather than a new one being made beside it. Without
-# ansible-vault it stops before anything else. The empty vault reaches ansible-vault on stdin, so the file is written
-# only once encryption has worked.
+vault/list:
+	@$(SETUPS_PY) list
+
+vault/switch:
+	@$(SETUPS_PY) switch '$(NAME)'
+
+# With NAME, a setup of that name, which the checkout then uses: local.yml with every setting commented out, an empty
+# vault and a random password (FROM=current: this checkout's own three files, moved into it).
+# Without NAME, the vault in the checkout itself. Every run decrypts the vault, so it and .vault_pass must exist, and
+# both are yours alone: neither is ever committed (.gitignore; README.md, Setups and the vault). This makes what is
+# missing: a random .vault_pass readable by its owner alone, and an empty vault encrypted with it, both encrypted
+# before either is written. A vault that already opens with .vault_pass is left alone, and one that does not is
+# refused, since it may hold your secrets with their password lost; so is a checkout that still has the vault's old,
+# committed place, whose vault moves rather than a new one being made beside it, and one that uses a setup, whose
+# links this would write through (scripts/init/setups.py). Without ansible-vault it stops before anything else.
 vault/new:
 	@test -x $(BIN)/ansible-vault || { echo "ansible-vault is not in $(VENV): activate the project's virtualenv, or pass VENV=<path>"; exit 1; }
-	@if [ -f .vault_pass ] && [ -f $(VAULT) ] && $(BIN)/ansible-vault view $(VAULT) >/dev/null 2>&1; then \
-	  echo "$(VAULT) already opens with .vault_pass: nothing to do."; \
-	elif [ -f $(VAULT) ]; then \
-	  echo "$(VAULT) does not open with .vault_pass, so it may hold your secrets: restore the .vault_pass" \
-	    "that opens it rather than replace it. To start afresh all the same, move the file out of the repository first."; \
-	  exit 1; \
-	elif [ -f $(OLD_VAULT) ]; then \
-	  echo "$(OLD_VAULT) is where the vault was committed until 2026-10-20. Move it rather than make a new one:" \
-	    "README.md, The vault, says how."; \
-	  exit 1; \
-	else \
-	  umask 077 && { [ -f .vault_pass ] || openssl rand -hex 32 > .vault_pass; } \
-	  && printf -- '---\n{}\n' | $(BIN)/ansible-vault encrypt --output $(VAULT) \
-	  && echo "Made $(VAULT), encrypted with .vault_pass. Keep a copy of both in your password manager."; \
-	fi
+	@$(SETUPS_PY) new '$(NAME)' --from='$(FROM)'
 
 ##@ Code
 .PHONY: lint $(addprefix lint/,$(lint_TYPES))
