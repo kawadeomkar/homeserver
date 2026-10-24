@@ -20,7 +20,8 @@ without a kind, are not objects.
 - The apps (k8s/apps/) run one replica each, replaced whole (Recreate), Homepage aside; every container refuses
   privilege escalation under the RuntimeDefault seccomp profile; every Ingress uses Traefik and the domain setting;
   every pod that mounts a shared NAS or static volume chowns its mount point first, and none sets fsGroup on an NFS
-  volume, which would chown the whole volume at every start.
+  volume, which would chown the whole volume at every start. No app container limits its CPU or memory, so a spike is
+  neither throttled nor OOM-killed: a limit there asks only for a device (the iGPU).
 - No PodDisruptionBudget: with one node for the apps, it would only stop a drain.
 - Every app namespace has a NetworkPolicy over all its pods that limits who reaches them and keeps them from the one
   hosts they must never reach (EGRESS_DENIED_ADDRESS, the NAS or the Proxmox host without one, and PROXMOX_ADDRESS).
@@ -659,6 +660,20 @@ def test_linuxserver_tags_are_immutable():
     assert images, "no LinuxServer.io image found"
     mutable = {image: owner for image, owner in images.items() if not IMMUTABLE.search(image)}
     assert mutable == {}, "LinuxServer.io re-points x.y.z at every build: pin x.y.z-lsNNN (CLAUDE.md)"
+
+
+def test_apps_set_no_cpu_or_memory_limits():
+    if not APPS.is_dir():
+        pytest.skip("no apps under k8s/apps/ yet")
+    capped = [
+        f"{label(obj)} {container['name']}: {key}"
+        for path, obj, spec in workloads()
+        if path.is_relative_to("k8s/apps")
+        for container in containers(spec)
+        for key in (container.get("resources") or {}).get("limits") or {}
+        if key in ("cpu", "memory")
+    ]
+    assert capped == [], "a CPU or memory limit throttles or OOM-kills an app at a spike: set requests (CLAUDE.md)"
 
 
 # --------------------------------------------------------------------------------- what the charts render ---

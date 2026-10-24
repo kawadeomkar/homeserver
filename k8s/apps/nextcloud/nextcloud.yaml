@@ -99,9 +99,6 @@ spec:
             requests:
               cpu: 250m
               memory: 512Mi
-            limits:
-              cpu: "2"
-              memory: 2Gi
           # Once installed, Nextcloud answers status.php with 400 for a host it does not trust, and it trusts localhost
           # always: the setup wizard, done through a port forward, trusts only that until README step 3 adds the
           # domain, and a probe naming the domain would have the pod killed in between.
