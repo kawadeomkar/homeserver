@@ -12,7 +12,7 @@ routes, the node joins the tailnet alone, its guard loaded with no routes and fo
 out are withdrawn. The role runs with this repo's own configuration (group_vars/proxmox/tailscale.yml) and RFC 5737
 addresses.
 
-Run: make test TYPE=idempotence
+Run: just test idempotence
 """
 
 import json

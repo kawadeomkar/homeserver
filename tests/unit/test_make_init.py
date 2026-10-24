@@ -1,4 +1,4 @@
-"""make init (scripts/init/): the settings file's editing, the answers' parsing, and whole runs with a scripted console.
+"""just init (scripts/init/): the settings file's editing, the answers' parsing, and whole runs with a scripted console.
 
 Addresses and MACs are built at run time: gitleaks flags any written out in a tracked file.
 """
@@ -78,7 +78,7 @@ class Silent(Scripted):
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
-    """A checkout's files make init reads, with HOME inside it, so the cluster's files are looked for there, and a
+    """A checkout's files just init reads, with HOME inside it, so the cluster's files are looked for there, and a
     store of setups of its own."""
     root = tmp_path / "repo"
     (root / "group_vars").mkdir(parents=True)
@@ -98,7 +98,7 @@ def repo(tmp_path, monkeypatch):
 
 
 def legacy_copy(root: Path) -> Path:
-    """local.yml as an older make init left it: a copy of local.yml.example, its values in force."""
+    """local.yml as an older just init left it: a copy of local.yml.example, its values in force."""
     path = root / "group_vars/all/local.yml"
     shutil.copy(root / "group_vars/all/local.yml.example", path)
     return path
@@ -182,7 +182,7 @@ def test_a_comment_inside_a_mapping_is_part_of_it():
 
 
 def test_a_key_is_added_to_a_mapping_written_in_flow_style():
-    doc = wizard.YamlKeys("---\n{}\n")  # what make vault TYPE=new encrypted before the template
+    doc = wizard.YamlKeys("---\n{}\n")  # what just vault new encrypted before the template
     doc.set("vault_key", "value", order=[])
     assert doc.values() == {"vault_key": "value"}
     doc = wizard.YamlKeys("---\n# A comment.\n{a: 1}\n")
@@ -362,9 +362,9 @@ def test_a_first_run_writes_each_answer_and_says_what_is_missing(repo):
     assert "The vault has no password" in summary
     assert "vault_haos_owner_password" not in summary, "a secret is not reported while the vault does not open"
     assert "secrets bundle" in summary and "age key" in summary
-    assert "make check TYPE=kubernetes && make deploy TYPE=kubernetes" in summary
+    assert "just check kubernetes && just deploy kubernetes" in summary
     assert "vm_backup_storage" in summary.split("RECOMMENDED")[1]
-    assert "TYPE=full also asks" in summary
+    assert "just init --full also asks" in summary
     assert stat.S_IMODE((repo / "group_vars/all/local.yml").stat().st_mode) == 0o600, "readable by its owner alone"
 
 
@@ -374,7 +374,7 @@ def test_a_second_run_of_enters_changes_nothing(repo):
     console = Scripted()
     init_run(repo, console, full=True)
     assert (repo / "group_vars/all/local.yml").read_text() == before
-    assert "kubernetes_api_sans" in console.topics, "TYPE=full asks for every setting"
+    assert "kubernetes_api_sans" in console.topics, "--full asks for every setting"
     assert any(f"now {lan(10)}" in line for line in console.out), "each setting shows its value"
 
 
@@ -522,6 +522,33 @@ def test_a_vault_password_that_does_not_open_the_vault_is_not_kept(repo):
     assert "That password does not open the vault." in console.text
 
 
+NO_SECTIONS = {"switch:nas": "n", "switch:remote": "n", "switch:cluster": "n", "switch:homeassistant": "n"}
+
+
+def test_a_new_vault_is_made_when_the_person_asks_for_one(repo):
+    """just vault new's work, done in this process: the checkout's tree has no justfile, and init needs no task
+    runner to make the vault, the template with every key empty, which then opens for the secrets asked after it."""
+    console = Scripted({"vault-new": "y", **NO_SECTIONS})
+    init = init_run(repo, console)
+    for path in (repo / ".vault_pass", repo / wizard.VAULT):
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600, path
+    assert f"Made {wizard.VAULT}, every key empty, encrypted with .vault_pass" in console.text
+    made = setups.decrypt((repo / wizard.VAULT).read_bytes(), (repo / ".vault_pass").read_bytes().strip())
+    assert init.vault.is_open and made.decode() == (repo / setups.VAULT_TEMPLATE).read_text()
+    assert "vault is missing" not in console.out[-1] and "has no password" not in console.out[-1]
+
+
+def test_a_new_vault_never_replaces_one_that_may_hold_secrets(repo):
+    """A vault that no .vault_pass opens is refused, as just vault new refuses it: said, and nothing written."""
+    make_vault(repo, {"vault_other": "x"})
+    (repo / ".vault_pass").unlink()
+    before = (repo / wizard.VAULT).read_bytes()
+    console = Scripted({"vault-new": "y", **NO_SECTIONS})
+    init_run(repo, console)
+    assert "does not open with .vault_pass, so it may hold your secrets" in console.text
+    assert (repo / wizard.VAULT).read_bytes() == before and not (repo / ".vault_pass").exists()
+
+
 def test_a_new_local_yml_is_the_example_with_every_setting_commented_out(repo):
     console = Silent()
     init_run(repo, console, interactive=False)
@@ -575,7 +602,7 @@ def owner_password_answers(password: str) -> dict:
 
 
 def test_a_secret_is_written_into_the_vault_template_on_its_own_line(repo):
-    """make vault TYPE=new's vault: the answer takes the key's empty line, and every comment stays; cleared, the key
+    """just vault new's vault: the answer takes the key's empty line, and every comment stays; cleared, the key
     is empty again, and the vault is the template once more."""
     template = (repo / setups.VAULT_TEMPLATE).read_text()
     make_vault(repo, {}, text=template)
@@ -587,7 +614,7 @@ def test_a_secret_is_written_into_the_vault_template_on_its_own_line(repo):
     assert vault_text(repo) == template
 
 
-def test_a_secret_is_written_into_the_empty_vault_an_older_make_vault_made(repo):
+def test_a_secret_is_written_into_the_empty_vault_an_older_just_vault_new_made(repo):
     make_vault(repo, {}, text="---\n{}\n")
     password = "-".join(["a", "long", "owner", "password"])
     init_run(repo, Scripted(owner_password_answers(password)))
@@ -772,7 +799,7 @@ def test_the_answers_go_into_the_setup_the_checkout_uses(repo):
     summary = flat(console.out[-1])
     assert "Setup home: " in summary
     assert f"Keep copies of the setup's directory, {setup}, the cluster's credentials directory" in summary
-    assert "FROM=current" not in summary
+    assert "--from current" not in summary
 
 
 def test_the_first_answer_switches_to_another_setup_or_makes_one(repo):
@@ -796,7 +823,7 @@ def test_a_checkout_with_its_own_files_is_offered_to_keep_them_as_a_setup(repo):
     declined = Scripted()
     init_run(repo, declined)
     assert "setup-adopt" in declined.topics and setups.active(repo) is None, "No is the default"
-    assert "FROM=current keeps local.yml" in flat(declined.out[-1])
+    assert "--from current keeps local.yml" in flat(declined.out[-1])
     init_run(repo, Scripted({"setup-adopt": "y", "setup-name": "home"}))
     setup = setups.store() / "home"
     assert setups.active(repo) == setup
@@ -836,7 +863,7 @@ def test_stopped_at_the_setup_question_the_summary_says_what_is_there(repo):
     with pytest.raises(EOFError):
         init.run()
     summary = flat(init.summary())
-    assert "Setup home: " in summary and "unread" not in summary and "make vault TYPE=new" not in summary
+    assert "Setup home: " in summary and "unread" not in summary and "just vault new" not in summary
     assert f"Keep copies of the setup's directory, {setup} in your password manager" in summary
 
 

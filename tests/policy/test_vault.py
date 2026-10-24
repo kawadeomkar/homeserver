@@ -1,4 +1,4 @@
-"""The vault is never committed, and `make vault TYPE=new` makes one of a user's own.
+"""The vault is never committed, and `just vault new` makes one of a user's own.
 
 Ansible's secrets live in group_vars/all/local.vault.yml, encrypted with .vault_pass, and both are git-ignored: nothing
 reads them from the repository, and this public repo would publish even their ciphertext. Until 2026-10-20 the vault
@@ -40,7 +40,7 @@ def test_the_vault_is_ignored_and_its_example_is_not():
 
 
 def test_the_example_lists_every_secret_the_playbooks_read():
-    """The example is the template make vault TYPE=new encrypts: every key the group_vars read, each empty, which
+    """The example is the template just vault new encrypts: every key the group_vars read, each empty, which
     every reader takes for unset, where a placeholder secret would pass for a real one."""
     read = set()
     for path in (ROOT / "group_vars").rglob("*.yml"):
@@ -57,9 +57,9 @@ def test_each_key_of_the_example_says_what_it_is_for():
 
 
 def vault_init_tree(tmp_path: Path) -> Path:
-    """The Makefile, ansible.cfg, scripts/init/setups.py, which makes the vault, and the vault's template, copied into
+    """The justfile, ansible.cfg, scripts/init/setups.py, which makes the vault, and the vault's template, copied into
     tmp_path, with nowhere a vault yet."""
-    for name in ("Makefile", "ansible.cfg"):
+    for name in ("justfile", "ansible.cfg"):
         shutil.copy(ROOT / name, tmp_path)
     (tmp_path / "scripts" / "init").mkdir(parents=True)
     shutil.copy(ROOT / "scripts" / "init" / "setups.py", tmp_path / "scripts" / "init" / "setups.py")
@@ -68,13 +68,14 @@ def vault_init_tree(tmp_path: Path) -> Path:
     return tmp_path / VAULT
 
 
-def run_in(tree: Path, *command: str) -> subprocess.CompletedProcess:
-    env = {**os.environ, "ANSIBLE_CONFIG": str(tree / "ansible.cfg")}
+def run_in(tree: Path, *command: str, **env: str) -> subprocess.CompletedProcess:
+    env = {**os.environ, "ANSIBLE_CONFIG": str(tree / "ansible.cfg"), **env}
     return subprocess.run(command, cwd=tree, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
 
 
 def vault_init(tree: Path, venv=sys.prefix) -> subprocess.CompletedProcess:
-    return run_in(tree, "make", "--no-print-directory", "vault", "TYPE=new", f"VENV={venv}")
+    """just vault new, with the virtualenv in the environment, where it outranks the one an outer just exports."""
+    return run_in(tree, "just", "vault", "new", VENV=str(venv))
 
 
 def view(tree: Path) -> subprocess.CompletedProcess:
@@ -137,7 +138,7 @@ def test_vault_init_writes_nothing_when_it_cannot_encrypt(tmp_path):
     in plain text."""
     vault = vault_init_tree(tmp_path)
     missing = vault_init(tmp_path, venv=tmp_path / "deleted-venv")
-    assert missing.returncode != 0 and "ansible-vault is not in" in missing.stdout, missing.stdout + missing.stderr
+    assert missing.returncode != 0 and "ansible-vault is not in" in missing.stderr, missing.stdout + missing.stderr
     assert not vault.exists() and not (tmp_path / ".vault_pass").exists()
     (tmp_path / ".vault_pass").write_text("")
     failed = vault_init(tmp_path)

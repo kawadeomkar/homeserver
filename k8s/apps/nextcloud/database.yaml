@@ -24,7 +24,7 @@ metadata:
   namespace: nextcloud
   labels:
     app.kubernetes.io/name: nextcloud-db
-    # make suspend stops it after nextcloud, and make resume starts it first (roles/app_scale).
+    # just suspend stops it after nextcloud, and just resume starts it first (roles/app_scale).
     app.kubernetes.io/component: database
 spec:
   replicas: 1
@@ -69,9 +69,6 @@ spec:
             requests:
               cpu: 100m
               memory: 512Mi
-            limits:
-              cpu: "2"
-              memory: 2Gi
           startupProbe:
             exec:
               command: [mariadb-admin, ping, -h, 127.0.0.1]

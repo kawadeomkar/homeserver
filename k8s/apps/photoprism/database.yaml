@@ -24,7 +24,7 @@ metadata:
   namespace: photoprism
   labels:
     app.kubernetes.io/name: photoprism-db
-    # make suspend stops it after photoprism, and make resume starts it first (roles/app_scale).
+    # just suspend stops it after photoprism, and just resume starts it first (roles/app_scale).
     app.kubernetes.io/component: database
 spec:
   replicas: 1
@@ -64,9 +64,6 @@ spec:
             requests:
               cpu: 100m
               memory: 1Gi
-            limits:
-              cpu: "2"
-              memory: 2Gi
           startupProbe:
             exec:
               command: [healthcheck.sh, --connect, --innodb_initialized]

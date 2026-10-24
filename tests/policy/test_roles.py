@@ -319,7 +319,7 @@ def test_inventory_without_the_nas_host(tmp_path):
 def test_inventory_without_the_kubernetes_group(tmp_path, playbook, local_yml, extra, refused):
     """An inventory made before the cluster has no kubernetes group. Without a cluster it still works; with one the
     run is refused before any VM is made, rather than creating the VMs and matching no host to build Talos on, and
-    an upgrade, a snapshot, make suspend or make resume is refused rather than matching no host and ending without a
+    an upgrade, a snapshot, just suspend or just resume is refused rather than matching no host and ending without a
     word. (Home Assistant's VM, left out here, needs no such group.)"""
     tree = example_tree(tmp_path, local_yml)
     inventory = tree / "inventory.example"
@@ -469,12 +469,13 @@ def test_vms_resolve_on_the_proxmox_host(tmp_path, local_yml, nodes, system):
     assert found == nodes
 
 
-def test_talos_pins_match_the_makefile_and_ci():
+def test_talos_pins_match_the_justfile_and_ci():
     """The Kubernetes version Talos runs is the one kubeconform validates the manifests against, and the talosctl CI
     validates the Talos configurations with is the pinned release."""
     pins = yaml.safe_load((ROOT / "group_vars" / "all" / "kubernetes.yml").read_text())
-    makefile = (ROOT / "Makefile").read_text()
-    assert re.search(rf"^KUBERNETES_VERSION \?= {re.escape(str(pins['talos_kubernetes_version']))}$", makefile, re.M)
+    justfile = (ROOT / "justfile").read_text()
+    version = re.escape(str(pins["talos_kubernetes_version"]))
+    assert re.search(rf"^kubernetes_version := '{version}'$", justfile, re.M)
     assert pins["talos_contract"] == ".".join(pins["talos_version"].split(".")[:2])
     ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
     assert "v" + ci["env"]["TALOSCTL_VERSION"] == pins["talos_version"]
@@ -1325,7 +1326,7 @@ def test_gpu_follows_local_yml(tmp_path, local_yml, mapping):
 
 
 HAOS_ONLY_ARGS = ("-e", json.dumps({"haos_mac": mac(9)}))
-# make's ALL=1.
+# just's --all.
 ALL_ARGS = ("-e", json.dumps({"cluster_vms": True}))
 
 
@@ -1339,7 +1340,7 @@ ALL_ARGS = ("-e", json.dumps({"cluster_vms": True}))
         pytest.param(None, CLUSTER_ARGS, "homeassistant", 1, None, id="haos-only"),
         pytest.param(example_without_kubernetes(), HAOS_ONLY_ARGS, "", 1, "so this setup has no cluster", id="haos"),
         pytest.param(example_without_kubernetes(), (), "", 0, "so this setup has no Home Assistant VM", id="neither"),
-        # ALL=1 adds the cluster's VMs, through the power entry point once more.
+        # --all adds the cluster's VMs, through the power entry point once more.
         pytest.param(None, (*CLUSTER_ARGS, *ALL_ARGS), "", 3, None, id="all"),
         pytest.param(
             example_without_kubernetes(), (*HAOS_ONLY_ARGS, *ALL_ARGS), "", 1, "no cluster", id="all-no-cluster"
@@ -1347,8 +1348,8 @@ ALL_ARGS = ("-e", json.dumps({"cluster_vms": True}))
     ],
 )
 def test_down_and_up_pass_the_argument_specs(tmp_path, playbook, local_yml, extra, only, validations, says):
-    """make suspend and make resume pass roles/app_scale's and the proxmox_vm role's power entry point's checks with the
-    tracked configuration and make's ONLY, and each play ends by itself in a setup without its part."""
+    """just suspend and just resume pass roles/app_scale's and the proxmox_vm role's power entry point's checks with the
+    tracked configuration and just's --only, and each play ends by itself in a setup without its part."""
     tree = example_tree(tmp_path, local_yml)
     rc, out = argspec_pass(tree, playbook, *extra, "-e", json.dumps({"only": only}))
     assert rc == 0, out[-3000:]
@@ -1359,7 +1360,7 @@ def test_down_and_up_pass_the_argument_specs(tmp_path, playbook, local_yml, extr
 @pytest.mark.parametrize(
     ("extra", "only", "refused"),
     [
-        pytest.param(HAOS_ONLY_ARGS, "jellyfin", "make suspend knows no jellyfin: only homeassistant", id="haos"),
+        pytest.param(HAOS_ONLY_ARGS, "jellyfin", "just suspend knows no jellyfin: only homeassistant", id="haos"),
         pytest.param((), "homeassistant", "knows no homeassistant, nor any other name", id="neither"),
     ],
 )
@@ -1372,10 +1373,10 @@ def test_down_without_a_cluster_refuses_an_app(tmp_path, extra, only, refused):
 
 @pytest.mark.parametrize("playbook", ["suspend.yml", "resume.yml"])
 def test_all_takes_no_only(tmp_path, playbook):
-    """ALL=1 stops or starts everything, so it refuses ONLY before any play changes anything."""
+    """--all stops or starts everything, so it refuses --only before any play changes anything."""
     tree = example_tree(tmp_path)
     rc, out = argspec_pass(tree, playbook, *CLUSTER_ARGS, *ALL_ARGS, "-e", json.dumps({"only": "jellyfin"}))
-    assert rc != 0 and "so it takes no ONLY" in out, out[-3000:]
+    assert rc != 0 and "so it takes no --only" in out, out[-3000:]
     assert out.count("Validating arguments against arg spec") == 0, out[-3000:]
 
 
@@ -1387,14 +1388,14 @@ def test_all_takes_no_only(tmp_path, playbook):
     ],
 )
 def test_the_cluster_goes_down_worker_first(tmp_path, local_yml, order):
-    """make suspend ALL=1 shuts the worker's VM down before the control plane's, whose API answers until the end, in
-    both setups; make resume ALL=1 starts them the other way round."""
+    """just suspend --all shuts the worker's VM down before the control plane's, whose API answers until the end, in
+    both setups; just resume --all starts them the other way round."""
     tree = example_tree(tmp_path, local_yml)
     assert resolve_on(tree, "homeserver", "kubernetes_power_order", *CLUSTER_ARGS) == order
 
 
 def test_down_and_up_read_only_alike(tmp_path):
-    """Every play of both playbooks, and the test playbooks, read ONLY the same way: names, blanks and spaces
+    """Every play of both playbooks, and the test playbooks, read --only the same way: names, blanks and spaces
     dropped, and without it no names (everything)."""
     tree = example_tree(tmp_path)
     expressions = set()
@@ -1413,7 +1414,7 @@ def test_down_and_up_read_only_alike(tmp_path):
         assert tests["vars"]["proxmox_vm_power_vmids"] == power["proxmox_vm_power_vmids"]
     (expression,) = expressions
     tests = yaml.safe_load((ROOT / "tests" / "integration" / "apps.yml").read_text())[0]["roles"][0]["vars"]
-    assert tests["app_scale_only"] == expression, "tests/integration/apps.yml reads ONLY as the playbooks do"
+    assert tests["app_scale_only"] == expression, "tests/integration/apps.yml reads --only as the playbooks do"
     inner = expression.strip().removeprefix("{{").removesuffix("}}")
     assert resolve_on(tree, "homeserver-k8s", inner, "-e", json.dumps({"only": " jellyfin,, media "})) == [
         "jellyfin",
@@ -1704,7 +1705,7 @@ def test_haos_placeholder_stops_the_plays_that_read_it(tmp_path):
 
 def test_haos_test_playbook_runs_the_real_plays_roles():
     """tests/integration/homeassistant.yml runs homeassistant.yml's roles with homeassistant.yml's own vars, and its
-    pre-tasks are homeassistant.yml's, so the idempotence tests run what make deploy TYPE=homeassistant does."""
+    pre-tasks are homeassistant.yml's, so the idempotence tests run what just deploy homeassistant does."""
     (real,) = yaml.safe_load((ROOT / "homeassistant.yml").read_text())
     (test,) = yaml.safe_load((ROOT / "tests" / "integration" / "homeassistant.yml").read_text())
     assert test["vars"] == real["vars"] and test["roles"] == real["roles"]

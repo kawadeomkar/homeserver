@@ -21,13 +21,13 @@ differently, so they have a section each; where the setups differ, the section s
 
   ```bash
   talosctl reset -n <worker address> --graceful=false --wipe-mode system-disk --reboot
-  make deploy TYPE=kubernetes ANSIBLE_ARGS='-e talos_reinstall=homeserver-worker-1'
+  just deploy kubernetes -e talos_reinstall=homeserver-worker-1
   ```
 
-  The VM boots the Talos ISO, which stays attached for this, into maintenance mode, and `make deploy TYPE=kubernetes`
+  The VM boots the Talos ISO, which stays attached for this, into maintenance mode, and `just deploy kubernetes`
   installs it again, since `talos_reinstall` names it: a bootstrapped cluster's keys go to no node in maintenance
   mode otherwise, so check first on the VM's console in Proxmox that it waits there at its address. The data
-  volume, on its own disk, is untouched, and so is the media disk without a NAS. Without `--reboot` the reset powers the VM off, and `make deploy TYPE=kubernetes`
+  volume, on its own disk, is untouched, and so is the media disk without a NAS. Without `--reboot` the reset powers the VM off, and `just deploy kubernetes`
   starts it. **Never `--wipe-mode all`**: that wipes the user volumes, the apps' data.
   The node keeps its name, which the local volumes are pinned to.
 - **The node does not answer at all**: `talosctl reset` needs the Talos API, so wipe the system disk from Proxmox
@@ -44,10 +44,10 @@ differently, so they have a section each; where the setups differ, the section s
      qm set 301 --scsi0 local-lvm:64,discard=on,ssd=1,serial=talos-system --boot 'order=scsi0;ide2'
      ```
 
-     `make deploy TYPE=kubernetes` corrects the boot order too, but on a running VM only from its next restart: Talos's
+     `just deploy kubernetes` corrects the boot order too, but on a running VM only from its next restart: Talos's
      own reboot after installing is not one.
-  4. `qm start 301`. The new disk is blank, so it boots the ISO into maintenance mode; `make deploy TYPE=kubernetes
-     ANSIBLE_ARGS='-e talos_reinstall=homeserver-worker-1'` installs it. The data disk is untouched.
+  4. `qm start 301`. The new disk is blank, so it boots the ISO into maintenance mode; `just deploy kubernetes
+     -e talos_reinstall=homeserver-worker-1` installs it. The data disk is untouched.
   5. Once the node is back: `qm disk unlink 301 --idlist unused0 --force 1`.
 
   This path is not yet tried on a real host; try it on a test host first.
@@ -69,8 +69,8 @@ scheduled, Flux stops, and `kubectl` does not answer: use the Proxmox console an
   with what the apps hold afterwards.
 - **If only etcd is lost**, restore it from a snapshot. The snapshot's age is the point every Kubernetes object
   goes back to: a claim made since is gone, and Flux re-creates it on a new, empty directory while the data
-  written since sits orphaned on the worker's data volume. Snapshots come only from `make etcd-snapshot` and from
-  the start of every `make talos-upgrade`, so take one before any risky change, or run `make etcd-snapshot` on a
+  written since sits orphaned on the worker's data volume. Snapshots come only from `just etcd-snapshot` and from
+  the start of every `just talos-upgrade`, so take one before any risky change, or run `just etcd-snapshot` on a
   schedule from the workstation (cron or launchd). Talos recovers etcd only on a node whose etcd waits to be
   bootstrapped (`Preparing`), so wipe etcd's partition alone first:
 

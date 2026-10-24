@@ -1,7 +1,7 @@
 ---
 # The vault: Ansible's secrets, in group_vars/all/local.vault.yml (git-ignored),
-# encrypted with the password in .vault_pass. make vault TYPE=new writes it from
-# local.vault.yml.example, every key empty, and make init or make vault fills
+# encrypted with the password in .vault_pass. just vault new writes it from
+# local.vault.yml.example, every key empty, and just init or just vault fills
 # them in. Neither file is ever committed: keep a copy of both in your password
 # manager (README.md, Setups and the vault).
 #
@@ -28,6 +28,6 @@ vault_tailscale_auth_key: ""
 
 # ----------------------------------------------------------- Home Assistant ---
 # With Home Assistant (haos_mac in local.yml): the password of its owner
-# account, which make deploy TYPE=homeassistant creates before anyone else on
-# the network can; 12 characters at least, from your password manager.
+# account, which just deploy homeassistant creates before anyone else on the
+# network can; 12 characters at least, from your password manager.
 vault_haos_owner_password: ""

@@ -3,7 +3,7 @@
 Ansible reads group_vars/all/local.yml and group_vars/all/local.vault.yml, and the vault's password from .vault_pass,
 which a checkout may link from a named setup. A link among them to a file that is gone is passed over without a word,
 as if there were no settings or no secrets, and the run would go on without them: a missing local.yml reads as no NAS
-and no cluster. make's playbook targets check the links first and name the setup; this does the same for
+and no cluster. just's playbook recipes check the links first and name the setup; this does the same for
 ansible-playbook started any other way, since Ansible loads the vars plugins beside a playbook by itself. It adds no
 variable, and reads only the links and the old vault's path, never a vault.
 """

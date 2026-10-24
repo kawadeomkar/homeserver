@@ -228,8 +228,8 @@ class TestPlan:
         result = pv.plan([vm()], facts(qemu=[], volumes={"300": [backup]}))
         assert result["create"] == [] and "qmrestore <archive> 300" in result["errors"][0]
         assert "the play again with -e proxmox_vm_ignore_existing_volumes=true" in result["errors"][0]
-        named = pv.plan([vm()], facts(qemu=[], volumes={"300": [backup]}, rebuild_command="make vms ANSIBLE_ARGS=x"))
-        assert "run make vms ANSIBLE_ARGS=x" in named["errors"][0]
+        named = pv.plan([vm()], facts(qemu=[], volumes={"300": [backup]}, rebuild_command="just vms -e x"))
+        assert "run just vms -e x" in named["errors"][0]
         assert "qm set" not in result["errors"][0], "a missing VM has no configuration to attach a disk to"
         ignored = pv.plan([vm()], facts(qemu=[], volumes={"300": [backup]}, ignore_existing_volumes=True))
         assert ignored["errors"] == [] and [c["vmid"] for c in ignored["create"]] == ["300"]

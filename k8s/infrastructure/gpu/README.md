@@ -19,6 +19,6 @@ Renovate leaves this directory alone (`renovate.json`). To bump:
 2. Pin the new image's tag and digest in `kustomization.yaml` (`newTag`, `digest`: with a digest alone, kustomize
    drops the tag)
    (`docker buildx imagetools inspect intel/intel-gpu-plugin:<version>`), and update the release and commit above.
-3. Check the patches still apply (`make lint TYPE=manifests`), that the release added no `args` the patch would replace,
-   and that `make lint TYPE=k8s` and `make test TYPE=policy` pass: a new hostPath or privilege fails `test_k8s.py` until
+3. Check the patches still apply (`just lint manifests`), that the release added no `args` the patch would replace,
+   and that `just lint k8s` and `just test policy` pass: a new hostPath or privilege fails `test_k8s.py` until
    it is pinned there, with a reason.

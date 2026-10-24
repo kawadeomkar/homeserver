@@ -127,7 +127,7 @@
           was bootstrapped before ({{ talos_config_dir }}/bootstrapped), and installing a node sends it the cluster's
           keys unauthenticated, to whatever answers at its address. If you are reinstalling it (its system disk wiped,
           its VM made anew), check on its VM's console in Proxmox that it waits in maintenance mode at that address,
-          then run again naming it: make deploy TYPE=kubernetes ANSIBLE_ARGS='-e talos_reinstall={{ _unnamed | map(attribute='name') | join(',') }}'.
+          then run again naming it: just deploy kubernetes -e talos_reinstall={{ _unnamed | map(attribute='name') | join(',') }}.
           Otherwise, something else is answering at its address: find it before anything else.
         quiet: true
       when:
@@ -253,7 +253,7 @@
       ansible.builtin.debug:
         msg: >-
           Configuration differs on {{ talos_drifted | map(attribute='name') | join(', ') }}{{ ': it would be applied' if
-          ansible_check_mode else '' }}. To see how, run again with ANSIBLE_ARGS='-e talos_keep_rendered=true', then
+          ansible_check_mode else '' }}. To see how, run again with -e talos_keep_rendered=true, then
           talosctl apply-config --dry-run -n <node> -f {{ talos_config_dir }}/rendered/<node>.yaml.
       changed_when: ansible_check_mode
       when: talos_drifted | length > 0
@@ -389,7 +389,7 @@
     - name: Report the versions running, and any upgrade the pins wait for
       ansible.builtin.debug:
         msg: >-
-          {{ {'running': _running} | combine({'pinned, not yet running (make talos-upgrade moves them)': _pending}
+          {{ {'running': _running} | combine({'pinned, not yet running (just talos-upgrade moves them)': _pending}
                                              if _pending else {})
              | combine({'applied to the control plane: etcd reads its settings only when it starts, so after a change '
                         ~ 'to cluster.etcd, restart it': 'talosctl -n ' ~ talos_controlplane.address ~ ' service etcd restart',

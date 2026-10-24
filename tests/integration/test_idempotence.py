@@ -13,7 +13,7 @@ group_vars/proxmox) and test addresses on loopback, with a NAS and, for the Prox
 Nothing here can reach a real machine: the inventory, config and addresses are all local to this
 directory.
 
-Needs the project virtualenv and openssl. Run: make test TYPE=idempotence
+Needs the project virtualenv and openssl. Run: just test idempotence
 """
 
 import base64
@@ -1266,15 +1266,15 @@ def test_proxmox_vm_with_a_nas(tmp_path):
     expect(result, "homeserver", changed=True, note="dry run on a fresh host")
     out = result[2]
     assert re.search(
-        r'storage pending: make deploy TYPE=proxmox adds it: run that first"?:\s*\[\s*"homeserver-persistent"', out
+        r'storage pending: just deploy proxmox adds it: run that first"?:\s*\[\s*"homeserver-persistent"', out
     ), out[-3000:]
     assert re.search(r'homeserver-worker-1"?:\s*"?create', out) and "Would download: talos-v1.14.2" in out, out[-3000:]
     assert read(state)["mutations"] == 0, "the dry run changed the host"
 
     rc, _, out = run("kubernetes.yml", extra)
-    assert (
-        rc != 0 and "homeserver-persistent: does not exist (make deploy TYPE=proxmox adds it: run that first)" in out
-    ), out[-3000:]
+    assert rc != 0 and "homeserver-persistent: does not exist (just deploy proxmox adds it: run that first)" in out, (
+        out[-3000:]
+    )
     assert vms_of(state) == {}
 
     seed_storage(state, PERSISTENT_NFS)
@@ -1521,7 +1521,8 @@ def test_proxmox_vm_refuses_to_build_over_old_volumes(tmp_path):
             -3000:
         ]
         assert "VM 300 (homeserver-cp-1) does not exist" in out and "qmrestore" in out, out[-3000:]
-        assert "scripts/runbooks/vm-restore.md" in out and "proxmox_vm_ignore_existing_volumes=true'" in out
+        assert "scripts/runbooks/vm-restore.md" in out, out[-3000:]
+        assert "run just deploy kubernetes -e proxmox_vm_ignore_existing_volumes=true" in out, out[-3000:]
         assert "appliance.ova" not in out
     assert vms_of(state) == {}
 
@@ -1569,7 +1570,7 @@ def test_proxmox_vm_refuses_to_build_over_old_volumes(tmp_path):
 @pytest.mark.cluster
 def test_proxmox_vm_starts_vms_restored_after_a_host_reinstall(tmp_path):
     """After a reinstall the VMs come back from their backups, stopped, their CD-ROM naming a Talos ISO that went with
-    the boot disk, so starting them by hand fails (scripts/runbooks/vm-restore.md). make deploy TYPE=kubernetes
+    the boot disk, so starting them by hand fails (scripts/runbooks/vm-restore.md). just deploy kubernetes
     downloads the ISO again and then starts them, creating nothing."""
     extra = cluster_vars(tmp_path)
     state = Path(extra["fake_pve_state"])
@@ -1821,7 +1822,7 @@ def test_talos_with_a_nas(tmp_path, factory):
     expect(result, "homeserver-k8s", changed=0, note="second run after drift on the control plane")
     assert "service etcd restart" not in result[2]
 
-    # A pin bump: nothing is applied or upgraded, and the run says what waits for make talos-upgrade.
+    # A pin bump: nothing is applied or upgraded, and the run says what waits for just talos-upgrade.
     before = read(state)
     bumped = extra | {"talos_version": "v1.14.3", "talos_kubernetes_version": "1.37.2"}
     result = run("talos.yml", bumped, env=env)
@@ -1829,7 +1830,7 @@ def test_talos_with_a_nas(tmp_path, factory):
     expect(result, "homeserver-k8s", changed=0, note="run with bumped pins")
     after = read(state)
     assert after["nodes"] == before["nodes"] and after.get("upgrades") is None and after["k8s_version"] == "1.37.1"
-    assert "make talos-upgrade" in result[2] and "homeserver-worker-1: Talos v1.14.3" in result[2], result[2][-3000:]
+    assert "just talos-upgrade" in result[2] and "homeserver-worker-1: Talos v1.14.3" in result[2], result[2][-3000:]
     assert "kubernetes: 1.37.2" in result[2]
     no_talos_secret(outputs)
 
@@ -2146,9 +2147,9 @@ def test_talos_renews_expiring_credentials(tmp_path, factory):
 
 @pytest.mark.cluster
 def test_talos_upgrade_and_etcd_snapshot(tmp_path, factory):
-    """make check TYPE=talos-upgrade changes nothing and shows the plan; make talos-upgrade snapshots etcd first,
-    upgrades the control plane before the worker, then Kubernetes, and has nothing left to do the second time. make
-    etcd-snapshot writes a snapshot and nothing else."""
+    """just talos-upgrade --check changes nothing and shows the plan; just talos-upgrade snapshots etcd first,
+    upgrades the control plane before the worker, then Kubernetes, and has nothing left to do the second time.
+    just etcd-snapshot writes a snapshot and nothing else."""
     extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
     state = Path(extra["fake_talos_state"])
     talos_state(state)
@@ -2175,7 +2176,7 @@ def test_talos_upgrade_and_etcd_snapshot(tmp_path, factory):
 
     bumped = extra | {"talos_version": "v1.14.3", "talos_kubernetes_version": "1.37.2"}
     result = run("talos_upgrade.yml", bumped, check=True, env=env)
-    expect(result, "homeserver-k8s", changed=True, note="check TYPE=talos-upgrade")
+    expect(result, "homeserver-k8s", changed=True, note="talos-upgrade --check")
     assert "Talos v1.14.2 -> v1.14.3" in result[2] and "1.37.1 -> 1.37.2" in result[2], result[2][-3000:]
     assert "no deprecated APIs found" in result[2] and read(state)["mutations"] == after["mutations"]
     assert not read(state).get("pre_pulls"), "the dry run pulled images onto the nodes"
@@ -2396,7 +2397,7 @@ def kustomizations_in(objects):
 @pytest.mark.cluster
 def test_flux_bootstrap_leaves_groups_out(tmp_path, operator_releases):
     """local.yml's kubernetes_apps reaches Flux through the FluxInstance alone: the groups it does not name are dropped
-    from the sync by one patch, which prunes them, and the run waits until they are gone. A Deployment make suspend
+    from the sync by one patch, which prunes them, and the run waits until they are gone. A Deployment just suspend
     holds there is skipped by Flux's prune and stays at zero; a dry run changes nothing. Running every group again
     takes the patch away, and the groups come back."""
     extra, env = flux_vars(tmp_path, operator_releases), talos_env(tmp_path)
@@ -2409,7 +2410,7 @@ def test_flux_bootstrap_leaves_groups_out(tmp_path, operator_releases):
     assert "patches" not in objects["Kustomization/flux-system/flux-system"]["spec"]
     assert kustomizations_in(objects) == {"flux-system", *GROUPS}
 
-    # The apps as Flux applied them, PhotoPrism held at zero by make suspend.
+    # The apps as Flux applied them, PhotoPrism held at zero by just suspend.
     s = read(state)
     for namespace, name, group, replicas in [
         ("media", "jellyfin", "apps-media", 1),
@@ -2434,7 +2435,7 @@ def test_flux_bootstrap_leaves_groups_out(tmp_path, operator_releases):
     assert sync[0]["patch"].startswith("$patch: delete\n")
     assert kustomizations_in(objects) == {"flux-system", "apps-media", "apps-nextcloud", "apps-homepage"}
     assert "wait deleted kustomization/apps-photoprism kustomization/apps-frigate" in read(state)["events"]
-    # Flux pruned PhotoPrism's database; PhotoPrism, held, stays at zero until make resume once its group is back.
+    # Flux pruned PhotoPrism's database; PhotoPrism, held, stays at zero until just resume once its group is back.
     deployments = {k.partition("/")[2] for k in objects if k.startswith("Deployment/") and "flux-operator" not in k}
     assert deployments == {"media/jellyfin", "photoprism/photoprism"}
     assert objects["ConfigMap/flux-system/cluster-settings"]["data"]["HOMEPAGE_SERVICES"] == "media nextcloud"
@@ -2826,7 +2827,7 @@ def held(replicas):
 def test_app_scale_down_and_up(tmp_path):
     """Down stops every app, apps before their databases, and holds each against Flux, leaving the platform alone;
     up brings back what down stopped, databases first. Both change nothing a second time, and a dry run nothing
-    at all. ONLY narrows either to apps or groups, and a name that is neither is refused before anything changes."""
+    at all. --only narrows either to apps or groups, and a name that is neither is refused before anything changes."""
     extra, env = apps_vars(tmp_path), talos_env(tmp_path)
     state = Path(extra["fake_talos_state"])
     apps_state(state)
@@ -2936,7 +2937,7 @@ def test_app_scale_refusals_and_timeouts(tmp_path):
 
 @pytest.mark.cluster
 def test_haos_power(tmp_path):
-    """make suspend shuts Home Assistant's VM down through its own shutdown, never a forced stop, and make resume starts
+    """just suspend shuts Home Assistant's VM down through its own shutdown, never a forced stop, and just resume starts
     it again; each leaves a VM already as asked alone, a dry run changes nothing, a VMID that does not exist is
     refused, and a shutdown that never finishes fails the run with the VM still running."""
     extra = {"fake_pve_state": str(tmp_path / "pve.json"), "haos_mac": mac(9)}

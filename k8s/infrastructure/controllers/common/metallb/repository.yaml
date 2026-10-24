@@ -1,7 +1,7 @@
 ---
 # MetalLB's chart as an OCI artifact, the same release its Helm repository serves, so it can be pinned by digest. The
 # digest is what is pulled (the tag says which release it is): a tag moved upstream changes nothing here, and
-# make lint TYPE=charts fails until both are bumped together.
+# just lint charts fails until both are bumped together.
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: OCIRepository
 metadata:

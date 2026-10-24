@@ -1,4 +1,4 @@
-# Copy to `inventory` (git-ignored); `make init` does it. No host here carries an address: the
+# Copy to `inventory` (git-ignored); `just init` does it. No host here carries an address: the
 # addresses are variables in group_vars/all/local.yml, which group_vars/<group>/connection.yml reads.
 
 # Configured through its API from this machine (ansible_connection: local). Keep this host even

@@ -1,4 +1,4 @@
-"""make init asks for every setting local.yml can hold and every secret the playbooks read from the vault, and shows
+"""just init asks for every setting local.yml can hold and every secret the playbooks read from the vault, and shows
 the defaults the playbooks use.
 
 A setting added to local.yml.example, or a vault variable added to the group_vars, fails here until it is in
@@ -56,7 +56,7 @@ def leaves(value):
 
 
 def test_the_example_holds_only_documentation_values():
-    """So a copy made by hand never points the playbooks at a real host or disk. make init itself writes local.yml
+    """So a copy made by hand never points the playbooks at a real host or disk. just init itself writes local.yml
     with these values commented out, and comments out any an older copy still holds."""
     values = yaml.safe_load(EXAMPLE.read_text())
     assert [k for k, v in values.items() for leaf in leaves(v) if not DOCUMENTATION.search(str(leaf))] == []

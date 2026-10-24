@@ -1,4 +1,4 @@
-"""Render every chart a setup's Flux Kustomizations install, for make lint TYPE=charts.
+"""Render every chart a setup's Flux Kustomizations install, for just lint charts.
 
 For each setup (k8s/clusters/<setup>), follows its Flux Kustomizations' paths through their kustomization.yaml files,
 as kustomize does, to the HelmReleases there and their sources (an OCIRepository's URL, tag and digest, a

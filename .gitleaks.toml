@@ -18,8 +18,9 @@ id = "ipv4-literal"
 description = "IPv4 literal in code, tests, manifests, scripts or documentation: use a variable, and RFC 5737 in examples"
 # molecule/ and .config/molecule/ are where Molecule role tests will go. CI scans a change with its
 # target's rules, so they must be covered before the first one is added. Markdown anywhere: a public address
-# written in a runbook identifies this network as much as one in a task.
-path = '''^(roles/|group_vars/|host_vars/|tests/|molecule/|\.config/molecule/|k8s/|scripts/|\.github/|inventory\.example$|[^/]+\.ya?ml$|ansible\.cfg$|Makefile$)|(^|/)[^/]+\.md$'''
+# written in a runbook identifies this network as much as one in a task. The task runner's files anywhere: justfile
+# and the other names just reads (Justfile, .justfile), and the modules it imports (*.just).
+path = '''^(roles/|group_vars/|host_vars/|tests/|molecule/|\.config/molecule/|k8s/|scripts/|\.github/|inventory\.example$|[^/]+\.ya?ml$|ansible\.cfg$)|(^|/)([^/]+\.(md|just)|\.?[Jj]ustfile)$'''
 regex = '''\b((?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3})\b'''
 secretGroup = 1
   [[rules.allowlists]]

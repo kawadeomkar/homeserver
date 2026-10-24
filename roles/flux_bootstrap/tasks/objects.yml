@@ -266,7 +266,7 @@
   when: not ansible_check_mode
 
 # A Kustomization dropped from the sync is pruned, and its finalizer deletes what it applied, bar what is marked never
-# to be pruned (the claims and namespaces) and what make suspend holds (kustomize.toolkit.fluxcd.io/reconcile:
+# to be pruned (the claims and namespaces) and what just suspend holds (kustomize.toolkit.fluxcd.io/reconcile:
 # disabled), which stays at zero replicas and comes back held with its group. kubectl's wait for a deletion passes for
 # one already gone, so this waits for the rest; it times out should a release of the operator stop passing its patches
 # on to the sync.
