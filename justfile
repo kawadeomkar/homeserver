@@ -152,10 +152,12 @@ lock *packages:
 
 # edit <setup>: another setup's vault, with its own password, and the checkout keeps the setup it uses; the lint reads
 # the checkout's setup alone, so it is left out. new <setup>: a setup of that name, which the checkout then uses:
-# local.yml with every setting commented out, an empty vault and a random password (--from current: this checkout's own
-# three files, moved into it). new alone: the vault in the checkout itself, and a .vault_pass if there is none, both
-# encrypted before either is written; a vault that already opens is left alone, and one that does not is refused, since
-# it may hold your secrets with their password lost (scripts/init/setups.py says the rest).
+# local.yml with every setting commented out, a vault with every key empty and a random password (--from current: this
+# checkout's own three files, moved into it). new alone: the vault in the checkout itself, and a .vault_pass if there is
+# none, both encrypted before either is written; a vault that already opens is left alone, and one that does not is
+# refused, since it may hold your secrets with their password lost. A new vault is local.vault.yml.example as it is:
+# every key the playbooks read, each empty (unset) under a comment saying what it is for (scripts/init/setups.py says
+# the rest).
 [arg('action', pattern='edit|new|list|switch', help='edit (the default), new, list or switch')]
 [arg('source', long='from', pattern='(current)?', help="new: this checkout's own local.yml, vault and .vault_pass become the setup")]
 [doc("Edit the vault's secrets, then lint them; or the setups: list, switch <setup>, new [<setup>] [--from current], edit <setup>")]

@@ -69,6 +69,8 @@ def render(key: str, value: Any) -> list[str]:
     """A setting's lines: a mapping one entry per line, anything else on one line, as local.yml.example writes them."""
     if isinstance(value, dict) and value:
         return [f"{key}:", *(f"  {_flow({k: v})[1:-1]}" for k, v in value.items())]
+    if value == "":
+        return [f'{key}: ""']  # as the examples write it, where YAML's dump would write ''
     return [_flow({key: value})[1:-1]]
 
 
@@ -115,8 +117,8 @@ class YamlKeys:
         return None
 
     def _to_block_style(self) -> None:
-        """A mapping written in flow style, such as the {} just vault new encrypts, as one line per key: a key
-        added after a flow mapping would not parse."""
+        """A mapping written in flow style, such as the {} just vault new encrypted before it wrote the template, as
+        one line per key: a key added after a flow mapping would not parse."""
         start = next(
             (i for i, line in enumerate(self.lines) if line.strip() and not line.startswith(("#", "---"))), None
         )
@@ -294,10 +296,6 @@ class Vault:
         self.doc.set(key, value, order)
         self._save()
 
-    def unset(self, key: str) -> None:
-        if self.doc.unset(key):
-            self._save()
-
     def _save(self) -> None:
         data = setups.encrypt(self.doc.text, self._password, self._vault_id)
         write_file(self.path, data, stat.S_IMODE(self.path.stat().st_mode))
@@ -405,10 +403,11 @@ class Init:
             return  # unchanged: the file keeps its own way of writing it
         try:
             if s.secret:
-                if answer is CLEAR:
-                    self.vault.unset(s.key)
-                else:
+                if answer is not CLEAR:
                     self.vault.set(s.key, answer, self.order)
+                elif has_value(self.current(s)):
+                    # Emptied, as just vault new writes it, so its line stays under its comment.
+                    self.vault.set(s.key, "", self.order)
                 return
             if answer is CLEAR:
                 if self.local.unset(s.key):
