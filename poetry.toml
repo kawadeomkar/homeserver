@@ -2,7 +2,7 @@
 # checkout behaves the same. Environment variables (POETRY_*) still override them.
 
 [virtualenvs]
-# make gives Poetry the project's virtualenv (VIRTUAL_ENV), which the user makes and keeps wherever they like. Run
+# just gives Poetry the project's virtualenv (VIRTUAL_ENV), which the user makes and keeps wherever they like. Run
 # without one, Poetry makes an environment of its own, in its cache, rather than install into whatever Python it finds:
 # poetry sync would remove every package there that the lock does not list.
 create = true

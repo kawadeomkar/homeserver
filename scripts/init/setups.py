@@ -1,14 +1,14 @@
-"""make vault's setups: each machine's local.yml, vault and vault password, kept together outside the checkout, and
+"""just vault's setups: each machine's local.yml, vault and vault password, kept together outside the checkout, and
 the one a checkout uses linked in.
 
-A setup is a directory of the store holding three files: local.yml, vault.yml and vault_pass. The store is $SETUPS
-(make's SETUPS=), else $XDG_CONFIG_HOME/homeserver/setups, ~/.config/homeserver/setups without it, and never inside the
-checkout, where git would offer a setup's password to a commit. The checkout links the files of the setup it uses in at
-the paths Ansible and make read, each a path no commit ever held, since a checkout of an older branch overwrites an
+A setup is a directory of the store holding three files: local.yml, vault.yml and vault_pass. The store is the
+environment's $SETUPS, else $XDG_CONFIG_HOME/homeserver/setups, ~/.config/homeserver/setups without it, and never inside
+the checkout, where git would offer a setup's password to a commit. The checkout links the files of the setup it uses in
+at the paths Ansible and just read, each a path no commit ever held, since a checkout of an older branch overwrites an
 ignored file at a path it tracks: group_vars/all/local.yml, group_vars/all/local.vault.yml and .vault_pass, which
 ansible.cfg names. Setups cannot sit side by side in group_vars/all/, where Ansible reads every .yml file, and a link to
 a missing file is skipped there without a word, as if there were no settings or no secrets: every playbook run first
-checks that the three links point into one setup and that each of its files is there (check; make's playbook targets,
+checks that the three links point into one setup and that each of its files is there (check; just's playbook recipes,
 and vars_plugins/setup_links.py for ansible-playbook started any other way). A checkout whose three paths are its own
 files, or missing, uses no setup and works as it always did.
 
@@ -24,7 +24,7 @@ files, or missing, uses no setup and works as it always did.
   edit NAME               ansible-vault edit on NAME's vault, with NAME's password, without switching
 
 Nothing here deletes a setup or replaces a file of the checkout's own that holds anything: switch and new refuse one,
-which new --from current moves into a setup first. A local.yml that sets nothing, as make init first writes it, gives
+which new --from current moves into a setup first. A local.yml that sets nothing, as just init first writes it, gives
 way, and so does a file the same as the setup's, as a switch cut short leaves it.
 """
 
@@ -50,9 +50,9 @@ FILES = {
 }
 # What makes each file in a checkout that uses no setup.
 MAKES = {
-    "local.yml": "make init writes it",
-    "vault.yml": "make vault TYPE=new makes it and its password",
-    "vault_pass": "make vault TYPE=new makes it and the vault",
+    "local.yml": "just init writes it",
+    "vault.yml": "just vault new makes it and its password",
+    "vault_pass": "just vault new makes it and the vault",
 }
 # Where the vault was committed until 2026-10-20: Ansible would read a vault there beside the setup's.
 OLD_VAULT = Path("group_vars/all/vault.yml")
@@ -118,7 +118,7 @@ def write_new(path: Path, data: bytes) -> None:
 
 # ------------------------------------------------------------------------------------------------- the vault ---
 def decrypt(data: bytes, password: bytes) -> bytes | None:
-    """A vault's text, None when the password does not open it: how make vault and make init both read a vault."""
+    """A vault's text, None when the password does not open it: how just vault and just init both read a vault."""
     from ansible.errors import AnsibleError
     from ansible.parsing.vault import VaultLib, VaultSecret
 
@@ -197,14 +197,14 @@ def active(root: Path) -> Path | None:
         raise Refused(
             f"This checkout's setup, {setup.name}, is not whole, and Ansible would run without what is missing, "
             f"without a word: {'; '.join(found)}. Restore the setup's files from your password manager, or link a "
-            f"whole setup in: make vault TYPE=switch NAME=<setup> (make vault TYPE=list lists them; NAME={setup.name} "
+            f"whole setup in: just vault switch <setup> (just vault list lists them; just vault switch {setup.name} "
             "finishes a switch that was cut short)."
         )
     return setup
 
 
 def sets_nothing(path: Path) -> bool:
-    """A local.yml with no setting, as make init first writes it: the example with every setting commented out. Nothing
+    """A local.yml with no setting, as just init first writes it: the example with every setting commented out. Nothing
     is lost when a setup's link replaces it."""
     try:
         return yaml.safe_load(path.read_text()) in (None, {})
@@ -235,8 +235,8 @@ def refuse_own_files(root: Path, setup: Path | None = None) -> None:
         one = len(own) == 1
         raise Refused(
             f"{listed} {'is' if one else 'are'} this checkout's own, and a setup's links would replace "
-            f"{'it' if one else 'them'}: make this checkout's files a setup first, make vault TYPE=new NAME=<name> "
-            f"FROM=current, or move {'it' if one else 'them'} out of the checkout"
+            f"{'it' if one else 'them'}: make this checkout's files a setup first, just vault new <name> "
+            f"--from current, or move {'it' if one else 'them'} out of the checkout"
         )
 
 
@@ -267,8 +267,8 @@ def existing(where: Path, name: str) -> Path:
     setup = where / name
     if not setup.is_dir():
         raise Refused(
-            f"There is no setup {name} in {shown(where)}: make vault TYPE=list lists them, and make vault TYPE=new "
-            f"NAME={name} makes it"
+            f"There is no setup {name} in {shown(where)}: just vault list lists them, and just vault new "
+            f"{name} makes it"
         )
     return setup
 
@@ -277,7 +277,7 @@ def unused(where: Path, name: str) -> Path:
     check_name(name)
     setup = where / name
     if os.path.lexists(setup):
-        raise Refused(f"Setup {name} exists already, in {shown(setup)}: make vault TYPE=switch NAME={name} uses it")
+        raise Refused(f"Setup {name} exists already, in {shown(setup)}: just vault switch {name} uses it")
     return setup
 
 
@@ -349,7 +349,7 @@ def adoptable(root: Path, opens: bool | None = None) -> None:
     refuse_old_vault(root)
     current = active(root)
     if current is not None:
-        raise Refused(f"This checkout links to setup {current.name} already: make vault TYPE=list lists the setups")
+        raise Refused(f"This checkout links to setup {current.name} already: just vault list lists the setups")
     for file, rel in FILES.items():
         if not (root / rel).is_file():
             raise Refused(f"There is no {rel} to move into a setup: {MAKES[file]}")
@@ -373,7 +373,7 @@ def adopt(root: Path, where: Path, name: str) -> Path:
 
 
 def own_vault(root: Path) -> str:
-    """make vault TYPE=new without NAME: what the checkout lacks of a vault of its own, a random .vault_pass readable
+    """just vault new without a name: what the checkout lacks of a vault of its own, a random .vault_pass readable
     by its owner alone and an empty vault encrypted with it. A vault that opens with .vault_pass is left alone, and one
     that does not is refused, since it may hold the person's secrets with their password lost; so is one at the old,
     committed path, which moves rather than a new one being made beside it, and a setup, whose links this would write
@@ -382,8 +382,7 @@ def own_vault(root: Path) -> str:
     current = active(root)
     if current is not None:
         raise Refused(
-            f"This checkout uses setup {current.name} (make vault TYPE=list): make vault TYPE=new NAME=<name> makes "
-            "another."
+            f"This checkout uses setup {current.name} (just vault list): just vault new <name> makes another."
         )
     vault, password_file = root / FILES["vault.yml"], root / FILES["vault_pass"]
     if vault.is_file() and password_file.is_file() and vault_keys(vault, password_file) is not None:
@@ -472,15 +471,15 @@ def listing(root: Path, where: Path) -> str:
         for row in rows:
             lines.append("  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip())
     else:
-        lines.append(f"No setups in {shown(where)}: make vault TYPE=new NAME=<name> makes one.")
+        lines.append(f"No setups in {shown(where)}: just vault new <name> makes one.")
     if broken:
         lines.append(broken)
     elif current and not any(current == resolved(where / name) for name in found):
         lines.append(f"This checkout uses setup {current.name}, in {shown(current.parent)}.")
     elif not current and own_files(root):
         lines.append(
-            "This checkout uses its own local.yml, vault and .vault_pass, in no setup: make vault TYPE=new "
-            "NAME=<name> FROM=current makes them one."
+            "This checkout uses its own local.yml, vault and .vault_pass, in no setup: just vault new "
+            "<name> --from current makes them one."
         )
     return "\n".join(lines)
 
@@ -516,17 +515,17 @@ def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
             return edit(where, args.name)
         elif args.command == "switch":
             if not args.name:
-                raise Refused("make vault TYPE=switch needs NAME=<setup>: make vault TYPE=list lists them")
+                raise Refused("just vault switch needs a setup's name: just vault list lists them")
             if switch(root, where, args.name):
                 print(f"This checkout uses setup {args.name} now ({shown(where / args.name)}).")
             else:
                 print(f"This checkout uses setup {args.name} already: nothing to do.")
         elif args.source not in ("", "current"):
-            raise Refused(f"FROM takes current alone, not {args.source}: make vault TYPE=new NAME=<name> FROM=current")
+            raise Refused(f"--from takes current alone, not {args.source}: just vault new <name> --from current")
         elif not args.name:
             raise Refused(
-                "FROM=current makes this checkout's own files a setup, which needs a name: make vault TYPE=new "
-                "NAME=<name> FROM=current"
+                "--from current makes this checkout's own files a setup, which needs a name: just vault new "
+                "<name> --from current"
             )
         elif args.source:
             setup = adopt(root, where, args.name)
@@ -540,7 +539,7 @@ def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
             setup = new(root, where, args.name, init.commented_example(root))
             print(
                 f"Made setup {args.name} ({shown(setup)}): local.yml with every setting commented out, an empty vault "
-                "and its password, readable by you alone. This checkout uses it now, and make init asks for its "
+                "and its password, readable by you alone. This checkout uses it now, and just init asks for its "
                 "settings. Keep a copy of the directory in your password manager."
             )
     except Refused as e:

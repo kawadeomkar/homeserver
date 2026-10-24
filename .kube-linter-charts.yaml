@@ -1,5 +1,5 @@
 ---
-# kube-linter on what the charts render (make lint TYPE=charts): only what every chart here must do, which this repo's
+# kube-linter on what the charts render (just lint charts): only what every chart here must do, which this repo's
 # own manifests must too: request CPU and memory, and run pinned images, never pulled with Always. A chart's
 # privilege and host paths are pinned by tests/policy/test_k8s.py instead, since several are privileged by
 # design (MetalLB's speaker, the CSI node plugin).

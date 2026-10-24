@@ -1,5 +1,5 @@
 ---
-# tasks_from: etcd-snapshot. An etcd snapshot alone (make etcd-snapshot).
+# tasks_from: etcd-snapshot. An etcd snapshot alone (just etcd-snapshot).
 - name: etcd-snapshot | Check the role's inputs
   ansible.builtin.import_tasks: validate.yml
 

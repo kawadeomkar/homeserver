@@ -58,30 +58,65 @@ def test_gate_allows_skipping_only_jobs_that_run_on_every_pull_request():
     assert conditional == dict.fromkeys(skippable, "github.event_name == 'pull_request'")
 
 
-def makefile_types(target):
-    """The types the Makefile's <target>_TYPES lists."""
-    match = re.search(rf"^{target}_TYPES\s*:=(.*)$", (ROOT / "Makefile").read_text(), re.M)
-    assert match, f"the Makefile has no {target}_TYPES"
-    return match.group(1).split()
+JUSTFILE = ROOT / "justfile"
+
+
+def justfile_types(recipe):
+    """The types the justfile's <recipe>_types lists, written as the pattern the recipe's arguments must match."""
+    match = re.search(rf"^{recipe}_types := '([a-z0-9|-]+)'$", JUSTFILE.read_text(), re.M)
+    assert match, f"the justfile has no {recipe}_types"
+    return match.group(1).split("|")
+
+
+def test_each_type_is_a_recipe_and_each_recipe_a_type():
+    """lint, test and fix run <recipe>-<type> for each of their types and refuse any other, by the pattern their types
+    argument takes from the list: a type without its recipe would fail only when run, and a recipe left out of the
+    list would never run at all."""
+    text = JUSTFILE.read_text()
+    for recipe in ("lint", "test", "fix"):
+        recipes = re.findall(rf"^{recipe}-([a-z0-9]+)(?: [^:\n]*)?:", text, re.M)
+        assert recipes and sorted(recipes) == sorted(justfile_types(recipe)), recipe
+        assert re.search(rf"^\[arg\('types', pattern={recipe}_types[ )]", text, re.M), recipe
+    assert set(justfile_types("k8s")) <= set(justfile_types("lint"))
 
 
 def test_ci_runs_every_lint_and_test_type():
-    """make lint and make test each run every type without TYPE, while CI splits them between its jobs by TYPE; a type
-    added to the Makefile and to no job would run locally and never gate a pull request."""
+    """just lint and just test each run every type without arguments, while CI splits them between its jobs; a type
+    added to the justfile and to no job would run locally and never gate a pull request."""
     ran = {"lint": set(), "test": set()}
     for job in workflow()["jobs"].values():
         for step in job.get("steps", []):
             for line in step.get("run", "").splitlines():
-                if not line.startswith("make "):
+                if not line.startswith("just "):
                     continue
                 words = shlex.split(line)
-                goals = [word for word in words[1:] if not word.startswith("-") and "=" not in word]
-                types = [word.split("=", 1)[1] for word in words if word.startswith("TYPE=")]
-                for goal in set(goals) & set(ran):
-                    assert types, f"CI runs make {goal} without TYPE, so its jobs would repeat each other: {line}"
-                    ran[goal].update(types[-1].replace("k8s", ",".join(makefile_types("k8s"))).split(","))
+                goal, types = words[1], [word for word in words[2:] if not word.startswith("-")]
+                if goal in ran:
+                    assert types, f"CI runs just {goal} without types, so its jobs would repeat each other: {line}"
+                    for kind in types:
+                        ran[goal].update(justfile_types("k8s") if kind == "k8s" else [kind])
     for goal, types in ran.items():
-        assert types == set(makefile_types(goal)), goal
+        assert types == set(justfile_types(goal)), goal
+
+
+def test_every_job_installs_just_first_at_a_version_the_justfile_takes():
+    """Every job's commands are just's, and just install fills the job's virtualenv, so just comes first, from
+    scripts/ci/install-just.sh; and the pinned release is no older than the justfile's minimum-version, below which
+    just refuses to read it."""
+    flow = workflow()
+    minimum = re.search(r"^set minimum-version := '([0-9.]+)'$", JUSTFILE.read_text(), re.M)
+    assert minimum, "the justfile names the oldest just it takes"
+
+    def version(text):
+        return tuple(int(part) for part in text.split("."))
+
+    assert version(flow["env"]["JUST_VERSION"]) >= version(minimum.group(1))
+    assert {"JUST_SHA256_X86_64", "JUST_SHA256_AARCH64"} <= set(flow["env"])
+    for name, job in flow["jobs"].items():
+        runs = [step.get("run", "") for step in job.get("steps", [])]
+        uses = [i for i, run in enumerate(runs) if re.search(r"(^|\s)just\s", run, re.M)]
+        if uses:
+            assert any(run == "scripts/ci/install-just.sh" for run in runs[: uses[0]]), name
 
 
 def test_every_idempotence_test_runs_once():
@@ -90,10 +125,10 @@ def test_every_idempotence_test_runs_once():
     jobs = workflow()["jobs"]
 
     def commands(job):
-        return [step["run"] for step in jobs[job]["steps"] if "make test TYPE=idempotence" in step.get("run", "")]
+        return [step["run"] for step in jobs[job]["steps"] if "just test idempotence" in step.get("run", "")]
 
-    assert commands("test") == ["make test TYPE=idempotence PYTEST_ARGS='-m \"not cluster\"'"]
-    assert commands("cluster") == ['make test TYPE=idempotence PYTEST_ARGS="-m cluster --shard $SHARD"']
+    assert commands("test") == ["just test idempotence --pytest-args='-m \"not cluster\"'"]
+    assert commands("cluster") == ['just test idempotence --pytest-args="-m cluster --shard $SHARD"']
     shards = jobs["cluster"]["strategy"]["matrix"]["shard"]
     assert shards == [f"{k}/{len(shards)}" for k in range(1, len(shards) + 1)]
 

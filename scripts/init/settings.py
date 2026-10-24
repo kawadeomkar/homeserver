@@ -1,4 +1,4 @@
-"""Every setting make init asks for: group_vars/all/local.yml's, and the secrets that go in the vault.
+"""Every setting just init asks for: group_vars/all/local.yml's, and the secrets that go in the vault.
 
 Each section of local.yml is switched on by a setting of its own (the NAS's addresses, the cluster's node addresses,
 Home Assistant's MAC, tailscale_enabled), as the playbooks work it out; the others are asked only when it is on.
@@ -67,7 +67,7 @@ class Setting:
     nas: bool | None = None  # asked only with a NAS (True) or only without one (False)
     after: str | None = None  # asked only once this setting is set
     required_without_nas: bool = False
-    popular: bool = False  # asked by a plain make init too; the other optional settings only by TYPE=full
+    popular: bool = False  # asked by a plain just init too; the other optional settings only by --full
     fields: tuple[str, ...] = field(default_factory=tuple)  # the parts of a composite
 
 
@@ -588,7 +588,7 @@ SETTINGS: tuple[Setting, ...] = (
         "cidr",
         "The clients Traefik serves (your LAN's prefix), once every app is set up",
         help="Leave it unset on a new cluster: several apps make their first visitor the admin. Set them up through "
-        "port forwards first (scripts/runbooks/first-run.md), then set this and run make deploy TYPE=kubernetes.",
+        "port forwards first (scripts/runbooks/first-run.md), then set this and run just deploy kubernetes.",
         popular=True,
     ),
     S(
@@ -718,7 +718,7 @@ BY_KEY = {s.key: s for s in SETTINGS}
 
 
 def without_example(value: Any, example: Any) -> Any:
-    """A setting's value without what it shares with local.yml.example's value for it, which an older make init
+    """A setting's value without what it shares with local.yml.example's value for it, which an older just init
     copied into local.yml: an entry of a mapping equal to the example's, an item of a list the example's list holds.
     None when nothing else is left."""
     if value == example:

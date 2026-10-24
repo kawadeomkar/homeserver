@@ -5,7 +5,7 @@
 # 0.0.0.0): the controller manager and scheduler are static pods the chart's Services find by their component label,
 # and etcd, which is no pod on Talos, is found through the API server's (below), so no address is written here.
 # The Proxmox host's own exporter is scraped too, at the address the cluster's settings give (below).
-# Every component requests CPU and memory (make lint TYPE=charts checks the rendered chart).
+# Every component requests CPU and memory (just lint charts checks the rendered chart).
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:

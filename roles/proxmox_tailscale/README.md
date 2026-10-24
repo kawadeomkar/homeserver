@@ -154,5 +154,5 @@ and with routes the route's auto-approver), with routes split DNS, and the auth 
 
 ## Reference
 
-[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make fix TYPE=docs` from the role itself:
+[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `just fix docs` from the role itself:
 its argument specs, defaults and vars, and each tasks file as a table and a flow graph. Never edit it by hand.

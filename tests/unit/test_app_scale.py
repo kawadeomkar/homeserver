@@ -1,4 +1,4 @@
-"""roles/app_scale's filters: which Deployments are the apps, and what make suspend and make resume do to them.
+"""roles/app_scale's filters: which Deployments are the apps, and what just suspend and just resume do to them.
 
 The idempotence tests run the role against a fake cluster; these cover the reading and the plan on their own,
 including forms the fake never produces (kubectl's JSON as text, an unset replica count, a malformed record).

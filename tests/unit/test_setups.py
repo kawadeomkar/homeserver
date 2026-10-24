@@ -1,5 +1,5 @@
 """Setups (scripts/init/setups.py): each machine's local.yml, vault and vault password kept outside the checkout, the
-one a checkout uses linked in; what make vault TYPE=list, switch and new do, and every refusal.
+one a checkout uses linked in; what just vault list, switch and new do, and every refusal.
 
 Each test has a checkout and a store of its own, under tmp_path, and HOME there too, so nothing reads or writes the
 real ~/.config/homeserver/setups.
@@ -147,9 +147,9 @@ def test_switch_and_new_never_replace_a_file_of_the_checkouts_own(root, where):
     own_files(root)
     before = {rel: (root / rel).read_bytes() for rel in setups.FILES.values()}
     stored(where, "lab")
-    with pytest.raises(setups.Refused, match="FROM=current"):
+    with pytest.raises(setups.Refused, match="--from current"):
         setups.switch(root, where, "lab")
-    with pytest.raises(setups.Refused, match="FROM=current"):
+    with pytest.raises(setups.Refused, match="--from current"):
         setups.new(root, where, "spare", "---\n")
     assert {rel: (root / rel).read_bytes() for rel in setups.FILES.values()} == before
     assert not links(root) and not (where / "spare").exists()
@@ -189,14 +189,14 @@ def test_files_that_are_not_whole_are_never_adopted(root, where):
     with pytest.raises(setups.Refused, match=r"does not open with \.vault_pass"):
         setups.adopt(root, where, "home")
     (root / LOCAL).unlink()
-    with pytest.raises(setups.Refused, match="make init writes it"):
+    with pytest.raises(setups.Refused, match="just init writes it"):
         setups.adopt(root, where, "home")
     assert not (where / "home").exists() and not links(root)
     assert (root / VAULT).is_file() and not (root / VAULT).is_symlink(), "the files stay where they were"
 
 
 def test_a_local_yml_that_sets_nothing_gives_way_to_a_setup(root, where):
-    """make init's first run writes local.yml with every setting commented out, and a setup restored after it still
+    """just init's first run writes local.yml with every setting commented out, and a setup restored after it still
     links in, since nothing is lost; a local.yml that sets anything is refused by name."""
     (root / LOCAL).write_text(wizard.commented_example(root))
     lab = setups.new(root, where, "lab", "---\n")
@@ -246,7 +246,7 @@ def test_a_move_cut_short_is_finished_by_switching_to_its_setup(root, where):
     for file in ("local.yml", "vault.yml"):
         (root / setups.FILES[file]).unlink()
         (root / setups.FILES[file]).symlink_to(setup / file)
-    with pytest.raises(setups.Refused, match=r"\.vault_pass is a file of this checkout's own.*NAME=home finishes"):
+    with pytest.raises(setups.Refused, match=r"\.vault_pass is a file of this checkout's own.*switch home finishes"):
         setups.check(root)
     assert setups.switch(root, where, "home") is True
     assert setups.active(root) == setup
@@ -312,16 +312,16 @@ def test_list_marks_the_setup_in_use_and_shows_no_secret(root, where):
 def test_list_says_what_a_checkout_without_a_setup_can_do(root, where):
     assert "No setups in" in setups.listing(root, where)
     own_files(root)
-    assert "FROM=current" in setups.listing(root, where)
+    assert "--from current" in setups.listing(root, where)
 
 
 # ------------------------------------------------------------------------------------------------------ cli ---
 @pytest.mark.parametrize(
     ("argv", "says"),
     [
-        (["switch"], "needs NAME=<setup>"),
+        (["switch"], "needs a setup's name"),
         (["new", "--from", "current"], "which needs a name"),
-        (["new", "home", "--from", "elsewhere"], "FROM takes current alone"),
+        (["new", "home", "--from", "elsewhere"], "--from takes current alone"),
         (["edit", "nope"], "There is no setup nope"),
     ],
 )
@@ -352,67 +352,68 @@ def test_the_store_is_never_inside_the_checkout(root, monkeypatch, capsys):
     assert not (root / "setups").exists() and not links(root)
 
 
-# ----------------------------------------------------------------------------------------------------- make ---
+# ----------------------------------------------------------------------------------------------------- just ---
 def tree(tmp_path: Path) -> Path:
-    """The Makefile and what make vault runs, copied into a checkout of their own."""
+    """The justfile and what just vault runs, copied into a checkout of their own."""
     checkout = tmp_path / "tree"
     (checkout / "scripts" / "init").mkdir(parents=True)
     (checkout / "group_vars" / "all").mkdir(parents=True)
     (checkout / "vars_plugins").mkdir()
-    for name in ("Makefile", "ansible.cfg", str(wizard.EXAMPLE), "vars_plugins/setup_links.py"):
+    for name in ("justfile", "ansible.cfg", str(wizard.EXAMPLE), "vars_plugins/setup_links.py"):
         shutil.copy(ROOT / name, checkout / name)
     for script in ("init.py", "settings.py", "setups.py"):
         shutil.copy(ROOT / "scripts" / "init" / script, checkout / "scripts" / "init" / script)
     return checkout
 
 
-# What an outer make (make test TYPE=unit) hands every make below it: its flags, and the variables of its command line,
-# which it puts in the environment too, TYPE among them.
-OUTER_MAKE = {
-    *("MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEOVERRIDES"),
-    *("TYPE", "NAME", "FROM", "SETUPS", "TAGS", "ONLY", "ALL", "ANSIBLE_ARGS", "PYTEST_ARGS", "UPDATE"),
-}
+# What an outer just (just test unit) exports to every process below it, VENV, and SETUPS, which a shell may export:
+# each test gives its own.
+OUTER_JUST = {"VENV", "SETUPS"}
 
 
-def make(checkout: Path, *args: str, **env: str) -> subprocess.CompletedProcess:
-    inherited = {k: v for k, v in os.environ.items() if k not in OUTER_MAKE}
+def just(checkout: Path, *args: str, **env: str) -> subprocess.CompletedProcess:
+    """just in the checkout, with this test's virtualenv. VENV goes in the environment: after a recipe's name, VENV=…
+    would be one of the recipe's arguments."""
+    inherited = {k: v for k, v in os.environ.items() if k not in OUTER_JUST}
     return subprocess.run(
-        ["make", "--no-print-directory", *args, f"VENV={sys.prefix}"],
+        ["just", *args],
         cwd=checkout,
-        env={**inherited, "ANSIBLE_CONFIG": str(checkout / "ansible.cfg"), **env},
+        env={**inherited, "VENV": sys.prefix, "ANSIBLE_CONFIG": str(checkout / "ansible.cfg"), **env},
         stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
     )
 
 
-def test_make_vault_makes_lists_and_switches_setups(tmp_path):
+def test_just_vault_makes_lists_and_switches_setups(tmp_path):
     checkout = tree(tmp_path)
-    store = tmp_path / "setups"
+    store = str(tmp_path / "setups")
     for name in ("home", "lab"):
-        made = make(checkout, "vault", "TYPE=new", f"NAME={name}", f"SETUPS={store}")
+        made = just(checkout, "vault", "new", name, SETUPS=store)
         assert made.returncode == 0, made.stdout + made.stderr
-    listed = make(checkout, "vault", "TYPE=list", f"SETUPS={store}")
+    listed = just(checkout, "vault", "list", SETUPS=store)
     assert listed.returncode == 0 and "*  lab" in listed.stdout and "  home" in listed.stdout, listed.stdout
-    switched = make(checkout, "vault", "TYPE=switch", "NAME=home", f"SETUPS={store}")
+    switched = just(checkout, "vault", "switch", "home", SETUPS=store)
     assert switched.returncode == 0 and "uses setup home now" in switched.stdout, switched.stdout + switched.stderr
-    assert setups.target(checkout / LOCAL) == store / "home" / "local.yml"
-    plain = make(checkout, "vault", "TYPE=new", f"SETUPS={store}")
+    assert setups.target(checkout / LOCAL) == Path(store) / "home" / "local.yml"
+    plain = just(checkout, "vault", "new", SETUPS=store)
     assert plain.returncode != 0 and "uses setup home" in plain.stderr, "never written through a setup's links"
-    nameless = make(checkout, "vault", "TYPE=switch", f"SETUPS={store}")
-    assert nameless.returncode != 0 and "needs NAME" in nameless.stderr
-    both = make(checkout, "vault", "TYPE=list,switch")
-    assert both.returncode != 0 and "one TYPE at a time" in both.stderr
+    nameless = just(checkout, "vault", "switch", SETUPS=store)
+    assert nameless.returncode != 0 and "switch needs" in nameless.stderr, nameless.stderr
+    both = just(checkout, "vault", "list", "switch", SETUPS=store)
+    assert both.returncode != 0 and "just vault list takes no setup" in both.stderr, both.stderr
+    unknown = just(checkout, "vault", "lists", SETUPS=store)
+    assert unknown.returncode != 0 and "does not match pattern" in unknown.stderr, unknown.stderr
 
 
-def test_make_vault_edits_another_setups_vault_without_switching(tmp_path):
+def test_just_vault_edits_another_setups_vault_without_switching(tmp_path):
     checkout = tree(tmp_path)
     store = tmp_path / "setups"
     for name in ("lab", "home"):
-        assert make(checkout, "vault", "TYPE=new", f"NAME={name}", f"SETUPS={store}").returncode == 0
+        assert just(checkout, "vault", "new", name, SETUPS=str(store)).returncode == 0
     editor = tmp_path / "editor.py"
     editor.write_text("import sys\nopen(sys.argv[1], 'w').write('vault_haos_owner_password: edited\\n')\n")
-    edited = make(checkout, "vault", "NAME=lab", f"SETUPS={store}", EDITOR=f"{sys.executable} {editor}")
+    edited = just(checkout, "vault", "edit", "lab", SETUPS=str(store), EDITOR=f"{sys.executable} {editor}")
     assert edited.returncode == 0, edited.stdout + edited.stderr
     lab, home = store / "lab", store / "home"
     assert decrypt(lab / "vault.yml", lab / "vault_pass") == {"vault_haos_owner_password": "edited"}
@@ -421,40 +422,47 @@ def test_make_vault_edits_another_setups_vault_without_switching(tmp_path):
 
 
 def test_a_playbook_run_names_its_setup_and_stops_on_a_broken_one(tmp_path):
+    """The log is named after the setup. A dry run cannot show it: just --dry-run stops at the just a recipe starts
+    again, so the run is real, in a tree with no proxmox.yml, where ansible-playbook stops at once."""
     checkout = tree(tmp_path)
     store = tmp_path / "setups"
-    assert make(checkout, "vault", "TYPE=new", "NAME=home", f"SETUPS={store}").returncode == 0
-    planned = make(checkout, "-n", "check", "TYPE=proxmox")
-    assert "-home-check-proxmox.log" in planned.stdout, "the log is named after the setup"
+    assert just(checkout, "vault", "new", "home", SETUPS=str(store)).returncode == 0
+    ran = just(checkout, "check", "proxmox")
+    assert ran.returncode != 0 and "Setup: home" in ran.stdout, ran.stdout + ran.stderr
+    assert "-home-check-proxmox.log" in ran.stdout, "the log is named after the setup"
+    assert os.readlink(checkout / "logs" / "latest.log").endswith("-home-check-proxmox.log")
+    logs = sorted((checkout / "logs").iterdir())
     (store / "home" / "local.yml").unlink()
-    stopped = make(checkout, "check", "TYPE=proxmox")
+    stopped = just(checkout, "check", "proxmox")
     assert stopped.returncode != 0 and "home, is not whole" in stopped.stderr, stopped.stdout + stopped.stderr
-    assert not (checkout / "logs").exists(), "stopped before anything ran"
+    assert "Logging to" not in stopped.stdout and sorted((checkout / "logs").iterdir()) == logs, "stopped first"
 
 
-def test_make_takes_name_from_its_command_line_alone_and_for_make_vault_alone(tmp_path):
-    """A NAME the shell exports (WSL sets it to the machine's name) is not make vault's; and make deploy NAME=lab
-    would deploy the setup the checkout links to, whichever it is, so it is refused."""
+def test_just_takes_no_parameter_from_the_environment_or_in_makes_style(tmp_path):
+    """A NAME the shell exports (WSL sets it to the machine's name) reaches nothing; a make-style NAME=lab after a
+    playbook recipe is refused before anything runs, rather than handed to ansible-playbook as a playbook; and
+    --from belongs to just vault new alone."""
     checkout = tree(tmp_path)
     store = tmp_path / "setups"
-    made = make(checkout, "vault", "TYPE=new", f"SETUPS={store}", NAME="mybox")
+    made = just(checkout, "vault", "new", SETUPS=str(store), NAME="mybox")
     assert made.returncode == 0, made.stdout + made.stderr
     assert not store.exists() and (checkout / VAULT).is_file() and not links(checkout), "the checkout's own vault"
-    refused = make(checkout, "-n", "deploy", "TYPE=proxmox", "NAME=lab")
-    assert refused.returncode != 0 and "NAME and FROM are make vault's" in refused.stderr, refused.stderr
-    stray = make(checkout, "vault", "FROM=current")
-    assert stray.returncode != 0 and "FROM=current is make vault TYPE=new's alone" in stray.stderr, stray.stderr
+    refused = just(checkout, "deploy", "proxmox", "NAME=lab")
+    assert refused.returncode != 0 and "NAME=lab: just takes no make-style parameter" in refused.stderr, refused.stderr
+    assert not (checkout / "logs").exists(), "refused before anything ran"
+    stray = just(checkout, "vault", "switch", "lab", "--from", "current")
+    assert stray.returncode != 0 and "--from current is just vault new's alone" in stray.stderr, stray.stderr
 
 
-def test_ansible_playbook_started_without_make_stops_on_a_broken_setup(tmp_path):
+def test_ansible_playbook_started_without_just_stops_on_a_broken_setup(tmp_path):
     """vars_plugins/setup_links.py, beside the playbooks, which Ansible loads by itself."""
     checkout = tree(tmp_path)
     store = tmp_path / "setups"
-    assert make(checkout, "vault", "TYPE=new", "NAME=home", f"SETUPS={store}").returncode == 0
+    assert just(checkout, "vault", "new", "home", SETUPS=str(store)).returncode == 0
     (checkout / "play.yml").write_text(
         "- hosts: localhost\n  gather_facts: false\n  tasks:\n    - ansible.builtin.debug:\n        msg: ran\n"
     )
-    inherited = {k: v for k, v in os.environ.items() if k not in OUTER_MAKE}
+    inherited = {k: v for k, v in os.environ.items() if k not in OUTER_JUST}
 
     def play() -> subprocess.CompletedProcess:
         return subprocess.run(

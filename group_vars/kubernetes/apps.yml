@@ -1,7 +1,7 @@
 ---
-# make suspend and make resume (suspend.yml, resume.yml): roles/app_scale scales the apps Flux applies from k8s/apps/ to
+# just suspend and just resume (suspend.yml, resume.yml): roles/app_scale scales the apps Flux applies from k8s/apps/ to
 # zero and back, an app being a Deployment and a group its namespace (media, nextcloud, ...). suspend.yml and resume.yml
-# set the state and the names (make's ONLY); the platform under k8s/infrastructure/ is never touched.
+# set the state and the names (just's --only); the platform under k8s/infrastructure/ is never touched.
 app_scale_kubeconfig: "{{ talos_config_dir }}/kubeconfig"
 app_scale_server: "{{ talos_endpoint }}"
 app_scale_path: k8s/apps

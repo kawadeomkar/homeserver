@@ -1,6 +1,6 @@
 ---
-# tasks_from: power. Shuts the VMs of proxmox_vm_power_vmids down (stopped) or starts them (running), with qm: make
-# suspend and make resume for Home Assistant's VM. A shutdown is the guest's own, through ACPI or its agent, never a
+# tasks_from: power. Shuts the VMs of proxmox_vm_power_vmids down (stopped) or starts them (running), with qm: just
+# suspend and just resume for Home Assistant's VM. A shutdown is the guest's own, through ACPI or its agent, never a
 # forced stop: one that does not finish within proxmox_vm_power_timeout seconds fails the run and leaves the VM running.
 # A VM already as asked is left alone, and nothing else about any VM changes. The main entry point starts a stopped VM
 # marked start, and so does the host at boot for one marked onboot: a VM shut down here stays down until then.

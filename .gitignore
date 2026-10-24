@@ -30,7 +30,7 @@ talosconfig.*
 # local notes / audits
 docs/*
 
-# Playbook run logs (make writes one per run); they hold addresses.
+# Playbook run logs (just writes one per run); they hold addresses.
 logs/
 
 # VSCODE
@@ -39,7 +39,7 @@ logs/
 # Ansible runtime and backups
 *.original
 *.tmp
-# make init's copy of a file it is writing (scripts/init/init.py, write_file): removed when a write fails, but a run
+# just init's copy of a file it is writing (scripts/init/init.py, write_file): removed when a write fails, but a run
 # killed outright leaves it, and .vault_pass's holds the vault's password
 *.init-tmp
 *.bkp

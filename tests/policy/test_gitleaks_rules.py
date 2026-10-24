@@ -5,7 +5,7 @@ identifier and the repository's own scans stay clean. They sit under the paths t
 expect (roles/, k8s/, tests/, ...) and are scanned from that root, as a directory and as a git commit:
 the range scan in CI and the pre-push hook use git mode.
 
-Marked `gitleaks`: `make test TYPE=gitleaks` runs these with gitleaks from PATH, `make test TYPE=policy` does not.
+Marked `gitleaks`: `just test gitleaks` runs these with gitleaks from PATH, `just test policy` does not.
 Without gitleaks they are skipped locally and fail in CI.
 """
 
@@ -51,8 +51,12 @@ FIXTURES = [
     ("molecule/demo/converge.yml", "demo_dns: " + dotted("8", "8", "4", "4") + "\n", {"ipv4-literal"}),
     (".config/molecule/config.yml", "server: " + dotted("1", "1", "1", "1") + "\n", {"ipv4-literal"}),
     ("extra.yml", "dns: " + dotted("9", "9", "9", "9") + "\n", {"ipv4-literal"}),
-    # ipv4-literal: also in scripts, workflows, host variables and Markdown anywhere
+    # ipv4-literal: also in scripts, the task runner's files, workflows, host variables and Markdown anywhere
     ("scripts/demo.sh", "ping " + dotted("1", "2", "3", "4") + "\n", {"ipv4-literal"}),
+    ("justfile", "dns := '" + dotted("9", "9", "9", "9") + "'\n", {"ipv4-literal"}),
+    ("ops/Justfile", "dns := '" + dotted("9", "9", "9", "9") + "'\n", {"ipv4-literal"}),
+    (".justfile", "dns := '" + dotted("9", "9", "9", "9") + "'\n", {"ipv4-literal"}),
+    ("modules/deploy.just", "dns := '" + dotted("9", "9", "9", "9") + "'\n", {"ipv4-literal"}),
     (".github/workflows/demo.yml", "dns: " + dotted("9", "9", "9", "9") + "\n", {"ipv4-literal"}),
     ("host_vars/nas.txt", "nas " + dotted("8", "8", "4", "4") + "\n", {"ipv4-literal"}),
     ("docs-tracked/notes.md", "gateway " + dotted("8", "8", "8", "8") + "\n", {"ipv4-literal"}),
@@ -101,7 +105,7 @@ FIXTURES = [
     ("group_vars/all/local.yml.bak", "x: 1\n", {"sensitive-file"}),
     ("group_vars/all/local.vault.yml", "$ANSIBLE_VAULT;1.1;AES256\n6162\n", {"sensitive-file"}),
     ("group_vars/all/vault.yml", "$ANSIBLE_VAULT;1.1;AES256\n6162\n", {"sensitive-file"}),
-    # make init's copies of the three, left by a run killed while writing (scripts/init/init.py, temp_copy)
+    # just init's copies of the three, left by a run killed while writing (scripts/init/init.py, temp_copy)
     (".vault_pass.init-tmp", "x\n", {"sensitive-file"}),
     ("group_vars/all/local.yml.init-tmp", "x: 1\n", {"sensitive-file"}),
     ("group_vars/all/local.vault.yml.init-tmp", "$ANSIBLE_VAULT;1.1;AES256\n6162\n", {"sensitive-file"}),
