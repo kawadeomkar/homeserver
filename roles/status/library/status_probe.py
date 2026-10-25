@@ -158,6 +158,8 @@ def ask(url, address, timeout):
         raw = sock = socket.create_connection((address, port), timeout=timeout)
         if secure:
             context = ssl.create_default_context()
+            # Python's default already refuses anything older; said here too, for code scanning.
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
             sock = context.wrap_socket(raw, server_hostname=host)

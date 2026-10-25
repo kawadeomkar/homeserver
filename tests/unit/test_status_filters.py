@@ -1351,7 +1351,7 @@ def test_the_full_text_fits_and_lines_up():
         column = header.index(title)
         for row in (line for line in lines if line.startswith((" jellyfin ", " homeassistant "))):
             assert row[column - 1] == " " and row[column] != " ", (title, header, row)
-    second = next(line for line in lines if "http://jellyfin.homeserver.internal" in line)
+    second = next(line for line in lines if line.split()[:1] == ["http://jellyfin.homeserver.internal"])
     assert second.index("http://") == header.index("URL") and second.rstrip().endswith("302")
 
 
