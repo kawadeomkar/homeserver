@@ -82,6 +82,8 @@ check_help := 'what it would do, changing nothing'
 # ansible-playbook's arguments: after the playbook for check and deploy, whose first argument is the playbook; after --
 # for the recipes with options of their own, since just reads every word that begins with - before it as one of them.
 playbook_args_help := "ansible-playbook's, after the playbook: --tags <stage>, -e <var>=<value>, -v"
+# deploy refuses uncommitted changes to what Ansible reads (_playbook), unless given this after the playbook.
+allow_dirty_help := "; --allow-dirty deploys uncommitted changes too (every playbook: just deploy site --allow-dirty)"
 option_args_help := "ansible-playbook's, after --: before it, just reads a word that begins with - as one of this recipe's options"
 # status's sections, in the order the report shows them, and the file each run writes the report to, which the recipe
 # reads its exit code from.
@@ -428,7 +430,7 @@ check playbook='site' *ansible_args:
 # Narrow a run to stages with --tags (just check truenas --tags truenas_pools), or pass a variable for one run:
 # just deploy kubernetes -e talos_allow_bootstrap=true.
 [arg('playbook', pattern=playbooks, help=playbook_help)]
-[arg('ansible_args', help=playbook_args_help)]
+[arg('ansible_args', help=playbook_args_help + allow_dirty_help)]
 [doc("Build and configure everything, the NAS first, or one playbook; then ansible-playbook's arguments: just deploy truenas --tags truenas_pools")]
 [group('machines')]
 [no-exit-message]
@@ -513,9 +515,13 @@ status json='' *sections:
     extra=()
     [ ${#sections[@]} -eq 0 ] || extra=(-e "{\"types\": \"$(IFS=,; echo "${sections[*]}")\"}")
     color=; if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then color=1; fi
+    # This checkout's version, which the report compares each machine's stamp with.
+    version=$({{ self }} _deploy_version) || exit 3
+    read -r commit describe date <<< "$version"
     rm -f {{ status_report }}
     rc=0
     ANSIBLE_STDOUT_CALLBACK=homeserver_status STATUS_COLOR=$color STATUS_QUIET=$json \
+      HOMESERVER_COMMIT=$commit HOMESERVER_DESCRIBE=$describe HOMESERVER_COMMIT_DATE=$date \
       {{ ansible_playbook }} status.yml --check ${extra[@]+"${extra[@]}"} ${@+"$@"} </dev/null || rc=$?
     if [ "$rc" -ne 0 ] || [ ! -s {{ status_report }} ]; then echo "just status: the run failed (ansible-playbook exited $rc)" >&2; exit 3; fi
     if [ -n "$json" ]; then cat {{ status_report }}; fi
@@ -529,31 +535,130 @@ status json='' *sections:
 # logs/20261004-210501-home-deploy-truenas-truenas_network.log; logs/latest.log points at the newest. The API key
 # never appears: the modules mark it no_log. A -- the caller put before ansible-playbook's arguments is dropped, and a
 # make-style TAGS=… or ANSIBLE_ARGS=… is refused rather than handed to ansible-playbook as a playbook's name. A run with
-# --check logs as check-<recipe>.
+# --check logs as check-<recipe>, told by the arguments as ansible-playbook reads them: -C in a cluster of short options
+# (-CD), --check or a prefix of it, never inside -e's value. A second run started in the same second logs to a file of
+# its own (-2.log, -3.log), never into the first's. Last, the version (_deploy_version): the log's first line, said on
+# the terminal, and given to the plays as HOMESERVER_COMMIT, HOMESERVER_DESCRIBE and HOMESERVER_COMMIT_DATE, always
+# set, so a value left in the caller's shell never reaches a run; the deploy plays stamp it in the machines' Proxmox
+# Notes. A real deploy refuses a tree that is no git checkout, whose stamp could name no commit, and uncommitted
+# changes to what Ansible reads unless given --allow-dirty, which is taken out of the arguments here and refused for
+# any other recipe, which refuses nothing; worked out after the checks above, so they still refuse before anything
+# runs. A run that only lists or checks syntax (--list-tasks, --list-hosts, --list-tags, --syntax-check) deploys
+# nothing and is never refused. HOMESERVER_PARTIAL names --start-at-task or --step, which leave tasks out as --limit
+# and --skip-tags do, though no variable tells a play so: such a run stamps nothing.
 [no-exit-message]
 [private]
 [script]
 _playbook recipe playbook *ansible_args:
     recipe=$1 book=$2; shift 2
     test -x {{ ansible_playbook }} || { echo "{{ ansible_playbook }} not found: run just install in the project's virtualenv, or point just at it (pyenv local <env>, or VENV=<its path>)" >&2; exit 2; }
-    args=() tags= prev=
+    args=() tags= prev= allow_dirty= partial= check= listing=
     for a in "$@"; do
       [ "$a" != -- ] || continue
       case $prev in -e | --extra-vars) ;; *) case $a in TYPE=* | TAGS=* | ONLY=* | ALL=* | ANSIBLE_ARGS=* | NAME=* | FROM=* | VENV=*)
         echo "$a: just takes no make-style parameter; just help $recipe says what it takes" >&2; exit 2 ;;
+      --allow-dirty) allow_dirty=1; continue ;;
+      --start-at-task | --start-at-task=* | --step) partial=${a%%=*} ;;
+      # argparse takes any unambiguous prefix of a long option; --c could be --connection too.
+      --ch | --che | --chec | --check) check=1 ;;
+      --list-tasks | --list-hosts | --list-tags | --syntax-check) listing=1 ;;
+      --*) ;;
+      # Short options, one after another, until one that takes a value, which is the rest of the word.
+      -?*) cluster=${a#-}
+        while [ -n "$cluster" ]; do
+          case ${cluster:0:1} in C) check=1 ;; [MefilTtcu]) break ;; esac
+          cluster=${cluster:1}
+        done ;;
       esac ;; esac
       case $prev in --tags|-t) tags=$a ;; esac
       case $a in --tags=*) tags=${a#--tags=} ;; esac
       args+=("$a") prev=$a
     done
+    if [ -n "$allow_dirty" ] && [ "$recipe" != deploy ]; then
+      echo "--allow-dirty is just deploy's alone: just $recipe refuses no uncommitted changes" >&2; exit 2
+    fi
     {{ setups }} check
     setup=$({{ setups }} name 2>/dev/null || true)
     name=$recipe; [ "$book" = "$recipe" ] || [ "$book" = site ] || name="$name-$book"
-    case " ${args[*]-} " in *" --check "* | *" -C "*) [ "$recipe" = check ] || name="check-$name" ;; esac
-    log={{ log_dir }}/$(date +%Y%m%d-%H%M%S)${setup:+-$setup}-$name${tags:+-${tags//,/+}}.log
-    umask 077; mkdir -p {{ log_dir }}; ln -sf "${log##*/}" {{ log_dir }}/latest.log
+    [ -z "$check" ] || [ "$recipe" = check ] || name="check-$name"
+    version=$({{ self }} _deploy_version)
+    read -r commit describe date <<< "$version"
+    if [ -z "$commit" ]; then said="not a git checkout, so no version"; else said="$describe (committed $date)"; fi
+    if [ "$recipe" = deploy ] && [ -z "$check" ] && [ -z "$listing" ]; then
+      if [ -z "$commit" ]; then
+        echo "just deploy runs from a git checkout, so that what reaches the machines is a commit you can find again, and their stamps name it: run it from a clone" >&2
+        exit 2
+      elif [ -z "$allow_dirty" ] && [ "${describe%-dirty}" != "$describe" ]; then
+        echo "just deploy refuses uncommitted changes to what Ansible reads ($describe): commit them, so that what reaches the machines is a commit you can find again, and their stamps name it, or deploy them as they are with --allow-dirty after the playbook (just deploy $book --allow-dirty)" >&2
+        exit 2
+      fi
+    fi
+    base={{ log_dir }}/$(date +%Y%m%d-%H%M%S)${setup:+-$setup}-$name${tags:+-${tags//,/+}}
+    umask 077; mkdir -p {{ log_dir }}
+    # Created without clobbering (set -C), so a run started in the same second never writes into another's log.
+    log=$base.log n=1
+    until ( set -C; echo "homeserver $said" > "$log" ) 2>/dev/null; do
+      n=$((n + 1)); [ "$n" -le 9 ] || { echo "just $recipe cannot create its log, $log" >&2; exit 2; }
+      log=$base-$n.log
+    done
+    ln -sf "${log##*/}" {{ log_dir }}/latest.log
     echo "Logging to $log (Python environment: {{ VENV }})"
-    ANSIBLE_LOG_PATH=$log exec {{ ansible_playbook }} "$book.yml" ${args[@]+"${args[@]}"}
+    echo "Version: homeserver $said"
+    HOMESERVER_COMMIT=$commit HOMESERVER_DESCRIBE=$describe HOMESERVER_COMMIT_DATE=$date HOMESERVER_PARTIAL=$partial \
+      ANSIBLE_LOG_PATH=$log exec {{ ansible_playbook }} "$book.yml" ${args[@]+"${args[@]}"}
+
+# The version a run records (scripts/runbooks/tags.md): the newest commit on the first-parent chain that changed a
+# file Ansible may read, named by git describe after the annotated CalVer tag before it (2026.11.0-3-g<commit>), or
+# by the commit alone before the first. A commit that touches only k8s/ (Flux's), tests/, .github/, scripts/ci/, the
+# linters', hooks' and tests' configuration or Markdown leaves it alone, so a merge no playbook can see moves no
+# machine's stamp; the list names what to leave out, so a new file counts until it is left out too. -dirty when those
+# files have uncommitted or untracked changes. Only a tag of CalVer's own shape counts, 20YY.M.PATCH (2026.11.0): any
+# other (2026.11.0-rc1, v1.0, 2026.11, 2026.11.0.1) is passed over, never picked, so a stray tag never names a
+# version. Printed on one line, the commit, its describe string and its date, each checked against the shape it must
+# have, so nothing else ever reaches Ansible: the plays read them from the environment, which Ansible never templates,
+# where an -e would be. Outside a git checkout, an empty line; a checkout git refuses to read, and a shallow clone,
+# whose history may stop before the commit, stop the run.
+[private]
+[script]
+_deploy_version:
+    # Each would change how git matches the paths below, and none is this repo's to set.
+    unset GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS
+    spec=(. ':(exclude)k8s' ':(exclude)tests' ':(exclude).github' ':(exclude)scripts/ci' ':(exclude,glob)**/*.md')
+    for f in .ansible-lint .coveragerc .git-blame-ignore-revs .gitattributes .gitleaks.toml '.kube-linter*.yaml' \
+      .pre-commit-config.yaml .yamlfmt .yamllint pytest.ini renovate.json ruff.toml; do spec+=(":(exclude)$f"); done
+    # Only "not a git repository" means no checkout: git missing, or refusing a checkout it does not trust, is said.
+    if ! err=$(LC_ALL=C git rev-parse --is-inside-work-tree 2>&1 >/dev/null); then
+      case $err in *"not a git repository"*) echo; exit 0 ;; esac
+      echo "git cannot read this checkout, so the run has no version: ${err:-git failed}" >&2; exit 2
+    fi
+    if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+      echo "this clone is shallow, so the commit that last changed Ansible's files may lie outside it: git fetch --unshallow, then run it again" >&2; exit 2
+    fi
+    # GitHub signs main's merges, and log.showSignature would print gpg's lines before the commit.
+    log=(git -c log.showSignature=false log -1)
+    # Empty in a repository with no commit yet, which has no version either.
+    commit=$("${log[@]}" --first-parent --format=%H -- "${spec[@]}" 2>/dev/null) || commit=
+    [ -n "$commit" ] || { echo; exit 0; }
+    # git describe matches tags by glob, which cannot say 20YY.M.PATCH: each tag of that shape is named to it instead,
+    # and with none it gives the commit alone.
+    calver='20[0-9]{2}\.([1-9]|1[0-2])\.(0|[1-9][0-9]*)'
+    match=()
+    while IFS= read -r tag; do match+=(--match "$tag"); done < <(git tag --list | grep -E "^$calver\$" || true)
+    [ ${#match[@]} -gt 0 ] || match=(--exclude '*')
+    describe=$(git describe --first-parent --always --abbrev=12 "${match[@]}" "$commit")
+    date=$("${log[@]}" --format=%cs "$commit")
+    # Untracked files count whatever status.showUntrackedFiles says: a new role file changes what a run does. Its own
+    # assignment, so a git status that fails stops the run rather than reading as a clean tree; without the index lock,
+    # which a refresh of its stat data would take, since nothing here writes.
+    changes=$(git --no-optional-locks status --porcelain --untracked-files=normal -- "${spec[@]}")
+    [ -z "$changes" ] || describe=$describe-dirty
+    # A net for git's own output. --abbrev=12 is a minimum, which git lengthens when 12 digits are not unique.
+    hex='[0-9a-f]{12,40}'
+    if ! [[ $commit =~ ^[0-9a-f]{40}$ && $date =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ &&
+            $describe =~ ^($calver(-[0-9]+-g$hex)?|$hex)(-dirty)?$ ]]; then
+      echo "git gave an unexpected version: commit '$commit', describe '$describe', date '$date'" >&2; exit 2
+    fi
+    echo "$commit $describe $date"
 
 # lint, test and fix run just once per type: finding no virtualenv, this says so once, before any of them.
 [private]

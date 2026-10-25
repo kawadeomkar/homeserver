@@ -10,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -504,3 +505,269 @@ def test_ansible_playbook_started_without_just_stops_on_a_broken_setup(tmp_path)
     stopped = play()
     output = stopped.stdout + stopped.stderr
     assert stopped.returncode != 0 and "home, is not whole" in output and "msg: ran" not in output, output
+
+
+# ------------------------------------------------------------------------------------------- the version ---
+
+# git with nobody's configuration: no signing, no hooks, the same author everywhere.
+GIT_ENV = {
+    "GIT_AUTHOR_NAME": "test",
+    "GIT_AUTHOR_EMAIL": "test@example.invalid",
+    "GIT_COMMITTER_NAME": "test",
+    "GIT_COMMITTER_EMAIL": "test@example.invalid",
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_CONFIG_NOSYSTEM": "1",
+}
+
+
+def git(repo: Path, *args: str) -> str:
+    done = subprocess.run(
+        ["git", "-C", str(repo), *args], env={**os.environ, **GIT_ENV}, capture_output=True, text=True, check=True
+    )
+    return done.stdout.strip()
+
+
+def commit(repo: Path, *paths: str, message: str = "change") -> str:
+    """A commit of everything in the tree, after writing each of `paths`; its full name."""
+    for path in paths:
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (repo / path).write_text(f"{path}: {message}\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", message)
+    return git(repo, "rev-parse", "HEAD")
+
+
+def version(repo: Path, **env: str) -> list[str]:
+    """What just's _deploy_version prints: [commit, describe, date], or [] outside a git checkout. With nobody's git
+    configuration, as the commits were made."""
+    done = just(repo, "_deploy_version", **GIT_ENV, **env)
+    assert done.returncode == 0, done.stdout + done.stderr
+    return done.stdout.split()
+
+
+def bare_repo(path: Path, *init: str) -> Path:
+    """A git repository holding nothing but the justfile, not committed yet."""
+    path.mkdir()
+    shutil.copy(ROOT / "justfile", path / "justfile")
+    git(path, "init", "-q", "-b", "main", *init)
+    return path
+
+
+def test_the_version_names_the_last_commit_ansible_reads(tmp_path):
+    """The newest commit on the first-parent chain that changed a file Ansible may read, outside k8s/, tests/,
+    .github/, scripts/ci/, the linters' and hooks' configuration and Markdown, named after the annotated CalVer tag
+    before it, the count after the tag being merges on main alone; a merge of what no playbook reads moves nothing;
+    any other tag passed over; -dirty for uncommitted Ansible files alone; nothing outside a git checkout."""
+    repo = bare_repo(tmp_path / "repo")
+    first = commit(repo, "roles/a/tasks/main.yml", message="first")
+    assert version(repo) == [first, first[:12], git(repo, "log", "-1", "--format=%cs")]
+    commit(repo, "k8s/apps/x.yaml", message="an image bump Flux applies")
+    commit(
+        repo,
+        "tests/test_x.py",
+        "README.md",
+        "roles/a/README.md",
+        ".github/workflows/x.yml",
+        "scripts/ci/check-x.sh",
+        "ruff.toml",
+        ".pre-commit-config.yaml",
+        ".kube-linter.yaml",
+        message="no playbook's",
+    )
+    assert version(repo)[:2] == [first, first[:12]], "a change no playbook reads moved the version"
+
+    git(repo, "tag", "-a", "2026.11.0", "-m", "November", first)
+    assert version(repo)[1] == "2026.11.0"
+    git(repo, "checkout", "-q", "-b", "feature")
+    commit(repo, "roles/a/defaults/main.yml", message="a feature")
+    commit(repo, "group_vars/all/x.yml", message="its settings")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "merge", "-q", "--no-ff", "-m", "Merge the feature", "feature")
+    merge = git(repo, "rev-parse", "HEAD")
+    # Three commits on main's first-parent chain since the tag: the Flux and test commits above, then the merge.
+    assert version(repo)[:2] == [merge, f"2026.11.0-3-g{merge[:12]}"]
+    git(repo, "checkout", "-q", "-b", "manifests")
+    commit(repo, "k8s/apps/y.yaml", message="a manifest")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "merge", "-q", "--no-ff", "-m", "Merge the manifests", "manifests")
+    assert version(repo)[:2] == [merge, f"2026.11.0-3-g{merge[:12]}"], "a merge no playbook reads moved the version"
+    git(repo, "tag", "bookmark", merge)
+    for name in ("2026.12.0-rc1", "2026.12", "2026.12.0.1", "2026.13.0", "2026.12.01", "0000.0", "v1.0"):
+        git(repo, "tag", "-a", name, "-m", "not CalVer's shape", merge)
+    assert version(repo)[1] == f"2026.11.0-3-g{merge[:12]}", "a tag of another shape was picked"
+    # A pathspec setting in the environment would change what the list leaves out.
+    assert version(repo, GIT_LITERAL_PATHSPECS="1")[:2] == [merge, f"2026.11.0-3-g{merge[:12]}"]
+
+    (repo / "k8s" / "new.yaml").write_text("kind: x\n")
+    assert not version(repo)[1].endswith("-dirty"), "a manifest Flux applies made the version dirty"
+    (repo / "roles" / "a" / "tasks" / "new.yml").write_text("---\n")
+    assert version(repo)[1] == f"2026.11.0-3-g{merge[:12]}-dirty"
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    shutil.copy(ROOT / "justfile", plain / "justfile")
+    assert version(plain) == []
+    git(plain, "init", "-q", "-b", "main")
+    assert version(plain) == [], "a repository with no commit yet has no version"
+    git(repo, "config", "status.showUntrackedFiles", "no")
+    assert version(repo)[1].endswith("-dirty"), "an untracked role file hidden from git status"
+
+
+# Stands in for gpg: signs anything with a dummy signature, and verifies as gpg does without the signer's public key,
+# as for GitHub's merge commits on a machine that never imported GitHub's key.
+FAKE_GPG = """#!/bin/sh
+case " $* " in
+  *" -bsau "*)
+    cat >/dev/null
+    echo "[GNUPG:] SIG_CREATED D 1 10 00 1792961851 test" >&2
+    printf -- '-----BEGIN PGP SIGNATURE-----\\n\\nZmFrZQ==\\n-----END PGP SIGNATURE-----\\n'
+    exit 0 ;;
+esac
+cat >/dev/null
+echo "[GNUPG:] NEWSIG"
+echo "[GNUPG:] ERRSIG 0000000000000000 1 10 00 1792961851 9 -"
+echo "[GNUPG:] NO_PUBKEY 0000000000000000"
+echo "gpg: Can't check signature: No public key" >&2
+exit 2
+"""
+
+
+def test_the_version_is_git_s_alone_or_none(tmp_path):
+    """Signed commits with log.showSignature, as a user who signs their own reads GitHub's merges, still give the
+    commit; a shallow clone, a checkout git refuses to read, a git status that fails and a version of an unexpected
+    shape stop the run, never read as no version, a clean tree or the wrong commit."""
+    gpg = tmp_path / "gpg"
+    gpg.write_text(FAKE_GPG)
+    gpg.chmod(0o755)
+    signed = bare_repo(tmp_path / "signed")
+    for key, value in (("gpg.program", str(gpg)), ("user.signingkey", "test"), ("commit.gpgSign", "true")):
+        git(signed, "config", key, value)
+    head = commit(signed, "roles/a/tasks/main.yml", message="signed")
+    git(signed, "config", "log.showSignature", "true")
+    shown = subprocess.run(
+        ["git", "-C", str(signed), "log", "-1", "--format=%H"],
+        env={**os.environ, **GIT_ENV},
+        capture_output=True,
+        text=True,
+    )
+    assert "No public key" in shown.stdout + shown.stderr, "the stand-in gpg was never asked"
+    assert version(signed)[:2] == [head, head[:12]]
+    # A shallow clone's history may end before the commit that last changed Ansible's files.
+    git(tmp_path, "clone", "-q", "--depth", "1", f"file://{signed}", "shallow")
+    shallow = just(tmp_path / "shallow", "_deploy_version", **GIT_ENV)
+    assert shallow.returncode == 2 and "git fetch --unshallow" in shallow.stderr, shallow.stdout + shallow.stderr
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "git").write_text(
+        "#!/bin/sh\necho \"fatal: detected dubious ownership in repository at '$PWD'\" >&2\nexit 128\n"
+    )
+    (bin_dir / "git").chmod(0o755)
+    refused = just(signed, "_deploy_version", **GIT_ENV, PATH=f"{bin_dir}:{os.environ['PATH']}")
+    assert refused.returncode == 2 and "git cannot read this checkout" in refused.stderr, refused.stderr
+    assert "dubious ownership" in refused.stderr and refused.stdout.strip() == ""
+
+    (signed / ".git" / "index").write_bytes(b"not an index")
+    broken = just(signed, "_deploy_version", **GIT_ENV)
+    assert broken.returncode != 0 and broken.stdout.strip() == "", "a git status that failed read as a clean tree"
+
+    sha256 = bare_repo(tmp_path / "sha256", "--object-format=sha256")
+    commit(sha256, "roles/a/tasks/main.yml", message="first")
+    odd = just(sha256, "_deploy_version", **GIT_ENV)
+    assert odd.returncode == 2 and "git gave an unexpected version" in odd.stderr, odd.stdout + odd.stderr
+
+
+# A stand-in for proxmox.yml, saying what just gave the run.
+SAY_VERSION = """---
+- name: Say what just gave the run
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Say the version
+      ansible.builtin.debug:
+        msg: "commit={{ lookup('env', 'HOMESERVER_COMMIT') }} partial={{ lookup('env', 'HOMESERVER_PARTIAL') }}."
+"""
+
+
+def versioned_tree(tmp_path: Path) -> Path:
+    """tree() as a git checkout of its own, with a setup, the repo's .gitignore, which keeps the setup's links out of
+    what git calls uncommitted, and a stand-in proxmox.yml, all committed."""
+    checkout = tree(tmp_path)
+    shutil.copy(ROOT / ".gitignore", checkout / ".gitignore")
+    (checkout / "proxmox.yml").write_text(SAY_VERSION)
+    assert just(checkout, "vault", "new", "home", SETUPS=str(tmp_path / "setups")).returncode == 0
+    git(checkout, "init", "-q", "-b", "main")
+    commit(checkout, message="the tree")
+    return checkout
+
+
+def test_a_deploy_refuses_uncommitted_ansible_files(tmp_path):
+    """A real deploy stops before anything runs, its log included, when what Ansible reads has uncommitted changes,
+    unless given --allow-dirty, which never reaches ansible-playbook, and when the tree is no git checkout, whose
+    stamp could name no commit, with --allow-dirty too; a dry run (-CD, -vC, a prefix of --check) or a listing never
+    stops, nor does talos-upgrade, which stamps nothing, while --check inside -e's value is no dry run; any recipe but
+    deploy refuses --allow-dirty. Each run's log and output start with the version it ran from, a run started in the
+    same second as another logs to a file of its own, and the plays get the version in the environment, with
+    --start-at-task or --step named in HOMESERVER_PARTIAL. (The tree has proxmox.yml alone, so a run of any other
+    playbook fails at ansible-playbook.)"""
+    checkout = versioned_tree(tmp_path)
+    store = str(tmp_path / "setups")
+    head = git(checkout, "rev-parse", "HEAD")
+    clean = just(checkout, "deploy", "proxmox", SETUPS=store, **GIT_ENV)
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    assert f"Version: homeserver {head[:12]} (committed " in clean.stdout, clean.stdout + clean.stderr
+    assert f"commit={head} partial=." in clean.stdout, clean.stdout
+    log = checkout / "logs" / "latest.log"
+    assert log.read_text().startswith(f"homeserver {head[:12]} (committed "), "the log's first line"
+    for args in (["--start-at-task", "Say the version"], ["--start-at-task=Say the version"]):
+        part = just(checkout, "deploy", "proxmox", *args, SETUPS=store, **GIT_ENV)
+        assert part.returncode == 0 and "partial=--start-at-task." in part.stdout, part.stdout + part.stderr
+
+    (checkout / "scripts" / "init" / "setups.py").write_text(
+        (ROOT / "scripts" / "init" / "setups.py").read_text() + "#\n"
+    )
+    logs = sorted((checkout / "logs").iterdir())
+    refused = just(checkout, "deploy", "proxmox", SETUPS=store, **GIT_ENV)
+    assert refused.returncode == 2 and "refuses uncommitted changes to what Ansible reads" in refused.stderr, (
+        refused.stdout + refused.stderr
+    )
+    assert f"({head[:12]}-dirty)" in refused.stderr and "just deploy proxmox --allow-dirty" in refused.stderr
+    assert "Version:" not in refused.stdout and sorted((checkout / "logs").iterdir()) == logs, "a refused run logged"
+    for recipe in (["check", "proxmox"], ["talos-upgrade"], ["deploy", "proxmox", "--allow-dirty"]):
+        ran = just(checkout, *recipe, SETUPS=store, **GIT_ENV)
+        output = ran.stdout + ran.stderr
+        assert f"Version: homeserver {head[:12]}-dirty (committed " in ran.stdout, output
+        assert "unrecognized arguments" not in output, "ansible-playbook got --allow-dirty"
+    # A dry run, or a listing, is told by the arguments as ansible-playbook reads them, never by a value inside -e's.
+    for args in (["-CD"], ["-vC"], ["--chec"], ["--list-tasks"]):
+        ran = just(checkout, "deploy", "proxmox", *args, SETUPS=store, **GIT_ENV)
+        assert "refuses uncommitted changes" not in ran.stderr, (args, ran.stderr)
+    assert (checkout / "logs" / "latest.log").resolve().name.endswith("-home-deploy-proxmox.log"), "a listing"
+    ran = just(checkout, "deploy", "proxmox", "-CD", SETUPS=store, **GIT_ENV)
+    assert (checkout / "logs" / "latest.log").resolve().name.endswith("-home-check-deploy-proxmox.log")
+    refused = just(checkout, "deploy", "proxmox", "-e", "note= --check ", SETUPS=store, **GIT_ENV)
+    assert refused.returncode == 2 and "refuses uncommitted changes" in refused.stderr, refused.stderr
+    for recipe in (["check", "proxmox"], ["talos-upgrade"], ["etcd-snapshot"]):
+        refused = just(checkout, *recipe, "--allow-dirty", SETUPS=store, **GIT_ENV)
+        assert refused.returncode == 2 and "--allow-dirty is just deploy's alone" in refused.stderr, refused.stderr
+    # A run started in the same second as another logs to a file of its own, never into the other's.
+    now = datetime.now()
+    taken = [
+        checkout / "logs" / f"{(now + timedelta(seconds=n)):%Y%m%d-%H%M%S}-home-check-proxmox.log" for n in range(15)
+    ]
+    for path in taken:
+        path.write_text("another run's\n")
+    just(checkout, "check", "proxmox", SETUPS=store, **GIT_ENV)
+    latest = (checkout / "logs" / "latest.log").resolve()
+    assert latest.name.endswith("-home-check-proxmox-2.log") and latest.read_text().startswith("homeserver "), latest
+    assert all(path.read_text() == "another run's\n" for path in taken), "a run wrote into another's log"
+
+    plain = tree(tmp_path / "plain")
+    assert just(plain, "vault", "new", "home", SETUPS=str(tmp_path / "plain-setups")).returncode == 0
+    for args in ((), ("--allow-dirty",)):
+        refused = just(plain, "deploy", "proxmox", *args, SETUPS=str(tmp_path / "plain-setups"))
+        assert refused.returncode == 2 and "just deploy runs from a git checkout" in refused.stderr, refused.stderr
+        assert "--allow-dirty" not in refused.stderr, "offered what it refuses"
+    assert not (plain / "logs").exists(), "a refused run logged"
+    ran = just(plain, "check", "proxmox", SETUPS=str(tmp_path / "plain-setups"))
+    assert "Version: homeserver not a git checkout, so no version" in ran.stdout, ran.stdout + ran.stderr
