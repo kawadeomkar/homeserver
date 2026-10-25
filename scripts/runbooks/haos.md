@@ -14,7 +14,7 @@ NAS; `roles/proxmox_vm` builds the VM and `roles/haos_onboard` gives a new Home 
    Home Assistant serves on its own ports, never through the cluster: Home Assistant OS 18 serves it on 80 and
    redirects the classic 8123 there.
 2. **The owner's password**, at least 12 characters, a long random one kept in your password manager:
-   `just vault`, then add `vault_haos_owner_password: <password>`. The run refuses to start a Home Assistant
+   `just vault`, then set `vault_haos_owner_password: <password>`. The run refuses to start a Home Assistant
    without it (below says why).
 3. **A Zigbee or Z-Wave stick**, if there is one: plug it into the Proxmox host, read its id with `lsusb`
    (`ID 10c4:ea60 ...`), and name it in `local.yml`: `haos_usb: [{host: "10c4:ea60"}]`. The vendor and product id

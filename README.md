@@ -133,14 +133,17 @@ addresses and serials in the git-ignored `all/local.yml`. Each role's `README.md
 Secrets go in the vault, `group_vars/all/local.vault.yml`, an Ansible Vault file encrypted with the password in
 `.vault_pass`, which `ansible.cfg` names: `vault_truenas_api_key` with a NAS, `vault_truenas_mail_password` with alert
 mail, `vault_tailscale_auth_key` with remote access and `vault_haos_owner_password` with Home Assistant
-(`local.vault.yml.example` lists them). Both files are gitignored, like `local.yml`: nothing reads them from the
-repository, and this public repository would publish even the vault's ciphertext, for anyone to guess its password at
-leisure. Every run decrypts the vault, so both must exist even when they hold nothing a setup uses:
+(`local.vault.yml.example` lists them, each explained). Both files are gitignored, like `local.yml`: nothing reads them
+from the repository, and this public repository would publish even the vault's ciphertext, for anyone to guess its
+password at leisure. Every run decrypts the vault, so both must exist even when they hold nothing a setup uses:
 
 ```bash
-just vault new     # what is missing: a random .vault_pass readable by you alone, and an empty vault encrypted with it
-just vault         # add or change a secret
+just vault new     # what is missing: a random .vault_pass readable by you alone, and the vault encrypted with it
+just vault         # fill in or change a secret
 ```
+
+A new vault is `local.vault.yml.example` as it is: every key, each empty and explained by the comment above it. An
+empty key counts as unset, so fill in only those your setup uses (`just init` asks for them) and leave the others.
 
 `just vault new` leaves a vault that opens with `.vault_pass` alone, and refuses one that does not, since it may hold
 your secrets with their password lost. The vault and its password exist nowhere else: keep a copy of both in your
@@ -157,9 +160,9 @@ and linked in at the same three paths, so Ansible, `ansible-vault` and git see w
 
 ```bash
 just vault new home --from current   # this checkout's own three files become setup home, linked back in
-just vault new lab                   # a new setup: local.yml to fill in, an empty vault, a new password; then used
+just vault new lab                   # a new setup: local.yml and the vault to fill in, a new password; then used
 just init                            # its settings and secrets; the first question is the setup, and Enter keeps it
-just vault list                      # every setup, the one in use marked, whether its vault opens, how many keys
+just vault list                      # every setup, the one in use marked, whether its vault opens, how many keys set
 just vault switch home               # this checkout uses home's three files
 just vault edit lab                  # edit lab's vault, with lab's password, without switching
 ```

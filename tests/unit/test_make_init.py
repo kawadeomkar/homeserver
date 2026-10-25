@@ -114,8 +114,12 @@ def make_vault(root: Path, data: dict, text: str | None = None) -> None:
 
 
 def read_vault(root: Path) -> dict:
+    return yaml.safe_load(vault_text(root))
+
+
+def vault_text(root: Path) -> str:
     lib = VaultLib([("default", VaultSecret(VAULT_PASSWORD.encode()))])
-    return yaml.safe_load(lib.decrypt((root / wizard.VAULT).read_bytes()))
+    return lib.decrypt((root / wizard.VAULT).read_bytes()).decode()
 
 
 def local(root: Path) -> dict:
@@ -178,7 +182,7 @@ def test_a_comment_inside_a_mapping_is_part_of_it():
 
 
 def test_a_key_is_added_to_a_mapping_written_in_flow_style():
-    doc = wizard.YamlKeys("---\n{}\n")  # what just vault new encrypts
+    doc = wizard.YamlKeys("---\n{}\n")  # what just vault new encrypted before the template
     doc.set("vault_key", "value", order=[])
     assert doc.values() == {"vault_key": "value"}
     doc = wizard.YamlKeys("---\n# A comment.\n{a: 1}\n")
@@ -466,7 +470,7 @@ def test_secrets_go_to_the_vault_and_never_to_the_screen(repo):
     console = Scripted({"vault_truenas_api_key": "-"})
     init_run(repo, console)
     assert any("now set." in line for line in console.out)
-    assert read_vault(repo) == {"vault_other": "left-alone"}
+    assert read_vault(repo) == {"vault_other": "left-alone", "vault_truenas_api_key": ""}, "emptied, which is unset"
     assert "vault_truenas_api_key" in console.out[-1].split("STILL REQUIRED")[1]
 
 
@@ -523,13 +527,14 @@ NO_SECTIONS = {"switch:nas": "n", "switch:remote": "n", "switch:cluster": "n", "
 
 def test_a_new_vault_is_made_when_the_person_asks_for_one(repo):
     """just vault new's work, done in this process: the checkout's tree has no justfile, and init needs no task
-    runner to make the vault, which then opens for the secrets asked after it."""
+    runner to make the vault, the template with every key empty, which then opens for the secrets asked after it."""
     console = Scripted({"vault-new": "y", **NO_SECTIONS})
     init = init_run(repo, console)
     for path in (repo / ".vault_pass", repo / wizard.VAULT):
         assert stat.S_IMODE(path.stat().st_mode) == 0o600, path
-    assert f"Made {wizard.VAULT}, encrypted with .vault_pass" in console.text
-    assert init.vault.is_open and init.vault.doc.values() == {}
+    assert f"Made {wizard.VAULT}, every key empty, encrypted with .vault_pass" in console.text
+    made = setups.decrypt((repo / wizard.VAULT).read_bytes(), (repo / ".vault_pass").read_bytes().strip())
+    assert init.vault.is_open and made.decode() == (repo / setups.VAULT_TEMPLATE).read_text()
     assert "vault is missing" not in console.out[-1] and "has no password" not in console.out[-1]
 
 
@@ -585,10 +590,8 @@ def test_the_summary_carries_the_playbooks_own_refusals(repo):
     assert len(messages) == 1 and "kubernetes_lb_frigate_ip" in messages[0]
 
 
-def test_a_secret_is_written_into_the_empty_vault_make_vault_init_makes(repo):
-    make_vault(repo, {}, text="---\n{}\n")
-    password = "-".join(["a", "long", "owner", "password"])
-    answers = {
+def owner_password_answers(password: str) -> dict:
+    return {
         "switch:nas": "n",
         "switch:remote": "n",
         "switch:cluster": "n",
@@ -596,7 +599,25 @@ def test_a_secret_is_written_into_the_empty_vault_make_vault_init_makes(repo):
         "proxmox_address": lan(10),
         "vault_haos_owner_password": password,
     }
-    init_run(repo, Scripted(answers))
+
+
+def test_a_secret_is_written_into_the_vault_template_on_its_own_line(repo):
+    """just vault new's vault: the answer takes the key's empty line, and every comment stays; cleared, the key
+    is empty again, and the vault is the template once more."""
+    template = (repo / setups.VAULT_TEMPLATE).read_text()
+    make_vault(repo, {}, text=template)
+    password = "-".join(["a", "long", "owner", "password"])
+    init_run(repo, Scripted(owner_password_answers(password)))
+    empty = 'vault_haos_owner_password: ""'
+    assert vault_text(repo) == template.replace(empty, f"vault_haos_owner_password: {password}")
+    init_run(repo, Scripted({"vault_haos_owner_password": "-"}))
+    assert vault_text(repo) == template
+
+
+def test_a_secret_is_written_into_the_empty_vault_an_older_just_vault_new_made(repo):
+    make_vault(repo, {}, text="---\n{}\n")
+    password = "-".join(["a", "long", "owner", "password"])
+    init_run(repo, Scripted(owner_password_answers(password)))
     assert read_vault(repo) == {"vault_haos_owner_password": password}
 
 
