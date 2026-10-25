@@ -2,6 +2,8 @@
 # The Proxmox host, in two reads: the node's name, which the API's paths need, then everything else at once. Each
 # pvesh or qm command starts Proxmox's Perl API afresh, a second of CPU, so they run in parallel; on a four-core host
 # the whole set takes about eight seconds. A host that does not answer is recorded, not a failure: the report says so.
+# status_reads (main.yml) says what the sections shown need: the host itself (proxmox), its Tailscale (tailscale,
+# which status.yml read before), or both.
 
 - name: proxmox | Read the node's name
   status_read:
@@ -10,13 +12,14 @@
     timeout: "{{ status_timeout }}"
   register: status_proxmox_name
   ignore_unreachable: true
-  when: status_proxmox_node | length == 0
+  when: "'proxmox' in status_reads and status_proxmox_node | length == 0"
 
 - name: proxmox | Use the node's name
   ansible.builtin.set_fact:
     status_proxmox_node_name: >-
       {{ status_proxmox_node if status_proxmox_node | length > 0
          else status_proxmox_name.results.node.stdout | default('') | trim }}
+  when: "'proxmox' in status_reads"
 
 # The day's history and the pending changes of each of this setup's VMs; the guest agent's filesystems and OS of those
 # whose agent reports them (Home Assistant's; Talos's lists no filesystem), and the address of one that serves an app
@@ -32,7 +35,7 @@
     timeout: "{{ status_timeout }}"
   register: status_proxmox_reads
   ignore_unreachable: true
-  when: not (status_proxmox_name.unreachable | default(false))
+  when: "'proxmox' in status_reads and not (status_proxmox_name.unreachable | default(false))"
   vars:
     _node: "/nodes/{{ status_proxmox_node_name }}"
     _json: [--output-format, json]
@@ -104,9 +107,10 @@
         {{ {'unread': _unread, 'node': status_proxmox_node_name,
             'results': status_proxmox_reads.results | default({}) | combine(status_proxmox_logs.results | default({}))}
            | status_proxmox(status_vms, status_budget_storages, status_storage_headroom_gib,
-                            status_reboot_required_file, status_backup_jobs) }}
+                            status_reboot_required_file, status_backup_jobs)
+           if 'proxmox' in status_reads else none }}
       # What roles/proxmox_tailscale's status entry point read, before this role ran: {} when Tailscale is off.
-      tailscale: "{{ status_tailscale_state }}"
+      tailscale: "{{ status_tailscale_state if 'tailscale' in status_reads else none }}"
   vars:
     _missed: >-
       {{ [status_proxmox_name, status_proxmox_reads, status_proxmox_logs] | selectattr('unreachable', 'defined')

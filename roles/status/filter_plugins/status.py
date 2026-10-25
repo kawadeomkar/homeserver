@@ -14,7 +14,9 @@ and Tailscale's from 1.104.2 on a Proxmox host and 1.102.4 on a Mac.
 The report is a mapping that just status --json prints as it is: every source's findings, the attention list
 (problems, things to do, and sources that could not be read, each with the command that deals with it), and the exit
 code just status returns: 2 when a source could not be read, else 1 when there is a problem, else 0. The commands it
-suggests are configuration (status_commands), so the role names none of this repo's recipes itself.
+suggests are configuration (status_commands), so the role names none of this repo's recipes itself. Which sources
+each section is worked out from is section_sources, so a host reads only what the sections shown need
+(status_host_reads), and a source no section shown needs is never missed.
 """
 
 import base64
@@ -1465,6 +1467,47 @@ def types_shown(types):
     return [t for t in TYPES if not types or t in types]
 
 
+# What the report is worked out from: the Proxmox host's findings (proxmox, and tailscale, its Tailscale), the
+# cluster's (cluster, and etcd_snapshots, the snapshot files on this machine), the NAS's (nas), and from this machine
+# the apps' probes and its own Tailscale's view of the tailnet's DNS (tailnet_dns). Each host reads only the sources
+# the sections shown need, so just status nas reads neither the Proxmox host nor the cluster.
+SOURCES = ("proxmox", "tailscale", "tailnet_dns", "cluster", "etcd_snapshots", "probes", "nas")
+HOST_SOURCES = {"proxmox": ("proxmox", "tailscale"), "cluster": ("cluster", "etcd_snapshots"), "nas": ("nas",)}
+
+
+def section_sources(section, types=()):
+    """The sources a section of the report is worked out from, when `types` are the sections shown. The apps list Home
+    Assistant's VM and say when the cluster's VMs are stopped, as the cluster does; the VMs and the storage show what
+    the cluster says of its nodes; the cluster's TLS line comes from the probes, which ask only when the apps are
+    shown; the apps say how they answer from the tailnet when Tailscale is shown too."""
+    shown = types_shown(types)
+    tailscale = ("tailscale", "tailnet_dns")
+    probes = ("probes",) if "apps" in shown else ()
+    return {
+        "apps": ("proxmox", "cluster", "probes", *(tailscale if "tailscale" in shown else ())),
+        "admin": ("tailscale",),
+        "tailscale": (*tailscale, "cluster"),
+        "vms": ("proxmox", "cluster"),
+        "storage": ("proxmox", "cluster"),
+        "backups": ("proxmox", "etcd_snapshots"),
+        "cluster": ("proxmox", "cluster", *probes),
+        "nas": ("nas",),
+    }[section]
+
+
+def sources(types=()):
+    """The sources the sections `types` asks for are worked out from, in SOURCES' order."""
+    needed = {s for t in types_shown(types) for s in section_sources(t, types)}
+    return [s for s in SOURCES if s in needed]
+
+
+def host_reads(source, types=()):
+    """What the host whose status_source is `source` reads for the sections `types` asks for: none, some or all of
+    the sources it has."""
+    needed = sources(types)
+    return [s for s in HOST_SOURCES.get(source, ()) if s in needed]
+
+
 def _host_of(url):
     return url.split("://", 1)[-1].split("/", 1)[0].rsplit("@", 1)[-1].split(":", 1)[0]
 
@@ -1999,16 +2042,17 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
     nas_network, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns), `now` seconds since
     the epoch, `tailnet_dns` what tailscale dns status --json said on this machine, if it runs Tailscale."""
     shown, setup, commands = types_shown(types), dict(setup or {}), dict(commands or {})
+    needed = sources(types)
     found = found or {}
     attention, unread = [], []
     prox = found.get("proxmox")
-    if prox is None:
+    if "proxmox" in needed and prox is None:
         unread.append(_item("unread", "proxmox", "the Proxmox host was not read"))
-    elif prox.get("unread"):
+    elif "proxmox" in needed and prox.get("unread"):
         unread.append(_item("unread", "proxmox", f"the Proxmox host could not be read: {prox['unread']}"))
     prox = prox or {}
     clu = found.get("cluster")
-    if setup.get("cluster"):
+    if setup.get("cluster") and "cluster" in needed:
         stopped = [
             f"{vm['vmid']} {vm['name']}" for vm in prox.get("vms") or [] if vm.get("node") and vm["status"] != "running"
         ]
@@ -2022,7 +2066,7 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
     clu = clu or {}
     readable = clu and not clu.get("unread")
     nas_found = found.get("nas")
-    if setup.get("nas"):
+    if setup.get("nas") and "nas" in needed:
         if nas_found is None:
             unread.append(_item("unread", "nas", "the NAS was not read"))
         elif nas_found.get("unread"):
@@ -2842,14 +2886,13 @@ def _error_lines(errors):
 
 
 def text(model, color=False):
-    """The report as the terminal shows it, with ANSI colours when `color`."""
+    """The report as the terminal shows it, with ANSI colours when `color`: its sections, then what needs attention,
+    which they lead to, last, where a terminal leaves it in view, above the exit line."""
     lines = []
     head = _Line().add("homeserver", "b")
     if model.get("read_at"):
         head.add(f"  {model['read_at']}", "d")
     lines += [head.add(f" · {_setup_text(model.get('setup') or {})}", "d"), _Line()]
-    if model["attention"]:
-        lines += [*_attention_lines(model), _Line()]
     types = model["types"]
     prox = model.get("proxmox") or {}
     clu = model.get("cluster") or {}
@@ -2873,6 +2916,8 @@ def text(model, color=False):
     if "nas" in types and (model.get("setup") or {}).get("nas"):
         lines += [*_nas_lines(model), _Line()]
     lines += _error_lines((prox.get("errors") or []) + (clu.get("errors") or []))
+    if model["attention"]:
+        lines += [*_attention_lines(model), _Line()]
     problems = sum(1 for a in model["attention"] if a["level"] == "problem")
     unread = sum(1 for a in model["attention"] if a["level"] == "unread")
     summary = (
@@ -2898,6 +2943,8 @@ class FilterModule:
             "status_probe_targets": probe_targets,
             "status_unknown_types": unknown_types,
             "status_types_shown": types_shown,
+            "status_sources": sources,
+            "status_host_reads": host_reads,
             "status_report": report,
             "status_text": text,
         }

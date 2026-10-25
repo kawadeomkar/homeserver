@@ -120,25 +120,26 @@ fakes, which cannot prove the real machines behave the same. Every `just deploy 
 lists and upgrades the Proxmox host, and says when an upgrade of the kernel, its firmware, the CPU's microcode or dbus
 waits for a reboot, which is then done by hand.
 
-`just status` reads the Proxmox host (and its Tailscale), the cluster and the NAS, and changes nothing. It shows what
-needs doing first, each with the command that deals with it (an app failing or waiting for its Secret, apps `just
-suspend` stopped, Traefik's allowed range still closed, DNS missing for the apps' names, a reboot an upgrade asked for,
-upgrades waiting, a VM stopped or waiting for a restart, a storage filling up or provisioned beyond its size, a VM's
-backup that failed or was missed, the backup job not as configured or missing, a node not Ready, etcd or Flux in
-trouble, the nodes behind the pins, a certificate or credential running out, Alertmanager's firing alerts, Tailscale
-down, unguarded or with a route not approved, the tailnet's split DNS missing, a NAS pool degraded, filling up or behind
-on its scrub, a snapshot task failing, TrueNAS's own alerts). Then each app (its state, version and URLs, with what each
-answered from this machine, through Traefik's address whatever DNS says, and how they answer from the tailnet), the
-admin pages (on the tailnet too), the Proxmox host's Tailscale (its tailnet name, routes, guard, forwarding and
-preferences), each of this setup's VMs (CPU over the last day, memory and disks: a node's from kubelet, Home Assistant's
-from its guest agent), each storage's use with the worker's own volumes, the backups (the nightly job and its next run,
-each VM's newest backup with its size and how many are kept, why a run failed, and the cluster's etcd snapshots), the
-cluster (nodes, pins, Flux's commit against the branch, addresses, GPU, TLS, credentials, alerts), and the NAS (pools,
-snapshot tasks, NFS, alerts). `just status vms storage` shows some sections (of apps, admin, tailscale, vms, storage,
-backups, cluster and nas), and `--json` prints the report as JSON. It exits with the report's own code: 0 when nothing
-is wrong, 1 for a problem, 2 when a source could not be read, 3 when the run failed; the code also ends its last line
-and is the `exit` field of `--json`. Another project's VMs on the host are counted, never named. It reads no Secret and
-checks no certificate, and never uses a kubeconfig of another cluster.
+`just status` reads the Proxmox host (and its Tailscale), the cluster and the NAS, and changes nothing. It shows each
+app (its state, version and URLs, with what each answered from this machine, through Traefik's address whatever DNS
+says, and how they answer from the tailnet), the admin pages (on the tailnet too), the Proxmox host's Tailscale (its
+tailnet name, routes, guard, forwarding and preferences), each of this setup's VMs (CPU over the last day, memory and
+disks: a node's from kubelet, Home Assistant's from its guest agent), each storage's use with the worker's own volumes,
+the backups (the nightly job and its next run, each VM's newest backup with its size and how many are kept, why a run
+failed, and the cluster's etcd snapshots), the cluster (nodes, pins, Flux's commit against the branch, addresses, GPU,
+TLS, credentials, alerts), and the NAS (pools, snapshot tasks, NFS, alerts), then, last, above its exit line, what needs
+doing, each with the command that deals with it (an app failing or waiting for its Secret, apps `just suspend` stopped,
+Traefik's allowed range still closed, DNS missing for the apps' names, a reboot an upgrade asked for, upgrades waiting,
+a VM stopped or waiting for a restart, a storage filling up or provisioned beyond its size, a VM's backup that failed or
+was missed, the backup job not as configured or missing, a node not Ready, etcd or Flux in trouble, the nodes behind the
+pins, a certificate or credential running out, Alertmanager's firing alerts, Tailscale down, unguarded or with a route
+not approved, the tailnet's split DNS missing, a NAS pool degraded, filling up or behind on its scrub, a snapshot task
+failing, TrueNAS's own alerts). On a terminal, the line on what is being read is drawn at once and kept up to date until
+the report replaces it. `just status vms storage` shows some sections (of apps, admin, tailscale, vms, storage, backups,
+cluster and nas), reading only the machines they need, and `--json` prints the report as JSON. It exits with the
+report's own code: 0 when nothing is wrong, 1 for a problem, 2 when a source could not be read, 3 when the run failed;
+the code also ends its last line and is the `exit` field of `--json`. Another project's VMs on the host are counted,
+never named. It reads no Secret and checks no certificate, and never uses a kubeconfig of another cluster.
 
 Whatever follows the playbook goes to ansible-playbook as typed, so a variable for one run is
 `just deploy kubernetes -e talos_allow_bootstrap=true`, and one host's play `just deploy proxmox --limit homeserver`.

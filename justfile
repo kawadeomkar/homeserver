@@ -491,8 +491,9 @@ etcd-snapshot *ansible_args:
 # ansible-playbook's arguments follow -- (just status vms -- -e status_probe_apps=false): before it, just reads a word
 # that begins with - as one of status's own options, and refuses one it does not have. The recipe hands on everything
 # from the first word that begins with -.
-# Colour only on a terminal, and never with NO_COLOR set. The setup's links are checked by vars_plugins/setup_links.py,
-# which keeps stdout to the report alone.
+# Colour only on a terminal, and never with NO_COLOR set; on a terminal, without --json, the line on what is being read
+# is drawn at once and kept up to date (STATUS_LIVE), except on one that says it can do nothing but print (TERM=dumb).
+# The setup's links are checked by vars_plugins/setup_links.py, which keeps stdout to the report alone.
 [arg('json', long='json', value='true', help='the report as JSON, alone on stdout')]
 [arg('sections', help="some of apps admin tailscale vms storage backups cluster nas; then, after --, ansible-playbook's arguments")]
 [doc('What runs, where to reach it and what needs doing, read without changing anything; sections: apps admin tailscale vms storage backups cluster nas')]
@@ -513,9 +514,10 @@ status json='' *sections:
     extra=()
     [ ${#sections[@]} -eq 0 ] || extra=(-e "{\"types\": \"$(IFS=,; echo "${sections[*]}")\"}")
     color=; if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then color=1; fi
+    live=; if [ -t 1 ] && [ -z "$json" ] && [ "${TERM:-dumb}" != dumb ]; then live=1; fi
     rm -f {{ status_report }}
     rc=0
-    ANSIBLE_STDOUT_CALLBACK=homeserver_status STATUS_COLOR=$color STATUS_QUIET=$json \
+    ANSIBLE_STDOUT_CALLBACK=homeserver_status STATUS_COLOR=$color STATUS_LIVE=$live STATUS_QUIET=$json \
       {{ ansible_playbook }} status.yml --check ${extra[@]+"${extra[@]}"} ${@+"$@"} </dev/null || rc=$?
     if [ "$rc" -ne 0 ] || [ ! -s {{ status_report }} ]; then echo "just status: the run failed (ansible-playbook exited $rc)" >&2; exit 3; fi
     if [ -n "$json" ]; then cat {{ status_report }}; fi

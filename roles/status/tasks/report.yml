@@ -46,12 +46,14 @@
 - name: report | Write the report
   when: status_report_file | length > 0
   block:
+    # Only the first time: a task less to wait for on every run after.
     - name: report | Make the report's directory
       ansible.builtin.file:
         path: "{{ status_report_file | dirname }}"
         state: directory
         mode: "0700"
       check_mode: false
+      when: status_report_file | dirname is not directory
 
     - name: report | Write the report as JSON
       ansible.builtin.copy:

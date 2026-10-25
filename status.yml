@@ -41,18 +41,23 @@
         fail_msg: "{{ haos_settings_error | join(' ') }}"
         quiet: true
       tags: [always]
-    # Never fails: a NAS that does not answer is recorded in truenas_status, which roles/status reports.
+    # Never fails: a NAS that does not answer is recorded in truenas_status, which roles/status reports. Each is
+    # read only when a section shown needs it (status_sources).
     - name: Read the NAS through its API
       ansible.builtin.import_role:
         name: truenas
         tasks_from: status
-      when: "'nas' in group_names and nas_present"
+      when:
+        - "'nas' in group_names and nas_present"
+        - "'nas' in status_types | status_sources"
     # Never fails either: what the Proxmox host's Tailscale says goes to proxmox_tailscale_status_state.
     - name: Read the Proxmox host's Tailscale
       ansible.builtin.import_role:
         name: proxmox_tailscale
         tasks_from: status
-      when: "'proxmox' in group_names and proxmox_tailscale_enabled is true"
+      when:
+        - "'proxmox' in group_names and proxmox_tailscale_enabled is true"
+        - "'tailscale' in status_types | status_sources"
   roles:
     - role: status
 

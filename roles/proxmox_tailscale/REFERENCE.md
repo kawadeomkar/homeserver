@@ -362,11 +362,7 @@ Description: Join a Proxmox VE node to a tailnet, and with routes make it the LA
 
 | Name | Module | Has Conditions |
 | ---- | ------ | -------------- |
-| status ¦ Read the node's state | ansible.builtin.command | False |
-| status ¦ Read the node's preferences | ansible.builtin.command | True |
-| status ¦ Read Tailscale Serve's configuration | ansible.builtin.command | True |
-| status ¦ Read the guard's table | ansible.builtin.command | True |
-| status ¦ Read whether the node forwards IPv4 | ansible.builtin.command | True |
+| status ¦ Read the node's state, preferences, Serve, guard and forwarding, at once | tailscale_read | False |
 | status ¦ Work out what the node says | ansible.builtin.set_fact | False |
 
 
@@ -533,13 +529,9 @@ classDef importRole stroke:#699ba7,stroke-width:2px;
 classDef includeVars stroke:#8e44ad,stroke-width:2px;
 classDef rescue stroke:#665352,stroke-width:2px;
 
-  Start-->|Task| status___Read_the_node_s_state0[status   read the node s state]:::task
-  status___Read_the_node_s_state0-->|Task| status___Read_the_node_s_preferences1[status   read the node s preferences<br>When: **proxmox tailscale status read rc   default 1     0**]:::task
-  status___Read_the_node_s_preferences1-->|Task| status___Read_Tailscale_Serve_s_configuration2[status   read tailscale serve s configuration<br>When: **proxmox tailscale status read rc   default 1     0**]:::task
-  status___Read_Tailscale_Serve_s_configuration2-->|Task| status___Read_the_guard_s_table3[status   read the guard s table<br>When: **proxmox tailscale status read is not unreachable**]:::task
-  status___Read_the_guard_s_table3-->|Task| status___Read_whether_the_node_forwards_IPv44[status   read whether the node forwards ipv4<br>When: **proxmox tailscale status read is not unreachable**]:::task
-  status___Read_whether_the_node_forwards_IPv44-->|Task| status___Work_out_what_the_node_says5[status   work out what the node says]:::task
-  status___Work_out_what_the_node_says5-->End
+  Start-->|Task| status___Read_the_node_s_state__preferences__Serve__guard_and_forwarding__at_once0[status   read the node s state  preferences  serve<br> guard and forwarding  at once]:::task
+  status___Read_the_node_s_state__preferences__Serve__guard_and_forwarding__at_once0-->|Task| status___Work_out_what_the_node_says1[status   work out what the node says]:::task
+  status___Work_out_what_the_node_says1-->End
 ```
 
 

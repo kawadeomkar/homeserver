@@ -37,22 +37,27 @@
       {%- endif -%}
       {{ out }}
 
-# A host with nothing to read still says so, so that the report play can tell it from one refused before its reads.
+# A host with nothing to read still says so, so that the report play can tell it from one refused before its reads:
+# one without a source, or whose sources no section shown needs (status_host_reads).
 - name: Read nothing here
   ansible.builtin.set_fact:
     status_found: {}
-  when: status_source | length == 0
+  when: status_source | status_host_reads(status_types) | length == 0
 
 - name: Read the Proxmox host
   ansible.builtin.include_tasks: proxmox.yml
-  when: status_source == 'proxmox'
+  when: status_source == 'proxmox' and status_reads | length > 0
+  vars:
+    status_reads: "{{ status_source | status_host_reads(status_types) }}"
 
 - name: Read the cluster
   ansible.builtin.include_tasks: cluster.yml
-  when: status_source == 'cluster'
+  when: status_source == 'cluster' and status_reads | length > 0
+  vars:
+    status_reads: "{{ status_source | status_host_reads(status_types) }}"
 
 - name: Work out what the NAS says
   ansible.builtin.set_fact:
     status_found:
       nas: "{{ status_nas_state | status_nas(status_nas_release) }}"
-  when: status_source == 'nas'
+  when: status_source == 'nas' and status_source | status_host_reads(status_types) | length > 0

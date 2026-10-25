@@ -33,7 +33,8 @@ Two entry points:
 - **report** (`tasks_from: report`) puts together what each of `status_hosts` found, asks each app's addresses from
   this machine (unless `status_probe_apps` is off), ranks what needs attention (sources not read, problems, things to
   do, each with the command from `status_commands` that deals with it), writes the report to `status_report_file` as
-  JSON, mode 0600, and shows it as text unless `status_quiet`. It writes in a dry run too, since `just status` runs
+  JSON, mode 0600, and shows it as text unless `status_quiet`: the sections, then what needs attention, last, above
+  the exit line. It writes in a dry run too, since `just status` runs
   as one and takes its exit code from the file: 2 when a source could not be read, else 1 for a problem, else 0.
 
 **An app** is each Ingress's backend Service, then the Deployment whose pods that Service selects, so a chart's app
@@ -43,6 +44,10 @@ waiting (for a Secret that does not exist yet), failing (a crash loop, an image 
 be scheduled or stays pending, a rollout past its deadline), suspended (`just suspend` recorded its replicas in
 `status_cluster_annotation`, and when), stopped (scaled to zero otherwise) or not applied (its Kustomization failed
 before anything ran). Home Assistant, a VM of its own, is an app too, through `status_vms`' `app`.
+
+Each host reads only the sources the sections of `status_types` need (the filter `status_host_reads`): the Proxmox
+host's own reads and its Tailscale, the cluster and its etcd snapshots, the NAS. Shown the NAS alone, the role reads
+neither the Proxmox host nor the cluster, and a source no section shown needs is never one not read.
 
 Every command goes through the role's module `status_read`, which runs a list of them at once and refuses the whole task
 if any is not on its read list: exact forms of `pvesh get`, `qm guest cmd` (`get-fsinfo`, `get-osinfo`,
@@ -135,8 +140,9 @@ flag, the nightly backup job roles/proxmox_backup keeps, the Tailscale state rol
 worker's user volumes, the settings roles/flux_bootstrap keeps, Alertmanager's pod, the pins, where roles/talos keeps
 the etcd snapshots) and `group_vars/nas/status.yml` (what roles/truenas's `status` entry point read, and the release
 that role is written for). `just status` runs it as a dry run with the stdout callback
-`callback_plugins/homeserver_status.py`, which prints one line on what was read and how long the probes took, then the
-report.
+`callback_plugins/homeserver_status.py`, which prints the report with one line on what was read and how long the probes
+took above its exit line; on a terminal, that line is drawn as soon as the hosts are read and redrawn in place, a
+spinner beside each host still being read, until the report replaces it.
 
 ## Example
 

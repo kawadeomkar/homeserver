@@ -439,6 +439,32 @@ def test_the_report_is_json():
     assert json.loads(json.dumps(model)) == model
 
 
+def test_each_host_reads_only_what_the_sections_shown_need():
+    every = ["proxmox", "tailscale", "tailnet_dns", "cluster", "etcd_snapshots", "probes", "nas"]
+    assert fs.sources([]) == every
+    assert fs.sources(["nas"]) == ["nas"]
+    assert fs.sources(["admin"]) == ["tailscale"]
+    assert fs.sources(["backups"]) == ["proxmox", "etcd_snapshots"]
+    # The cluster's TLS line comes from the probes, which ask only when the apps are shown.
+    assert fs.sources(["cluster"]) == ["proxmox", "cluster"]
+    assert fs.sources(["apps"]) == ["proxmox", "cluster", "probes"]
+    assert fs.sources(["apps", "tailscale"]) == ["proxmox", "tailscale", "tailnet_dns", "cluster", "probes"]
+    assert fs.host_reads("proxmox", ["nas"]) == [] and fs.host_reads("cluster", ["nas"]) == []
+    assert fs.host_reads("proxmox", ["admin"]) == ["tailscale"]
+    assert fs.host_reads("cluster", ["backups"]) == ["etcd_snapshots"]
+    assert fs.host_reads("nas", []) == ["nas"] and fs.host_reads("", []) == []
+
+
+def test_a_source_no_section_shown_needs_is_not_missed():
+    """just status nas reads neither the Proxmox host nor the cluster, so neither is a source not read."""
+    setup = {"nas": True, "cluster": True, "home_assistant": True}
+    assert fs.report({}, setup, ["nas"])["attention"] == [
+        {"level": "unread", "subject": "nas", "text": "the NAS was not read", "command": ""}
+    ]
+    assert [a["subject"] for a in fs.report({}, setup, ["admin"])["attention"]] == []
+    assert [a["subject"] for a in fs.report({}, setup, ["vms"])["attention"]] == ["proxmox", "cluster"]
+
+
 # --------------------------------------------------------------------------------------------------- text ---
 
 
@@ -463,6 +489,11 @@ def test_the_text_says_what_matters():
     out = report_text()
     assert out.startswith("homeserver  2026-10-21 14:40 PDT · Proxmox only + Home Assistant\n")
     assert "ATTENTION  0 problems · 3 to do" in out
+    # What needs attention comes after the sections it is worked out from, last, above the exit line.
+    lines = out.splitlines()
+    attention = lines.index("ATTENTION  0 problems · 3 to do")
+    assert attention > next(i for i, line in enumerate(lines) if line.startswith("STORAGE"))
+    assert lines[attention - 1] == "" and lines[-2] == "" and lines[-1].startswith("exit 0 · ")
     assert "→ qm reboot 301" in out and "→ just deploy proxmox" in out
     assert "VMS  pve · Proxmox VE 9.2.21 · kernel 7.0.14-22-pve · up 13 d" in out
     assert "/mnt/data 4.9 / 30" in out and "Home Assistant OS 18.3" in out
@@ -1692,8 +1723,10 @@ def test_the_nas_is_left_out_unless_shown():
     state = nas_state(ready=False)
     model = nas_report(state, types=["vms"])
     assert model["attention"] == [] and "NAS " not in fs.text(model, False)
+    # Not shown, the NAS is not read, so a NAS that would not answer is no source not read.
     unread = fs.report({"proxmox": {}, "nas": {"unread": "timed out"}}, NAS_SETUP, ["vms"], now=NAS_NOW)
-    assert unread["exit"] == 2
+    assert unread["exit"] == 0 and unread["attention"] == []
+    assert fs.report({"nas": {"unread": "timed out"}}, NAS_SETUP, ["nas"], now=NAS_NOW)["exit"] == 2
 
 
 def test_the_nas_text():

@@ -135,9 +135,9 @@ def status(
     guard_hosts=(),
     guard_allow=(),
 ):
-    """The node as just status reports it, from tasks/status.yml's reads (each a registered command result): tailscale
-    status --json, get --json, serve status --json, nft list table inet tailnet_guard and sysctl -n
-    net.ipv4.ip_forward. Only the node's own entry of the status is kept."""
+    """The node as just status reports it, from tasks/status.yml's reads (each of tailscale_read's results, or the
+    task's own result when the host did not answer): tailscale status --json, get --json, serve status --json, nft list
+    table inet tailnet_guard and sysctl -n net.ipv4.ip_forward. Only the node's own entry of the status is kept."""
     routes = [str(r) for r in routes or []]
     out = {
         "wanted_routes": routes,

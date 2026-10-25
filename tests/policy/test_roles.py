@@ -1727,7 +1727,7 @@ def test_status_passes_the_argument_specs(tmp_path, local_yml, extra):
     """just status passes roles/status's checks with the tracked configuration and the sections it names, in each setup:
     the main entry point's on the Proxmox host, the cluster's host and the NAS's (which read nothing without a cluster
     or a NAS), roles/truenas's status entry point's on the NAS's when there is one, the report's on the controller."""
-    types = ("-e", json.dumps({"types": " vms,, storage,apps "}))
+    types = ("-e", json.dumps({"types": " vms,, storage,apps,nas "}))
     rc, out = argspec_pass(example_tree(tmp_path, local_yml), "status.yml", *extra, *types)
     assert rc == 0, out[-3000:]
 
@@ -1777,7 +1777,8 @@ def test_status_reads_the_nas_as_its_play_reaches_it(tmp_path, local_yml, source
         {"name": "truenas", "tasks_from": "status"},
         {"name": "proxmox_tailscale", "tasks_from": "status"},
     ]
-    assert "nas_present" in imports[0]["when"]
+    # Only with a NAS, and only when a section shown needs it.
+    assert imports[0]["when"] == ["'nas' in group_names and nas_present", "'nas' in status_types | status_sources"]
     nas_vars = yaml.safe_load((ROOT / "group_vars" / "nas" / "status.yml").read_text())
     assert "truenas_status" in nas_vars["status_nas_state"]
     assert "truenas_supported_version" in nas_vars["status_nas_release"]
@@ -1798,7 +1799,10 @@ def test_status_reads_tailscale_as_the_proxmox_play_keeps_it(tmp_path, more, ena
     reads = next(
         t for t in play["pre_tasks"] if t.get("ansible.builtin.import_role", {}).get("name") == "proxmox_tailscale"
     )
-    assert reads["when"] == "'proxmox' in group_names and proxmox_tailscale_enabled is true"
+    assert reads["when"] == [
+        "'proxmox' in group_names and proxmox_tailscale_enabled is true",
+        "'tailscale' in status_types | status_sources",
+    ]
     proxmox_vars = yaml.safe_load((ROOT / "group_vars" / "proxmox" / "status.yml").read_text())
     assert proxmox_vars["status_tailscale_state"] == "{{ proxmox_tailscale_status_state | default({}) }}"
     admin = resolve_on(tree, "homeserver", "status_admin")
