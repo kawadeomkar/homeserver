@@ -81,7 +81,11 @@ Every command is a recipe of [just](https://github.com/casey/just), 1.55 or late
 `just` lists the recipes, `just help <recipe>` shows one's arguments and options, and `just --completions zsh` (or
 bash, fish) gives your shell completion for them. A recipe takes what it acts on as arguments (`just check proxmox`,
 `just lint yaml python`) and nothing from the environment but the virtualenv's path and Poetry's. just's own flags,
-such as `--dry-run`, go before the recipe: after it, they are the recipe's, or ansible-playbook's.
+such as `--dry-run`, go before the recipe: after it, they are the recipe's, or ansible-playbook's, which `just check`
+and `just deploy` take after the playbook (`just check site --tags truenas_nfs`) and a recipe with options of its own
+after `--` (`just suspend --check -- -v`), since before it just reads every word that begins with `-` as one of them.
+In the listing, `playbook='site'` is an argument you can leave out, and is then `site`: give only its value
+(`just deploy proxmox`).
 
 The tooling runs from a Python virtualenv of the project's own, which you make and keep where you like; just never
 creates one. With pyenv, for example: `pyenv virtualenv 3.14.6 homeserver && pyenv local homeserver`, after which
