@@ -19,7 +19,9 @@ State is a JSON file named by $FAKE_TALOS_STATE:
   `bootstrap_precondition_count` (bootstrap answers FailedPrecondition that many times first) and
   `operator_never_available` (for kubectl wait).
 - `objects`: {"<kind>/<namespace>/<name>": manifest} for kubectl, with `pods_linger`, `never_available` and
-  `events` (fake_kubectl.py's docstring).
+  `events` (fake_kubectl.py's docstring), and what just status's reads list (`node_stats`, `alerts`, `pod_states`,
+  `pods_node`).
+- `remote_heads`: {ref: commit} for git ls-remote, which just status runs on the branch Flux syncs.
 
 Written from talosctl v1.14.2's flags and output and the Talos documentation, not from a node: `version` prints the
 client's block first, then each node's under `NODE:`; a node in maintenance mode answers only --insecure, a
@@ -54,7 +56,11 @@ def load():
 
 
 def save(state):
-    state_path().write_text(json.dumps(state, indent=1, sort_keys=True))
+    """Written whole, then moved into place, so that the commands just status runs at once never read half a file."""
+    path = state_path()
+    scratch = path.with_name(f".{path.name}.{os.getpid()}")
+    scratch.write_text(json.dumps(state, indent=1, sort_keys=True))
+    os.replace(scratch, path)
 
 
 def fail(message, code=1):
@@ -575,6 +581,8 @@ def kubectl(state, args):
     kubeconfig = None
     if args[:1] == ["--kubeconfig"]:
         kubeconfig, args = args[1], args[2:]
+    if args[:1] and args[0].startswith("--request-timeout="):
+        args = args[1:]
     if args == ["version", "-o", "json"]:
         kube_reach(state, kubeconfig)
         print(
@@ -589,10 +597,22 @@ def kubectl(state, args):
     fake_kubectl.run(state, kubeconfig, args, kube_reach, fail)
 
 
+def git(state, args):
+    """git ls-remote <url> <ref>, as just status asks which commit the branch Flux syncs points at: the state's
+    `remote_heads` ({ref: commit}); a ref it does not have prints nothing, as git does."""
+    if len(args) != 3 or args[0] != "ls-remote":
+        fail(f"the fake runs git ls-remote <url> <ref> only: {args}")
+    if not args[1].startswith("https://"):
+        fail(f"fatal: unable to access '{args[1]}'")
+    commit = state.get("remote_heads", {}).get(args[2])
+    if commit:
+        print(f"{commit}\t{args[2]}")
+
+
 def main():
     tool, args = sys.argv[1], sys.argv[2:]
     state = load()
-    {"talosctl": talosctl, "kubectl": kubectl}[tool](state, args)
+    {"talosctl": talosctl, "kubectl": kubectl, "git": git}[tool](state, args)
     save(state)
 
 

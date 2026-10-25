@@ -1711,3 +1711,262 @@ def test_haos_test_playbook_runs_the_real_plays_roles():
     assert test["vars"] == real["vars"] and test["roles"] == real["roles"]
     by_name = {task["name"]: task for task in real["pre_tasks"]}
     assert all(by_name.get(task["name"]) == task for task in test["pre_tasks"]), "a pre-task differs"
+
+
+# just status, in each setup the two switches make, with and without Home Assistant.
+STATUS_SETUPS = [
+    pytest.param(None, CLUSTER_ARGS, id="nas-cluster"),
+    pytest.param(example_without_kubernetes(), HAOS_ONLY_ARGS, id="nas"),
+    pytest.param(PROXMOX_ONLY_CLUSTER_LOCAL_YML, CLUSTER_ARGS, id="proxmox-only-cluster"),
+    pytest.param(PROXMOX_ONLY_LOCAL_YML, (), id="proxmox-only"),
+]
+
+
+@pytest.mark.parametrize(("local_yml", "extra"), STATUS_SETUPS)
+def test_status_passes_the_argument_specs(tmp_path, local_yml, extra):
+    """just status passes roles/status's checks with the tracked configuration and the sections it names, in each setup:
+    the main entry point's on the Proxmox host, the cluster's host and the NAS's (which read nothing without a cluster
+    or a NAS), roles/truenas's status entry point's on the NAS's when there is one, the report's on the controller."""
+    types = ("-e", json.dumps({"types": " vms,, storage,apps "}))
+    rc, out = argspec_pass(example_tree(tmp_path, local_yml), "status.yml", *extra, *types)
+    assert rc == 0, out[-3000:]
+
+    def validated(entry):
+        return {
+            host
+            for section in out.split(f"Validating arguments against arg spec '{entry}'")[1:]
+            for host in re.findall(r"^ok: \[([^\]]+)\]", section.split("TASK [", 1)[0], re.M)
+        }
+
+    assert validated("main") == {"homeserver", "homeserver-k8s", "truenas"}, out[-3000:]
+    nas = local_yml is None or "truenas_static_address" in (local_yml or "")
+    assert validated("status") == ({"truenas"} if nas else set()), out[-3000:]
+    assert out.count("Validating arguments against arg spec 'report'") == 1, out[-3000:]
+
+
+def test_status_refuses_a_section_it_does_not_have(tmp_path):
+    types = json.dumps({"types": "vms,disks"})
+    rc, out = argspec_pass(example_tree(tmp_path), "status.yml", *CLUSTER_ARGS, "-e", types)
+    assert rc != 0, out[-3000:]
+    message = "The report has no section disks: its sections are apps, admin, tailscale, vms, storage, backups, "
+    message += "cluster, nas."
+    assert message in out, out[-3000:]
+
+
+def test_status_refuses_a_backup_job_it_cannot_check(tmp_path):
+    """A backup job without its schedule would end the reading play with a template error and no report."""
+    jobs = json.dumps({"status_backup_jobs": [{"id": "vm-nightly", "storage": "homeserver-backup", "vmid": [300]}]})
+    rc, out = argspec_pass(example_tree(tmp_path), "status.yml", *CLUSTER_ARGS, "-e", jobs)
+    assert rc != 0 and "status_backup_jobs must each have an id, a schedule and a storage." in out, out[-3000:]
+
+
+@pytest.mark.parametrize(("local_yml", "source"), [(None, "nas"), (PROXMOX_ONLY_LOCAL_YML, "")])
+def test_status_reads_the_nas_as_its_play_reaches_it(tmp_path, local_yml, source):
+    """just status reads the NAS through roles/truenas's status entry point, with the NAS play's own connection
+    settings (the static address, then the bootstrap one; the pinned certificate), and only with a NAS."""
+    tree = example_tree(tmp_path, local_yml)
+    names = "{'status_source': status_source, 'truenas_api_hosts': truenas_api_hosts}"
+    found = resolve_on(tree, "truenas", names)
+    assert found["status_source"] == source
+    if source:
+        assert found["truenas_api_hosts"] == ["192.0.2.10", "192.0.2.50"]
+    play = yaml.safe_load((ROOT / "status.yml").read_text())[0]
+    assert "nas" in play["hosts"].split(":")
+    imports = [t for t in play["pre_tasks"] if "ansible.builtin.import_role" in t]
+    assert [t["ansible.builtin.import_role"] for t in imports] == [
+        {"name": "truenas", "tasks_from": "status"},
+        {"name": "proxmox_tailscale", "tasks_from": "status"},
+    ]
+    assert "nas_present" in imports[0]["when"]
+    nas_vars = yaml.safe_load((ROOT / "group_vars" / "nas" / "status.yml").read_text())
+    assert "truenas_status" in nas_vars["status_nas_state"]
+    assert "truenas_supported_version" in nas_vars["status_nas_release"]
+
+
+@pytest.mark.parametrize(
+    ("more", "enabled"),
+    [("", False), ("tailscale_enabled: true\n", True), ("tailscale_advertise_routes: [192.0.2.0/24]\n", True)],
+    ids=["off", "host-only", "routes"],
+)
+def test_status_reads_tailscale_as_the_proxmox_play_keeps_it(tmp_path, more, enabled):
+    """just status reads the Proxmox host's Tailscale through roles/proxmox_tailscale's status entry point, with the
+    variables proxmox.yml gives the role (group_vars/proxmox/tailscale.yml), and only when the setup turns it on."""
+    tree = example_tree(tmp_path, PROXMOX_ONLY_LOCAL_YML + more)
+    names = "{'enabled': proxmox_tailscale_enabled, 'tags': proxmox_tailscale_tags}"
+    assert resolve_on(tree, "homeserver", names) == {"enabled": enabled, "tags": ["tag:homeserver"]}
+    play = yaml.safe_load((ROOT / "status.yml").read_text())[0]
+    reads = next(
+        t for t in play["pre_tasks"] if t.get("ansible.builtin.import_role", {}).get("name") == "proxmox_tailscale"
+    )
+    assert reads["when"] == "'proxmox' in group_names and proxmox_tailscale_enabled is true"
+    proxmox_vars = yaml.safe_load((ROOT / "group_vars" / "proxmox" / "status.yml").read_text())
+    assert proxmox_vars["status_tailscale_state"] == "{{ proxmox_tailscale_status_state | default({}) }}"
+    admin = resolve_on(tree, "homeserver", "status_admin")
+    assert admin[0] == {"name": "Proxmox VE", "url": "https://192.0.2.20:8006", "tailscale_node": True}
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "storage"),
+    [(None, "homeserver-backup"), (PROXMOX_ONLY_CLUSTER_LOCAL_YML, None)],
+    ids=["nas", "proxmox-only"],
+)
+def test_status_checks_the_backup_job_the_proxmox_play_makes(tmp_path, local_yml, storage):
+    """just status checks the host's backup job against roles/proxmox_backup's own (none without a NAS and without
+    vm_backup_storage, which it reports), and finds the etcd snapshots where roles/talos takes them."""
+    tree = example_tree(tmp_path, local_yml)
+    jobs = resolve_on(tree, "homeserver", "status_backup_jobs == proxmox_backup_jobs", *CLUSTER_ARGS)
+    assert jobs is True
+    found = resolve_on(tree, "homeserver", "status_backup_jobs", *CLUSTER_ARGS)
+    assert [j["storage"] for j in found] == ([storage] if storage else [])
+    if storage:
+        assert found[0]["vmid"] == [300, 301, 310] and found[0]["schedule"] == "02:00"
+    snapshots = resolve_on(
+        tree, "homeserver-k8s", "status_cluster_snapshot_dir == talos_config_dir ~ '/etcd'", *CLUSTER_ARGS
+    )
+    assert snapshots is True
+
+
+def test_status_reads_the_cluster_as_it_is_built(tmp_path):
+    """just status reads the cluster with roles/talos's credentials and endpoint, finds the apps as just suspend does,
+    shows every Talos user volume the nodes declare by its mount, and reads Alertmanager's pod by the name
+    kube-prometheus-stack gives it."""
+    tree = example_tree(tmp_path, PROXMOX_ONLY_CLUSTER_LOCAL_YML)
+    names = [
+        "status_source",
+        "status_cluster_kubeconfig",
+        "status_cluster_server",
+        "status_cluster_nodes",
+        "status_cluster_apps_path",
+        "status_cluster_annotation",
+        "status_cluster_database_label",
+        "status_cluster_volumes",
+        "status_cluster_settings",
+        "status_cluster_alertmanager",
+        "status_cluster_pins",
+        "talos_config_dir",
+        "talos_endpoint",
+        "app_scale_path",
+        "app_scale_annotation",
+        "app_scale_late_label",
+        "talos_nodes",
+        "kubernetes_nodes",
+        "flux_bootstrap_settings",
+        "talos_version",
+        "talos_kubernetes_version",
+    ]
+    found = resolve_on(tree, "homeserver-k8s", "{" + ", ".join(f"'{n}': {n}" for n in names) + "}", *CLUSTER_ARGS)
+    assert found["status_source"] == "cluster"
+    assert found["status_cluster_kubeconfig"] == found["talos_config_dir"] + "/kubeconfig"
+    assert found["status_cluster_server"] == found["talos_endpoint"]
+    assert found["status_cluster_nodes"] == [{"name": n["name"], "role": n["role"]} for n in found["kubernetes_nodes"]]
+    assert [found[f"status_cluster_{k}"] for k in ("apps_path", "annotation", "database_label")] == [
+        found["app_scale_path"],
+        found["app_scale_annotation"],
+        found["app_scale_late_label"],
+    ]
+    declared = {
+        re.search(r"^name: (\S+)$", patch, re.M).group(1)
+        for n in found["talos_nodes"]
+        for patch in n["patches"]
+        if "kind: UserVolumeConfig" in patch
+    }
+    assert declared == {"local-path-provisioner", "media"}
+    assert set(found["status_cluster_volumes"]) == {f"/var/mnt/{name}" for name in declared}
+    assert found["status_cluster_settings"]["allowlist"] in found["flux_bootstrap_settings"]
+    assert found["status_cluster_pins"] == {
+        "talos": found["talos_version"],
+        "kubernetes": found["talos_kubernetes_version"],
+    }
+    release = yaml.safe_load((ROOT / "k8s" / "infrastructure" / "monitoring" / "release.yaml").read_text())
+    values = release["spec"].get("values") or {}
+    assert not values.get("fullnameOverride") and not values.get("nameOverride")
+    alertmanager = found["status_cluster_alertmanager"]
+    assert alertmanager == {
+        "namespace": release["metadata"]["namespace"],
+        "pod": f"alertmanager-{release['metadata']['name']}-alertmanager-0",
+    }
+    without = resolve_on(
+        example_tree(tmp_path / "local", PROXMOX_ONLY_LOCAL_YML),
+        "homeserver-k8s",
+        "[status_source, status_cluster_server]",
+    )
+    assert without == ["", ""]
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "extra"),
+    [
+        pytest.param(None, CLUSTER_ARGS, id="cluster-and-home-assistant"),
+        pytest.param(
+            None, ("-e", json.dumps({**CLUSTER_VARS, "vm_backup_extra_vmids": [320, 301]})), id="with-extra-vms"
+        ),
+        pytest.param(PROXMOX_ONLY_LOCAL_YML, ("-e", json.dumps({"vm_backup_extra_vmids": [320]})), id="extra-alone"),
+        pytest.param(PROXMOX_ONLY_LOCAL_YML, (), id="none"),
+    ],
+)
+def test_status_reports_on_the_vms_the_backup_covers(tmp_path, local_yml, extra):
+    """The VMs just status names are this repo's own, the same the nightly backup covers; any other VM on the host is
+    only counted."""
+    tree = example_tree(tmp_path, local_yml)
+    reported = resolve_on(tree, "homeserver", "status_vms | map(attribute='vmid') | list", *extra)
+    assert reported == resolve_on(tree, "homeserver", "vm_backup_vmids", *extra)
+
+
+# What a task may name besides its module.
+TASK_KEYWORDS = {
+    "name",
+    "when",
+    "vars",
+    "register",
+    "tags",
+    "block",
+    "rescue",
+    "always",
+    "loop",
+    "loop_control",
+    "check_mode",
+    "changed_when",
+    "failed_when",
+    "ignore_errors",
+    "ignore_unreachable",
+    "no_log",
+    "until",
+    "retries",
+    "delay",
+}
+
+
+def test_status_reads_only_through_status_read():
+    """No task of roles/status runs a command, or anything that could change a host, but through status_read, whose
+    read list refuses everything else; it writes only its own report, on the controller."""
+    allowed = {
+        "status_read",
+        # The report entry point's questions to the apps, from this machine: a GET each, no certificate checked.
+        "status_probe",
+        "ansible.builtin.assert",
+        "ansible.builtin.set_fact",
+        "ansible.builtin.include_tasks",
+        "ansible.builtin.debug",
+        # The report entry point's own directory and file.
+        "ansible.builtin.file",
+        "ansible.builtin.copy",
+    }
+    used = {}
+    for tasks_file in sorted((ROOT / "roles" / "status" / "tasks").glob("*.yml")):
+        for task in tasks_in(yaml.safe_load(tasks_file.read_text())):
+            for module in set(task) - TASK_KEYWORDS:
+                used.setdefault(module, []).append(f"{tasks_file.name}: {task.get('name')}")
+    assert {module: where for module, where in used.items() if module not in allowed} == {}
+    report = yaml.safe_load((ROOT / "roles" / "status" / "tasks" / "report.yml").read_text())
+    writes = [t for t in tasks_in(report) if {"ansible.builtin.file", "ansible.builtin.copy"} & set(t)]
+    assert all("status_report_file" in json.dumps(t) for t in writes), "the report entry point writes elsewhere"
+
+
+def test_the_nas_is_read_with_truenas_info_alone():
+    """roles/truenas's status entry point, which just status runs on the NAS, calls truenas_info alone, the module
+    that only reads, with its status option, without the pool scan, each address tried once, and never fails."""
+    tasks = list(tasks_in(yaml.safe_load((ROOT / "roles" / "truenas" / "tasks" / "status.yml").read_text())))
+    assert [sorted(set(t) - TASK_KEYWORDS) for t in tasks] == [["truenas_info"]]
+    args = tasks[0]["truenas_info"]
+    assert args["status"] is True and args["importable"] is False and args["api_connect_wait"] == 0
+    assert tasks[0]["register"] == "truenas_status" and tasks[0]["failed_when"] is False

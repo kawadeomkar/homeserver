@@ -18,9 +18,10 @@ restricted to other cluster nodes. Nothing the role runs changes either. Anythin
 unexpected command fails the test. A state's `storage_total` gives a storage's size in bytes (64 GiB otherwise).
 
 Backup jobs: `pvesh get|create /cluster/backup` and `pvesh get|set /cluster/backup/<id>`, from Proxmox VE 9's
-API schema, not yet captured from a host. A job's prune settings come back as an object and its enabled flag
-as a number; the role reads text as well, in case a real host gives that. Ids follow Proxmox's pve-configid
-rule, and an option the schema lacks fails as it does there.
+API schema, and since 2026-10-21 checked against a host's: a job's prune settings come back as an object and its
+enabled flag as a number (the role reads text as well), and only the listing carries `next-run`. Ids follow
+Proxmox's pve-configid rule, and an option the schema lacks fails as it does there. The backup runs just status
+reads are described under backup_run().
 
 VMs: `qm create|set|config|status|start|shutdown` and `qm disk resize`, and pvesh's /nodes/<node>/qemu,
 /nodes/<node>/lxc (the state's `containers`), .../qemu/<id>/config and .../pending, /nodes/<node>/status,
@@ -54,6 +55,17 @@ USB devices (usb0 to usb14) reach a running VM at once (hotplug). `qm guest cmd 
 for a running VM as the QEMU guest agent does, its NIC with the VM's MAC and the state's `guest_ip` (127.0.0.1
 otherwise), beside the loopback and a Docker bridge; `agent_down` counts calls that fail first, as while it boots.
 
+just status's reads (roles/status), in the shapes captured from a Proxmox VE 9.2 host on 2026-10-21:
+`pvesh get /cluster/resources`, the node, every VM (a template among them, with `template: 1`) and every storage in
+one list, a VM's use from the state's `usage` (cpu, mem and uptime by VMID; a running VM otherwise uses a tenth of
+its CPU and half its memory, and a stopped one nothing); `/nodes/<node>/rrddata` and `.../qemu/<id>/rrddata` with
+`--timeframe day --cf AVERAGE`, a point every ten minutes over the last day (a real host has one a minute), the
+first one carrying only its time, as for a VM started since; `/nodes/<node>/status` with the version, the running
+kernel, the uptime and the root filesystem besides the memory; and `qm guest cmd <id> get-fsinfo` and `get-osinfo`
+for a running VM, from the state's `guest_fsinfo` and `guest_osinfo` by VMID, which answer as Talos's agent does
+otherwise: no filesystem, and no OS name. The state file is replaced whole on every save, so that commands run at
+the same time, as just status runs them, never read one half written.
+
 apt-get reads the deb822 .sources files in $FAKE_PVE_SOURCES_DIR, the directory the role is given. `update`
 fails with 401 Unauthorized, as the real one does, when an enterprise.proxmox.com repository is still
 enabled, and otherwise fills the package lists from the no-subscription repository if one is enabled, or with
@@ -79,6 +91,9 @@ import json
 import os
 import re
 import sys
+import time
+from datetime import datetime, timedelta
+from datetime import time as clock
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -141,7 +156,11 @@ def load():
 
 
 def save(state):
-    state_path().write_text(json.dumps(state, indent=1, sort_keys=True))
+    # Written aside and renamed over the state, so that a command reading it meanwhile sees it whole.
+    path = state_path()
+    scratch = path.with_name(f".{path.name}.{os.getpid()}")
+    scratch.write_text(json.dumps(state, indent=1, sort_keys=True))
+    os.replace(scratch, path)
 
 
 def fail(message):
@@ -288,7 +307,18 @@ def shown_job(job):
 
 
 def get_backup_jobs(state, opts):
-    return [shown_job(job) for job in state.get("backup_jobs", {}).values()]
+    """The jobs as the listing shows them, which alone carries each job's next run: the state's `next_runs` by id,
+    else the next time a daily HH:MM schedule fires."""
+    out = []
+    for job in state.get("backup_jobs", {}).values():
+        shown = shown_job(job)
+        next_run = state.get("next_runs", {}).get(job["id"])
+        if next_run is None and re.fullmatch(r"\d{1,2}:\d{2}", job.get("schedule", "")):
+            next_run = daily(job["schedule"], time.time(), 1)[0]
+        if next_run is not None:
+            shown["next-run"] = int(next_run)
+        out.append(shown)
+    return out
 
 
 def create_backup_job(state, opts):
@@ -318,6 +348,119 @@ def set_backup_job(state, jid, opts):
         job.pop(name, None)
     job.update(opts)
     state["mutations"] += 1
+
+
+# ------------------------------------------------------------------------------------------ backup runs ---
+# just status reads when a schedule fires (/cluster/jobs/schedule-analyze), the backup runs (/nodes/<node>/tasks with
+# --typefilter vzdump) and a run's log (/nodes/<node>/tasks/<upid>/log), in the shapes captured from a Proxmox VE 9.2
+# host on 2026-10-21: a finished run's `status` is OK or its error, a running one has neither status nor end time,
+# and a log is numbered lines that end with TASK OK or TASK ERROR. Runs come from the state's `tasks`, which
+# backup_run() below seeds as vzdump would leave them; the fake runs no backup itself.
+
+
+def daily(schedule, after, count):
+    """The next `count` times, after `after`, that a daily HH:MM schedule fires in local time; no other calendar
+    form is known here."""
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", schedule)
+    if not match:
+        fail(f"fake pvesh: only daily HH:MM schedules are known here, not {schedule!r}")
+    day, out = datetime.fromtimestamp(after).date(), []
+    while len(out) < count:
+        when = datetime.combine(day, clock(int(match.group(1)), int(match.group(2)))).timestamp()
+        if when > after:
+            out.append(int(when))
+        day += timedelta(days=1)
+    return out
+
+
+def schedule_analyze(state, opts):
+    if set(opts) - {"schedule", "iterations", "starttime"} or "schedule" not in opts:
+        fail(f"400 Parameter verification failed: {sorted(opts)}")
+    times = daily(opts["schedule"], int(opts.get("starttime", time.time())), int(opts.get("iterations", 10)))
+    return [{"timestamp": t, "utc": time.strftime("%a %b %d %H:%M:%S %Y", time.gmtime(t))} for t in times]
+
+
+def vzdump_upid(start, vmid=""):
+    return f"UPID:{NODE}:{start % 2**24:08X}:{start % 2**28:08X}:{start:08X}:vzdump:{vmid}:root@pam:"
+
+
+def backup_run(state, start, vmids, storage, failed=None, running=False, error=""):
+    """Seed a backup run as vzdump leaves it: its task and log, and a backup on `storage` of each VM it made, a
+    minute apart. `failed` maps the VMs it failed to why; `error` fails it before any VM, as a storage that cannot
+    be activated does; `running` leaves it running, with no VM done yet."""
+    failed, lines = (
+        failed or {},
+        [f"INFO: starting new backup job: vzdump {' '.join(map(str, vmids))} --storage {storage}"],
+    )
+    when = start
+    for vmid in [] if error or running else vmids:
+        name = state.get("vms", {}).get(str(vmid), {}).get("config", {}).get("name", "")
+        lines += [f"INFO: Starting Backup of VM {vmid} (qemu)", f"INFO: VM Name: {name}"]
+        if vmid in failed:
+            lines += [f"ERROR: Backup of VM {vmid} failed - {failed[vmid]}", "INFO: Failed at"]
+        else:
+            stamp = time.strftime("%Y_%m_%d-%H_%M_%S", time.localtime(when))
+            state.setdefault("content", {}).setdefault(storage, []).append(
+                {
+                    "content": "backup",
+                    "ctime": when,
+                    "format": "vma.zst",
+                    "notes": name,
+                    "size": (vmid % 7 + 1) * 2**30,
+                    "subtype": "qemu",
+                    "vmid": vmid,
+                    "volid": f"{storage}:backup/vzdump-qemu-{vmid}-{stamp}.vma.zst",
+                }
+            )
+            lines.append(f"INFO: Finished Backup of VM {vmid} (00:01:00)")
+        when += 60
+    task = {"type": "vzdump", "id": "", "user": "root@pam", "starttime": start, "log": lines}
+    if error:
+        task.update(endtime=start + 1, exitstatus=error)
+    elif not running:
+        lines.append("INFO: Backup job finished " + ("with errors" if failed else "successfully"))
+        task.update(endtime=when, exitstatus="job errors" if failed else "OK")
+    state.setdefault("tasks", {})[vzdump_upid(start)] = task
+
+
+def shown_task(upid, task):
+    out = {"upid": upid, "node": NODE, "pid": 1, "pstart": 1, "starttime": task["starttime"], "type": task["type"]}
+    out |= {"id": task.get("id", ""), "user": task.get("user", "root@pam")}
+    if "endtime" in task:
+        out |= {"endtime": task["endtime"], "status": task["exitstatus"]}
+    return out
+
+
+def get_tasks(state, node, opts):
+    check_node(node)
+    if set(opts) - {"typefilter", "source", "limit", "start", "errors"}:
+        fail(f"400 Parameter verification failed.\n{sorted(opts)[0]}: property is not defined in schema")
+    source = opts.get("source", "archive")
+    tasks = [
+        shown_task(upid, t)
+        for upid, t in state.get("tasks", {}).items()
+        if "starttime" in t and opts.get("typefilter", t["type"]) == t["type"]
+    ]
+    if source != "all":
+        tasks = [t for t in tasks if ("endtime" in t) == (source == "archive")]
+    tasks.sort(key=lambda t: -t["starttime"])
+    start = int(opts.get("start", 0))
+    return tasks[start : start + int(opts.get("limit", 50))]
+
+
+def get_task_log(state, node, upid, opts):
+    check_node(node)
+    if set(opts) - {"limit", "start"}:
+        fail(f"400 Parameter verification failed.\n{sorted(opts)[0]}: property is not defined in schema")
+    task = state.get("tasks", {}).get(upid)
+    if task is None:
+        fail(f"no such task '{upid}'")
+    lines = list(task.get("log", []))
+    if "endtime" in task:
+        lines.append("TASK OK" if task["exitstatus"] == "OK" else f"TASK ERROR: {task['exitstatus']}")
+    start = int(opts.get("start", 0))
+    # As Proxmox does, 50 lines unless asked for more.
+    return [{"n": n + 1, "t": t} for n, t in enumerate(lines)][start : start + int(opts.get("limit", 50))]
 
 
 # ---------------------------------------------------------------------------------------------- VMs ---
@@ -528,7 +671,16 @@ def qm(state, args):
     elif verb == "status":
         print(f"status: {vm_of(state, args[1])['status']}")
         return
-    elif verb == "guest" and args[1:2] == ["cmd"] and args[3:] == ["network-get-interfaces"]:
+    elif (
+        verb == "guest"
+        and args[1:2] == ["cmd"]
+        and args[3:]
+        in (
+            ["network-get-interfaces"],
+            ["get-fsinfo"],
+            ["get-osinfo"],
+        )
+    ):
         vm = vm_of(state, args[2])
         if vm["status"] != "running":
             fail(f"VM {args[2]} is not running")
@@ -536,6 +688,12 @@ def qm(state, args):
             state["agent_down"] -= 1
             save(state)
             fail("QEMU guest agent is not running")
+        if args[3] == "get-fsinfo":
+            print(json.dumps(state.get("guest_fsinfo", {}).get(args[2], []), indent=3))
+            return
+        if args[3] == "get-osinfo":
+            print(json.dumps(state.get("guest_osinfo", {}).get(args[2], TALOS_OSINFO), indent=3))
+            return
         # The loopback's and Docker's MACs and addresses are built here: gitleaks flags them written out.
         mac = configured_mac(applied(vm)).lower()
         print(
@@ -690,7 +848,116 @@ def get_node_status(state, node, opts):
     check_node(node)
     no_options(opts)
     memory = state.get("node_memory", {"total": 64 * 2**30, "used": 4 * 2**30})
-    return {"memory": {**memory, "free": memory["total"] - memory["used"]}, "cpuinfo": {"cpus": 8}}
+    root = {"total": 96 * 2**30, "used": 12 * 2**30}
+    return {
+        "memory": {**memory, "free": memory["total"] - memory["used"]},
+        "cpuinfo": {"cpus": 8},
+        "cpu": 0.12,
+        "uptime": NODE_UPTIME,
+        "pveversion": f"pve-manager/{state.get('packages', PACKAGES)['installed']['pve-manager']}/4f6e0ac86f9e8c7f",
+        "current-kernel": {"machine": "x86_64", "release": KERNEL, "sysname": "Linux"},
+        "rootfs": {**root, "avail": root["total"] - root["used"], "free": root["total"] - root["used"]},
+        "loadavg": ["0.67", "0.53", "0.62"],
+    }
+
+
+# What /cluster/resources and the history say of the host and its VMs, besides what the state holds.
+NODE_UPTIME = 1141465
+KERNEL = "7.0.2-6-pve"
+TALOS_OSINFO = {"kernel-release": "6.18.54-talos", "kernel-version": "#1 SMP PREEMPT_DYNAMIC", "machine": "x86_64"}
+NOW = 1792570320
+
+
+def vm_usage(state, vmid, vm):
+    """A VM's CPU and memory use and uptime: the state's `usage`, or a tenth of its CPU and half its memory."""
+    memory = int(str(applied(vm).get("memory", "512")).split("=")[-1]) * 2**20
+    if vm["status"] != "running":
+        return {"cpu": 0, "mem": 0, "uptime": 0, "maxmem": memory}
+    usage = {"cpu": 0.1, "mem": memory // 2, "uptime": 3600, **state.get("usage", {}).get(str(vmid), {})}
+    return {**usage, "maxmem": memory}
+
+
+def get_cluster_resources(state, opts):
+    no_options(opts)
+    memory = state.get("node_memory", {"total": 64 * 2**30, "used": 4 * 2**30})
+    out = [
+        {
+            "id": f"node/{NODE}",
+            "type": "node",
+            "node": NODE,
+            "status": "online",
+            "cpu": 0.12,
+            "maxcpu": 8,
+            "mem": memory["used"],
+            "maxmem": memory["total"],
+            "disk": 12 * 2**30,
+            "maxdisk": 96 * 2**30,
+            "uptime": NODE_UPTIME,
+        }
+    ]
+    for vmid, vm in sorted(state.get("vms", {}).items(), key=lambda item: int(item[0])):
+        config = applied(vm)
+        usage = vm_usage(state, vmid, vm)
+        entry = {
+            "id": f"qemu/{vmid}",
+            "type": "qemu",
+            "vmid": int(vmid),
+            "node": NODE,
+            "name": config.get("name", f"VM {vmid}"),
+            "status": vm["status"],
+            "template": int(config.get("template", 0)),
+            "maxcpu": int(config.get("cores", 1)),
+            "cpu": usage["cpu"],
+            "mem": usage["mem"],
+            "maxmem": usage["maxmem"],
+            "disk": 0,
+            "maxdisk": 0,
+            "uptime": usage["uptime"],
+        }
+        if config.get("tags"):
+            entry["tags"] = config["tags"]
+        out.append(entry)
+    for entry in state["storage"]:
+        status = get_storage_status(state, NODE, entry["storage"], {})
+        out.append(
+            {
+                "id": f"storage/{NODE}/{entry['storage']}",
+                "type": "storage",
+                "node": NODE,
+                "storage": entry["storage"],
+                "status": "available" if status["active"] else "unknown",
+                "plugintype": entry["type"],
+                "content": status["content"],
+                "shared": status["shared"],
+                "disk": status["used"],
+                "maxdisk": status["total"],
+            }
+        )
+    return out
+
+
+def day_history(opts, cpu, memory, maxmem):
+    """A day's history as --timeframe day --cf AVERAGE gives it, a point every ten minutes, the first with only its
+    time."""
+    if opts != {"timeframe": "day", "cf": "AVERAGE"}:
+        fail(f"400 Parameter verification failed: {sorted(opts)}")
+    points = [{"time": NOW - 86400}]
+    for t in range(NOW - 86400 + 600, NOW + 1, 600):
+        points.append({"time": t, "cpu": cpu, "maxcpu": 8, "mem": memory, "maxmem": maxmem, "netin": 1000.0})
+    return points
+
+
+def get_node_rrddata(state, node, opts):
+    check_node(node)
+    memory = state.get("node_memory", {"total": 64 * 2**30, "used": 4 * 2**30})
+    return day_history(opts, 0.12, memory["used"], memory["total"])
+
+
+def get_vm_rrddata(state, node, vmid, opts):
+    check_node(node)
+    vm = vm_of(state, vmid)
+    usage = vm_usage(state, vmid, vm)
+    return day_history(opts, usage["cpu"], usage["mem"], usage["maxmem"])
 
 
 def get_node_storage(state, node, opts):
@@ -767,6 +1034,9 @@ def get_task_status(state, node, upid, opts):
 
 ROUTES = [
     (re.compile(r"/storage"), {"get": get_storage}),
+    (re.compile(r"/cluster/resources"), {"get": get_cluster_resources}),
+    (re.compile(r"/nodes/([^/]+)/rrddata"), {"get": get_node_rrddata}),
+    (re.compile(r"/nodes/([^/]+)/qemu/(\d+)/rrddata"), {"get": get_vm_rrddata}),
     (re.compile(r"/nodes/([^/]+)/config"), {"get": get_node_config}),
     (re.compile(r"/nodes/([^/]+)/status"), {"get": get_node_status}),
     (re.compile(r"/nodes/([^/]+)/qemu"), {"get": get_qemu}),
@@ -777,6 +1047,9 @@ ROUTES = [
     (re.compile(r"/nodes/([^/]+)/storage/([^/]+)/content"), {"get": get_content}),
     (re.compile(r"/nodes/([^/]+)/storage/([^/]+)/download-url"), {"create": download_url}),
     (re.compile(r"/nodes/([^/]+)/tasks/([^/]+)/status"), {"get": get_task_status}),
+    (re.compile(r"/nodes/([^/]+)/tasks"), {"get": get_tasks}),
+    (re.compile(r"/nodes/([^/]+)/tasks/([^/]+)/log"), {"get": get_task_log}),
+    (re.compile(r"/cluster/jobs/schedule-analyze"), {"get": schedule_analyze}),
     (re.compile(r"/nodes/([^/]+)/storage/([^/]+)/status"), {"get": get_storage_status}),
     (re.compile(r"/cluster/backup"), {"get": get_backup_jobs, "create": create_backup_job}),
     (re.compile(r"/cluster/backup/([^/]+)"), {"get": get_backup_job, "set": set_backup_job}),

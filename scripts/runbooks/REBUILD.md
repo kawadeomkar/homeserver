@@ -187,6 +187,13 @@ without the bundle the cluster cannot be managed and is rebuilt), the age key, t
 MACs' DHCP reservations, and the inventory's `[kubernetes]` group. `scripts/runbooks/talos.md` covers building,
 upgrading and the watchdog; a worker that stays down is `scripts/runbooks/dead-worker.md`.
 
+## 6. What is still missing
+
+`just status` reads every machine and changes nothing. After a rebuild, run it last: it lists what is still missing,
+each with the command that deals with it, such as a VM not restored or stopped, an app waiting for its Secret,
+Traefik's allowed range still closed, a NAS pool degraded, or the backup job not on the host. It exits 0 once nothing
+is wrong, even while things to do remain, such as an upgrade or a reboot to schedule.
+
 ## Known limits
 
 - **A degraded pool is not imported.** The role imports only pools that report ONLINE, so with one failed disk

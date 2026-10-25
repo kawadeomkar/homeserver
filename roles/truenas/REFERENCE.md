@@ -458,6 +458,88 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 
 
 
+#### Key: status
+
+**Description**: 
+- Runs truenas_info with its status option and records the result in truenas_status, for roles/status to report. Tries each of truenas_api_hosts once, so a NAS that does not answer costs a few seconds.
+- Never fails. A NAS that does not answer, refuses the API key or presents another certificate than truenas_api_cert_sha256 pins leaves truenas_status without an api_host, with why in its msg, and the key goes to no other server.
+
+
+**Options**:
+
+
+  - **truenas_api_hosts**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: Addresses to try in order; the first that answers is used.
+  
+  
+  
+
+  - **truenas_api_port**
+    - **Required**: false
+    - **Type**: int
+    - **Default**: 443
+  
+    - **Description**: HTTPS port of the TrueNAS web server.
+  
+  
+  
+
+  - **truenas_api_key**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: API key. Keep it in an ansible-vault file.
+  
+  
+  
+
+  - **truenas_validate_certs**
+    - **Required**: false
+    - **Type**: bool
+    - **Default**: False
+    - **Description**: 
+  
+  
+  
+  
+
+  - **truenas_api_cert_sha256**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: SHA-256 fingerprint of the NAS's certificate; the API key goes only to that server. Required while truenas_validate_certs is off.
+  
+  
+  
+
+  - **truenas_api_timeout**
+    - **Required**: false
+    - **Type**: int
+    - **Default**: 120
+  
+    - **Description**: Seconds to wait for one API answer.
+  
+  
+  
+
+  - **truenas_api_login_wait**
+    - **Required**: false
+    - **Type**: int
+    - **Default**: 75
+  
+    - **Description**: Seconds to wait out TrueNAS's login rate limit (20 logins per 60 s per client).
+  
+  
+  
+
+
+
 </details>
 
 
@@ -592,6 +674,12 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 | Name | Module | Has Conditions |
 | ---- | ------ | -------------- |
 | snapshots ¦ Create or update the periodic snapshot tasks | truenas_resource | True |
+
+#### File: tasks/status.yml
+
+| Name | Module | Has Conditions |
+| ---- | ------ | -------------- |
+| status ¦ Read the NAS's state and health | truenas_info | False |
 
 #### File: tasks/system.yml
 
@@ -804,6 +892,25 @@ classDef rescue stroke:#665352,stroke-width:2px;
 
   Start-->|Task| snapshots___Create_or_update_the_periodic_snapshot_tasks0[snapshots   create or update the periodic snapshot<br>tasks<br>When: **truenas snapshot tasks   length   0**]:::task
   snapshots___Create_or_update_the_periodic_snapshot_tasks0-->End
+```
+
+
+### Graph for status.yml
+
+```mermaid
+flowchart TD
+Start
+classDef block stroke:#3498db,stroke-width:2px;
+classDef task stroke:#4b76bb,stroke-width:2px;
+classDef includeTasks stroke:#16a085,stroke-width:2px;
+classDef importTasks stroke:#34495e,stroke-width:2px;
+classDef includeRole stroke:#2980b9,stroke-width:2px;
+classDef importRole stroke:#699ba7,stroke-width:2px;
+classDef includeVars stroke:#8e44ad,stroke-width:2px;
+classDef rescue stroke:#665352,stroke-width:2px;
+
+  Start-->|Task| status___Read_the_NAS_s_state_and_health0[status   read the nas s state and health]:::task
+  status___Read_the_NAS_s_state_and_health0-->End
 ```
 
 

@@ -1,0 +1,20 @@
+---
+# Read-only, for just status (status.yml, roles/status): the NAS's state and health in one login, and never an error.
+# A NAS that does not answer, refuses the key or presents another certificate than the pinned one leaves
+# truenas_status without an api_host, with why in its msg, for the report to say; the key goes to no other server.
+
+- name: status | Read the NAS's state and health
+  truenas_info:
+    api_hosts: "{{ truenas_api_hosts }}"
+    api_port: "{{ truenas_api_port }}"
+    api_key: "{{ truenas_api_key }}"
+    validate_certs: "{{ truenas_validate_certs }}"
+    api_cert_sha256: "{{ truenas_api_cert_sha256 }}"
+    api_timeout: "{{ truenas_api_timeout }}"
+    api_login_wait: "{{ truenas_api_login_wait }}"
+    # Each address once: a NAS that is down is a line of the report, not a minute's wait.
+    api_connect_wait: 0
+    importable: false
+    status: true
+  register: truenas_status
+  failed_when: false

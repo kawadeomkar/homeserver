@@ -8,5 +8,7 @@ target-version = "py312"
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "BLE", "RUF"]
 
 [lint.per-file-ignores]
-# An Ansible module starts with its DOCUMENTATION, EXAMPLES and RETURN strings, and imports after them.
+# An Ansible module starts with its DOCUMENTATION, EXAMPLES and RETURN strings, and imports after them, and a
+# callback plugin with its DOCUMENTATION.
 "roles/*/library/*.py" = ["E402"]
+"callback_plugins/*.py" = ["E402"]

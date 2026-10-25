@@ -201,22 +201,12 @@
   when: not ansible_check_mode or proxmox_tailscale_backend == 'Running'
 
 # advertise-routes as a set, whether tailscale writes it as a list or a comma-separated string; every setting by its
-# flag name, as tailscale get --json keys it. A setting tailscale does not know reads as different, and tailscale set
-# then names it.
+# flag name, as tailscale get --json keys it (filter_plugins/proxmox_tailscale.py, which just status shares).
 - name: node | Work out which preferences differ
   ansible.builtin.set_fact:
     proxmox_tailscale_differ: >-
-      {%- set prefs = proxmox_tailscale_prefs.stdout | from_json -%}
-      {%- set out = [] -%}
-      {%- set routes = prefs['advertise-routes'] | default('', true) -%}
-      {%- set routes = routes.split(',') if routes is string else routes -%}
-      {%- if routes | map('trim') | select | sort != proxmox_tailscale_advertise_routes | map('string') | sort -%}
-      {%-   set _ = out.append('advertise-routes') -%}
-      {%- endif -%}
-      {%- for key, value in proxmox_tailscale_settings.items() if key not in prefs or prefs[key] != value -%}
-      {%-   set _ = out.append(key) -%}
-      {%- endfor -%}
-      {{ out }}
+      {{ proxmox_tailscale_prefs.stdout
+         | proxmox_tailscale_differ(proxmox_tailscale_advertise_routes, proxmox_tailscale_settings) }}
   when: proxmox_tailscale_prefs is not skipped
 
 - name: node | Set the node's routes and preferences
@@ -253,41 +243,16 @@
   no_log: true
   when: proxmox_tailscale_status.rc == 0
 
-# What only the admin console, or the owner on the node, can fix. Reported on every run, never a failure.
+# What only the admin console, or the owner on the node, can fix. Reported on every run, never a failure; just status
+# lists the same, through the same filter (filter_plugins/proxmox_tailscale.py).
 - name: node | Report what the admin console must fix
   ansible.builtin.debug:
     msg: "{{ _report if _report else 'Nothing for the admin console to fix.' }}"
   when: proxmox_tailscale_status_after is not skipped
   vars:
-    _after: "{{ proxmox_tailscale_status_after.stdout | from_json if proxmox_tailscale_status_after.rc == 0 else {} }}"
-    _running: "{{ _after.BackendState | default('') == 'Running' }}"
-    _self: "{{ _after.Self | default({}, true) }}"
-    _primary: "{{ _self.PrimaryRoutes | default([], true) }}"
-    _tags: "{{ _self.Tags | default([], true) }}"
-    _serve: "{{ proxmox_tailscale_serve.stdout | default('{}', true) | from_json if proxmox_tailscale_serve.rc == 0 else {} }}"
     _report: >-
-      {%- set out = [] -%}
-      {%- set unapproved = proxmox_tailscale_advertise_routes | map('string') | reject('in', _primary) | list -%}
-      {%- if _running and unapproved -%}
-      {%-   set _ = out.append('Advertised but not approved, or served by another subnet router: ' ~ unapproved | join(', ')
-                               ~ '. Approve them in the admin console, or add the auto-approver from '
-                               ~ 'scripts/runbooks/tailscale.md.') -%}
-      {%- endif -%}
-      {%- if _running and _tags | sort != proxmox_tailscale_tags | sort -%}
-      {%-   set _ = out.append('The node is tagged ' ~ (_tags | join(', ') if _tags else 'with nothing') ~ ', not '
-                               ~ proxmox_tailscale_tags | join(', ') ~ '. Tags change only by re-authenticating: edit '
-                               ~ 'them in the admin console (Machines, Edit ACL tags).') -%}
-      {%- endif -%}
-      {%- if _running and _self.KeyExpiry | default('', true) -%}
-      {%-   set _ = out.append('The node key expires at ' ~ _self.KeyExpiry ~ ', and remote access with it: '
-                               ~ 'disable key expiry for the machine in the admin console.') -%}
-      {%- endif -%}
-      {%- if _serve -%}
-      {%-   set _ = out.append('Tailscale Serve or Funnel is configured on the node. It connects from the node itself, '
-                               ~ 'with the address the guarded hosts trust, which the guard cannot see: check that no '
-                               ~ 'target is one of ' ~ (proxmox_tailscale_guard_hosts | join(', ') or 'them') ~ '.') -%}
-      {%- endif -%}
-      {%- for warning in _after.Health | default([], true) -%}
-      {%-   set _ = out.append('Tailscale reports: ' ~ warning) -%}
-      {%- endfor -%}
-      {{ out }}
+      {{ (proxmox_tailscale_status_after.stdout if proxmox_tailscale_status_after.rc == 0 else '')
+         | proxmox_tailscale_console(proxmox_tailscale_serve.stdout if proxmox_tailscale_serve.rc == 0 else '',
+                                     proxmox_tailscale_advertise_routes, proxmox_tailscale_tags,
+                                     proxmox_tailscale_guard_hosts)
+         | map(attribute='text') | list }}

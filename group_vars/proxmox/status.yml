@@ -1,0 +1,15 @@
+---
+# just status on the Proxmox host (roles/status's main entry point): read as the Proxmox host, its installer's
+# storage shown against the disk budget roles/proxmox_vm keeps (vm_storage_installer, group_vars/all/storage.yml, and
+# the same headroom, group_vars/proxmox/vms.yml), Debian's flag for a pending reboot, which roles/proxmox_apt
+# writes when an upgrade asks for one, the nightly backup job roles/proxmox_backup keeps
+# (group_vars/proxmox/backup.yml): none without a NAS and without vm_backup_storage, which the report says, and
+# Tailscale as roles/proxmox_tailscale keeps it (group_vars/proxmox/tailscale.yml).
+status_source: proxmox
+status_budget_storages: ["{{ vm_storage_installer }}"]
+status_storage_headroom_gib: "{{ proxmox_vm_host_headroom_gib }}"
+status_reboot_required_file: /run/reboot-required
+status_backup_jobs: "{{ proxmox_backup_jobs }}"
+# Tailscale, when local.yml turns it on: status.yml reads it first, through roles/proxmox_tailscale's read-only status
+# entry point, which records it in proxmox_tailscale_status_state; {} when it is off.
+status_tailscale_state: "{{ proxmox_tailscale_status_state | default({}) }}"

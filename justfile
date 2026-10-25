@@ -79,6 +79,10 @@ playbook_help := 'site (the default: every one, the NAS first), truenas, proxmox
 only_pattern := '[a-z0-9, -]*'
 only_help := 'some apps, groups or homeassistant, comma-separated'
 check_help := 'what it would do, changing nothing'
+# status's sections, in the order the report shows them, and the file each run writes the report to, which the recipe
+# reads its exit code from.
+status_sections := 'apps|admin|tailscale|vms|storage|backups|cluster|nas'
+status_report := '.cache/status/report.json'
 
 # The vault: git-ignored, at a path no commit ever held. Until 2026-10-20 it was committed as group_vars/all/vault.yml.
 vault := 'group_vars/all/local.vault.yml'
@@ -456,6 +460,41 @@ talos-upgrade *ansible_args:
 [no-exit-message]
 etcd-snapshot *ansible_args:
     @{{ self }} _playbook etcd-snapshot etcd-snapshot "$@"
+
+# status reads the machines and changes nothing (status.yml), as a dry run with the repo's stdout callback, and keeps
+# no log. It exits with the report's code, read from the file the run writes, which just passes on as its own: 0 when
+# nothing is wrong, 1 for a problem, 2 when a machine could not be read, 3 when the run failed or was refused. The
+# sections to show come first (just status vms storage), checked here before anything runs and again by the role; from
+# the first word that begins with -, the rest goes to ansible-playbook (just status -- -e status_probe_apps=false).
+# Colour only on a terminal, and never with NO_COLOR set. The setup's links are checked by vars_plugins/setup_links.py,
+# which keeps stdout to the report alone.
+[arg('json', long='json', value='true', help='the report as JSON, alone on stdout')]
+[arg('sections', help="some of apps admin tailscale vms storage backups cluster nas; from the first word that begins with -, ansible-playbook's arguments")]
+[doc('What runs, where to reach it and what needs doing, read without changing anything; sections: apps admin tailscale vms storage backups cluster nas')]
+[group('machines')]
+[no-exit-message]
+[script]
+status json='' *sections:
+    json=$1; shift
+    test -x {{ ansible_playbook }} || { echo "{{ ansible_playbook }} not found: run just install in the project's virtualenv, or point just at it (pyenv local <env>, or VENV=<its path>)" >&2; exit 3; }
+    sections=()
+    while [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; do
+      case $1 in TYPE=* | JSON=* | ANSIBLE_ARGS=* | VENV=*)
+        echo "$1: just takes no make-style parameter; just help status says what it takes" >&2; exit 3 ;;
+      esac
+      [[ $1 =~ ^({{ status_sections }})$ ]] || { echo "just status has no section $1: it takes {{ replace(status_sections, '|', ' ') }}" >&2; exit 3; }
+      sections+=("$1"); shift
+    done
+    extra=()
+    [ ${#sections[@]} -eq 0 ] || extra=(-e "{\"types\": \"$(IFS=,; echo "${sections[*]}")\"}")
+    color=; if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then color=1; fi
+    rm -f {{ status_report }}
+    rc=0
+    ANSIBLE_STDOUT_CALLBACK=homeserver_status STATUS_COLOR=$color STATUS_QUIET=$json \
+      {{ ansible_playbook }} status.yml --check ${extra[@]+"${extra[@]}"} ${@+"$@"} </dev/null || rc=$?
+    if [ "$rc" -ne 0 ] || [ ! -s {{ status_report }} ]; then echo "just status: the run failed (ansible-playbook exited $rc)" >&2; exit 3; fi
+    if [ -n "$json" ]; then cat {{ status_report }}; fi
+    exit "$({{ bin }}/python -c 'import json, sys; print(json.load(open(sys.argv[1]))["exit"])' {{ status_report }})"
 
 # Every playbook run. A missing playbook binary means just found a Python other than the project's virtualenv, or one
 # not yet installed: say so, rather than leave the shell's "No such file or directory" and a dangling latest.log. Then

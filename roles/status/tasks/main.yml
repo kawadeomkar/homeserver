@@ -1,0 +1,58 @@
+---
+# Reads the host the play runs on for just status, as status_source names it, and leaves what it found in the fact
+# status_found, which the report entry point (report.yml) puts together with the other hosts'. Nothing here changes
+# anything: every command goes through status_read, which runs them at once and refuses any that is not on its read
+# list, and the NAS is read before, through its API (status_nas_state). The parsing is a filter plugin
+# (filter_plugins/status.py).
+
+- name: Check the role's inputs
+  ansible.builtin.assert:
+    that: _errors | length == 0
+    fail_msg: "{{ _errors | join(' ') }}"
+    quiet: true
+  tags: [always]
+  vars:
+    _errors: >-
+      {%- set out = [] -%}
+      {%- set unknown = status_types | status_unknown_types -%}
+      {%- if unknown -%}
+      {%-   set _ = out.append('The report has no section ' ~ unknown | join(', ') ~ ': its sections are '
+                               ~ [] | status_types_shown | join(', ') ~ '.') -%}
+      {%- endif -%}
+      {%- if status_source == 'cluster' and not status_cluster_kubeconfig -%}
+      {%-   set _ = out.append('status_cluster_kubeconfig must be set to read the cluster.') -%}
+      {%- endif -%}
+      {%- if status_cluster_database_label and status_cluster_database_label is not match('^[^=\s]+=[^=\s]+$') -%}
+      {%-   set _ = out.append('status_cluster_database_label must be one label as key=value, or empty.') -%}
+      {%- endif -%}
+      {%- set complete = status_backup_jobs | selectattr('id', 'defined') | selectattr('schedule', 'defined')
+                         | selectattr('storage', 'defined') | selectattr('id') | selectattr('schedule')
+                         | selectattr('storage') | list -%}
+      {%- if complete | length != status_backup_jobs | length -%}
+      {%-   set _ = out.append('status_backup_jobs must each have an id, a schedule and a storage.') -%}
+      {%- endif -%}
+      {%- set vmids = status_vms | map(attribute='vmid') | map('int') | list -%}
+      {%- if vmids | select('<', 100) | list or vmids | unique | length != vmids | length -%}
+      {%-   set _ = out.append('status_vms must be VMs with distinct VMIDs from 100 up.') -%}
+      {%- endif -%}
+      {{ out }}
+
+# A host with nothing to read still says so, so that the report play can tell it from one refused before its reads.
+- name: Read nothing here
+  ansible.builtin.set_fact:
+    status_found: {}
+  when: status_source | length == 0
+
+- name: Read the Proxmox host
+  ansible.builtin.include_tasks: proxmox.yml
+  when: status_source == 'proxmox'
+
+- name: Read the cluster
+  ansible.builtin.include_tasks: cluster.yml
+  when: status_source == 'cluster'
+
+- name: Work out what the NAS says
+  ansible.builtin.set_fact:
+    status_found:
+      nas: "{{ status_nas_state | status_nas(status_nas_release) }}"
+  when: status_source == 'nas'

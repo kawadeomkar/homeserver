@@ -1,0 +1,87 @@
+---
+# Neutral defaults: with nothing else set, the role reads nothing and reports nothing. What it reads is configuration,
+# set in inventory group_vars; see README.md.
+
+# What the host the play runs on is: proxmox, the Proxmox host; cluster, the Kubernetes cluster, read from this
+# machine; nas, the NAS, from what status_nas_state says; empty reads nothing.
+status_source: ""
+# The report's sections to read and show; empty means every one.
+status_types: []
+# The VMs this setup makes, each {vmid, name, made_by, start, guest_agent, node, app}: what makes it, what starts it,
+# whether its guest agent reports its filesystems, the cluster node it is (whose memory and disks the cluster reports),
+# and the app it serves, {name, url, port} (its address from the guest agent when url is empty). Every other VM on the
+# host is only counted.
+status_vms: []
+# What this setup has, {nas, cluster, home_assistant}, for the report's first line.
+status_setup: {}
+# The Proxmox node's name; empty takes the host's short hostname, as Proxmox names its node.
+status_proxmox_node: ""
+# Storages whose disk budget the report shows: their disks' provisioned sizes against their size.
+status_budget_storages: []
+# GiB of a ZFS, directory or BTRFS storage kept out of its budget for the host's own files.
+status_storage_headroom_gib: 0
+# The file that says the host waits for a reboot; empty does not look.
+status_reboot_required_file: ""
+# The backup jobs this setup has, as roles/proxmox_backup takes them ({id, schedule, storage, vmid}), checked against
+# the host's: each VM's newest backup on its job's storage, the runs that failed and why. Empty with VMs to back up
+# says nothing is backed up.
+status_backup_jobs: []
+# The cluster: the kubeconfig and talosconfig to read it with, and the API server the kubeconfig must name (another
+# cluster's credentials are reported, never used; empty checks nothing).
+status_cluster_kubeconfig: ""
+status_cluster_talosconfig: ""
+status_cluster_server: ""
+# Its nodes, each {name, role}, whose kubelet statistics give their memory and disks.
+status_cluster_nodes: []
+# Where its apps come from: the path under which Flux's Kustomizations apply them, the annotation in which just
+# suspend records an app's replicas, and the label (key=value) of an app's database.
+status_cluster_apps_path: ""
+status_cluster_annotation: ""
+status_cluster_database_label: ""
+# The nodes' own volumes to show, {mount path: name}.
+status_cluster_volumes: {}
+# The ConfigMap of the cluster's settings, {namespace, name, allowlist}, allowlist the key of Traefik's allowed range;
+# empty reads none.
+status_cluster_settings: {}
+# Alertmanager's pod, {namespace, pod}, whose firing alerts amtool lists; empty reads none.
+status_cluster_alertmanager: {}
+# The repository and branch Flux syncs, whose newest commit the report compares with what Flux applied.
+status_cluster_flux_url: ""
+status_cluster_flux_ref: ""
+# The versions the configuration pins, {talos, kubernetes}, compared with what the nodes run.
+status_cluster_pins: {}
+# Seconds kubectl waits for the API server on each read.
+status_cluster_request_timeout: 10
+# The directory of the cluster's etcd snapshots, each named <anything>-<UTC time as 20261021T093000Z>.db, whose
+# newest the backups section shows; empty shows none.
+status_cluster_snapshot_dir: ""
+# The NAS: what truenas_info returned with its status option, or its failure, and the TrueNAS release (major.minor)
+# its configuration is written for, which a NAS on another is told; empty compares none.
+status_nas_state: {}
+status_nas_release: ""
+# The Proxmox host's Tailscale: what roles/proxmox_tailscale's status entry point recorded, {} when it is off.
+status_tailscale_state: {}
+# How many reads run at once on a host, and the seconds each may take.
+status_parallel: 8
+status_timeout: 30
+# The report entry point: the hosts whose findings it puts together, the file it writes the report to (empty writes
+# none), whether the text it shows is in colour, and whether it shows none.
+status_hosts: []
+status_report_file: ""
+status_color: false
+status_quiet: false
+# Whether the report asks each app's addresses from this machine (DNS, and one GET per URL), and the seconds each
+# may take.
+status_probe_apps: true
+status_probe_timeout: 5
+# The admin pages to list, each {name, url}; tailscale_node: true marks the page the Proxmox host serves itself,
+# which its tailnet name reaches too.
+status_admin: []
+# The commands the report suggests, by purpose: upgrade (the Proxmox host's packages), resume (suspended apps, with
+# {names} for theirs), talos_upgrade, credentials (renewed), allowlist (Traefik's still closed), secrets (an app's
+# missing Secret), nas (the NAS's settings applied again), nas_release (a TrueNAS release its configuration is not
+# written for), nas_network (interface changes never committed), backup (a backup job applied again), backup_target
+# (where backups could go, when there is no job), etcd_snapshot (taking one), tailscale (the Proxmox host's Tailscale
+# applied again), tailscale_login (its first login), split_dns (the tailnet's split DNS for the apps' domain). One left
+# out is suggested by text alone.
+status_commands: {}

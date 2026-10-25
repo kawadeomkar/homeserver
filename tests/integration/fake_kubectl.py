@@ -1,5 +1,5 @@
-"""The kubectl verbs roles/flux_bootstrap and roles/app_scale use, for fake_talos.py's kubectl (its docstring has
-the state).
+"""The kubectl verbs roles/flux_bootstrap, roles/app_scale and roles/status use, for fake_talos.py's kubectl (its
+docstring has the state).
 
 `apply --server-side --field-manager M -f -|<file>`, `diff --server-side --field-manager M -f -`, `get <kind> <name>
 -n <namespace> -o json`, `get kustomizations -A`, `get <kustomizations|deployments> -A -o json`, `create secret
@@ -23,9 +23,19 @@ carries the patches the FluxInstance's spec.kustomize.patches add to it, and eac
 A Deployment has pods while its replicas are above zero: they go the moment it is scaled to zero, unless the state's
 `pods_linger` names it, and it is available once scaled up, unless `never_available` names it; either makes the
 wait time out. Every patch and wait is appended to the state's `events`, so a test sees their order.
+
+just status's reads, as kubectl v1.36 prints them: `get <kind> -A -o json` for the kinds it lists (a cluster-scoped
+kind ignores -A, as kubectl does), `get deployments -A -o json --show-managed-fields`, `get --raw
+/api/v1/nodes/<node>/proxy/stats/summary` from the state's `node_stats` ({node: summary}), and `exec -n <namespace>
+<pod> -c alertmanager -- amtool alert query -o json --alertmanager.url=...` from the state's `alerts`. A listed
+Deployment carries the status the controller would give it: every replica ready, unless `pod_states` says why its
+pods are not ({name: {reason, message, restarts, finished}}, as a waiting container) or `never_available` names it.
+Its pods are made up from it, one per replica, with its template's labels, on the state's `pods_node`; Pod objects
+in the state are listed as they are. Every get is a read, and leaves `mutations` alone.
 """
 
 import base64
+import copy
 import json
 import re
 import sys
@@ -41,7 +51,27 @@ BUILT_IN = {
     "Deployment": True,
     "ServiceAccount": True,
     "CustomResourceDefinition": False,
+    "Node": False,
+    "Pod": True,
+    "Service": True,
+    "Ingress": True,
+    "PersistentVolume": False,
 }
+# What get lists by its plural name.
+LISTED = {
+    "kustomizations": "Kustomization",
+    "deployments": "Deployment",
+    "nodes": "Node",
+    "pods": "Pod",
+    "services": "Service",
+    "ingresses": "Ingress",
+    "persistentvolumes": "PersistentVolume",
+    "helmreleases": "HelmRelease",
+    "fluxinstances": "FluxInstance",
+    "certificates": "Certificate",
+}
+STATS = re.compile(r"/api/v1/nodes/([a-z0-9.-]+)/proxy/stats/summary")
+AMTOOL = ["amtool", "alert", "query", "-o", "json", "--alertmanager.url=http://127.0.0.1:9093"]
 
 
 def flags_of(args, value_flags, bool_flags, fail):
@@ -147,6 +177,59 @@ def selects(deployment, selector):
     labels = ((deployment.get("spec") or {}).get("selector") or {}).get("matchLabels") or {}
     wanted = dict(part.split("=", 1) for part in selector.split(",") if part)
     return bool(wanted) and all(labels.get(k) == v for k, v in wanted.items())
+
+
+def with_status(state, deployment):
+    """A Deployment as the API lists it: with the status its controller gives it."""
+    out = copy.deepcopy(deployment)
+    name = out["metadata"]["name"]
+    replicas = out.get("spec", {}).get("replicas", 1)
+    trouble = name in state.get("pod_states", {}) or name in state.get("never_available", [])
+    ready = 0 if trouble else replicas
+    out.setdefault("status", {}).update(
+        {"replicas": replicas, "readyReplicas": ready, "availableReplicas": ready, "updatedReplicas": replicas}
+    )
+    return out
+
+
+def made_up_pods(state):
+    """One pod per replica of each Deployment, as its ReplicaSet would make them, with its template's labels."""
+    pods = []
+    for key, deployment in sorted(state.get("objects", {}).items()):
+        if not key.startswith("Deployment/"):
+            continue
+        meta, spec = deployment["metadata"], deployment.get("spec", {})
+        replicas = spec.get("replicas", 1)
+        if replicas == 0 and meta["name"] not in state.get("pods_linger", []):
+            continue
+        trouble = state.get("pod_states", {}).get(meta["name"])
+        for n in range(max(replicas, 1)):
+            container = {"name": meta["name"], "ready": not trouble, "restartCount": 0, "state": {"running": {}}}
+            if trouble:
+                container["restartCount"] = trouble.get("restarts", 0)
+                container["state"] = {"waiting": {"reason": trouble["reason"], "message": trouble.get("message", "")}}
+                if trouble.get("finished"):
+                    container["lastState"] = {"terminated": {"finishedAt": trouble["finished"]}}
+            template = spec.get("template", {})
+            pods.append(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Pod",
+                    "metadata": {
+                        "name": f"{meta['name']}-5d8c7b9f4-{n:05d}",
+                        "namespace": meta.get("namespace", ""),
+                        "labels": template.get("metadata", {}).get("labels", {}),
+                        "creationTimestamp": "2026-10-21T04:10:29Z",
+                    },
+                    "spec": {"nodeName": state.get("pods_node", ""), **template.get("spec", {})},
+                    "status": {
+                        "phase": "Running",
+                        "conditions": [{"type": "PodScheduled", "status": "True"}],
+                        "containerStatuses": [container],
+                    },
+                }
+            )
+    return pods
 
 
 def reconcile_flux(state):
@@ -259,14 +342,31 @@ def run(state, kubeconfig, args, reach, fail):
         if any(doc["kind"] == "FluxInstance" for doc in docs):
             reconcile_flux(state)
         return
+    if verb == "exec":
+        flags, positional = flags_of(rest[: rest.index("--")] if "--" in rest else rest, {"-n", "-c"}, set(), fail)
+        if rest[rest.index("--") + 1 :] != AMTOOL or flags.get("-c") != "alertmanager":
+            fail(f"the fake runs amtool alert query in Alertmanager's container only: {rest}")
+        if "alerts" not in state:
+            fail(f'Error from server (NotFound): pods "{positional[0]}" not found')
+        print(json.dumps(state["alerts"]))
+        return
     if verb == "get":
-        flags, positional = flags_of(rest, {"-n", "-o"}, {"-A"}, fail)
-        listed = {"kustomizations": "Kustomization", "deployments": "Deployment"}
-        if len(positional) == 1 and positional[0] in listed and flags.get("-A") and flags.get("-o") == "json":
-            kind = listed[positional[0]]
+        flags, positional = flags_of(rest, {"-n", "-o", "--raw"}, {"-A", "--show-managed-fields"}, fail)
+        if flags.get("--raw"):
+            found = STATS.fullmatch(flags["--raw"])
+            if not found or found.group(1) not in state.get("node_stats", {}):
+                fail("Error from server (NotFound): the server could not find the requested resource")
+            print(json.dumps(state["node_stats"][found.group(1)]))
+            return
+        if len(positional) == 1 and positional[0] in LISTED and flags.get("-A") and flags.get("-o") == "json":
+            kind = LISTED[positional[0]]
             if kind not in kinds(state):
                 fail(f'error: the server doesn\'t have a resource type "{positional[0]}"')
             items = [obj for k, obj in sorted(objects.items()) if k.startswith(kind + "/")]
+            if kind == "Deployment":
+                items = [with_status(state, obj) for obj in items]
+            if kind == "Pod":
+                items += made_up_pods(state)
             print(json.dumps({"apiVersion": "v1", "kind": "List", "items": items}))
             return
         if positional == ["kustomizations"] and flags.get("-A"):

@@ -1,0 +1,299 @@
+---
+argument_specs:
+  main:
+    short_description: Read a host for just status, without changing anything
+    description:
+      - Reads the host the play runs on, as status_source names it, and leaves what it found in the fact
+        status_found for the report entry point. Every command goes through the role's module status_read, which
+        runs them at once and refuses any that is not on its read list.
+      - On the Proxmox host (proxmox) it reads the host, its storages and the VMs of status_vms; every other VM is
+        only counted.
+      - For the cluster (cluster), on this machine, it reads the nodes, the apps (each Ingress's Service, then the
+        Deployment it selects, and every Deployment a Flux Kustomization under status_cluster_apps_path applies),
+        Flux, the certificates, the nodes' kubelet statistics, Alertmanager's alerts, etcd's state and the newest
+        commit of the branch Flux syncs. It reads the credentials under no_log, keeping only the server the
+        kubeconfig names and when each client certificate expires, and reports another cluster's credentials
+        rather than use them. It never reads a Secret.
+      - For the NAS (nas) it reads nothing itself, and works out what status_nas_state says, the result of
+        truenas_info with its status option, which roles/truenas's status entry point reads in one login - the
+        pools' health, capacity and last scrub, TrueNAS's alerts, the snapshot tasks' last runs, the NFS service.
+      - A host that does not answer is recorded as such, not a failure, so the report can say so.
+      - Refuses a section name that is not one of the report's.
+      - The defaults read nothing.
+    options:
+      status_source:
+        type: str
+        choices: ["", proxmox, cluster, nas]
+        default: ""
+        description: What the host is; empty reads nothing.
+      status_types:
+        type: list
+        elements: str
+        default: []
+        description: The report's sections to read and show; empty means every one.
+      status_vms:
+        type: list
+        elements: dict
+        default: []
+        description: The VMs this setup makes; every other VM on the host is only counted.
+        options:
+          vmid:
+            type: int
+            required: true
+            description: The VM's VMID.
+          name:
+            type: str
+            default: ""
+            description: Its name, for a VM that does not exist yet.
+          made_by:
+            type: str
+            default: ""
+            description: The command that makes it, which the report suggests while it is missing.
+          start:
+            type: str
+            default: ""
+            description: The command that starts it, which the report suggests while it is stopped.
+          guest_agent:
+            type: bool
+            default: false
+            description: Whether its guest agent reports its filesystems (Talos's reports none).
+          node:
+            type: str
+            default: ""
+            description: The cluster node it is, whose memory and disks the cluster reports in place of Proxmox's.
+          app:
+            type: dict
+            description: The app it serves, listed with the cluster's.
+            options:
+              name:
+                type: str
+                required: true
+                description: The app's name.
+              url:
+                type: str
+                default: ""
+                description: Its address; empty takes the one its guest agent reports, with port.
+              port:
+                type: int
+                default: 80
+                description: The port of the address its guest agent reports.
+      status_setup:
+        type: dict
+        default: {}
+        description: What this setup has, as {nas, cluster, home_assistant}, for the report's first line.
+      status_proxmox_node:
+        type: str
+        default: ""
+        description: The Proxmox node's name; empty takes the host's short hostname.
+      status_budget_storages:
+        type: list
+        elements: str
+        default: []
+        description: Storages whose disk budget the report shows.
+      status_storage_headroom_gib:
+        type: int
+        default: 0
+        description: GiB of a ZFS, directory or BTRFS storage kept out of its budget for the host's own files.
+      status_reboot_required_file:
+        type: str
+        default: ""
+        description: The file that says the host waits for a reboot; empty does not look.
+      status_backup_jobs:
+        type: list
+        elements: dict
+        default: []
+        description: >-
+          The backup jobs this setup has, as roles/proxmox_backup takes them ({id, schedule, storage, vmid}), checked
+          against the host's; empty with VMs to back up says nothing is backed up.
+      status_cluster_kubeconfig:
+        type: str
+        default: ""
+        description: The kubeconfig the cluster is read with.
+      status_cluster_talosconfig:
+        type: str
+        default: ""
+        description: The talosconfig etcd's state is read with; a missing file reads none.
+      status_cluster_server:
+        type: str
+        default: ""
+        description: The API server the kubeconfig must name; another is reported and not read. Empty checks nothing.
+      status_cluster_nodes:
+        type: list
+        elements: dict
+        default: []
+        description: The cluster's nodes, whose kubelet statistics give their memory and disks.
+        options:
+          name:
+            type: str
+            required: true
+            description: The node's name.
+          role:
+            type: str
+            default: ""
+            description: Its role, controlplane or worker.
+      status_cluster_apps_path:
+        type: str
+        default: ""
+        description: The path in the repository under which Flux's Kustomizations apply the apps.
+      status_cluster_annotation:
+        type: str
+        default: ""
+        description: The annotation in which just suspend records an app's replicas, which marks it suspended.
+      status_cluster_database_label:
+        type: str
+        default: ""
+        description: The label (key=value) of an app's database, listed under the app.
+      status_cluster_volumes:
+        type: dict
+        default: {}
+        description: The nodes' own volumes to show, as {mount path, name}.
+      status_cluster_settings:
+        type: dict
+        default: {}
+        description: >-
+          The ConfigMap of the cluster's settings, as {namespace, name, allowlist}, allowlist the key of Traefik's
+          allowed range; empty reads none.
+      status_cluster_alertmanager:
+        type: dict
+        default: {}
+        description: Alertmanager's pod, as {namespace, pod}, whose firing alerts amtool lists; empty reads none.
+      status_cluster_flux_url:
+        type: str
+        default: ""
+        description: The repository Flux syncs; empty does not compare its branch with what Flux applied.
+      status_cluster_flux_ref:
+        type: str
+        default: ""
+        description: The branch Flux syncs, as refs/heads/<name>.
+      status_cluster_pins:
+        type: dict
+        default: {}
+        description: The versions the configuration pins, as {talos, kubernetes}, compared with what the nodes run.
+      status_cluster_request_timeout:
+        type: int
+        default: 10
+        description: Seconds kubectl waits for the API server on each read.
+      status_cluster_snapshot_dir:
+        type: str
+        default: ""
+        description: >-
+          The directory of the cluster's etcd snapshots, each named <anything>-<UTC time>.db
+          (etcd-20261021T093000Z.db), whose newest the backups section shows; empty shows none.
+      status_nas_state:
+        type: dict
+        default: {}
+        description: What truenas_info returned with its status option, or its failure; the NAS's findings.
+      status_nas_release:
+        type: str
+        default: ""
+        description: The TrueNAS release (major.minor) the NAS's configuration is written for; empty compares none.
+      status_tailscale_state:
+        type: dict
+        default: {}
+        description: >-
+          The Proxmox host's Tailscale, as roles/proxmox_tailscale's status entry point records it in
+          proxmox_tailscale_status_state; empty when it is off.
+      status_parallel:
+        type: int
+        default: 8
+        description: How many reads run at once on a host.
+      status_timeout:
+        type: int
+        default: 30
+        description: Seconds each read may take.
+      status_hosts:
+        type: list
+        elements: str
+        default: []
+        description: The report entry point's hosts, whose findings it puts together.
+      status_report_file:
+        type: str
+        default: ""
+        description: Where the report entry point writes the report, as JSON; empty writes none.
+      status_color:
+        type: bool
+        default: false
+        description: Whether the report entry point shows the report in colour.
+      status_quiet:
+        type: bool
+        default: false
+        description: Whether the report entry point shows no report.
+      status_probe_apps:
+        type: bool
+        default: true
+        description: Whether the report asks each app's addresses from this machine, a DNS lookup and one GET per URL.
+      status_probe_timeout:
+        type: int
+        default: 5
+        description: Seconds each lookup and each request may take.
+      status_admin:
+        type: list
+        elements: dict
+        default: []
+        description: >-
+          The admin pages the report lists, each {name, url}; tailscale_node marks the page the Proxmox host serves
+          itself, which its tailnet name reaches too.
+      status_commands:
+        type: dict
+        default: {}
+        description: >-
+          The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials,
+          allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale,
+          tailscale_login, split_dns. One left out is suggested by text alone.
+  report:
+    short_description: Put just status's findings together, write the report and show it
+    description:
+      - Puts together what each host of status_hosts found (its status_found), ranks what needs attention, writes
+        the report to status_report_file as JSON, mode 0600, and shows it as text, unless status_quiet.
+      - Writes the report in a dry run too, since just status runs as one and takes its exit code from the file.
+      - Unless status_probe_apps is off, first asks each app's addresses from this machine with the role's module
+        status_probe, checking no certificate and sending no credentials.
+    options:
+      status_types:
+        type: list
+        elements: str
+        default: []
+        description: The report's sections to show; empty means every one.
+      status_setup:
+        type: dict
+        default: {}
+        description: What this setup has, as {nas, cluster, home_assistant}, for the report's first line.
+      status_hosts:
+        type: list
+        elements: str
+        default: []
+        description: The hosts whose findings the report puts together.
+      status_report_file:
+        type: str
+        default: ""
+        description: Where the report is written, as JSON; empty writes none.
+      status_color:
+        type: bool
+        default: false
+        description: Whether the report is shown in colour.
+      status_quiet:
+        type: bool
+        default: false
+        description: Whether no report is shown.
+      status_probe_apps:
+        type: bool
+        default: true
+        description: Whether the report asks each app's addresses from this machine, a DNS lookup and one GET per URL.
+      status_probe_timeout:
+        type: int
+        default: 5
+        description: Seconds each lookup and each request may take.
+      status_admin:
+        type: list
+        elements: dict
+        default: []
+        description: >-
+          The admin pages the report lists, each {name, url}; tailscale_node marks the page the Proxmox host serves
+          itself, which its tailnet name reaches too.
+      status_commands:
+        type: dict
+        default: {}
+        description: >-
+          The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials,
+          allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale,
+          tailscale_login, split_dns. One left out is suggested by text alone.

@@ -1,0 +1,7 @@
+---
+# just status (status.yml, roles/status) on the NAS: status.yml reads it first through roles/truenas's status entry
+# point (truenas_info, one login), and roles/status works out what that says. Without a NAS it reads nothing.
+status_source: "{{ 'nas' if nas_present else '' }}"
+status_nas_state: "{{ truenas_status | default({}) }}"
+# The release roles/truenas is written for, its own default, which status.yml's import of the role brings in.
+status_nas_release: "{{ truenas_supported_version | default('') }}"

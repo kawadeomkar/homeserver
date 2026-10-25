@@ -1,0 +1,116 @@
+---
+# The Proxmox host, in two reads: the node's name, which the API's paths need, then everything else at once. Each
+# pvesh or qm command starts Proxmox's Perl API afresh, a second of CPU, so they run in parallel; on a four-core host
+# the whole set takes about eight seconds. A host that does not answer is recorded, not a failure: the report says so.
+
+- name: proxmox | Read the node's name
+  status_read:
+    commands:
+      node: [hostname, -s]
+    timeout: "{{ status_timeout }}"
+  register: status_proxmox_name
+  ignore_unreachable: true
+  when: status_proxmox_node | length == 0
+
+- name: proxmox | Use the node's name
+  ansible.builtin.set_fact:
+    status_proxmox_node_name: >-
+      {{ status_proxmox_node if status_proxmox_node | length > 0
+         else status_proxmox_name.results.node.stdout | default('') | trim }}
+
+# The day's history and the pending changes of each of this setup's VMs; the guest agent's filesystems and OS of those
+# whose agent reports them (Home Assistant's; Talos's lists no filesystem), and the address of one that serves an app
+# without a URL of its own; the disks on each budgeted storage; the upgrades apt would make, from the lists as last
+# refreshed (a simulation, which is quick, where the API's own list takes four seconds); whether an upgrade asked for
+# a reboot; and the backups: the host's jobs (each with its next run), the latest backup runs, running ones among them,
+# the backups on each of this setup's jobs' storages, and when each job's schedule fires next, twice, which gives its
+# period without reading the calendar format here.
+- name: proxmox | Read the host, its storages and its VMs, at once
+  status_read:
+    commands: "{{ _commands }}"
+    parallel: "{{ status_parallel }}"
+    timeout: "{{ status_timeout }}"
+  register: status_proxmox_reads
+  ignore_unreachable: true
+  when: not (status_proxmox_name.unreachable | default(false))
+  vars:
+    _node: "/nodes/{{ status_proxmox_node_name }}"
+    _json: [--output-format, json]
+    _day: [--timeframe, day, --cf, AVERAGE]
+    _types: "{{ status_types | status_types_shown }}"
+    _commands: >-
+      {%- set c = {'resources': ['pvesh', 'get', '/cluster/resources'] + _json} -%}
+      {%- if 'vms' in _types -%}
+      {%-   set _ = c.update({'node': ['pvesh', 'get', _node ~ '/status'] + _json,
+                              'rrd-node': ['pvesh', 'get', _node ~ '/rrddata'] + _day + _json,
+                              'updates': ['apt-get', '-q', '-s', 'dist-upgrade']}) -%}
+      {%-   if status_reboot_required_file | length > 0 -%}
+      {%-     set _ = c.update({'reboot': ['test', '-e', status_reboot_required_file]}) -%}
+      {%-   endif -%}
+      {%-   for vm in status_vms -%}
+      {%-     set vmid = vm.vmid | string -%}
+      {%-     set _ = c.update({'rrd-' ~ vmid: ['pvesh', 'get', _node ~ '/qemu/' ~ vmid ~ '/rrddata'] + _day + _json,
+                                'pending-' ~ vmid: ['pvesh', 'get', _node ~ '/qemu/' ~ vmid ~ '/pending'] + _json}) -%}
+      {%-   endfor -%}
+      {%- endif -%}
+      {%- for vm in status_vms if vm.guest_agent | default(false) and ('vms' in _types or 'apps' in _types) -%}
+      {%-   set vmid = vm.vmid | string -%}
+      {%-   set _ = c.update({'fsinfo-' ~ vmid: ['qm', 'guest', 'cmd', vmid, 'get-fsinfo'],
+                              'osinfo-' ~ vmid: ['qm', 'guest', 'cmd', vmid, 'get-osinfo']}) -%}
+      {%-   if vm.app | default(none) and not vm.app.url | default('') -%}
+      {%-     set _ = c.update({'network-' ~ vmid: ['qm', 'guest', 'cmd', vmid, 'network-get-interfaces']}) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {%- if 'storage' in _types -%}
+      {%-   for storage in status_budget_storages -%}
+      {%-     set _ = c.update({'content-' ~ storage: ['pvesh', 'get', _node ~ '/storage/' ~ storage ~ '/content'] + _json}) -%}
+      {%-   endfor -%}
+      {%- endif -%}
+      {%- if 'backups' in _types -%}
+      {%-   set _ = c.update({'backup-jobs': ['pvesh', 'get', '/cluster/backup'] + _json,
+                            'backup-tasks': ['pvesh', 'get', _node ~ '/tasks', '--typefilter', 'vzdump', '--source',
+                                             'all', '--limit', '20'] + _json}) -%}
+      {%-   for job in status_backup_jobs -%}
+      {%-     set _ = c.update({'backups-' ~ job.storage: ['pvesh', 'get', _node ~ '/storage/' ~ job.storage ~ '/content',
+                                                         '--content', 'backup'] + _json,
+                              'schedule-' ~ job.id: ['pvesh', 'get', '/cluster/jobs/schedule-analyze', '--schedule',
+                                                     job.schedule | string, '--iterations', '2'] + _json}) -%}
+      {%-   endfor -%}
+      {%- endif -%}
+      {{ c }}
+
+# Which VMs a failed backup run failed, and why, is only in its log: read those of the newest few that failed.
+- name: proxmox | Read the logs of the backup runs that failed
+  status_read:
+    commands: >-
+      {%- set c = {} -%}
+      {%- for upid in _runs -%}
+      {%-   set _ = c.update({'log-' ~ upid: ['pvesh', 'get', '/nodes/' ~ status_proxmox_node_name ~ '/tasks/' ~ upid
+                                             ~ '/log', '--limit', '5000', '--output-format', 'json']}) -%}
+      {%- endfor -%}
+      {{ c }}
+    parallel: "{{ status_parallel }}"
+    timeout: "{{ status_timeout }}"
+  register: status_proxmox_logs
+  ignore_unreachable: true
+  when: _runs | length > 0
+  vars:
+    _runs: "{{ status_proxmox_reads.results | default({}) | status_backup_failed_runs }}"
+
+- name: proxmox | Work out what the host says
+  ansible.builtin.set_fact:
+    status_found:
+      proxmox: >-
+        {{ {'unread': _unread, 'node': status_proxmox_node_name,
+            'results': status_proxmox_reads.results | default({}) | combine(status_proxmox_logs.results | default({}))}
+           | status_proxmox(status_vms, status_budget_storages, status_storage_headroom_gib,
+                            status_reboot_required_file, status_backup_jobs) }}
+      # What roles/proxmox_tailscale's status entry point read, before this role ran: {} when Tailscale is off.
+      tailscale: "{{ status_tailscale_state }}"
+  vars:
+    _missed: >-
+      {{ [status_proxmox_name, status_proxmox_reads, status_proxmox_logs] | selectattr('unreachable', 'defined')
+         | selectattr('unreachable') | list }}
+    _unread: >-
+      {{ (_missed | first).msg | default('it did not answer') if _missed
+         else ('' if status_proxmox_node_name | length > 0 else 'hostname -s named no node') }}

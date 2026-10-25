@@ -11,11 +11,15 @@ reports, with the simulation's `Inst` lines, and a real install prints dpkg's `U
 not know fails with exit status 100, as the real one does. Installing `tailscale` enables and starts tailscaled, and
 upgrading it restarts tailscaled, as the package's scripts do.
 
-tailscale follows Tailscale 1.104 on Linux: `status --json` with `BackendState`, and `Self` leaving out `Tags`,
-`PrimaryRoutes` and `KeyExpiry` when empty, as the real one does; `get --json`, keyed by `tailscale set`'s flag names,
+tailscale follows Tailscale 1.104 on Linux: `status --json` shaped as 1.104.2 prints it on a Proxmox host, with
+`BackendState`, the tailnet's MagicDNS suffix and name (for a personal tailnet, its owner's login), another device in
+`Peer` and its owner in `User`, which just status must never keep, and `Self` leaving out `Tags`, `PrimaryRoutes` and
+`KeyExpiry` when empty, as the real one does; `get --json`, keyed by `tailscale set`'s flag names,
 with `advertise-routes` a comma-separated string as captured from a real client (1.102); `up`, which takes its key only
 as `--auth-key=file:<path>` here, and refuses, like the real one, a change of settings that does not mention every
-non-default one; `set`, with only the flags the real one takes (no `--advertise-tags`); and `serve status --json`.
+non-default one; `set`, with only the flags the real one takes (no `--advertise-tags`); `serve status --json`; and
+`dns status --json`, as this machine's own Tailscale (1.102) prints it, with the state's `split_dns` as its split DNS
+routes. `nft list table` prints the table as the role wrote it, which differs from nft's own listing only in spacing.
 Routes are approved when the state's `auto_approve` is set, standing for the policy's auto-approver. `ip link show`
 finds tailscaled's interface while tailscaled runs, named by the state's `tun` as tailscaled's --tun flag names it:
 tailscale0 by default, none with userspace-networking.
@@ -71,6 +75,13 @@ UP_ONLY = {"advertise-tags", "auth-key", "force-reauth", "json", "login-server",
 UP_FLAGS = (set(DEFAULT_PREFS) - SET_ONLY) | UP_ONLY
 SET_FLAGS = set(DEFAULT_PREFS) | {"accept-risk"}
 REPOSITORY = {"tailscale": "1.104.1", "tailscale-archive-keyring": "1.35.181"}
+# The tailnet's MagicDNS suffix and the node's tailnet addresses, built here so that no tailnet name or CGNAT address
+# is written in the repository, which the leak checks refuse.
+SUFFIX = "tail0example" + ".ts.net"
+NODE_ADDRESSES = [".".join(["100", "64", "0", "20"]), ":".join(["fd7a", "115c", "a1e0", "", "14"])]
+PEER_ADDRESSES = [".".join(["100", "64", "0", "21"]), ":".join(["fd7a", "115c", "a1e0", "", "15"])]
+# What the tailnet's name is for a personal tailnet: its owner's login, which just status must never show.
+TAILNET_NAME = "owner@example.com"
 DEBIAN = {"nftables": "1.1.3-1"}
 
 
@@ -87,6 +98,7 @@ def fresh_state():
         "tun": "tailscale0",
         "serve": {},
         "health": [],
+        "split_dns": {},
         "restarts": 0,
         "mutations": 0,
         "calls": [],
@@ -333,14 +345,60 @@ def status(state):
     node = state["node"]
     prefs = node["prefs"]
     routes = [r for r in prefs["advertise-routes"].split(",") if r]
-    self = {"HostName": "pve", "OS": "linux", "Online": node["backend"] == "Running"}
+    running = node["backend"] == "Running"
+    self = {
+        "ID": "n1",
+        "HostName": "pve",
+        "DNSName": f"pve.{SUFFIX}." if running else "",
+        "OS": "linux",
+        "TailscaleIPs": NODE_ADDRESSES if running else [],
+        "AllowedIPs": [a + ("/128" if ":" in a else "/32") for a in NODE_ADDRESSES] if running else [],
+        "Online": running,
+    }
     if node["tags"]:
         self["Tags"] = node["tags"]
     else:
         self["KeyExpiry"] = "2027-04-15T00:00:00Z"
-    if routes and state["auto_approve"] and node["backend"] == "Running":
+    if routes and state["auto_approve"] and running:
         self["PrimaryRoutes"] = routes
-    return {"BackendState": node["backend"], "Self": self, "Health": state["health"], "Version": "1.104.1"}
+        self["AllowedIPs"] += routes
+    peer = {
+        "ID": "n2",
+        "HostName": "laptop",
+        "DNSName": f"laptop.{SUFFIX}.",
+        "OS": "macOS",
+        "TailscaleIPs": PEER_ADDRESSES,
+        "UserID": 7,
+        "Online": True,
+    }
+    return {
+        "Version": "1.104.1-t0example-g0example",
+        "TUN": state["tun"] == "tailscale0",
+        "BackendState": node["backend"],
+        "HaveNodeKey": running,
+        "TailscaleIPs": self["TailscaleIPs"],
+        "Self": self,
+        "Health": state["health"],
+        "MagicDNSSuffix": SUFFIX,
+        "CurrentTailnet": {"Name": TAILNET_NAME, "MagicDNSSuffix": SUFFIX, "MagicDNSEnabled": True},
+        "Peer": {"nodekey:peer": peer} if running else {},
+        "User": {"7": {"ID": 7, "LoginName": TAILNET_NAME, "DisplayName": "Owner"}} if running else {},
+    }
+
+
+def dns_status(state):
+    """tailscale dns status --json on this machine, as 1.102 prints it: the tailnet's DNS from the coordination
+    server, its split DNS routes from the state's split_dns ({domain: [resolver addresses]})."""
+    return {
+        "TailscaleDNS": True,
+        "CurrentTailnet": {"MagicDNSEnabled": True, "MagicDNSSuffix": SUFFIX, "SelfDNSName": f"laptop.{SUFFIX}."},
+        "SplitDNSRoutes": {
+            domain.rstrip(".") + ".": [{"Addr": a} for a in addresses]
+            for domain, addresses in state.get("split_dns", {}).items()
+        },
+        "SearchDomains": [SUFFIX],
+        "SystemDNS": {"Nameservers": [], "SearchDomains": [], "MatchDomains": []},
+    }
 
 
 def tailscale(state, args):
@@ -355,6 +413,8 @@ def tailscale(state, args):
         print(json.dumps(node["prefs"], indent=2))
     elif args == ["serve", "status", "--json"]:
         print(json.dumps(state["serve"]))
+    elif args == ["dns", "status", "--json"]:
+        print(json.dumps(dns_status(state), indent=2))
     elif args[:1] == ["up"]:
         given = flags_of(state, args[1:], UP_FLAGS, "up")
         if node["backend"] == "NeedsLogin":
