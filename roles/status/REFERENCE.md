@@ -23,6 +23,8 @@ Description: Read the homeserver's machines without changing them, and report wh
 - On the Proxmox host (proxmox) it reads the host, its storages and the VMs of status_vms; every other VM is only counted.
 - For the cluster (cluster), on this machine, it reads the nodes, the apps (each Ingress's Service, then the Deployment it selects, and every Deployment a Flux Kustomization under status_cluster_apps_path applies), Flux, the certificates, the nodes' kubelet statistics, Alertmanager's alerts, etcd's state and the newest commit of the branch Flux syncs. It reads the credentials under no_log, keeping only the server the kubeconfig names and when each client certificate expires, and reports another cluster's credentials rather than use them. It never reads a Secret.
 - For the NAS (nas) it reads nothing itself, and works out what status_nas_state says, the result of truenas_info with its status option, which roles/truenas's status entry point reads in one login - the pools' health, capacity and last scrub, TrueNAS's alerts, the snapshot tasks' last runs, the NFS service.
+- Unless status_probe_apps is off, asks from this machine the addresses of the apps it found (the cluster's, and an app on a VM of its own) with the role's module status_probe, checking no certificate and sending no credentials.
+- Reads only the sources the sections of status_types need (the filter status_host_reads); on the Proxmox host it says what its Tailscale says first, in the fact status_early.
 - A host that does not answer is recorded as such, not a failure, so the report can say so.
 - Refuses a section name that is not one of the report's.
 - The defaults read nothing.
@@ -378,12 +380,32 @@ Description: Read the homeserver's machines without changing them, and report wh
   
   
 
+  - **status_read_at**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: When the report was read, as its first line says it; empty takes now.
+  
+  
+  
+
+  - **status_now**
+    - **Required**: false
+    - **Type**: int
+    - **Default**: 0
+  
+    - **Description**: When the report was read, in seconds since the epoch, which its ages count from; 0 takes now.
+  
+  
+  
+
   - **status_probe_apps**
     - **Required**: false
     - **Type**: bool
     - **Default**: True
   
-    - **Description**: Whether the report asks each app's addresses from this machine, a DNS lookup and one GET per URL.
+    - **Description**: Whether the main entry point asks each app's addresses from this machine, a DNS lookup and one GET per URL: the cluster's apps, and an app on a VM of its own.
   
   
   
@@ -427,7 +449,7 @@ Description: Read the homeserver's machines without changing them, and report wh
 **Description**: 
 - Puts together what each host of status_hosts found (its status_found), ranks what needs attention, writes the report to status_report_file as JSON, mode 0600, and shows it as text, unless status_quiet.
 - Writes the report in a dry run too, since just status runs as one and takes its exit code from the file.
-- Unless status_probe_apps is off, first asks each app's addresses from this machine with the role's module status_probe, checking no certificate and sending no credentials.
+- What each host found includes what its apps' addresses answered, which the main entry point asks.
 
 
 **Options**:
@@ -493,22 +515,22 @@ Description: Read the homeserver's machines without changing them, and report wh
   
   
 
-  - **status_probe_apps**
+  - **status_read_at**
     - **Required**: false
-    - **Type**: bool
-    - **Default**: True
+    - **Type**: str
+    - **Default**: 
   
-    - **Description**: Whether the report asks each app's addresses from this machine, a DNS lookup and one GET per URL.
+    - **Description**: When the report was read, as its first line says it; empty takes now.
   
   
   
 
-  - **status_probe_timeout**
+  - **status_now**
     - **Required**: false
     - **Type**: int
-    - **Default**: 5
+    - **Default**: 0
   
-    - **Description**: Seconds each lookup and each request may take.
+    - **Description**: When the report was read, in seconds since the epoch, which its ages count from; 0 takes now.
   
   
   
@@ -583,10 +605,12 @@ Description: Read the homeserver's machines without changing them, and report wh
 | [status_report_file](defaults/main.yml#L70)   | str |  |    
 | [status_color](defaults/main.yml#L71)   | bool | `False` |    
 | [status_quiet](defaults/main.yml#L72)   | bool | `False` |    
-| [status_probe_apps](defaults/main.yml#L75)   | bool | `True` |    
-| [status_probe_timeout](defaults/main.yml#L76)   | int | `5` |    
-| [status_admin](defaults/main.yml#L79)   | list | `[]` |    
-| [status_commands](defaults/main.yml#L87)   | dict | `{}` |    
+| [status_read_at](defaults/main.yml#L75)   | str |  |    
+| [status_now](defaults/main.yml#L76)   | int | `0` |    
+| [status_probe_apps](defaults/main.yml#L79)   | bool | `True` |    
+| [status_probe_timeout](defaults/main.yml#L80)   | int | `5` |    
+| [status_admin](defaults/main.yml#L83)   | list | `[]` |    
+| [status_commands](defaults/main.yml#L91)   | dict | `{}` |    
 
 
 
@@ -599,10 +623,12 @@ Description: Read the homeserver's machines without changing them, and report wh
 
 | Name | Module | Has Conditions |
 | ---- | ------ | -------------- |
-| cluster ¦ Read the credentials' server and expiry | ansible.builtin.set_fact | False |
-| cluster ¦ Check the credentials are this cluster's | ansible.builtin.set_fact | False |
+| cluster ¦ Read the credentials' server and expiry | ansible.builtin.set_fact | True |
+| cluster ¦ Check the credentials are this cluster's | ansible.builtin.set_fact | True |
 | cluster ¦ Read the cluster, at once | status_read | True |
 | cluster ¦ Work out what the cluster says | ansible.builtin.set_fact | False |
+| cluster ¦ Ask the apps' addresses | status_probe | True |
+| cluster ¦ Say what the cluster says | ansible.builtin.set_fact | False |
 
 #### File: tasks/main.yml
 
@@ -618,22 +644,24 @@ Description: Read the homeserver's machines without changing them, and report wh
 
 | Name | Module | Has Conditions |
 | ---- | ------ | -------------- |
+| proxmox ¦ Read this machine's Tailscale DNS | status_read | True |
+| proxmox ¦ Say what its Tailscale says | ansible.builtin.set_fact | True |
 | proxmox ¦ Read the node's name | status_read | True |
-| proxmox ¦ Use the node's name | ansible.builtin.set_fact | False |
+| proxmox ¦ Use the node's name | ansible.builtin.set_fact | True |
 | proxmox ¦ Read the host, its storages and its VMs, at once | status_read | True |
 | proxmox ¦ Read the logs of the backup runs that failed | status_read | True |
 | proxmox ¦ Work out what the host says | ansible.builtin.set_fact | False |
+| proxmox ¦ Ask Home Assistant's address | status_probe | True |
+| proxmox ¦ Say what the host says | ansible.builtin.set_fact | False |
 
 #### File: tasks/report.yml
 
 | Name | Module | Has Conditions |
 | ---- | ------ | -------------- |
 | report ¦ Put the findings together | ansible.builtin.set_fact | False |
-| report ¦ Ask the apps' addresses | status_probe | True |
-| report ¦ Read this machine's Tailscale DNS | status_read | True |
 | report ¦ Rank what needs attention | ansible.builtin.set_fact | False |
 | report ¦ Write the report | block | True |
-| report ¦ Make the report's directory | ansible.builtin.file | False |
+| report ¦ Make the report's directory | ansible.builtin.file | True |
 | report ¦ Write the report as JSON | ansible.builtin.copy | False |
 | report ¦ Show the report | ansible.builtin.debug | True |
 
@@ -656,11 +684,13 @@ classDef importRole stroke:#699ba7,stroke-width:2px;
 classDef includeVars stroke:#8e44ad,stroke-width:2px;
 classDef rescue stroke:#665352,stroke-width:2px;
 
-  Start-->|Task| cluster___Read_the_credentials__server_and_expiry0[cluster   read the credentials  server and expiry]:::task
-  cluster___Read_the_credentials__server_and_expiry0-->|Task| cluster___Check_the_credentials_are_this_cluster_s1[cluster   check the credentials are this cluster s]:::task
-  cluster___Check_the_credentials_are_this_cluster_s1-->|Task| cluster___Read_the_cluster__at_once2[cluster   read the cluster  at once<br>When: **status cluster unread   length    0**]:::task
+  Start-->|Task| cluster___Read_the_credentials__server_and_expiry0[cluster   read the credentials  server and expiry<br>When: **cluster  in status reads**]:::task
+  cluster___Read_the_credentials__server_and_expiry0-->|Task| cluster___Check_the_credentials_are_this_cluster_s1[cluster   check the credentials are this cluster s<br>When: **cluster  in status reads**]:::task
+  cluster___Check_the_credentials_are_this_cluster_s1-->|Task| cluster___Read_the_cluster__at_once2[cluster   read the cluster  at once<br>When: **cluster  in status reads and status cluster<br>unread   length    0**]:::task
   cluster___Read_the_cluster__at_once2-->|Task| cluster___Work_out_what_the_cluster_says3[cluster   work out what the cluster says]:::task
-  cluster___Work_out_what_the_cluster_says3-->End
+  cluster___Work_out_what_the_cluster_says3-->|Task| cluster___Ask_the_apps__addresses4[cluster   ask the apps  addresses<br>When: **status probe apps and  targets   length   0**]:::task
+  cluster___Ask_the_apps__addresses4-->|Task| cluster___Say_what_the_cluster_says5[cluster   say what the cluster says]:::task
+  cluster___Say_what_the_cluster_says5-->End
 ```
 
 
@@ -679,10 +709,10 @@ classDef includeVars stroke:#8e44ad,stroke-width:2px;
 classDef rescue stroke:#665352,stroke-width:2px;
 
   Start-->|Task| Check_the_role_s_inputs0[check the role s inputs]:::task
-  Check_the_role_s_inputs0-->|Task| Read_nothing_here1[read nothing here<br>When: **status source   length    0**]:::task
-  Read_nothing_here1-->|Include task| Read_the_Proxmox_host_proxmox_yml_2[read the proxmox host<br>When: **status source     proxmox**<br>include_task: proxmox yml]:::includeTasks
-  Read_the_Proxmox_host_proxmox_yml_2-->|Include task| Read_the_cluster_cluster_yml_3[read the cluster<br>When: **status source     cluster**<br>include_task: cluster yml]:::includeTasks
-  Read_the_cluster_cluster_yml_3-->|Task| Work_out_what_the_NAS_says4[work out what the nas says<br>When: **status source     nas**]:::task
+  Check_the_role_s_inputs0-->|Task| Read_nothing_here1[read nothing here<br>When: **status source   status host reads status types   <br>length    0**]:::task
+  Read_nothing_here1-->|Include task| Read_the_Proxmox_host_proxmox_yml_2[read the proxmox host<br>When: **status source     proxmox  and status reads  <br>length   0**<br>include_task: proxmox yml]:::includeTasks
+  Read_the_Proxmox_host_proxmox_yml_2-->|Include task| Read_the_cluster_cluster_yml_3[read the cluster<br>When: **status source     cluster  and status reads  <br>length   0**<br>include_task: cluster yml]:::includeTasks
+  Read_the_cluster_cluster_yml_3-->|Task| Work_out_what_the_NAS_says4[work out what the nas says<br>When: **status source     nas  and status source   status<br>host reads status types    length   0**]:::task
   Work_out_what_the_NAS_says4-->End
 ```
 
@@ -701,12 +731,16 @@ classDef importRole stroke:#699ba7,stroke-width:2px;
 classDef includeVars stroke:#8e44ad,stroke-width:2px;
 classDef rescue stroke:#665352,stroke-width:2px;
 
-  Start-->|Task| proxmox___Read_the_node_s_name0[proxmox   read the node s name<br>When: **status proxmox node   length    0**]:::task
-  proxmox___Read_the_node_s_name0-->|Task| proxmox___Use_the_node_s_name1[proxmox   use the node s name]:::task
-  proxmox___Use_the_node_s_name1-->|Task| proxmox___Read_the_host__its_storages_and_its_VMs__at_once2[proxmox   read the host  its storages and its vms <br>at once<br>When: **not  status proxmox name unreachable   default<br>false**]:::task
-  proxmox___Read_the_host__its_storages_and_its_VMs__at_once2-->|Task| proxmox___Read_the_logs_of_the_backup_runs_that_failed3[proxmox   read the logs of the backup runs that<br>failed<br>When: **runs   length   0**]:::task
-  proxmox___Read_the_logs_of_the_backup_runs_that_failed3-->|Task| proxmox___Work_out_what_the_host_says4[proxmox   work out what the host says]:::task
-  proxmox___Work_out_what_the_host_says4-->End
+  Start-->|Task| proxmox___Read_this_machine_s_Tailscale_DNS0[proxmox   read this machine s tailscale dns<br>When: **tailscale  in status reads and status tailscale<br>state routes   default       selectattr <br>advertised     list   length   0**]:::task
+  proxmox___Read_this_machine_s_Tailscale_DNS0-->|Task| proxmox___Say_what_its_Tailscale_says1[proxmox   say what its tailscale says<br>When: **tailscale  in status reads**]:::task
+  proxmox___Say_what_its_Tailscale_says1-->|Task| proxmox___Read_the_node_s_name2[proxmox   read the node s name<br>When: **proxmox  in status reads and status proxmox node <br> length    0**]:::task
+  proxmox___Read_the_node_s_name2-->|Task| proxmox___Use_the_node_s_name3[proxmox   use the node s name<br>When: **proxmox  in status reads**]:::task
+  proxmox___Use_the_node_s_name3-->|Task| proxmox___Read_the_host__its_storages_and_its_VMs__at_once4[proxmox   read the host  its storages and its vms <br>at once<br>When: **proxmox  in status reads and not  status proxmox<br>name unreachable   default false**]:::task
+  proxmox___Read_the_host__its_storages_and_its_VMs__at_once4-->|Task| proxmox___Read_the_logs_of_the_backup_runs_that_failed5[proxmox   read the logs of the backup runs that<br>failed<br>When: **runs   length   0**]:::task
+  proxmox___Read_the_logs_of_the_backup_runs_that_failed5-->|Task| proxmox___Work_out_what_the_host_says6[proxmox   work out what the host says]:::task
+  proxmox___Work_out_what_the_host_says6-->|Task| proxmox___Ask_Home_Assistant_s_address7[proxmox   ask home assistant s address<br>When: **status probe apps and  targets   length   0**]:::task
+  proxmox___Ask_Home_Assistant_s_address7-->|Task| proxmox___Say_what_the_host_says8[proxmox   say what the host says]:::task
+  proxmox___Say_what_the_host_says8-->End
 ```
 
 
@@ -725,15 +759,13 @@ classDef includeVars stroke:#8e44ad,stroke-width:2px;
 classDef rescue stroke:#665352,stroke-width:2px;
 
   Start-->|Task| report___Put_the_findings_together0[report   put the findings together]:::task
-  report___Put_the_findings_together0-->|Task| report___Ask_the_apps__addresses1[report   ask the apps  addresses<br>When: **status probe apps and  targets   length   0**]:::task
-  report___Ask_the_apps__addresses1-->|Task| report___Read_this_machine_s_Tailscale_DNS2[report   read this machine s tailscale dns<br>When: **status findings tailscale   default      routes  <br>default       selectattr  advertised     list  <br>length   0**]:::task
-  report___Read_this_machine_s_Tailscale_DNS2-->|Task| report___Rank_what_needs_attention3[report   rank what needs attention]:::task
-  report___Rank_what_needs_attention3-->|Block Start| report___Write_the_report4_block_start_0[[report   write the report<br>When: **status report file   length   0**]]:::block
-  report___Write_the_report4_block_start_0-->|Task| report___Make_the_report_s_directory0[report   make the report s directory]:::task
+  report___Put_the_findings_together0-->|Task| report___Rank_what_needs_attention1[report   rank what needs attention]:::task
+  report___Rank_what_needs_attention1-->|Block Start| report___Write_the_report2_block_start_0[[report   write the report<br>When: **status report file   length   0**]]:::block
+  report___Write_the_report2_block_start_0-->|Task| report___Make_the_report_s_directory0[report   make the report s directory<br>When: **status report file   dirname is not directory**]:::task
   report___Make_the_report_s_directory0-->|Task| report___Write_the_report_as_JSON1[report   write the report as json]:::task
-  report___Write_the_report_as_JSON1-.->|End of Block| report___Write_the_report4_block_start_0
-  report___Write_the_report_as_JSON1-->|Task| report___Show_the_report5[report   show the report<br>When: **not status quiet**]:::task
-  report___Show_the_report5-->End
+  report___Write_the_report_as_JSON1-.->|End of Block| report___Write_the_report2_block_start_0
+  report___Write_the_report_as_JSON1-->|Task| report___Show_the_report3[report   show the report<br>When: **not status quiet**]:::task
+  report___Show_the_report3-->End
 ```
 
 

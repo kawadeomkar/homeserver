@@ -31,6 +31,7 @@ drop-in requires it, and refuses a plain `restart` of the guard, which would res
 Anything else exits non-zero, so an unexpected command fails the test.
 """
 
+import fcntl
 import json
 import os
 import sys
@@ -451,11 +452,21 @@ def tailscale(state, args):
 
 def main():
     tool, args = sys.argv[1], sys.argv[2:]
-    state = load()
-    state["calls"].append([tool, *args])
-    tools = {"apt-get": apt_get, "ip": ip, "nft": nft, "sysctl": sysctl, "systemctl": systemctl, "tailscale": tailscale}
-    tools[tool](state, args)
-    save(state)
+    # One call at a time: tailscale_read runs its reads at once, and each records itself in the state.
+    with state_path().with_name(f".{state_path().name}.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        state = load()
+        state["calls"].append([tool, *args])
+        tools = {
+            "apt-get": apt_get,
+            "ip": ip,
+            "nft": nft,
+            "sysctl": sysctl,
+            "systemctl": systemctl,
+            "tailscale": tailscale,
+        }
+        tools[tool](state, args)
+        save(state)
 
 
 if __name__ == "__main__":

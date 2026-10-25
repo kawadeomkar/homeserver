@@ -70,8 +70,12 @@ status_hosts: []
 status_report_file: ""
 status_color: false
 status_quiet: false
-# Whether the report asks each app's addresses from this machine (DNS, and one GET per URL), and the seconds each
-# may take.
+# When the report was read, as its first line says it and in seconds since the epoch, which the ages it shows count
+# from; empty and 0 take the time the report is put together.
+status_read_at: ""
+status_now: 0
+# Whether the main entry point asks each app's addresses from this machine (DNS, and one GET per URL): the cluster's
+# apps, and an app on a VM of its own; and the seconds each may take.
 status_probe_apps: true
 status_probe_timeout: 5
 # The admin pages to list, each {name, url}; tailscale_node: true marks the page the Proxmox host serves itself,

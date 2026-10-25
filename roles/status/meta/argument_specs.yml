@@ -17,6 +17,11 @@ argument_specs:
       - For the NAS (nas) it reads nothing itself, and works out what status_nas_state says, the result of
         truenas_info with its status option, which roles/truenas's status entry point reads in one login - the
         pools' health, capacity and last scrub, TrueNAS's alerts, the snapshot tasks' last runs, the NFS service.
+      - Unless status_probe_apps is off, asks from this machine the addresses of the apps it found (the cluster's,
+        and an app on a VM of its own) with the role's module status_probe, checking no certificate and sending no
+        credentials.
+      - Reads only the sources the sections of status_types need (the filter status_host_reads); on the Proxmox host
+        it says what its Tailscale says first, in the fact status_early.
       - A host that does not answer is recorded as such, not a failure, so the report can say so.
       - Refuses a section name that is not one of the report's.
       - The defaults read nothing.
@@ -218,10 +223,20 @@ argument_specs:
         type: bool
         default: false
         description: Whether the report entry point shows no report.
+      status_read_at:
+        type: str
+        default: ""
+        description: When the report was read, as its first line says it; empty takes now.
+      status_now:
+        type: int
+        default: 0
+        description: When the report was read, in seconds since the epoch, which its ages count from; 0 takes now.
       status_probe_apps:
         type: bool
         default: true
-        description: Whether the report asks each app's addresses from this machine, a DNS lookup and one GET per URL.
+        description: >-
+          Whether the main entry point asks each app's addresses from this machine, a DNS lookup and one GET per URL:
+          the cluster's apps, and an app on a VM of its own.
       status_probe_timeout:
         type: int
         default: 5
@@ -246,8 +261,7 @@ argument_specs:
       - Puts together what each host of status_hosts found (its status_found), ranks what needs attention, writes
         the report to status_report_file as JSON, mode 0600, and shows it as text, unless status_quiet.
       - Writes the report in a dry run too, since just status runs as one and takes its exit code from the file.
-      - Unless status_probe_apps is off, first asks each app's addresses from this machine with the role's module
-        status_probe, checking no certificate and sending no credentials.
+      - What each host found includes what its apps' addresses answered, which the main entry point asks.
     options:
       status_types:
         type: list
@@ -275,14 +289,14 @@ argument_specs:
         type: bool
         default: false
         description: Whether no report is shown.
-      status_probe_apps:
-        type: bool
-        default: true
-        description: Whether the report asks each app's addresses from this machine, a DNS lookup and one GET per URL.
-      status_probe_timeout:
+      status_read_at:
+        type: str
+        default: ""
+        description: When the report was read, as its first line says it; empty takes now.
+      status_now:
         type: int
-        default: 5
-        description: Seconds each lookup and each request may take.
+        default: 0
+        description: When the report was read, in seconds since the epoch, which its ages count from; 0 takes now.
       status_admin:
         type: list
         elements: dict

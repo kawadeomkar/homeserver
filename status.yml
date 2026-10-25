@@ -9,9 +9,34 @@
 # Each host is read through roles/status, whose module status_read runs every command at once and refuses any that is
 # not on its read list: the Proxmox host over SSH, and the cluster from this machine with kubectl and talosctl; the
 # NAS through its API, with roles/truenas's read-only status entry point (one login), and the Proxmox host's Tailscale
-# with roles/proxmox_tailscale's. All three hosts at the same time (strategy free). The report play then asks each
-# app's addresses from this machine. A host that does not answer is a section of the report that says so, not a
-# failure; a refused setting or command ends the run with no report.
+# with roles/proxmox_tailscale's. All three hosts at the same time (strategy free), each asking from this machine the
+# addresses of the apps it found. A host that does not answer is a section of the report that says so, not a failure;
+# a refused setting or command ends the run with no report. On a terminal, the callback shows each section as soon as
+# the hosts it needs are read, with the settings the first play says (status_settings), and the report play's are the
+# same.
+
+- name: Begin the report
+  hosts: localhost
+  gather_facts: false
+  vars:
+    status_types: "{{ (types | default('')).split(',') | map('trim') | select | list }}"
+  tasks:
+    - name: Say what the report is of
+      ansible.builtin.set_fact:
+        status_settings:
+          setup: "{{ status_setup }}"
+          types: "{{ status_types }}"
+          read_at: "{{ now().strftime('%Y-%m-%d %H:%M %Z') | trim }}"
+          now: "{{ now().timestamp() | int }}"
+          admin: "{{ status_admin }}"
+          commands: "{{ status_commands }}"
+          # The reading play's hosts, by the label the report gives each.
+          hosts:
+            proxmox: "{{ groups['proxmox'] | default([]) }}"
+            cluster: "{{ groups['kubernetes'] | default([]) }}"
+            nas: "{{ groups['nas'] | default([]) }}"
+      # The report play reads them, so they are said whatever tasks are chosen.
+      tags: [always]
 
 - name: Read the machines
   hosts: proxmox:kubernetes:nas
@@ -41,18 +66,23 @@
         fail_msg: "{{ haos_settings_error | join(' ') }}"
         quiet: true
       tags: [always]
-    # Never fails: a NAS that does not answer is recorded in truenas_status, which roles/status reports.
+    # Never fails: a NAS that does not answer is recorded in truenas_status, which roles/status reports. Each is
+    # read only when a section shown needs it (status_sources).
     - name: Read the NAS through its API
       ansible.builtin.import_role:
         name: truenas
         tasks_from: status
-      when: "'nas' in group_names and nas_present"
+      when:
+        - "'nas' in group_names and nas_present"
+        - "'nas' in status_types | status_sources"
     # Never fails either: what the Proxmox host's Tailscale says goes to proxmox_tailscale_status_state.
     - name: Read the Proxmox host's Tailscale
       ansible.builtin.import_role:
         name: proxmox_tailscale
         tasks_from: status
-      when: "'proxmox' in group_names and proxmox_tailscale_enabled is true"
+      when:
+        - "'proxmox' in group_names and proxmox_tailscale_enabled is true"
+        - "'tailscale' in status_types | status_sources"
   roles:
     - role: status
 
@@ -66,6 +96,8 @@
     status_report_file: "{{ playbook_dir }}/.cache/status/report.json"
     status_color: "{{ lookup('ansible.builtin.env', 'STATUS_COLOR') == '1' }}"
     status_quiet: "{{ lookup('ansible.builtin.env', 'STATUS_QUIET') | length > 0 }}"
+    status_read_at: "{{ status_settings.read_at }}"
+    status_now: "{{ status_settings.now }}"
   tasks:
     # A host refused before its reads, or by status_read, left no findings, unlike one that did not answer: no half
     # report then, and ansible-playbook's own failure tells make the run failed.

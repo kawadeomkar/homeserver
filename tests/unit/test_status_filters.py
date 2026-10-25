@@ -439,6 +439,32 @@ def test_the_report_is_json():
     assert json.loads(json.dumps(model)) == model
 
 
+def test_each_host_reads_only_what_the_sections_shown_need():
+    every = ["proxmox", "tailscale", "tailnet_dns", "cluster", "etcd_snapshots", "probes", "nas"]
+    assert fs.sources([]) == every
+    assert fs.sources(["nas"]) == ["nas"]
+    assert fs.sources(["admin"]) == ["tailscale"]
+    assert fs.sources(["backups"]) == ["proxmox", "etcd_snapshots"]
+    # The cluster's TLS line comes from the probes, which ask only when the apps are shown.
+    assert fs.sources(["cluster"]) == ["proxmox", "cluster"]
+    assert fs.sources(["apps"]) == ["proxmox", "cluster", "probes"]
+    assert fs.sources(["apps", "tailscale"]) == ["proxmox", "tailscale", "tailnet_dns", "cluster", "probes"]
+    assert fs.host_reads("proxmox", ["nas"]) == [] and fs.host_reads("cluster", ["nas"]) == []
+    assert fs.host_reads("proxmox", ["admin"]) == ["tailscale"]
+    assert fs.host_reads("cluster", ["backups"]) == ["etcd_snapshots"]
+    assert fs.host_reads("nas", []) == ["nas"] and fs.host_reads("", []) == []
+
+
+def test_a_source_no_section_shown_needs_is_not_missed():
+    """just status nas reads neither the Proxmox host nor the cluster, so neither is a source not read."""
+    setup = {"nas": True, "cluster": True, "home_assistant": True}
+    assert fs.report({}, setup, ["nas"])["attention"] == [
+        {"level": "unread", "subject": "nas", "text": "the NAS was not read", "command": ""}
+    ]
+    assert [a["subject"] for a in fs.report({}, setup, ["admin"])["attention"]] == []
+    assert [a["subject"] for a in fs.report({}, setup, ["vms"])["attention"]] == ["proxmox", "cluster"]
+
+
 # --------------------------------------------------------------------------------------------------- text ---
 
 
@@ -463,6 +489,11 @@ def test_the_text_says_what_matters():
     out = report_text()
     assert out.startswith("homeserver  2026-10-21 14:40 PDT · Proxmox only + Home Assistant\n")
     assert "ATTENTION  0 problems · 3 to do" in out
+    # What needs attention comes after the sections it is worked out from, last, above the exit line.
+    lines = out.splitlines()
+    attention = lines.index("ATTENTION  0 problems · 3 to do")
+    assert attention > next(i for i, line in enumerate(lines) if line.startswith("STORAGE"))
+    assert lines[attention - 1] == "" and lines[-2] == "" and lines[-1].startswith("exit 0 · ")
     assert "→ qm reboot 301" in out and "→ just deploy proxmox" in out
     assert "VMS  pve · Proxmox VE 9.2.21 · kernel 7.0.14-22-pve · up 13 d" in out
     assert "/mnt/data 4.9 / 30" in out and "Home Assistant OS 18.3" in out
@@ -1692,8 +1723,10 @@ def test_the_nas_is_left_out_unless_shown():
     state = nas_state(ready=False)
     model = nas_report(state, types=["vms"])
     assert model["attention"] == [] and "NAS " not in fs.text(model, False)
+    # Not shown, the NAS is not read, so a NAS that would not answer is no source not read.
     unread = fs.report({"proxmox": {}, "nas": {"unread": "timed out"}}, NAS_SETUP, ["vms"], now=NAS_NOW)
-    assert unread["exit"] == 2
+    assert unread["exit"] == 0 and unread["attention"] == []
+    assert fs.report({"nas": {"unread": "timed out"}}, NAS_SETUP, ["nas"], now=NAS_NOW)["exit"] == 2
 
 
 def test_the_nas_text():
@@ -2361,3 +2394,89 @@ def test_no_tailscale_section_when_it_is_off():
     assert model["tailscale"] is None and "TAILSCALE" not in fs.text(model, False)
     assert all("tailnet" not in page for page in model["admin"])
     assert "TAILSCALE" not in fs.text(tail_report(types=["apps", "vms"]), False)
+
+
+# ------------------------------------------------------------------------------------- what is shown when ---
+
+EVERY_SETUP = {"nas": True, "cluster": True, "home_assistant": True}
+
+
+def everything():
+    """Every source's findings, as status_merge puts the hosts' together: the Proxmox host's and its Tailscale, this
+    machine's view of the tailnet's DNS, the cluster's and its etcd snapshots, the probes, the NAS's."""
+    return {
+        "proxmox": backed_up(),
+        "tailscale": tail_state(),
+        "tailnet_dns": tailnet_dns({"homeserver.internal.": [{"Addr": "192.0.2.1"}]}),
+        "cluster": cluster_found(),
+        "etcd_snapshots": SNAPSHOTS,
+        "probes": probes(),
+        "nas": fs.nas(nas_state(alerts=[{"klass": "SMART", "level": "WARNING", "text": "A disk wears out."}]), "25.10"),
+    }
+
+
+def blocks_of(found, types=()):
+    model = fs.report(
+        found,
+        EVERY_SETUP,
+        types,
+        "2026-10-21 14:32 PDT",
+        admin=ADMIN_PAGES,
+        commands=COMMANDS | TAILSCALE_COMMANDS,
+        now=NOW,
+    )
+    return dict(fs.blocks(model)), model
+
+
+def test_the_text_is_its_blocks_in_order():
+    blocks, model = blocks_of(everything())
+    sections = ["apps", "admin", "tailscale", "vms", "storage", "backups", "cluster", "nas"]
+    assert list(blocks) == ["head", *sections, "attention", "exit"]
+    assert fs.text(model) == "\n".join(line for lines in blocks.values() for line in lines) + "\n"
+    assert fs.text(model, True) == "\n".join(line for _, lines in fs.blocks(model, True) for line in lines) + "\n"
+    # Each section's problems and things to do, which the callback shows while the sections before it are read.
+    counted = sum(n for counts in model["counts"].values() for n in counts.values())
+    assert counted == len([a for a in model["attention"] if a["level"] != "unread"]) > 0
+    assert model["counts"]["nas"] == {"problem": 0, "todo": 1} and list(model["counts"]) == sections
+
+
+@pytest.mark.parametrize("types", [(), ("apps",), ("cluster",), ("vms", "storage"), ("admin", "tailscale"), ("nas",)])
+def test_each_section_depends_only_on_its_sources(types):
+    """A section is the same whatever the sources it is not worked out from say, read or not: just status's callback
+    prints each as soon as its own are read, and the report play's text then has the same. A source no section shown
+    needs is never read, so it is not there to begin with."""
+    full = {k: v for k, v in everything().items() if k in fs.sources(types)}
+    whole, model = blocks_of(full, types)
+    for section in fs.types_shown(types):
+        needed = fs.section_sources(section, types)
+        for source in set(full) - set(needed):
+            partial, counts = blocks_of({k: v for k, v in full.items() if k != source}, types)
+            assert partial.get(section) == whole.get(section), (section, source)
+            assert counts["counts"][section] == model["counts"][section], (section, source)
+        alone, counts = blocks_of({k: v for k, v in full.items() if k in needed}, types)
+        assert alone.get(section) == whole.get(section) and counts["counts"][section] == model["counts"][section]
+
+
+def test_the_hosts_findings_put_together():
+    one, other = {"url": "https://a.homeserver.internal"}, {"url": "http://192.0.2.32:8123"}
+    merged = fs.merge(
+        [{"cluster": {"apps": []}, "probes": [one]}, {}, None, {"proxmox": {"vms": []}, "probes": [other]}]
+    )
+    assert merged == {"cluster": {"apps": []}, "proxmox": {"vms": []}, "probes": [one, other]}
+    assert fs.merge([]) == {"probes": []}
+    # The report takes the probes and this machine's tailnet DNS from them, when it is not given its own.
+    full = everything()
+    assert fs.report(full, EVERY_SETUP, now=NOW) == fs.report(
+        {k: v for k, v in full.items() if k not in ("probes", "tailnet_dns")},
+        EVERY_SETUP,
+        probes=full["probes"],
+        tailnet_dns=full["tailnet_dns"],
+        now=NOW,
+    )
+
+
+def test_the_sections_a_setup_can_have():
+    nothing = {"nas": False, "cluster": False, "home_assistant": False}
+    assert fs.sections_expected(nothing) == ["admin", "tailscale", "vms", "storage", "backups"]
+    assert fs.sections_expected(nothing | {"home_assistant": True}, ["apps", "cluster"]) == ["apps"]
+    assert fs.sections_expected(EVERY_SETUP, ["nas", "vms"]) == ["vms", "nas"]
