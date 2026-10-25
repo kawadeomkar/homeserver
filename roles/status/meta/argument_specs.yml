@@ -85,6 +85,12 @@ argument_specs:
         type: str
         default: ""
         description: The Proxmox node's name; empty takes the host's short hostname.
+      status_notes_marker:
+        type: str
+        default: ""
+        description: >-
+          The word that marks the version stamp's block in the Notes of the host and of this setup's VMs
+          (roles/proxmox_notes), whose begin marker carries the commit; empty reads none.
       status_budget_storages:
         type: list
         elements: str
@@ -239,7 +245,17 @@ argument_specs:
         description: >-
           The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials,
           allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale,
-          tailscale_login, split_dns. One left out is suggested by text alone.
+          tailscale_login, split_dns, deploy_host. One left out is suggested by text alone.
+      status_deploy:
+        type: dict
+        default: {}
+        description: >-
+          This checkout's version, {commit, describe, date}, which the report entry point places each machine's
+          version stamp against; empty compares none.
+      status_checkout:
+        type: str
+        default: ""
+        description: The checkout's directory, where the report entry point asks git where a stamp's commit lies.
   report:
     short_description: Put just status's findings together, write the report and show it
     description:
@@ -248,6 +264,8 @@ argument_specs:
       - Writes the report in a dry run too, since just status runs as one and takes its exit code from the file.
       - Unless status_probe_apps is off, first asks each app's addresses from this machine with the role's module
         status_probe, checking no certificate and sending no credentials.
+      - Places each machine's version stamp against status_deploy, with git merge-base --is-ancestor in
+        status_checkout for a stamp of another commit.
     options:
       status_types:
         type: list
@@ -296,4 +314,22 @@ argument_specs:
         description: >-
           The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials,
           allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale,
-          tailscale_login, split_dns. One left out is suggested by text alone.
+          tailscale_login, split_dns, deploy_host. One left out is suggested by text alone.
+      status_deploy:
+        type: dict
+        default: {}
+        description: >-
+          This checkout's version, {commit, describe, date}, which each machine's version stamp is placed against
+          (current, behind, ahead, from another branch, from uncommitted files); empty compares none.
+      status_checkout:
+        type: str
+        default: ""
+        description: The checkout's directory, where git tells whether a stamp's commit comes before this one's.
+      status_parallel:
+        type: int
+        default: 8
+        description: How many of git's reads, which place the version stamps, run at once.
+      status_timeout:
+        type: int
+        default: 30
+        description: Seconds each of git's reads may take.

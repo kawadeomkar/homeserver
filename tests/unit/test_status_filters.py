@@ -2361,3 +2361,282 @@ def test_no_tailscale_section_when_it_is_off():
     assert model["tailscale"] is None and "TAILSCALE" not in fs.text(model, False)
     assert all("tailnet" not in page for page in model["admin"])
     assert "TAILSCALE" not in fs.text(tail_report(types=["apps", "vms"]), False)
+
+
+# ------------------------------------------------------------------------------------------ version stamps ---
+
+# The commits machines were deployed from: this checkout's, one before it, one after it, one on another branch.
+HERE_COMMIT, OLD_COMMIT, NEW_COMMIT, FORK_COMMIT = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
+CHECKOUT = {"commit": HERE_COMMIT, "describe": "2026.11.0-3-g" + HERE_COMMIT[:12], "date": "2026-10-25"}
+
+
+def stamp_notes(commit, describe=None, date="2026-10-24", owner="Rack 2, bottom shelf.\n\n"):
+    """Notes as roles/proxmox_notes leaves them, the owner's own text above the block."""
+    return (
+        f"{owner}<!-- homeserver:begin commit={commit} describe={describe or commit[:12]} date={date} -->\n"
+        f"Deployed by `just deploy kubernetes` from homeserver `{describe or commit[:12]}`.\n<!-- homeserver:end -->"
+    )
+
+
+def pending_with(notes):
+    return [{"key": "cores", "value": 2}, {"key": "description", "value": notes}]
+
+
+def stamped(**more):
+    """What the Proxmox host's reads say with the version stamps read: the host and VMs 300 and 310 stamped, 301 not."""
+    reads = {
+        "node-config": ok({"description": stamp_notes(OLD_COMMIT) + "\n", "digest": "x"}),
+        "pending-300": ok(pending_with(stamp_notes(HERE_COMMIT, CHECKOUT["describe"], "2026-10-25"))),
+        "pending-310": ok(pending_with(stamp_notes(NEW_COMMIT, NEW_COMMIT[:12] + "-dirty"))),
+    }
+    return fs.proxmox(
+        {"unread": "", "node": "pve", "results": results(**reads | more)},
+        VMS,
+        ["local-lvm"],
+        16,
+        "/run/reboot-required",
+        (),
+        "homeserver",
+    )
+
+
+def test_a_stamp_from_the_notes():
+    assert fs.stamp(stamp_notes(OLD_COMMIT, "2026.10.0"), "homeserver") == {
+        "commit": OLD_COMMIT,
+        "describe": "2026.10.0",
+        "date": "2026-10-24",
+    }
+    assert fs.stamp("Rack 2.", "homeserver") is None
+    assert fs.stamp(stamp_notes(OLD_COMMIT), "") is None
+    assert fs.stamp(stamp_notes("not-a-commit"), "homeserver") is None
+    # A value of another shape is left out, never shown as it is.
+    for describe in ("v1.0<b>", "2026.11.0.1", "2026.13.0", "2026.11", "2026.11.0-3-gabc"):
+        odd = fs.stamp(stamp_notes(OLD_COMMIT, describe, "yesterday"), "homeserver")
+        assert odd == {"commit": OLD_COMMIT, "describe": OLD_COMMIT[:12], "date": ""}, describe
+    # git lengthens the hash when 12 digits are ambiguous.
+    assert fs.stamp(stamp_notes(OLD_COMMIT, "2026.11.0-3-g" + OLD_COMMIT[:13]), "homeserver")["describe"].endswith(
+        OLD_COMMIT[:13]
+    )
+
+
+def test_a_stamp_by_the_notes_role_s_own_rule():
+    """Notes roles/proxmox_notes would refuse are a broken stamp, never none yet or a stamp to trust; a block in an
+    example, fenced or indented, is no block at all."""
+    two = stamp_notes(OLD_COMMIT) + "\n" + stamp_notes(NEW_COMMIT, owner="")
+    assert fs.stamp(two, "homeserver") == {"broken": "2 begin markers and 2 end markers"}
+    half = stamp_notes(OLD_COMMIT).rsplit("\n", 1)[0]
+    assert fs.stamp(half, "homeserver") == {"broken": "1 begin markers and 0 end markers"}
+    assert fs.stamp("Notes:\n```\nqm list", "homeserver") == {
+        "broken": "they end inside a code block, a fence never closed"
+    }
+    fenced = "An example:\n```markdown\n" + stamp_notes(OLD_COMMIT, owner="") + "\n```"
+    assert fs.stamp(fenced, "homeserver") is None
+    indented = "\n".join("    " + line for line in stamp_notes(OLD_COMMIT, owner="").split("\n"))
+    assert fs.stamp(indented, "homeserver") is None
+
+
+def test_the_host_and_vms_carry_their_stamps():
+    prox = stamped()
+    assert prox["host"]["stamp"]["commit"] == OLD_COMMIT
+    vms = {vm["vmid"]: vm for vm in prox["vms"]}
+    assert vms[300]["stamp"]["describe"] == CHECKOUT["describe"]
+    assert vms[301]["stamp"] is None and vms[310]["stamp"]["describe"].endswith("-dirty")
+    # Without a marker nothing is read for them; without the reads (a section that shows no stamps), none either.
+    assert "stamp" not in found()["host"] and "stamp" not in found()["vms"][0]
+    unasked = fs.proxmox({"unread": "", "node": "pve", "results": results()}, VMS, notes_marker="homeserver")
+    assert "stamp" not in unasked["host"] and "stamp" in unasked["vms"][0]
+    # A read that failed is said as such: never as no stamp.
+    broken = stamped(**{"node-config": failed("500 no such node"), "pending-300": failed("500 timeout")})
+    assert broken["errors"] == ["the node's Notes: 500 no such node", "VM 300's pending changes: 500 timeout"]
+    assert broken["host"]["stamp_unread"] == "500 no such node"
+    assert {vm["vmid"]: vm.get("stamp_unread") for vm in broken["vms"]} == {300: "500 timeout", 301: None, 310: None}
+
+
+def test_the_reads_that_place_each_stamp():
+    # VM 310's stamp is from uncommitted files, which nothing places: no read asks after it.
+    prox = stamped()
+    reads = fs.stamp_reads({"proxmox": prox}, CHECKOUT, "/home/me/homeserver")
+    assert reads == {
+        f"ancestor-{OLD_COMMIT}": [
+            "git",
+            "-C",
+            "/home/me/homeserver",
+            "merge-base",
+            "--is-ancestor",
+            OLD_COMMIT,
+            HERE_COMMIT,
+        ],
+        f"descendant-{OLD_COMMIT}": [
+            "git",
+            "-C",
+            "/home/me/homeserver",
+            "merge-base",
+            "--is-ancestor",
+            HERE_COMMIT,
+            OLD_COMMIT,
+        ],
+    }
+    broken = stamped(**{"node-config": ok({"description": "<!-- homeserver:begin -->\n", "digest": "x"})})
+    assert broken["host"]["stamp"] == {"broken": "1 begin markers and 0 end markers"}
+    assert fs.stamp_reads({"proxmox": broken}, CHECKOUT, "/home/me/homeserver") == {}
+    assert fs.stamp_reads({"proxmox": prox}, {"commit": ""}, "/home/me/homeserver") == {}
+    assert fs.stamp_reads({}, CHECKOUT, "/home/me/homeserver") == {}
+
+
+def rc(code, stderr="", error=""):
+    return {"rc": code, "stdout": "", "stderr": stderr, "error": error}
+
+
+UNKNOWN = f"fatal: Not a valid commit name {FORK_COMMIT}\n"
+
+
+def test_each_stamp_against_this_checkout():
+    def placed(commit, before=None, after=None, describe=None, checkout=CHECKOUT):
+        ancestry = {}
+        if before is not None:
+            ancestry = {f"ancestor-{commit}": before, f"descendant-{commit}": after}
+        found_stamp = {"commit": commit, "describe": describe or commit[:12], "date": ""}
+        return fs.deployed(found_stamp, checkout, ancestry, "just deploy kubernetes")
+
+    def state(commit, before=None, after=None, **more):
+        reads = (before, after) if before is None else (rc(before), rc(after))
+        return placed(commit, *reads, **more)["state"]
+
+    assert state(HERE_COMMIT) == "current"
+    assert state(OLD_COMMIT, 0, 1) == "behind"
+    assert state(NEW_COMMIT, 1, 0) == "ahead"
+    assert state(FORK_COMMIT, 1, 1) == "elsewhere"
+    assert placed(FORK_COMMIT, rc(128, UNKNOWN), rc(128, UNKNOWN))["state"] == "unknown"
+    # Anything else git could not answer is no reason to fetch: it is said, with what git said.
+    for failed in (rc(None, error="timed out after 30 s"), rc(128, "fatal: detected dubious ownership in repository")):
+        out = placed(FORK_COMMIT, failed, rc(1))
+        assert out["state"] == "unplaced" and out["why"] in ("timed out after 30 s", failed["stderr"].strip()), out
+    # From a checkout with uncommitted changes, a machine at its commit lacks them.
+    dirty = CHECKOUT | {"describe": CHECKOUT["describe"] + "-dirty"}
+    assert placed(HERE_COMMIT, checkout=dirty)["checkout_dirty"] is True
+    assert "checkout_dirty" not in placed(HERE_COMMIT)
+    assert fs.deployed({"broken": "two blocks"}, CHECKOUT, {}, "just deploy proxmox")["state"] == "broken"
+    assert state(HERE_COMMIT, describe=HERE_COMMIT[:12] + "-dirty") == "dirty"
+    assert state(OLD_COMMIT, checkout={}) == ""
+    assert state(OLD_COMMIT, describe=OLD_COMMIT[:12] + "-dirty", checkout={}) == "", "no version: shown alone"
+    unread = fs.deployed(None, CHECKOUT, {}, "just deploy proxmox", "500 no such node")
+    assert unread["state"] == "unread" and unread["command"] == "just deploy proxmox"
+    assert fs.deployed(None, CHECKOUT, {}, "just deploy homeassistant") == {
+        "commit": "",
+        "describe": "",
+        "date": "",
+        "state": "never",
+        "command": "just deploy homeassistant",
+    }
+
+
+def stamped_report(**more):
+    ancestry = {f"ancestor-{OLD_COMMIT}": rc(0), f"descendant-{OLD_COMMIT}": rc(1)}
+    commands = COMMANDS | {"deploy_host": "just deploy proxmox"}
+    return fs.report(
+        {"proxmox": stamped(**more)},
+        SETUP,
+        [],
+        "2026-10-25 10:00 PDT",
+        commands=commands,
+        deploy=CHECKOUT,
+        ancestry=ancestry,
+    )
+
+
+def test_a_machine_behind_or_deployed_from_uncommitted_files_is_a_thing_to_do():
+    model = stamped_report()
+    assert model["checkout"] == CHECKOUT and json.loads(json.dumps(model)) == model
+    versions = [a for a in model["attention"] if a["subject"] == "version"]
+    assert versions == [
+        {
+            "level": "todo",
+            "subject": "version",
+            "text": f"the host was deployed from {OLD_COMMIT[:12]}; this checkout is at {CHECKOUT['describe']}",
+            "command": "just deploy proxmox",
+        },
+        {
+            "level": "todo",
+            "subject": "version",
+            "text": f"310 homeassistant was deployed from uncommitted files ({NEW_COMMIT[:12]}-dirty)",
+            "command": "just deploy homeassistant",
+        },
+    ]
+    vms = {vm["vmid"]: vm for vm in model["proxmox"]["vms"]}
+    assert vms[300]["deployed"]["state"] == "current" and vms[301]["deployed"]["state"] == "never"
+    assert model["exit"] == 0, "a thing to do is no problem"
+
+
+def test_machines_one_command_brings_up_are_one_thing_to_do():
+    both = stamp_notes(OLD_COMMIT)
+    reads = {"pending-300": ok(pending_with(both)), "pending-301": ok(pending_with(both))}
+    versions = [a for a in stamped_report(**reads)["attention"] if a["subject"] == "version"]
+    assert [a["text"] for a in versions if a["command"] == "just deploy kubernetes"] == [
+        f"300 homeserver-cp-1 and 301 homeserver-worker-1 were deployed from {OLD_COMMIT[:12]}; this checkout is at "
+        f"{CHECKOUT['describe']}"
+    ]
+
+
+def test_a_checkout_with_uncommitted_changes_says_to_commit_them_first():
+    ancestry = {f"ancestor-{OLD_COMMIT}": rc(0), f"descendant-{OLD_COMMIT}": rc(1)}
+    dirty = CHECKOUT | {"describe": CHECKOUT["describe"] + "-dirty"}
+    model = fs.report(
+        {"proxmox": stamped()},
+        SETUP,
+        [],
+        "2026-10-25 10:00 PDT",
+        commands=COMMANDS | {"deploy_host": "just deploy proxmox"},
+        deploy=dirty,
+        ancestry=ancestry,
+    )
+    versions = [a for a in model["attention"] if a["subject"] == "version"]
+    assert versions and all(
+        a["text"].endswith("(commit this checkout's changes first: just deploy refuses them)") for a in versions
+    )
+    out = fs.text(model, False)
+    assert "this commit, without the edits here" in out and max(len(line) for line in out.splitlines()) <= 100
+
+
+def test_a_broken_stamp_and_an_unplaced_one_are_said():
+    reads = {"node-config": ok({"description": "<!-- homeserver:begin -->\n", "digest": "x"})}
+    timed_out = {f"ancestor-{OLD_COMMIT}": rc(None, error="timed out after 30 s"), f"descendant-{OLD_COMMIT}": rc(1)}
+    broken = stamped_report(**reads)
+    assert [a["text"] for a in broken["attention"] if a["subject"] == "version" and "broken" in a["text"]] == [
+        "the host's Notes hold a broken version stamp (1 begin markers and 0 end markers): mend or remove it by hand,"
+        " or the next deploy refuses them"
+    ]
+    assert "version stamp broken: mend its Notes by hand" in fs.text(broken, False)
+    unplaced = fs.report(
+        {"proxmox": stamped()},
+        SETUP,
+        [],
+        "2026-10-25 10:00 PDT",
+        commands=COMMANDS,
+        deploy=CHECKOUT,
+        ancestry=timed_out,
+    )
+    assert unplaced["proxmox"]["host"]["deployed"]["state"] == "unplaced"
+    out = fs.text(unplaced, False)
+    assert "not placed against this checkout" in out
+    assert "where the host's version stamp lies against this checkout: timed out after 30 s" in out, out
+
+
+def test_the_text_says_where_each_machine_was_deployed_from():
+    out = fs.text(stamped_report(), False)
+    lines = out.splitlines()
+    assert max(len(line) for line in lines) <= 100, out
+    assert f"deployed from {OLD_COMMIT[:12]} (2026-10-24) · behind this checkout" in out
+    assert f"deployed from {CHECKOUT['describe']} (2026-10-25) · this checkout's" in out
+    assert "no version stamp yet (a whole just deploy leaves one)" in out
+    unread = fs.text(stamped_report(**{"node-config": failed("500 no such node")}), False)
+    assert "version stamp not read" in unread and "the node's Notes: 500 no such node" in unread, unread
+    assert f"deployed from {NEW_COMMIT[:12]}-dirty (2026-10-24) · from uncommitted files" in out
+    host = next(i for i, line in enumerate(lines) if "● host " in line)
+    assert lines[host + 1].startswith(" " * 9 + "deployed from "), "the host's stamp is under its name"
+
+
+def test_no_checkout_version_only_shows_the_stamps():
+    # VM 310's stamp is from uncommitted files, which is a thing to do only against a version of the checkout's own.
+    model = fs.report({"proxmox": stamped()}, SETUP, [], "2026-10-25 10:00 PDT", commands=COMMANDS)
+    assert not [a for a in model["attention"] if a["subject"] == "version"], model["attention"]
+    assert f"deployed from {OLD_COMMIT[:12]} (2026-10-24)\n" in fs.text(model, False)

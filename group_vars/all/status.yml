@@ -72,3 +72,10 @@ status_commands:
     a one-off auth key in the vault (just vault; scripts/runbooks/tailscale.md, section 4), then just deploy
     proxmox
   split_dns: Tailscale's admin console, DNS (scripts/runbooks/tailscale.md, section 2)
+  deploy_host: just deploy proxmox
+# The version stamp each deploy leaves in the Notes of the host and the VMs (group_vars/proxmox/notes.yml, whose
+# marker the Proxmox host reads them by), which the report places against this checkout's version, as just status's
+# own run gives it (group_vars/all/deploy.yml); each VM's is deployed by what makes it (status_vms' made_by).
+status_notes_marker: "{{ proxmox_notes_marker | default('') }}"
+status_deploy: "{{ homeserver_deploy }}"
+status_checkout: "{{ playbook_dir }}"

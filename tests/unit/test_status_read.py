@@ -104,6 +104,9 @@ AMTOOL = ["--", "amtool", "alert", "query", "-o", "json", "--alertmanager.url=ht
         ["git", "ls-remote", "git@github.com:example/homeserver.git", "refs/heads/deploy/nuc"],
         ["git", "ls-remote", "ssh://git@example.com/homeserver.git", "refs/tags/v1"],
         ["tailscale", "dns", "status", "--json"],
+        # The node's Notes, which hold the version stamp, and whether a stamp's commit comes before this checkout's.
+        ["pvesh", "get", "/nodes/pve/config", *JSON],
+        ["git", "-C", "/home/me/homeserver", "merge-base", "--is-ancestor", "a" * 40, "0123456789abcdef" * 2 + "0" * 8],
     ],
 )
 def test_reads_are_allowed(argv):
@@ -115,6 +118,12 @@ def test_reads_are_allowed(argv):
     [
         # Writes, and reads that could return a secret.
         ["pvesh", "set", "/nodes/pve/config", "--description", "x"],
+        ["pvesh", "get", "/nodes/pve/config"],
+        # git compares two commits by their full names alone, never a ref or an option, in an absolute directory.
+        ["git", "-C", "/home/me/homeserver", "merge-base", "--is-ancestor", "HEAD", "a" * 40],
+        ["git", "-C", "/home/me/homeserver", "merge-base", "--is-ancestor", "--all", "a" * 40],
+        ["git", "-C", "homeserver", "merge-base", "--is-ancestor", "a" * 40, "b" * 40],
+        ["git", "merge-base", "--is-ancestor", "a" * 40, "b" * 40],
         ["pvesh", "create", "/nodes/pve/qemu/310/status/stop"],
         ["pvesh", "get", "/access/users", *JSON],
         ["pvesh", "get", "/nodes/pve/qemu/310/config", *JSON],
@@ -231,6 +240,12 @@ def test_a_command_that_cannot_start_is_reported():
 def test_git_never_waits_for_a_password():
     result = status_read.run_one([sys.executable, "-c", "import os; print(os.environ['GIT_TERMINAL_PROMPT'])"], 10)
     assert result["stdout"].strip() == "0"
+
+
+def test_git_never_fetches_a_commit_it_lacks():
+    # In a partial clone, merge-base would fetch a stamp's unknown commit, reaching the network and writing objects.
+    result = status_read.run_one([sys.executable, "-c", "import os; print(os.environ['GIT_NO_LAZY_FETCH'])"], 10)
+    assert result["stdout"].strip() == "1"
 
 
 def test_output_is_never_translated():

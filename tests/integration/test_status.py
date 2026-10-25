@@ -610,6 +610,69 @@ def test_just_status_exits_with_the_reports_code(tree, tmp_path):
     assert not (tree / ".cache" / "status" / "report.json").exists()
 
 
+def stamp_of(commit, describe, date="2026-10-24"):
+    """Notes as roles/proxmox_notes leaves them (group_vars/proxmox/notes.yml), the owner's own text above."""
+    return (
+        f"Rack 2.\n\n<!-- homeserver:begin commit={commit} describe={describe} date={date} -->\n"
+        f"Deployed by `just deploy` from homeserver `{describe}`.\n<!-- homeserver:end -->"
+    )
+
+
+def test_each_machines_version_stamp(tree, tmp_path):
+    """just status in a git checkout of its own places the stamp each deploy left in the Notes against the checkout's
+    version: the host's, from the commit before, behind it, a thing to do with just deploy proxmox; the control plane's
+    this checkout's; the worker's none yet; Home Assistant's from uncommitted files, a thing to do too. Only git's own
+    history in the checkout says which comes first."""
+    env = {
+        "GIT_AUTHOR_NAME": "test",
+        "GIT_AUTHOR_EMAIL": "test@example.invalid",
+        "GIT_COMMITTER_NAME": "test",
+        "GIT_COMMITTER_EMAIL": "test@example.invalid",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+    }
+
+    def git(*args):
+        done = subprocess.run(["git", "-C", str(tree), *args], env=os.environ | env, capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+        return done.stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    git("add", "-A")
+    git("commit", "-q", "-m", "the tree")
+    before = git("rev-parse", "HEAD")
+    (tree / "scripts" / "note.txt").parent.mkdir(exist_ok=True)
+    (tree / "scripts" / "note.txt").write_text("a change Ansible's version counts\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "the next")
+    head = git("rev-parse", "HEAD")
+
+    state = tmp_path / "pve.json"
+    seed(state, node={"description": stamp_of(before, before[:12]) + "\n"})
+    stamps = json.loads(state.read_text())
+    stamps["vms"]["300"]["config"]["description"] = stamp_of(head, head[:12], "2026-10-25")
+    stamps["vms"]["310"]["config"]["description"] = stamp_of(head, head[:12] + "-dirty")
+    state.write_text(json.dumps(stamps))
+    rc, out, err = just_status(tree, state, "vms")
+    assert rc == 0, out + err
+
+    report = report_of(tree)
+    assert report["checkout"]["commit"] == head and report["checkout"]["describe"] == head[:12]
+    vms = {vm["vmid"]: vm for vm in report["proxmox"]["vms"]}
+    states = {
+        "host": report["proxmox"]["host"]["deployed"]["state"],
+        **{vmid: vm["deployed"]["state"] for vmid, vm in vms.items() if "deployed" in vm},
+    }
+    assert states == {"host": "behind", 300: "current", 301: "never", 310: "dirty"}
+    assert [(a["subject"], a["command"]) for a in report["attention"] if a["subject"] == "version"] == [
+        ("version", "just deploy proxmox"),
+        ("version", "just deploy homeassistant"),
+    ]
+    assert f"deployed from {before[:12]} (2026-10-24) · behind this checkout" in out, out
+    assert f"deployed from {head[:12]} (2026-10-25) · this checkout's" in out, out
+    assert "no version stamp yet (a whole just deploy leaves one)" in out, out
+
+
 def test_an_app_that_fails_is_a_problem(tree, tmp_path):
     state = tmp_path / "pve.json"
     seed(state)

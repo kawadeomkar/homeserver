@@ -16,6 +16,12 @@ status_vms: []
 status_setup: {}
 # The Proxmox node's name; empty takes the host's short hostname, as Proxmox names its node.
 status_proxmox_node: ""
+# The word that marks the version stamp's block in the Notes of the host and of this setup's VMs (roles/proxmox_notes);
+# empty reads none. The report entry point places each stamp against this checkout's version, status_deploy
+# ({commit, describe, date}; empty compares none), with git in status_checkout, the checkout's directory.
+status_notes_marker: ""
+status_deploy: {}
+status_checkout: ""
 # Storages whose disk budget the report shows: their disks' provisioned sizes against their size.
 status_budget_storages: []
 # GiB of a ZFS, directory or BTRFS storage kept out of its budget for the host's own files.
@@ -82,6 +88,6 @@ status_admin: []
 # missing Secret), nas (the NAS's settings applied again), nas_release (a TrueNAS release its configuration is not
 # written for), nas_network (interface changes never committed), backup (a backup job applied again), backup_target
 # (where backups could go, when there is no job), etcd_snapshot (taking one), tailscale (the Proxmox host's Tailscale
-# applied again), tailscale_login (its first login), split_dns (the tailnet's split DNS for the apps' domain). One left
-# out is suggested by text alone.
+# applied again), tailscale_login (its first login), split_dns (the tailnet's split DNS for the apps' domain),
+# deploy_host (what stamps the host's version, when its stamp is behind). One left out is suggested by text alone.
 status_commands: {}

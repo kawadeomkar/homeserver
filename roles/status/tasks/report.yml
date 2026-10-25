@@ -34,6 +34,19 @@
   register: status_tailnet_dns
   when: (status_findings.tailscale | default({})).routes | default([]) | selectattr('advertised') | list | length > 0
 
+# Where each machine's version stamp lies against this checkout's commit: whether git's history here has it before or
+# after, for each stamped commit but the checkout's own. Nothing to read when the stamps all match, or when this run
+# has no version of its own (a tree that is no git checkout).
+- name: report | Place the version stamps against this checkout
+  status_read:
+    commands: "{{ _commands }}"
+    parallel: "{{ status_parallel }}"
+    timeout: "{{ status_timeout }}"
+  register: status_stamp_ancestry
+  when: _commands | length > 0
+  vars:
+    _commands: "{{ status_findings | status_stamp_reads(status_deploy, status_checkout) }}"
+
 - name: report | Rank what needs attention
   ansible.builtin.set_fact:
     status_report: >-
@@ -41,7 +54,8 @@
          | status_report(status_setup, status_types, now().strftime('%Y-%m-%d %H:%M %Z') | trim,
                          probes=status_probes.results | default([]), admin=status_admin, commands=status_commands,
                          now=now().timestamp() | int,
-                         tailnet_dns=status_tailnet_dns.results.dns | default(none)) }}
+                         tailnet_dns=status_tailnet_dns.results.dns | default(none),
+                         deploy=status_deploy, ancestry=status_stamp_ancestry.results | default({})) }}
 
 - name: report | Write the report
   when: status_report_file | length > 0

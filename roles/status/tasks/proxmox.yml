@@ -18,13 +18,14 @@
       {{ status_proxmox_node if status_proxmox_node | length > 0
          else status_proxmox_name.results.node.stdout | default('') | trim }}
 
-# The day's history and the pending changes of each of this setup's VMs; the guest agent's filesystems and OS of those
-# whose agent reports them (Home Assistant's; Talos's lists no filesystem), and the address of one that serves an app
-# without a URL of its own; the disks on each budgeted storage; the upgrades apt would make, from the lists as last
-# refreshed (a simulation, which is quick, where the API's own list takes four seconds); whether an upgrade asked for
-# a reboot; and the backups: the host's jobs (each with its next run), the latest backup runs, running ones among them,
-# the backups on each of this setup's jobs' storages, and when each job's schedule fires next, twice, which gives its
-# period without reading the calendar format here.
+# The day's history and the pending changes of each of this setup's VMs, a list of every current setting, the Notes
+# and their version stamp among them; the node's own configuration, for its Notes; the guest agent's filesystems and
+# OS of those whose agent reports them (Home Assistant's; Talos's lists no filesystem), and the address of one that
+# serves an app without a URL of its own; the disks on each budgeted storage; the upgrades apt would make, from the
+# lists as last refreshed (a simulation, which is quick, where the API's own list takes four seconds); whether an
+# upgrade asked for a reboot; and the backups: the host's jobs (each with its next run), the latest backup runs,
+# running ones among them, the backups on each of this setup's jobs' storages, and when each job's schedule fires
+# next, twice, which gives its period without reading the calendar format here.
 - name: proxmox | Read the host, its storages and its VMs, at once
   status_read:
     commands: "{{ _commands }}"
@@ -46,6 +47,9 @@
                               'updates': ['apt-get', '-q', '-s', 'dist-upgrade']}) -%}
       {%-   if status_reboot_required_file | length > 0 -%}
       {%-     set _ = c.update({'reboot': ['test', '-e', status_reboot_required_file]}) -%}
+      {%-   endif -%}
+      {%-   if status_notes_marker | length > 0 -%}
+      {%-     set _ = c.update({'node-config': ['pvesh', 'get', _node ~ '/config'] + _json}) -%}
       {%-   endif -%}
       {%-   for vm in status_vms -%}
       {%-     set vmid = vm.vmid | string -%}
@@ -104,7 +108,7 @@
         {{ {'unread': _unread, 'node': status_proxmox_node_name,
             'results': status_proxmox_reads.results | default({}) | combine(status_proxmox_logs.results | default({}))}
            | status_proxmox(status_vms, status_budget_storages, status_storage_headroom_gib,
-                            status_reboot_required_file, status_backup_jobs) }}
+                            status_reboot_required_file, status_backup_jobs, status_notes_marker) }}
       # What roles/proxmox_tailscale's status entry point read, before this role ran: {} when Tailscale is off.
       tailscale: "{{ status_tailscale_state }}"
   vars:

@@ -94,6 +94,16 @@ Description: Read the homeserver's machines without changing them, and report wh
   
   
 
+  - **status_notes_marker**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The word that marks the version stamp's block in the Notes of the host and of this setup's VMs (roles/proxmox_notes), whose begin marker carries the commit; empty reads none.
+  
+  
+  
+
   - **status_budget_storages**
     - **Required**: false
     - **Type**: list
@@ -415,7 +425,27 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Type**: dict
     - **Default**: {}
   
-    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns. One left out is suggested by text alone.
+    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns, deploy_host. One left out is suggested by text alone.
+  
+  
+  
+
+  - **status_deploy**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: This checkout's version, {commit, describe, date}, which the report entry point places each machine's version stamp against; empty compares none.
+  
+  
+  
+
+  - **status_checkout**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The checkout's directory, where the report entry point asks git where a stamp's commit lies.
   
   
   
@@ -428,6 +458,7 @@ Description: Read the homeserver's machines without changing them, and report wh
 - Puts together what each host of status_hosts found (its status_found), ranks what needs attention, writes the report to status_report_file as JSON, mode 0600, and shows it as text, unless status_quiet.
 - Writes the report in a dry run too, since just status runs as one and takes its exit code from the file.
 - Unless status_probe_apps is off, first asks each app's addresses from this machine with the role's module status_probe, checking no certificate and sending no credentials.
+- Places each machine's version stamp against status_deploy, with git merge-base --is-ancestor in status_checkout for a stamp of another commit.
 
 
 **Options**:
@@ -530,7 +561,47 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Type**: dict
     - **Default**: {}
   
-    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns. One left out is suggested by text alone.
+    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns, deploy_host. One left out is suggested by text alone.
+  
+  
+  
+
+  - **status_deploy**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: This checkout's version, {commit, describe, date}, which each machine's version stamp is placed against (current, behind, ahead, from another branch, from uncommitted files); empty compares none.
+  
+  
+  
+
+  - **status_checkout**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The checkout's directory, where git tells whether a stamp's commit comes before this one's.
+  
+  
+  
+
+  - **status_parallel**
+    - **Required**: false
+    - **Type**: int
+    - **Default**: 8
+  
+    - **Description**: How many of git's reads, which place the version stamps, run at once.
+  
+  
+  
+
+  - **status_timeout**
+    - **Required**: false
+    - **Type**: int
+    - **Default**: 30
+  
+    - **Description**: Seconds each of git's reads may take.
   
   
   
@@ -555,38 +626,41 @@ Description: Read the homeserver's machines without changing them, and report wh
 | [status_vms](defaults/main.yml#L14)   | list | `[]` |    
 | [status_setup](defaults/main.yml#L16)   | dict | `{}` |    
 | [status_proxmox_node](defaults/main.yml#L18)   | str |  |    
-| [status_budget_storages](defaults/main.yml#L20)   | list | `[]` |    
-| [status_storage_headroom_gib](defaults/main.yml#L22)   | int | `0` |    
-| [status_reboot_required_file](defaults/main.yml#L24)   | str |  |    
-| [status_backup_jobs](defaults/main.yml#L28)   | list | `[]` |    
-| [status_cluster_kubeconfig](defaults/main.yml#L31)   | str |  |    
-| [status_cluster_talosconfig](defaults/main.yml#L32)   | str |  |    
-| [status_cluster_server](defaults/main.yml#L33)   | str |  |    
-| [status_cluster_nodes](defaults/main.yml#L35)   | list | `[]` |    
-| [status_cluster_apps_path](defaults/main.yml#L38)   | str |  |    
-| [status_cluster_annotation](defaults/main.yml#L39)   | str |  |    
-| [status_cluster_database_label](defaults/main.yml#L40)   | str |  |    
-| [status_cluster_volumes](defaults/main.yml#L42)   | dict | `{}` |    
-| [status_cluster_settings](defaults/main.yml#L45)   | dict | `{}` |    
-| [status_cluster_alertmanager](defaults/main.yml#L47)   | dict | `{}` |    
-| [status_cluster_flux_url](defaults/main.yml#L49)   | str |  |    
-| [status_cluster_flux_ref](defaults/main.yml#L50)   | str |  |    
-| [status_cluster_pins](defaults/main.yml#L52)   | dict | `{}` |    
-| [status_cluster_request_timeout](defaults/main.yml#L54)   | int | `10` |    
-| [status_cluster_snapshot_dir](defaults/main.yml#L57)   | str |  |    
-| [status_nas_state](defaults/main.yml#L60)   | dict | `{}` |    
-| [status_nas_release](defaults/main.yml#L61)   | str |  |    
-| [status_tailscale_state](defaults/main.yml#L63)   | dict | `{}` |    
-| [status_parallel](defaults/main.yml#L65)   | int | `8` |    
-| [status_timeout](defaults/main.yml#L66)   | int | `30` |    
-| [status_hosts](defaults/main.yml#L69)   | list | `[]` |    
-| [status_report_file](defaults/main.yml#L70)   | str |  |    
-| [status_color](defaults/main.yml#L71)   | bool | `False` |    
-| [status_quiet](defaults/main.yml#L72)   | bool | `False` |    
-| [status_probe_apps](defaults/main.yml#L75)   | bool | `True` |    
-| [status_probe_timeout](defaults/main.yml#L76)   | int | `5` |    
-| [status_admin](defaults/main.yml#L79)   | list | `[]` |    
-| [status_commands](defaults/main.yml#L87)   | dict | `{}` |    
+| [status_notes_marker](defaults/main.yml#L22)   | str |  |    
+| [status_deploy](defaults/main.yml#L23)   | dict | `{}` |    
+| [status_checkout](defaults/main.yml#L24)   | str |  |    
+| [status_budget_storages](defaults/main.yml#L26)   | list | `[]` |    
+| [status_storage_headroom_gib](defaults/main.yml#L28)   | int | `0` |    
+| [status_reboot_required_file](defaults/main.yml#L30)   | str |  |    
+| [status_backup_jobs](defaults/main.yml#L34)   | list | `[]` |    
+| [status_cluster_kubeconfig](defaults/main.yml#L37)   | str |  |    
+| [status_cluster_talosconfig](defaults/main.yml#L38)   | str |  |    
+| [status_cluster_server](defaults/main.yml#L39)   | str |  |    
+| [status_cluster_nodes](defaults/main.yml#L41)   | list | `[]` |    
+| [status_cluster_apps_path](defaults/main.yml#L44)   | str |  |    
+| [status_cluster_annotation](defaults/main.yml#L45)   | str |  |    
+| [status_cluster_database_label](defaults/main.yml#L46)   | str |  |    
+| [status_cluster_volumes](defaults/main.yml#L48)   | dict | `{}` |    
+| [status_cluster_settings](defaults/main.yml#L51)   | dict | `{}` |    
+| [status_cluster_alertmanager](defaults/main.yml#L53)   | dict | `{}` |    
+| [status_cluster_flux_url](defaults/main.yml#L55)   | str |  |    
+| [status_cluster_flux_ref](defaults/main.yml#L56)   | str |  |    
+| [status_cluster_pins](defaults/main.yml#L58)   | dict | `{}` |    
+| [status_cluster_request_timeout](defaults/main.yml#L60)   | int | `10` |    
+| [status_cluster_snapshot_dir](defaults/main.yml#L63)   | str |  |    
+| [status_nas_state](defaults/main.yml#L66)   | dict | `{}` |    
+| [status_nas_release](defaults/main.yml#L67)   | str |  |    
+| [status_tailscale_state](defaults/main.yml#L69)   | dict | `{}` |    
+| [status_parallel](defaults/main.yml#L71)   | int | `8` |    
+| [status_timeout](defaults/main.yml#L72)   | int | `30` |    
+| [status_hosts](defaults/main.yml#L75)   | list | `[]` |    
+| [status_report_file](defaults/main.yml#L76)   | str |  |    
+| [status_color](defaults/main.yml#L77)   | bool | `False` |    
+| [status_quiet](defaults/main.yml#L78)   | bool | `False` |    
+| [status_probe_apps](defaults/main.yml#L81)   | bool | `True` |    
+| [status_probe_timeout](defaults/main.yml#L82)   | int | `5` |    
+| [status_admin](defaults/main.yml#L85)   | list | `[]` |    
+| [status_commands](defaults/main.yml#L93)   | dict | `{}` |    
 
 
 
@@ -631,6 +705,7 @@ Description: Read the homeserver's machines without changing them, and report wh
 | report ¦ Put the findings together | ansible.builtin.set_fact | False |
 | report ¦ Ask the apps' addresses | status_probe | True |
 | report ¦ Read this machine's Tailscale DNS | status_read | True |
+| report ¦ Place the version stamps against this checkout | status_read | True |
 | report ¦ Rank what needs attention | ansible.builtin.set_fact | False |
 | report ¦ Write the report | block | True |
 | report ¦ Make the report's directory | ansible.builtin.file | False |
@@ -727,13 +802,14 @@ classDef rescue stroke:#665352,stroke-width:2px;
   Start-->|Task| report___Put_the_findings_together0[report   put the findings together]:::task
   report___Put_the_findings_together0-->|Task| report___Ask_the_apps__addresses1[report   ask the apps  addresses<br>When: **status probe apps and  targets   length   0**]:::task
   report___Ask_the_apps__addresses1-->|Task| report___Read_this_machine_s_Tailscale_DNS2[report   read this machine s tailscale dns<br>When: **status findings tailscale   default      routes  <br>default       selectattr  advertised     list  <br>length   0**]:::task
-  report___Read_this_machine_s_Tailscale_DNS2-->|Task| report___Rank_what_needs_attention3[report   rank what needs attention]:::task
-  report___Rank_what_needs_attention3-->|Block Start| report___Write_the_report4_block_start_0[[report   write the report<br>When: **status report file   length   0**]]:::block
-  report___Write_the_report4_block_start_0-->|Task| report___Make_the_report_s_directory0[report   make the report s directory]:::task
+  report___Read_this_machine_s_Tailscale_DNS2-->|Task| report___Place_the_version_stamps_against_this_checkout3[report   place the version stamps against this<br>checkout<br>When: **commands   length   0**]:::task
+  report___Place_the_version_stamps_against_this_checkout3-->|Task| report___Rank_what_needs_attention4[report   rank what needs attention]:::task
+  report___Rank_what_needs_attention4-->|Block Start| report___Write_the_report5_block_start_0[[report   write the report<br>When: **status report file   length   0**]]:::block
+  report___Write_the_report5_block_start_0-->|Task| report___Make_the_report_s_directory0[report   make the report s directory]:::task
   report___Make_the_report_s_directory0-->|Task| report___Write_the_report_as_JSON1[report   write the report as json]:::task
-  report___Write_the_report_as_JSON1-.->|End of Block| report___Write_the_report4_block_start_0
-  report___Write_the_report_as_JSON1-->|Task| report___Show_the_report5[report   show the report<br>When: **not status quiet**]:::task
-  report___Show_the_report5-->End
+  report___Write_the_report_as_JSON1-.->|End of Block| report___Write_the_report5_block_start_0
+  report___Write_the_report_as_JSON1-->|Task| report___Show_the_report6[report   show the report<br>When: **not status quiet**]:::task
+  report___Show_the_report6-->End
 ```
 
 
