@@ -144,6 +144,28 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       `tag:claude-vm`), rather than replace it. The runbook's section 1 then points at the target instead of its
       placeholder JSON
 
+## Versions
+
+Each deploy stamps the version it came from in the Proxmox Notes of what it deployed (`scripts/runbooks/tags.md`).
+
+- [ ] Apply the rulesets by hand: `tags.json` with `POST` (it does not exist yet), recording the ID it returns in
+      `scripts/runbooks/tags.md`, and `main.json` with `PUT`, which narrows merges to merge commits. Then cut the
+      first tag on `main` and run `just deploy`, so every machine carries a stamp
+- [ ] A Prometheus scrape of the Flux Operator's metrics, `flux_resource_info` with each Kustomization's revision,
+      and an alert when the Kustomizations stay on more than one revision (`count by (revision)` above one for some
+      minutes): an entry in kube-prometheus-stack's `additionalScrapeConfigs` for
+      `flux-operator.flux-system.svc:8080`, beside the Proxmox host's (not a ServiceMonitor, a kind the release's own
+      CRDs bring, which a fresh cluster refuses in the same Flux Kustomization), and a rule in its
+      `additionalPrometheusRulesMap`. flux-system's `allow-scraping` policy admits port 8080 from every namespace and
+      `monitoring`'s policies restrict ingress only, so no policy changes; `up{job="flux-operator"}` proves the scrape.
+      `just status` already shows Flux's applied commit against its branch, so this is for an alert alone
+- [ ] A stamp on the NAS too, once `tests/integration/fake_truenas.py` models a dataset's `comments`: today it
+      accepts the field but drops it on create and lower-cases it on update, so a comment would read as drift on
+      every run (a false green for any configuration that sets one). TrueNAS 25.10 maps `comments` to
+      `org.freenas:description`, which child datasets inherit; `truenas_dataset` passes it through already. A
+      reverse-DNS ZFS user property (`user_properties_update`, never the full-replace `user_properties`) is the
+      cleaner field but needs module code too
+
 ## Bringing the apps up
 
 Once the cluster is built and Flux syncs it (`scripts/runbooks/talos.md`). Merge app by app, or suspend the app
