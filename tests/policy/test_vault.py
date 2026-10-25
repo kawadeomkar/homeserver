@@ -40,23 +40,31 @@ def test_the_vault_is_ignored_and_its_example_is_not():
 
 
 def test_the_example_lists_every_secret_the_playbooks_read():
+    """The example is the template just vault new encrypts: every key the group_vars read, each empty, which
+    every reader takes for unset, where a placeholder secret would pass for a real one."""
     read = set()
     for path in (ROOT / "group_vars").rglob("*.yml"):
         if "vault" not in path.name and path.name != "local.yml":
             read |= set(re.findall(r"\bvault_[a-z0-9_]+\b", path.read_text()))
-    text = EXAMPLE.read_text()
-    assert set(re.findall(r"^# (vault_[a-z0-9_]+):", text, re.M)) == read - NEVER_IN_THE_VAULT
-    assert yaml.safe_load(text) is None, "the example sets nothing: a placeholder secret would pass for a real one"
+    assert yaml.safe_load(EXAMPLE.read_text()) == dict.fromkeys(sorted(read - NEVER_IN_THE_VAULT), "")
+
+
+def test_each_key_of_the_example_says_what_it_is_for():
+    lines = EXAMPLE.read_text().splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("vault_"):
+            assert lines[i - 1].startswith("# ") and "---" not in lines[i - 1], f"no comment above {line}"
 
 
 def vault_init_tree(tmp_path: Path) -> Path:
-    """The justfile, ansible.cfg and scripts/init/setups.py, which makes the vault, copied into tmp_path, with
-    nowhere a vault yet."""
+    """The justfile, ansible.cfg, scripts/init/setups.py, which makes the vault, and the vault's template, copied into
+    tmp_path, with nowhere a vault yet."""
     for name in ("justfile", "ansible.cfg"):
         shutil.copy(ROOT / name, tmp_path)
     (tmp_path / "scripts" / "init").mkdir(parents=True)
     shutil.copy(ROOT / "scripts" / "init" / "setups.py", tmp_path / "scripts" / "init" / "setups.py")
     (tmp_path / "group_vars" / "all").mkdir(parents=True)
+    shutil.copy(EXAMPLE, tmp_path / EXAMPLE.relative_to(ROOT))
     return tmp_path / VAULT
 
 
@@ -75,8 +83,8 @@ def view(tree: Path) -> subprocess.CompletedProcess:
 
 
 def test_vault_init_makes_a_vault_and_its_password(tmp_path):
-    """A .vault_pass and a vault only their owner can read, the vault an empty mapping. A second run finds a vault
-    that opens and leaves it alone."""
+    """A .vault_pass and a vault only their owner can read, the vault the example as it is, every key empty under its
+    comment. A second run finds a vault that opens and leaves it alone."""
     vault = vault_init_tree(tmp_path)
     first = vault_init(tmp_path)
     assert first.returncode == 0, first.stdout + first.stderr
@@ -84,7 +92,7 @@ def test_vault_init_makes_a_vault_and_its_password(tmp_path):
         assert path.stat().st_mode & 0o777 == 0o600, path
     assert vault.read_text().startswith(HEADERS)
     opened = view(tmp_path)
-    assert opened.returncode == 0 and yaml.safe_load(opened.stdout) == {}, opened.stderr
+    assert opened.returncode == 0 and opened.stdout == EXAMPLE.read_text(), opened.stderr
     before = vault.read_bytes()
     second = vault_init(tmp_path)
     assert second.returncode == 0 and "nothing to do" in second.stdout, second.stdout + second.stderr
