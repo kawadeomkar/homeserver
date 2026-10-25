@@ -74,20 +74,38 @@
 # was taken.
 - name: cluster | Work out what the cluster says
   ansible.builtin.set_fact:
-    status_found:
-      etcd_snapshots: >-
-        {{ {'dir': status_cluster_snapshot_dir | regex_replace(_home, '~/'),
-            'files': query('ansible.builtin.fileglob', status_cluster_snapshot_dir ~ '/*.db') | map('basename') | list}
-           if 'etcd_snapshots' in status_reads and status_cluster_snapshot_dir else none }}
-      cluster: >-
-        {{ {'unread': status_cluster_unread, 'results': status_cluster_reads.results | default({}),
-            'access': status_cluster_access}
-           | status_cluster(nodes=status_cluster_nodes, apps_path=status_cluster_apps_path,
-                            annotation=status_cluster_annotation, database_label=status_cluster_database_label,
-                            volumes=status_cluster_volumes, settings=status_cluster_settings,
-                            pins=status_cluster_pins, kubeconfig=_shown, now=now().timestamp() | int)
-           if 'cluster' in status_reads else none }}
+    status_cluster_snapshots: >-
+      {{ {'dir': status_cluster_snapshot_dir | regex_replace(_home, '~/'),
+          'files': query('ansible.builtin.fileglob', status_cluster_snapshot_dir ~ '/*.db') | map('basename') | list}
+         if 'etcd_snapshots' in status_reads and status_cluster_snapshot_dir else none }}
+    status_cluster_found: >-
+      {{ {'unread': status_cluster_unread, 'results': status_cluster_reads.results | default({}),
+          'access': status_cluster_access}
+         | status_cluster(nodes=status_cluster_nodes, apps_path=status_cluster_apps_path,
+                          annotation=status_cluster_annotation, database_label=status_cluster_database_label,
+                          volumes=status_cluster_volumes, settings=status_cluster_settings,
+                          pins=status_cluster_pins, kubeconfig=_shown, now=now().timestamp() | int)
+         if 'cluster' in status_reads else none }}
   vars:
     _home: "{{ '^' ~ (lookup('ansible.builtin.env', 'HOME') | regex_escape) ~ '/' }}"
     # The kubeconfig as the kubectl commands the report suggests name it.
     _shown: "{{ status_cluster_kubeconfig | regex_replace(_home, '~/') }}"
+
+# A DNS lookup per app's name, and one GET per URL, sent to the address Traefik answers on whatever DNS says, closed
+# once the headers arrive. No certificate is checked, so no CA and no credential is needed. The cluster's host is this
+# machine, so the apps are asked from here.
+- name: cluster | Ask the apps' addresses
+  status_probe:
+    targets: "{{ _targets }}"
+    timeout: "{{ status_probe_timeout }}"
+  register: status_cluster_probes
+  when: status_probe_apps and _targets | length > 0
+  vars:
+    _targets: "{{ {'cluster': status_cluster_found} | status_probe_targets(status_types) }}"
+
+- name: cluster | Say what the cluster says
+  ansible.builtin.set_fact:
+    status_found:
+      etcd_snapshots: "{{ status_cluster_snapshots }}"
+      cluster: "{{ status_cluster_found }}"
+      probes: "{{ status_cluster_probes.results | default([]) }}"

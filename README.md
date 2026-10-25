@@ -134,12 +134,13 @@ a VM stopped or waiting for a restart, a storage filling up or provisioned beyon
 was missed, the backup job not as configured or missing, a node not Ready, etcd or Flux in trouble, the nodes behind the
 pins, a certificate or credential running out, Alertmanager's firing alerts, Tailscale down, unguarded or with a route
 not approved, the tailnet's split DNS missing, a NAS pool degraded, filling up or behind on its scrub, a snapshot task
-failing, TrueNAS's own alerts). On a terminal, the line on what is being read is drawn at once and kept up to date until
-the report replaces it. `just status vms storage` shows some sections (of apps, admin, tailscale, vms, storage, backups,
-cluster and nas), reading only the machines they need, and `--json` prints the report as JSON. It exits with the
-report's own code: 0 when nothing is wrong, 1 for a problem, 2 when a source could not be read, 3 when the run failed;
-the code also ends its last line and is the `exit` field of `--json`. Another project's VMs on the host are counted,
-never named. It reads no Secret and checks no certificate, and never uses a kubeconfig of another cluster.
+failing, TrueNAS's own alerts). On a terminal, each section shows as soon as the machines it needs are read, always in
+the same order, with a line for each still to come, and the line on what is being read, kept up to date below. `just
+status vms storage` shows some sections (of apps, admin, tailscale, vms, storage, backups, cluster and nas), reading
+only the machines they need, and `--json` prints the report as JSON. It exits with the report's own code: 0 when nothing
+is wrong, 1 for a problem, 2 when a source could not be read, 3 when the run failed; the code also ends its last line
+and is the `exit` field of `--json`. Another project's VMs on the host are counted, never named. It reads no Secret and
+checks no certificate, and never uses a kubeconfig of another cluster.
 
 Whatever follows the playbook goes to ansible-playbook as typed, so a variable for one run is
 `just deploy kubernetes -e talos_allow_bootstrap=true`, and one host's play `just deploy proxmox --limit homeserver`.

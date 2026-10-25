@@ -1770,7 +1770,7 @@ def test_status_reads_the_nas_as_its_play_reaches_it(tmp_path, local_yml, source
     assert found["status_source"] == source
     if source:
         assert found["truenas_api_hosts"] == ["192.0.2.10", "192.0.2.50"]
-    play = yaml.safe_load((ROOT / "status.yml").read_text())[0]
+    play = next(p for p in yaml.safe_load((ROOT / "status.yml").read_text()) if p["name"] == "Read the machines")
     assert "nas" in play["hosts"].split(":")
     imports = [t for t in play["pre_tasks"] if "ansible.builtin.import_role" in t]
     assert [t["ansible.builtin.import_role"] for t in imports] == [
@@ -1795,7 +1795,7 @@ def test_status_reads_tailscale_as_the_proxmox_play_keeps_it(tmp_path, more, ena
     tree = example_tree(tmp_path, PROXMOX_ONLY_LOCAL_YML + more)
     names = "{'enabled': proxmox_tailscale_enabled, 'tags': proxmox_tailscale_tags}"
     assert resolve_on(tree, "homeserver", names) == {"enabled": enabled, "tags": ["tag:homeserver"]}
-    play = yaml.safe_load((ROOT / "status.yml").read_text())[0]
+    play = next(p for p in yaml.safe_load((ROOT / "status.yml").read_text()) if p["name"] == "Read the machines")
     reads = next(
         t for t in play["pre_tasks"] if t.get("ansible.builtin.import_role", {}).get("name") == "proxmox_tailscale"
     )
@@ -1937,6 +1937,7 @@ TASK_KEYWORDS = {
     "until",
     "retries",
     "delay",
+    "delegate_to",
 }
 
 
@@ -1961,6 +1962,15 @@ def test_status_reads_only_through_status_read():
             for module in set(task) - TASK_KEYWORDS:
                 used.setdefault(module, []).append(f"{tasks_file.name}: {task.get('name')}")
     assert {module: where for module, where in used.items() if module not in allowed} == {}
+    # What the Proxmox host's play asks from this machine (its apps' addresses, this machine's Tailscale), and nothing
+    # delegated elsewhere.
+    delegated = {
+        task.get("delegate_to")
+        for tasks_file in (ROOT / "roles" / "status" / "tasks").glob("*.yml")
+        for task in tasks_in(yaml.safe_load(tasks_file.read_text()))
+        if "delegate_to" in task
+    }
+    assert delegated == {"localhost"}
     report = yaml.safe_load((ROOT / "roles" / "status" / "tasks" / "report.yml").read_text())
     writes = [t for t in tasks_in(report) if {"ansible.builtin.file", "ansible.builtin.copy"} & set(t)]
     assert all("status_report_file" in json.dumps(t) for t in writes), "the report entry point writes elsewhere"

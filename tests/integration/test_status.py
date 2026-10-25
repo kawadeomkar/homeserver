@@ -777,16 +777,20 @@ def test_the_apps_are_asked_from_here(tree, tmp_path):
     assert report["dns"]["state"] == "missing" and report["dns"]["address"] == "192.0.2.40"
     assert all(u["error"] for a in report["apps"] if a["name"] != "homeassistant" for u in a["urls"])
     assert ("problem", "traefik") in [(a["level"], a["subject"]) for a in report["attention"]]
-    assert "probes ok " in reading(out), out
+    # Each host's play asked its own apps: the cluster's the apps, the Proxmox host's Home Assistant, at an address
+    # that never answers either.
+    apps = {a["name"]: a for a in report["apps"]}
+    assert apps["homeassistant"]["urls"][0]["error"], apps["homeassistant"]
     assert "Until DNS has them, these lines in /etc/hosts reach the apps from here:" in out
 
 
 SPINNER = re.compile(r"reading  .*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] \d+\.\d s")
 
 
-def test_on_a_terminal_the_line_on_what_is_read_is_live(tree, tmp_path):
-    """On a terminal, the line on what is being read is drawn at once and redrawn in place, a spinner beside each host
-    still being read, then cleared: what the terminal holds after the run is the report as a pipe gets it."""
+def test_on_a_terminal_each_section_shows_as_it_is_read(tree, tmp_path):
+    """On a terminal, the report's head comes at once, then each section in its order as the hosts it needs are read,
+    the sections still to come and the line on what is being read redrawn in place below them, a spinner beside what
+    is still waited for, then cleared: what the terminal holds after the run is the report as a pipe gets it."""
     state = tmp_path / "pve.json"
     seed(state)
     rc, plain, err = just_status(tree, state)
@@ -794,6 +798,8 @@ def test_on_a_terminal_the_line_on_what_is_read_is_live(tree, tmp_path):
     rc, stream = just_status_on_a_terminal(tree, state)
     assert rc == 0, stream
     assert SPINNER.search(stream), stream
+    assert re.search(r" [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] APPS +waiting for the Proxmox host", stream), stream
+    assert stream.index("homeserver  ") < stream.index("reading  "), stream
     terminal = Terminal(rows=20)
     terminal.feed(stream)
     assert terminal.redraws > 0, stream
@@ -999,7 +1005,8 @@ def seed_nas(path, **more):
     for guid in ("1001", "1002"):
         fake._import_pool({"guid": guid})
     for pool in fake.s["pools"]:
-        pool["scan"] = fake_truenas.finished_scrub(end=time.time() - 3 * 86400)
+        # Three days ago, and some minutes: the report's ages count from when the reading began.
+        pool["scan"] = fake_truenas.finished_scrub(end=time.time() - 3 * 86400 - 600)
     fake.s["datasets"]["persistent/nextcloud"] = fake.new_dataset("persistent/nextcloud", {})
     fake.m_sharing_nfs_create({"path": "/mnt/persistent/nextcloud", "hosts": ["192.0.2.31"]})
     fake.m_pool_snapshottask_create(
@@ -1201,7 +1208,7 @@ def test_the_sections_shown_read_only_the_machines_they_need(nas_tree, nas, tmp_
 DAY = 86400
 
 
-def seed_backups(path, runs, vmids=(300, 301, 310), job=True, next_in=4 * 3600):
+def seed_backups(path, runs, vmids=(300, 301, 310), job=True, next_in=4 * 3600 - 30):
     """The NAS's backup storage on the fake host, the nightly job over `vmids` as roles/proxmox_backup makes it, due
     next in `next_in` seconds, and `runs` seeded through fake_pve.backup_run: each (days before the last run due,
     {vmid: why it failed})."""
