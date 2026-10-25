@@ -1,0 +1,18 @@
+---
+# Neutral defaults: with nothing else set, the role changes nothing. What it writes, and where, is configuration,
+# set in inventory group_vars and the plays; see README.md.
+
+# The word that marks the role's block, <!-- <marker>:begin ... --> to <!-- <marker>:end -->: the project's name.
+proxmox_notes_marker: ""
+# The key=value pairs the begin marker carries, hidden in the web UI, for a tool to read back, such as the commit a
+# deploy came from.
+proxmox_notes_metadata: {}
+# The block's text, Markdown as the web UI renders it. Empty, the role writes nothing.
+proxmox_notes_text: ""
+# Whether the block goes in the node's own Notes.
+proxmox_notes_node: false
+# The VMs whose Notes hold the block.
+proxmox_notes_vmids: []
+# What to say when there is no block to write (proxmox_notes_text empty) for Notes the role was given: why, such as
+# "this run was narrowed with --limit". Empty, nothing is said.
+proxmox_notes_skip_reason: ""

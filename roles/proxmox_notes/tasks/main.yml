@@ -1,0 +1,141 @@
+---
+# Keeps a block of text, marked as proxmox_notes_marker's, in the Notes of the Proxmox node and of the VMs
+# proxmox_notes_vmids names, with pvesh, qm and pvenode over root SSH. Only the block is ever written: every other line
+# of the Notes stays as it is, and a block whose markers are broken is refused, never guessed at. The
+# proxmox_notes_plan filter (filter_plugins/proxmox_notes.py) works out what to write from what the tasks read.
+# Notes apply to a running VM at once, never as a pending change (qemu-server's $fast_plug_option).
+
+# Needs no connection, so it runs under every tag, and a dry run of the configuration alone catches it.
+- name: Check the role's inputs
+  ansible.builtin.assert:
+    that: _errors | length == 0
+    fail_msg: "{{ _errors | join(' ') }}"
+    quiet: true
+  tags: [always]
+  vars:
+    _errors: >-
+      {{ proxmox_notes_marker | proxmox_notes_input_errors(proxmox_notes_metadata, proxmox_notes_text,
+                                                           proxmox_notes_node, proxmox_notes_vmids) }}
+
+- name: Say why nothing is written
+  ansible.builtin.debug:
+    msg: "{{ proxmox_notes_skip_reason }}"
+  when: >-
+    not proxmox_notes_text | proxmox_notes_has_text and proxmox_notes_skip_reason | length > 0
+    and (proxmox_notes_node or proxmox_notes_vmids | length > 0)
+
+- name: Do nothing without a block to write, or Notes to write it in
+  ansible.builtin.meta: end_role
+  when: >-
+    not proxmox_notes_text | proxmox_notes_has_text
+    or (not proxmox_notes_node and proxmox_notes_vmids | length == 0)
+
+# Proxmox names a node after its short hostname. qm and pvenode write the local node's, so the role reads it too.
+- name: Find the node's name
+  ansible.builtin.command:
+    argv: [hostname, -s]
+  register: proxmox_notes_hostname
+  changed_when: false
+  check_mode: false
+
+- name: Read the node's VMs
+  ansible.builtin.command:
+    argv: [pvesh, get, "/nodes/{{ proxmox_notes_hostname.stdout | trim }}/qemu", --output-format, json]
+  register: proxmox_notes_qemu
+  changed_when: false
+  check_mode: false
+  when: proxmox_notes_vmids | length > 0
+
+- name: Read the Notes of each VM
+  ansible.builtin.command:
+    argv: [pvesh, get, "/nodes/{{ proxmox_notes_hostname.stdout | trim }}/qemu/{{ item }}/config", --output-format, json]
+  register: proxmox_notes_configs
+  changed_when: false
+  check_mode: false
+  loop: >-
+    {{ proxmox_notes_vmids | map('string') | unique
+       | select('in', proxmox_notes_qemu.stdout | default('[]') | from_json | map(attribute='vmid') | map('string'))
+       | list }}
+
+- name: Read the node's Notes
+  ansible.builtin.command:
+    argv: [pvesh, get, "/nodes/{{ proxmox_notes_hostname.stdout | trim }}/config", --output-format, json]
+  register: proxmox_notes_node_config
+  changed_when: false
+  check_mode: false
+  when: proxmox_notes_node
+
+- name: Work out what to write
+  ansible.builtin.set_fact:
+    proxmox_notes_plan: >-
+      {{ proxmox_notes_marker
+         | proxmox_notes_plan(proxmox_notes_metadata, proxmox_notes_text, proxmox_notes_node, proxmox_notes_vmids,
+                              proxmox_notes_qemu.stdout | default('[]') | from_json,
+                              proxmox_notes_configs.results | default([]) | proxmox_notes_configs,
+                              proxmox_notes_node_config.stdout | from_json if proxmox_notes_node else none) }}
+
+- name: Refuse Notes whose block cannot be written
+  ansible.builtin.assert:
+    that: proxmox_notes_plan.problems | length == 0
+    fail_msg: "{{ proxmox_notes_plan.problems | join('; ') }}."
+    quiet: true
+
+# The VMs are created earlier in the same run, so one still missing on a real run is no VM of this role's to stamp.
+- name: Refuse a VM that does not exist
+  ansible.builtin.assert:
+    that: proxmox_notes_plan.missing | length == 0
+    fail_msg: >-
+      The node has no VM {{ proxmox_notes_plan.missing | join(', ') }}, whose Notes proxmox_notes_vmids names.
+    quiet: true
+  when: not ansible_check_mode
+
+# Each write passes the digest of the configuration as read, so a change made since (in the web UI, or by another
+# project keeping a block of its own) is refused rather than overwritten. A refused write is reported by the task after
+# the two, from Proxmox's own message: a failed task would print the whole Notes, the owner's text with them.
+- name: Write the block in each VM's Notes
+  ansible.builtin.command:
+    argv: >-
+      {{ ['qm', 'set', item.vmid | string, '--description', item.notes]
+         + (['--digest', item.digest] if item.digest | length > 0 else []) }}
+    # The Notes as they are: a $NAME or a leading ~ in them is the owner's text, never the host's to expand.
+    expand_argument_vars: false
+  register: proxmox_notes_vm_writes
+  changed_when: proxmox_notes_vm_writes.rc == 0
+  failed_when: false
+  loop: "{{ proxmox_notes_plan.writes | selectattr('target', 'eq', 'vm') | list }}"
+  loop_control:
+    label: "{{ item | proxmox_notes_summary }}"
+
+- name: Write the block in the node's Notes
+  ansible.builtin.command:
+    argv: >-
+      {{ ['pvenode', 'config', 'set', '--description', item.notes]
+         + (['--digest', item.digest] if item.digest | length > 0 else []) }}
+    expand_argument_vars: false
+  register: proxmox_notes_node_writes
+  changed_when: proxmox_notes_node_writes.rc == 0
+  failed_when: false
+  loop: "{{ proxmox_notes_plan.writes | selectattr('target', 'eq', 'node') | list }}"
+  loop_control:
+    label: "{{ item | proxmox_notes_summary }}"
+
+- name: Refuse a write Proxmox did not take
+  ansible.builtin.assert:
+    that: _failed | length == 0
+    fail_msg: >-
+      Proxmox did not take the {{ proxmox_notes_marker }} block in the Notes of {{ _failed | join('; ') }}. The
+      Notes are as they were; run it again once that is settled.
+    quiet: true
+  vars:
+    _failed: >-
+      {{ (proxmox_notes_vm_writes.results | default([]) + proxmox_notes_node_writes.results | default([]))
+         | proxmox_notes_failures }}
+
+# The commands above are skipped in a dry run, which says instead what they would write.
+- name: Say what would be written
+  ansible.builtin.debug:
+    msg: "{{ _would }}"
+  changed_when: true
+  when: ansible_check_mode and _would | length > 0
+  vars:
+    _would: "{{ proxmox_notes_plan.writes | proxmox_notes_would(proxmox_notes_marker, proxmox_notes_plan.missing) }}"

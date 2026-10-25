@@ -23,6 +23,15 @@ enabled flag as a number (the role reads text as well), and only the listing car
 Proxmox's pve-configid rule, and an option the schema lacks fails as it does there. The backup runs just status
 reads are described under backup_run().
 
+Notes (roles/proxmox_notes, as Proxmox VE 9.2's qemu-server 9.2.11 and pve-manager store them, read from a host's
+installed code and pve-manager's and pve-common's sources): `qm set --description` for a VM, applied at once on a
+running one, and `pvenode config set --description` for the node, each refused beyond Proxmox's 8192 and 65536
+characters, and each refused when given a `--digest` other than the configuration's own. A VM's come back trimmed at
+the end. A node's are kept as NodeConfig writes them, a comment line each (encode_text: control characters, `:`, `%`
+and anything past ASCII as %XX, spaces as they are; Perl's split drops the trailing empty lines), and come back as
+PVE::JSONSchema::parse_config reads that file: each line's trailing spaces trimmed and a newline after each. A node
+with no configuration file at all answers {}, with no description and no digest.
+
 VMs: `qm create|set|config|status|start|shutdown` and `qm disk resize`, and pvesh's /nodes/<node>/qemu,
 /nodes/<node>/lxc (the state's `containers`), .../qemu/<id>/config and .../pending, /nodes/<node>/status,
 /nodes/<node>/storage, .../storage/<id>/content (filtered by --content and --vmid; as on Proxmox, files that belong
@@ -95,7 +104,7 @@ import time
 from datetime import datetime, timedelta
 from datetime import time as clock
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 # Proxmox names the node after the short hostname, which the fake `hostname -s` answers. Fixed rather than
 # the controller's own: macOS renames itself when the network hands it a name, and a rename between the
@@ -224,10 +233,41 @@ def get_storage(state, opts):
     return listing(state)
 
 
+def encode_text(text):
+    """PVE::ParseUtils::encode_text: every byte but 0x20-0x24, 0x26-0x39 and 0x3b-0x7e as %XX."""
+    return "".join(
+        chr(b) if 0x20 <= b <= 0x24 or 0x26 <= b <= 0x39 or 0x3B <= b <= 0x7E else f"%{b:02X}" for b in text.encode()
+    )
+
+
+def node_file(state):
+    """The node's configuration file as pve-manager's NodeConfig writes it: the Notes first, a comment line each,
+    then each setting."""
+    lines = state["node"].get("description", "").split("\n")
+    while lines and lines[-1] == "":
+        lines.pop()
+    raw = "".join(f"#{encode_text(line)}\n" for line in lines)
+    return raw + "".join(f"{k}: {v}\n" for k, v in sorted(state["node"].items()) if k != "description")
+
+
+def node_digest(state):
+    raw = node_file(state)
+    return hashlib.sha1(raw.encode()).hexdigest() if raw else ""
+
+
 def get_node_config(state, node, opts):
     # As on a real host, /nodes/localhost/config (or any name but the node's own) answers {},
-    # and values come back as strings.
-    return {k: str(v) for k, v in state["node"].items()} if node == NODE else {}
+    # and values come back as strings. The node's Notes (description) come back as PVE::JSONSchema's
+    # parse_config reads them from the file's comment lines: each line's leading and trailing whitespace
+    # trimmed (a tab is %09 in the file, so only spaces go), then decoded, and a newline after each.
+    raw = node_file(state)
+    if node != NODE or not raw:
+        return {}
+    out = {k: str(v) for k, v in state["node"].items() if k != "description"}
+    lines = [line.strip(" ") for line in raw.split("\n") if line.strip(" ")]
+    out["description"] = "".join(unquote(line[1:]) + "\n" for line in lines if line.startswith("#"))
+    out["digest"] = node_digest(state)
+    return out
 
 
 def check_node(node):
@@ -489,8 +529,12 @@ VM_OPTIONS = {
     "ide2",
     "boot",
     "tags",
+    "description",
 }
 BLOCK_TYPES = ("lvmthin", "lvm", "zfspool")
+# Proxmox's limits on Notes: qemu-server's maxLength for a VM's description, NodeConfig's for a node's.
+VM_NOTES_LIMIT = 8 * 1024
+NODE_NOTES_LIMIT = 64 * 1024
 
 
 def vm_option(name):
@@ -600,6 +644,8 @@ def checked_value(state, vmid, key, value):
         return ",".join([volid, *opts, f"size={size_text(volume['size'])}"])
     if key == "tags":
         return tags_text(value)
+    if key == "description" and len(value) > VM_NOTES_LIMIT:
+        fail(f"400 Parameter verification failed.\ndescription: value may only be {VM_NOTES_LIMIT} characters long")
     if key == "ide2":
         volid = value.split(",", 1)[0]
         if volid not in ("none", "cdrom") and not any(
@@ -643,6 +689,15 @@ def qm(state, args):
     elif verb == "set":
         vmid, opts = args[1], options(args[2:])
         vm = vm_of(state, vmid)
+        digest = opts.pop("digest", "")
+        # Another writer's Notes, saved after the role read the configuration and before it writes: what a test
+        # seeds in `concurrent_notes` ({vmid: Notes}) lands first.
+        edit = state.get("concurrent_notes", {}).pop(vmid, None)
+        if edit is not None:
+            vm["config"]["description"] = edit
+            save(state)
+        if digest and digest != vm_digest(vm):
+            fail("checksum mismatch (file change by other user?)")
         unknown = [name for name in opts if not vm_option(name) and name != "delete"]
         if unknown:
             fail(f"400 Parameter verification failed.\n{unknown[0]}: property is not defined in schema")
@@ -792,7 +847,12 @@ NUMERIC = ("cores", "sockets", "balloon", "onboot")
 
 
 def shown_config(config):
-    return {k: int(v) if k in NUMERIC and str(v).isdigit() else v for k, v in config.items()}
+    # A VM's Notes (description) come back as qemu-server's parse_vm_config reads its comment lines: with
+    # the trailing whitespace trimmed.
+    return {
+        k: int(v) if k in NUMERIC and str(v).isdigit() else v.rstrip() if k == "description" else v
+        for k, v in config.items()
+    }
 
 
 def get_lxc(state, node, opts):
@@ -819,11 +879,16 @@ def get_qemu(state, node, opts):
     ]
 
 
+def vm_digest(vm):
+    """The digest of a VM's configuration file, which changes with any setting."""
+    return hashlib.sha1(json.dumps(shown_config(applied(vm)), sort_keys=True).encode()).hexdigest()
+
+
 def get_vm_config(state, node, vmid, opts):
     check_node(node)
     no_options(opts)
-    config = shown_config(applied(vm_of(state, vmid)))
-    return {**config, "digest": hashlib.sha1(json.dumps(config, sort_keys=True).encode()).hexdigest()}
+    vm = vm_of(state, vmid)
+    return {**shown_config(applied(vm)), "digest": vm_digest(vm)}
 
 
 def get_vm_pending(state, node, vmid, opts):
@@ -1098,7 +1163,18 @@ def pvenode(state, args):
     if args[:2] != ["config", "set"]:
         fail(f"fake pvenode: unsupported {args}")
     opts = options(args[2:])
+    digest = opts.pop("digest", "")
+    if "concurrent_node_notes" in state:
+        state["node"]["description"] = state.pop("concurrent_node_notes")
+        save(state)
+    if digest and node_digest(state) and digest != node_digest(state):
+        fail("detected modified configuration - file changed by other user? Try again.")
     for key, value in opts.items():
+        if key == "description":
+            if len(value) > NODE_NOTES_LIMIT:
+                fail(f"400 description: value may only be {NODE_NOTES_LIMIT} characters long")
+            state["node"][key] = value
+            continue
         if key != "startall-onboot-delay":
             fail(f"fake pvenode: unsupported option {key}")
         delay = int(value)

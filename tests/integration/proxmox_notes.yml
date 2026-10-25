@@ -1,0 +1,17 @@
+---
+# roles/proxmox_notes with this repo's own configuration (group_vars/all/deploy.yml, group_vars/proxmox/notes.yml),
+# against the fake hostname, pvesh, qm and pvenode in fake_pve_bin/. A playbook of its own: the version comes from
+# the test's environment, as just gives it to every run, and what a deploy playbook's own vars say (which machines,
+# which command) from extra vars.
+- name: Stamp the fake Proxmox host and its VMs with the version deployed
+  hosts: proxmox
+  gather_facts: false
+  vars_files:
+    - ../../group_vars/all/deploy.yml
+    - ../../group_vars/proxmox/notes.yml
+  environment:
+    PATH: "{{ playbook_dir }}/fake_pve_bin:{{ lookup('ansible.builtin.env', 'PATH') }}"
+    FAKE_PVE_STATE: "{{ fake_pve_state }}"
+    FAKE_PVE_PYTHON: "{{ ansible_playbook_python }}"
+  roles:
+    - role: proxmox_notes

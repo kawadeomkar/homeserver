@@ -8,10 +8,14 @@
 # address in group_vars/all/local.yml), the installer's own storage is checked to hold VM disks, as it is with a NAS
 # when there is a cluster, whose system disks go there. A TrueNAS section that keeps other settings but gives no
 # address stops the play, as in truenas.yml, and so does an incomplete Kubernetes or Home Assistant section, since
-# the backup covers the cluster's VMs and Home Assistant's.
+# the backup covers the cluster's VMs and Home Assistant's. Last, the version this run came from goes in the host's
+# own Notes (roles/proxmox_notes, group_vars/proxmox/notes.yml), so only a run that got that far leaves it.
 - name: Configure the Proxmox host's packages and VM storage
   hosts: proxmox
   gather_facts: false
+  vars:
+    homeserver_deployed_by: just deploy proxmox
+    proxmox_notes_node: true
   pre_tasks:
     - name: Refuse NAS settings that come without a NAS address
       ansible.builtin.assert:
@@ -38,6 +42,7 @@
     - role: proxmox_storage
     - role: proxmox_backup
     - role: proxmox_node_exporter
+    - role: proxmox_notes
   post_tasks:
     - name: Say which VMs have no backup
       ansible.builtin.debug:
