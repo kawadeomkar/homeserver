@@ -1,20 +1,33 @@
 ---
-# The keys of the vault, group_vars/all/local.vault.yml (git-ignored): Ansible's secrets, encrypted with the
-# password in .vault_pass. make vault TYPE=new makes an empty vault and a .vault_pass when there are none, and
-# make vault opens it to add a key. Neither file is ever committed: keep a copy of both in your password
-# manager (README.md, The vault). Only the keys a setup uses are needed, and none is set here.
+# The vault: Ansible's secrets, in group_vars/all/local.vault.yml (git-ignored),
+# encrypted with the password in .vault_pass. just vault new writes it from
+# local.vault.yml.example, every key empty, and just init or just vault fills
+# them in. Neither file is ever committed: keep a copy of both in your password
+# manager (README.md, Setups and the vault).
 #
-# With a NAS: the TrueNAS API key, for a local user in builtin_administrators, made in its web UI over HTTPS
-# (scripts/runbooks/REBUILD.md, section 2).
-# vault_truenas_api_key: <the key>
-#
-# With alert mail (truenas_mail_server in local.yml): the mail server's password.
-# vault_truenas_mail_password: <the password>
-#
-# With remote access (tailscale_advertise_routes in local.yml): a one-off, pre-approved auth key, tagged
-# tag:homeserver, spent at the host's first login (scripts/runbooks/tailscale.md, section 4).
-# vault_tailscale_auth_key: <the key>
-#
-# With Home Assistant (haos_mac in local.yml): the password of its owner account, which homeassistant.yml creates
-# before anyone else on the network can; 12 characters at least.
-# vault_haos_owner_password: <the password>
+# A setup needs only the keys it uses. An empty key counts as unset, so leave
+# the others empty.
+
+# ------------------------------------------------------------------ TrueNAS ---
+# With a NAS: the TrueNAS API key, for a local user in builtin_administrators,
+# made in its web UI over HTTPS (scripts/runbooks/REBUILD.md, section 2).
+# TrueNAS shows it once.
+vault_truenas_api_key: ""
+
+# With alert mail (truenas_mail_server in local.yml): the mail server's
+# password, for the truenas_mail_user login. Changing it here is enough: the
+# next run sends it to the NAS.
+vault_truenas_mail_password: ""
+
+# ------------------------------------------------------------------ Proxmox ---
+# With remote access (tailscale_enabled or tailscale_advertise_routes in
+# local.yml): a one-off, pre-approved auth key, tagged tag:homeserver, spent at
+# the host's first login (scripts/runbooks/tailscale.md, section 4). A spent key
+# does nothing, so leave it here.
+vault_tailscale_auth_key: ""
+
+# ----------------------------------------------------------- Home Assistant ---
+# With Home Assistant (haos_mac in local.yml): the password of its owner
+# account, which just deploy homeassistant creates before anyone else on the
+# network can; 12 characters at least, from your password manager.
+vault_haos_owner_password: ""

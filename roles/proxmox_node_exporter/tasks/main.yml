@@ -1,0 +1,143 @@
+---
+# Puts Prometheus's node exporter on a Proxmox VE node, for a Prometheus elsewhere to scrape on port 9100: the node's
+# own CPU, memory, disks, temperatures and systemd units, which an exporter inside a VM cannot see. Debian's package,
+# without its recommended collectors (prometheus-node-exporter-collectors: timers of their own that run SMART, apt,
+# IPMI and NVMe scripts as root). Only the node itself and proxmox_node_exporter_scrapers may connect: systemd's IP
+# filter on the exporter's unit drops every other packet, whatever the firewalls allow. Upgrades are apt's, with
+# every other package (proxmox_apt). Every command runs through `command`, not a module, so the idempotence tests
+# can stand in for it with a fake on PATH.
+
+# Each problem gets its own sentence, naming the variable to change. Argument validation accepts a string for a
+# list (it would split it on commas) but leaves the variable as it was, so the string is refused here before
+# anything iterates its characters. Tagged always, as the other roles' checks are, so any run refuses bad settings
+# first.
+- name: Check the role's inputs
+  tags: [always]
+  ansible.builtin.assert:
+    that: _errors | length == 0
+    fail_msg: "{{ _errors | join(' ') }}"
+    quiet: true
+  vars:
+    _octet: "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
+    _address: "^{{ _octet }}([.]{{ _octet }}){3}$"
+    _errors: >-
+      {%- set out = [] -%}
+      {%- if proxmox_node_exporter_scrapers is string -%}
+      {%-   set _ = out.append('proxmox_node_exporter_scrapers must be a list, not a string.') -%}
+      {%- else -%}
+      {%-   set bad = proxmox_node_exporter_scrapers | map('string') | reject('match', _address) | list -%}
+      {%-   if bad -%}
+      {%-     set _ = out.append('proxmox_node_exporter_scrapers takes IPv4 addresses; these are not: '
+                                 ~ bad | join(', ') ~ '.') -%}
+      {%-   endif -%}
+      {%- endif -%}
+      {{ out }}
+
+- name: Do nothing without addresses to serve
+  ansible.builtin.meta: end_role
+  when: proxmox_node_exporter_scrapers | length == 0
+
+- name: Read whether the exporter is installed
+  ansible.builtin.command:
+    argv: [dpkg-query, --show, "--showformat=${db:Status-Status}", prometheus-node-exporter]
+    # dpkg-query's own field, not a variable to expand.
+    expand_argument_vars: false
+  register: proxmox_node_exporter_package
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# Before the package: its scripts enable and start the exporter as soon as it is unpacked, listening on every address.
+# With the drop-in loaded first, it never answers anyone else, not even for that moment.
+- name: Create the exporter's drop-in directory
+  ansible.builtin.file:
+    path: "{{ proxmox_node_exporter_systemd_dir }}/prometheus-node-exporter.service.d"
+    state: directory
+    mode: "0755"
+
+- name: Let only the scrapers and the node connect
+  ansible.builtin.template:
+    src: allowed-addresses.conf.j2
+    dest: "{{ proxmox_node_exporter_systemd_dir }}/prometheus-node-exporter.service.d/10-allowed-addresses.conf"
+    mode: "0644"
+  register: proxmox_node_exporter_dropin
+
+# Also before an install, so the exporter starts with the drop-in even when an earlier run wrote it and stopped short.
+- name: Reload systemd's unit files
+  ansible.builtin.command:
+    argv: [systemctl, daemon-reload]
+  changed_when: true
+  when: proxmox_node_exporter_dropin is changed or proxmox_node_exporter_package.stdout | trim != 'installed'
+
+# The lists are fresh: proxmox_apt refreshes them earlier in the same play.
+- name: Install the exporter
+  ansible.builtin.command:
+    argv:
+      - apt-get
+      - -q
+      - -y
+      - -o
+      - Dpkg::Options::=--force-confdef
+      - -o
+      - Dpkg::Options::=--force-confold
+      - --no-install-recommends
+      - install
+      - prometheus-node-exporter
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  changed_when: true
+  when: proxmox_node_exporter_package.stdout | trim != 'installed'
+
+- name: Read whether the exporter is enabled and running
+  ansible.builtin.command:
+    argv: "{{ item }}"
+  loop:
+    - [systemctl, is-enabled, prometheus-node-exporter.service]
+    - [systemctl, is-active, prometheus-node-exporter.service]
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  register: proxmox_node_exporter_unit
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# Installed by this run, the package's scripts have enabled and started it already, with the drop-in loaded. Installed
+# before, it is started when it is not running, and restarted when its addresses changed, since it started with the
+# old ones. Missing in a dry run, there is nothing to read yet.
+- name: Work out what the exporter needs
+  ansible.builtin.set_fact:
+    proxmox_node_exporter_install: "{{ not _installed }}"
+    proxmox_node_exporter_enable: "{{ _installed and proxmox_node_exporter_unit.results[0].stdout | trim != 'enabled' }}"
+    proxmox_node_exporter_restart: >-
+      {{ [] if not _installed else
+         (['it is not running'] if not _active else [])
+         + (['its addresses changed'] if _active and proxmox_node_exporter_dropin is changed else []) }}
+  vars:
+    _installed: "{{ proxmox_node_exporter_package.stdout | trim == 'installed' }}"
+    _active: "{{ proxmox_node_exporter_unit.results[1].stdout | trim == 'active' }}"
+
+- name: Enable the exporter at boot
+  ansible.builtin.command:
+    argv: [systemctl, enable, prometheus-node-exporter.service]
+  changed_when: true
+  when: proxmox_node_exporter_enable
+
+# A restart starts a stopped exporter too.
+- name: Start or restart the exporter
+  ansible.builtin.command:
+    argv: [systemctl, restart, prometheus-node-exporter.service]
+  changed_when: true
+  when: proxmox_node_exporter_restart | length > 0
+
+- name: Say what the exporter would need
+  ansible.builtin.debug:
+    msg: "Would {{ _actions | join(' and ') }}."
+  vars:
+    _actions: >-
+      {{ (['install prometheus-node-exporter, whose scripts enable and start it'] if proxmox_node_exporter_install else [])
+         + (['enable it at boot'] if proxmox_node_exporter_enable else [])
+         + (['restart it (' ~ proxmox_node_exporter_restart | join(', ') ~ ')'] if proxmox_node_exporter_restart else []) }}
+  changed_when: true
+  when:
+    - ansible_check_mode
+    - proxmox_node_exporter_install or proxmox_node_exporter_enable or proxmox_node_exporter_restart | length > 0

@@ -33,7 +33,7 @@ status_cluster_talosconfig: ""
 status_cluster_server: ""
 # Its nodes, each {name, role}, whose kubelet statistics give their memory and disks.
 status_cluster_nodes: []
-# Where its apps come from: the path under which Flux's Kustomizations apply them, the annotation in which make
+# Where its apps come from: the path under which Flux's Kustomizations apply them, the annotation in which just
 # suspend records an app's replicas, and the label (key=value) of an app's database.
 status_cluster_apps_path: ""
 status_cluster_annotation: ""

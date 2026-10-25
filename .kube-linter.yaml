@@ -1,5 +1,5 @@
 ---
-# kube-linter's configuration (make lint TYPE=manifests): its default checks, minus three that contradict
+# kube-linter's configuration (just lint manifests): its default checks, minus three that contradict
 # deliberate choices, plus the probe checks and two of the repo's own rules. A workload that needs what a check forbids
 # carries an ignore-check.kube-linter.io/<check> annotation saying why. tests/policy/test_k8s.py checks
 # the conventions kube-linter cannot express.
@@ -13,7 +13,7 @@ checks:
     - no-read-only-root-fs
     # LinuxServer images start as root and drop to PUID 1000.
     - run-as-non-root
-    # It requires memory limits, which are set only where a runaway can starve the node (CLAUDE.md).
+    # It requires memory limits, which the apps do not set: a spike is never OOM-killed (CLAUDE.md).
     # unset-memory-request below requires the requests instead. The default unset-cpu-requirements
     # already requires CPU requests, and only those.
     - unset-memory-requirements

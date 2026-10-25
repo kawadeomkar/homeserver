@@ -218,12 +218,12 @@ NO_BACKUP = "are not backed up, because this setup has no NAS"
 @pytest.mark.parametrize(
     ("local_yml", "extra", "validations", "present", "absent"),
     [
-        pytest.param(None, CLUSTER_ARGS, 10, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas-cluster-haos"),
-        pytest.param(EXAMPLE_LOCAL_YML, (), 6, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas"),
+        pytest.param(None, CLUSTER_ARGS, 11, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas-cluster-haos"),
+        pytest.param(EXAMPLE_LOCAL_YML, (), 7, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas"),
         pytest.param(
             EXAMPLE_LOCAL_YML + TAILSCALE_LOCAL_YML,
             (),
-            6,
+            7,
             [NAS_PLAY_RUNS[0], TAILSCALE_CHECK],
             [NO_BACKUP],
             id="nas-tailscale",
@@ -231,18 +231,18 @@ NO_BACKUP = "are not backed up, because this setup has no NAS"
         pytest.param(
             PROXMOX_ONLY_CLUSTER_LOCAL_YML,
             CLUSTER_ARGS,
-            9,
+            10,
             [*NAS_PLAY_ENDS, NO_BACKUP, TAILSCALE_CHECK],
             NAS_ROLE,
             id="proxmox-only-cluster-haos",
         ),
         pytest.param(
-            PROXMOX_ONLY_LOCAL_YML, (), 5, [*NAS_PLAY_ENDS, TAILSCALE_CHECK], [*NAS_ROLE, NO_BACKUP], id="proxmox-only"
+            PROXMOX_ONLY_LOCAL_YML, (), 6, [*NAS_PLAY_ENDS, TAILSCALE_CHECK], [*NAS_ROLE, NO_BACKUP], id="proxmox-only"
         ),
         pytest.param(
             PROXMOX_ONLY_LOCAL_YML + f'haos_mac: "{mac(9)}"\n',
             (),
-            7,
+            8,
             [*NAS_PLAY_ENDS, NO_BACKUP, TAILSCALE_CHECK],
             NAS_ROLE,
             id="proxmox-only-haos",
@@ -250,13 +250,13 @@ NO_BACKUP = "are not backed up, because this setup has no NAS"
         pytest.param(
             PROXMOX_ONLY_LOCAL_YML + TAILSCALE_LOCAL_YML,
             (),
-            5,
+            6,
             [NAS_PLAY_ENDS[0], TAILSCALE_CHECK],
             ["TASK [truenas :", NO_BACKUP],
             id="proxmox-only-tailscale",
         ),
         pytest.param(
-            blank_nas_local_yml(), (), 5, NAS_PLAY_ENDS, [*NAS_ROLE, NO_BACKUP], id="proxmox-only-blank-values"
+            blank_nas_local_yml(), (), 6, NAS_PLAY_ENDS, [*NAS_ROLE, NO_BACKUP], id="proxmox-only-blank-values"
         ),
     ],
 )
@@ -298,7 +298,7 @@ def test_inventory_without_the_nas_host(tmp_path):
     rc, out = argspec_pass(tree)
     assert rc == 0, out[-3000:]
     assert "skipping: no hosts matched" in out, out[-3000:]
-    assert out.count("Validating arguments against arg spec 'main'") == 5, out[-3000:]
+    assert out.count("Validating arguments against arg spec 'main'") == 6, out[-3000:]
 
 
 @pytest.mark.parametrize(
@@ -319,7 +319,7 @@ def test_inventory_without_the_nas_host(tmp_path):
 def test_inventory_without_the_kubernetes_group(tmp_path, playbook, local_yml, extra, refused):
     """An inventory made before the cluster has no kubernetes group. Without a cluster it still works; with one the
     run is refused before any VM is made, rather than creating the VMs and matching no host to build Talos on, and
-    an upgrade, a snapshot, make suspend or make resume is refused rather than matching no host and ending without a
+    an upgrade, a snapshot, just suspend or just resume is refused rather than matching no host and ending without a
     word. (Home Assistant's VM, left out here, needs no such group.)"""
     tree = example_tree(tmp_path, local_yml)
     inventory = tree / "inventory.example"
@@ -469,12 +469,13 @@ def test_vms_resolve_on_the_proxmox_host(tmp_path, local_yml, nodes, system):
     assert found == nodes
 
 
-def test_talos_pins_match_the_makefile_and_ci():
+def test_talos_pins_match_the_justfile_and_ci():
     """The Kubernetes version Talos runs is the one kubeconform validates the manifests against, and the talosctl CI
     validates the Talos configurations with is the pinned release."""
     pins = yaml.safe_load((ROOT / "group_vars" / "all" / "kubernetes.yml").read_text())
-    makefile = (ROOT / "Makefile").read_text()
-    assert re.search(rf"^KUBERNETES_VERSION \?= {re.escape(str(pins['talos_kubernetes_version']))}$", makefile, re.M)
+    justfile = (ROOT / "justfile").read_text()
+    version = re.escape(str(pins["talos_kubernetes_version"]))
+    assert re.search(rf"^kubernetes_version := '{version}'$", justfile, re.M)
     assert pins["talos_contract"] == ".".join(pins["talos_version"].split(".")[:2])
     ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
     assert "v" + ci["env"]["TALOSCTL_VERSION"] == pins["talos_version"]
@@ -561,7 +562,7 @@ def test_flux_settings_resolve_on_the_kubernetes_host(tmp_path, local_yml, path,
         " | select('search', 'kind: UserVolumeConfig') | map('regex_search', 'name: (\\S+)', '\\1') | flatten]",
         *CLUSTER_ARGS,
     )
-    common = {"DOMAIN", "TZ", "LB_RANGE", "LB_TRAEFIK_IP", "LB_FRIGATE_IP", "DATA_NODE"}
+    common = {"DOMAIN", "TZ", "LB_RANGE", "LB_TRAEFIK_IP", "LB_FRIGATE_IP", "DATA_NODE", "HOMEPAGE_SERVICES"}
     common |= {
         "GPU_I915",
         "FRIGATE_DETECTOR_DEVICE",
@@ -824,7 +825,7 @@ def without(settings, *names):
             [
                 "It gives none to homeserver-worker-1.",
                 "homeserver-cp-1 runs the control plane alone and takes no data or media disk",
-                "kubernetes_node_sizes must give homeserver-worker-1, which runs every app, cores, memory_mib",
+                "kubernetes_node_sizes must give homeserver-worker-1, which runs the apps, cores, memory_mib",
             ],
             id="proxmox-only-single-node-as-before",
         ),
@@ -860,7 +861,7 @@ def without(settings, *names):
             PROXMOX_ONLY_CLUSTER_LOCAL_YML.replace("kubernetes_node_sizes:", "unused_sizes:"),
             CLUSTER_VARS,
             [
-                "kubernetes_node_sizes must give homeserver-worker-1, which runs every app, cores, memory_mib, "
+                "kubernetes_node_sizes must give homeserver-worker-1, which runs the apps, cores, memory_mib, "
                 "system_disk_gib, data_disk_gib, media_disk_gib"
             ],
             id="proxmox-only-unsized",
@@ -976,7 +977,9 @@ def without(settings, *names):
                         "data_disk_gib": 11,
                         "media_disk_gib": 11,
                     },
-                }
+                },
+                # What such a worker holds: the platform, Homepage and Nextcloud (scripts/runbooks/talos.md).
+                "kubernetes_apps": ["homepage", "nextcloud"],
             },
             [],
             id="proxmox-only-smallest-sizes",
@@ -1167,6 +1170,21 @@ def without(settings, *names):
             ["kubernetes_lb_traefik_ip must be an IPv4 address, such as 192.0.2.40, not 192.0.2.400."],
             id="lb-address-out-of-bounds",
         ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_apps": "media"},
+            ["kubernetes_apps must be a list of the app groups this host runs, such as [media, homepage]. The groups:"],
+            id="apps-not-a-list",
+        ),
+        pytest.param(
+            None,
+            CLUSTER_VARS | {"kubernetes_apps": ["media", "medias", "jellyfin"]},
+            [
+                "kubernetes_apps must be a list of the app groups this host runs, such as [media, homepage], and "
+                "there is no group medias, jellyfin. The groups: media, nextcloud, photoprism, frigate, homepage."
+            ],
+            id="apps-that-are-no-group",
+        ),
     ],
 )
 def test_kubernetes_settings_are_checked(tmp_path, local_yml, extra, expected):
@@ -1246,6 +1264,32 @@ def test_secret_options_are_no_log():
     assert excepted == set(NOT_SECRET), "NOT_SECRET names an option that no longer exists or is now no_log"
 
 
+@pytest.mark.parametrize(
+    ("apps", "excluded", "sections"),
+    [
+        pytest.param(None, [], "media nextcloud photoprism frigate", id="every-group"),
+        pytest.param(
+            ["media", "nextcloud", "homepage"], ["apps-photoprism", "apps-frigate"], "media nextcloud", id="some"
+        ),
+        pytest.param(
+            [], [f"apps-{g}" for g in ("media", "nextcloud", "photoprism", "frigate", "homepage")], "", id="none"
+        ),
+    ],
+)
+def test_apps_this_host_runs(tmp_path, apps, excluded, sections):
+    """local.yml's kubernetes_apps, the groups this host runs, becomes the Flux Kustomizations the sync leaves out and
+    Homepage's sections. Unset, every group runs and nothing is left out; empty, the platform runs alone."""
+    given = CLUSTER_VARS | ({"kubernetes_apps": apps} if apps is not None else {})
+    got = resolve_on(
+        example_tree(tmp_path),
+        "homeserver-k8s",
+        "[flux_bootstrap_sync_exclude, flux_bootstrap_settings.HOMEPAGE_SERVICES, kubernetes_settings_error]",
+        "-e",
+        json.dumps(given),
+    )
+    assert got == [excluded, sections, []]
+
+
 def test_home_assistant_url_is_a_setting_only_when_given(tmp_path):
     """Homepage's tile reads ${HAOS_URL:=}: the setting exists only when local.yml names Home Assistant OS's address,
     which is never tracked."""
@@ -1254,6 +1298,8 @@ def test_home_assistant_url_is_a_setting_only_when_given(tmp_path):
     given = json.dumps({**CLUSTER_VARS, "haos_url": "http://homeassistant.home.arpa:8123"})
     settings = resolve_on(tree, "homeserver-k8s", "flux_bootstrap_settings", "-e", given)
     assert settings["HAOS_URL"] == "http://homeassistant.home.arpa:8123"
+    # Homepage shows its section then, last.
+    assert settings["HOMEPAGE_SERVICES"].endswith(" frigate home")
 
 
 @pytest.mark.parametrize("local_yml", [None, PROXMOX_ONLY_CLUSTER_LOCAL_YML], ids=["nas", "proxmox-only"])
@@ -1280,7 +1326,7 @@ def test_gpu_follows_local_yml(tmp_path, local_yml, mapping):
 
 
 HAOS_ONLY_ARGS = ("-e", json.dumps({"haos_mac": mac(9)}))
-# make's ALL=1.
+# just's --all.
 ALL_ARGS = ("-e", json.dumps({"cluster_vms": True}))
 
 
@@ -1294,7 +1340,7 @@ ALL_ARGS = ("-e", json.dumps({"cluster_vms": True}))
         pytest.param(None, CLUSTER_ARGS, "homeassistant", 1, None, id="haos-only"),
         pytest.param(example_without_kubernetes(), HAOS_ONLY_ARGS, "", 1, "so this setup has no cluster", id="haos"),
         pytest.param(example_without_kubernetes(), (), "", 0, "so this setup has no Home Assistant VM", id="neither"),
-        # ALL=1 adds the cluster's VMs, through the power entry point once more.
+        # --all adds the cluster's VMs, through the power entry point once more.
         pytest.param(None, (*CLUSTER_ARGS, *ALL_ARGS), "", 3, None, id="all"),
         pytest.param(
             example_without_kubernetes(), (*HAOS_ONLY_ARGS, *ALL_ARGS), "", 1, "no cluster", id="all-no-cluster"
@@ -1302,8 +1348,8 @@ ALL_ARGS = ("-e", json.dumps({"cluster_vms": True}))
     ],
 )
 def test_down_and_up_pass_the_argument_specs(tmp_path, playbook, local_yml, extra, only, validations, says):
-    """make suspend and make resume pass roles/app_scale's and the proxmox_vm role's power entry point's checks with the
-    tracked configuration and make's ONLY, and each play ends by itself in a setup without its part."""
+    """just suspend and just resume pass roles/app_scale's and the proxmox_vm role's power entry point's checks with the
+    tracked configuration and just's --only, and each play ends by itself in a setup without its part."""
     tree = example_tree(tmp_path, local_yml)
     rc, out = argspec_pass(tree, playbook, *extra, "-e", json.dumps({"only": only}))
     assert rc == 0, out[-3000:]
@@ -1314,7 +1360,7 @@ def test_down_and_up_pass_the_argument_specs(tmp_path, playbook, local_yml, extr
 @pytest.mark.parametrize(
     ("extra", "only", "refused"),
     [
-        pytest.param(HAOS_ONLY_ARGS, "jellyfin", "make suspend knows no jellyfin: only homeassistant", id="haos"),
+        pytest.param(HAOS_ONLY_ARGS, "jellyfin", "just suspend knows no jellyfin: only homeassistant", id="haos"),
         pytest.param((), "homeassistant", "knows no homeassistant, nor any other name", id="neither"),
     ],
 )
@@ -1327,10 +1373,10 @@ def test_down_without_a_cluster_refuses_an_app(tmp_path, extra, only, refused):
 
 @pytest.mark.parametrize("playbook", ["suspend.yml", "resume.yml"])
 def test_all_takes_no_only(tmp_path, playbook):
-    """ALL=1 stops or starts everything, so it refuses ONLY before any play changes anything."""
+    """--all stops or starts everything, so it refuses --only before any play changes anything."""
     tree = example_tree(tmp_path)
     rc, out = argspec_pass(tree, playbook, *CLUSTER_ARGS, *ALL_ARGS, "-e", json.dumps({"only": "jellyfin"}))
-    assert rc != 0 and "so it takes no ONLY" in out, out[-3000:]
+    assert rc != 0 and "so it takes no --only" in out, out[-3000:]
     assert out.count("Validating arguments against arg spec") == 0, out[-3000:]
 
 
@@ -1342,14 +1388,14 @@ def test_all_takes_no_only(tmp_path, playbook):
     ],
 )
 def test_the_cluster_goes_down_worker_first(tmp_path, local_yml, order):
-    """make suspend ALL=1 shuts the worker's VM down before the control plane's, whose API answers until the end, in
-    both setups; make resume ALL=1 starts them the other way round."""
+    """just suspend --all shuts the worker's VM down before the control plane's, whose API answers until the end, in
+    both setups; just resume --all starts them the other way round."""
     tree = example_tree(tmp_path, local_yml)
     assert resolve_on(tree, "homeserver", "kubernetes_power_order", *CLUSTER_ARGS) == order
 
 
 def test_down_and_up_read_only_alike(tmp_path):
-    """Every play of both playbooks, and the test playbooks, read ONLY the same way: names, blanks and spaces
+    """Every play of both playbooks, and the test playbooks, read --only the same way: names, blanks and spaces
     dropped, and without it no names (everything)."""
     tree = example_tree(tmp_path)
     expressions = set()
@@ -1368,7 +1414,7 @@ def test_down_and_up_read_only_alike(tmp_path):
         assert tests["vars"]["proxmox_vm_power_vmids"] == power["proxmox_vm_power_vmids"]
     (expression,) = expressions
     tests = yaml.safe_load((ROOT / "tests" / "integration" / "apps.yml").read_text())[0]["roles"][0]["vars"]
-    assert tests["app_scale_only"] == expression, "tests/integration/apps.yml reads ONLY as the playbooks do"
+    assert tests["app_scale_only"] == expression, "tests/integration/apps.yml reads --only as the playbooks do"
     inner = expression.strip().removeprefix("{{").removesuffix("}}")
     assert resolve_on(tree, "homeserver-k8s", inner, "-e", json.dumps({"only": " jellyfin,, media "})) == [
         "jellyfin",
@@ -1413,6 +1459,42 @@ def test_talos_config_dir_follows_local_yml(tmp_path, given, expected):
     assert resolve_on(tree, "homeserver-k8s", "flux_bootstrap_kubeconfig", *CLUSTER_ARGS) == str(
         Path.home() / expected / "kubeconfig"
     )
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "extra", "scrapers"),
+    [
+        pytest.param(None, CLUSTER_ARGS, ["192.0.2.30", "192.0.2.31"], id="nas-cluster"),
+        pytest.param(EXAMPLE_LOCAL_YML, (), [], id="nas"),
+        pytest.param(
+            PROXMOX_ONLY_CLUSTER_LOCAL_YML, CLUSTER_ARGS, ["192.0.2.30", "192.0.2.31"], id="proxmox-only-cluster"
+        ),
+        pytest.param(PROXMOX_ONLY_LOCAL_YML, (), [], id="proxmox-only"),
+    ],
+)
+def test_node_exporter_follows_the_cluster(tmp_path, local_yml, extra, scrapers):
+    """The Proxmox host's exporter answers the cluster's nodes, where Prometheus runs, in both setups; without a
+    cluster there is no Prometheus, and the role installs nothing."""
+    tree = example_tree(tmp_path, local_yml)
+    assert resolve_on(tree, "homeserver", "proxmox_node_exporter_scrapers", *extra) == scrapers
+
+
+@pytest.mark.parametrize(
+    ("given", "refusal"),
+    [
+        pytest.param("192.0.2.31", "proxmox_node_exporter_scrapers must be a list, not a string.", id="string"),
+        pytest.param(
+            ["homeserver-worker-1", "192.0.2.0/24"],
+            "proxmox_node_exporter_scrapers takes IPv4 addresses; these are not: homeserver-worker-1, 192.0.2.0/24.",
+            id="not-ipv4",
+        ),
+    ],
+)
+def test_node_exporter_inputs_are_checked(tmp_path, given, refusal):
+    """Each refusal names the variable, before anything runs."""
+    tree = example_tree(tmp_path, EXAMPLE_LOCAL_YML)
+    rc, out = argspec_pass(tree, "proxmox.yml", "-e", json.dumps({"proxmox_node_exporter_scrapers": given}))
+    assert rc != 0 and refusal in out, out[-3000:]
 
 
 @pytest.mark.parametrize(
@@ -1623,7 +1705,7 @@ def test_haos_placeholder_stops_the_plays_that_read_it(tmp_path):
 
 def test_haos_test_playbook_runs_the_real_plays_roles():
     """tests/integration/homeassistant.yml runs homeassistant.yml's roles with homeassistant.yml's own vars, and its
-    pre-tasks are homeassistant.yml's, so the idempotence tests run what make deploy TYPE=homeassistant does."""
+    pre-tasks are homeassistant.yml's, so the idempotence tests run what just deploy homeassistant does."""
     (real,) = yaml.safe_load((ROOT / "homeassistant.yml").read_text())
     (test,) = yaml.safe_load((ROOT / "tests" / "integration" / "homeassistant.yml").read_text())
     assert test["vars"] == real["vars"] and test["roles"] == real["roles"]
@@ -1631,7 +1713,7 @@ def test_haos_test_playbook_runs_the_real_plays_roles():
     assert all(by_name.get(task["name"]) == task for task in test["pre_tasks"]), "a pre-task differs"
 
 
-# make status, in each setup the two switches make, with and without Home Assistant.
+# just status, in each setup the two switches make, with and without Home Assistant.
 STATUS_SETUPS = [
     pytest.param(None, CLUSTER_ARGS, id="nas-cluster"),
     pytest.param(example_without_kubernetes(), HAOS_ONLY_ARGS, id="nas"),
@@ -1642,9 +1724,9 @@ STATUS_SETUPS = [
 
 @pytest.mark.parametrize(("local_yml", "extra"), STATUS_SETUPS)
 def test_status_passes_the_argument_specs(tmp_path, local_yml, extra):
-    """make status passes roles/status's checks with the tracked configuration and make's TYPE, in each setup: the
-    main entry point's on the Proxmox host, the cluster's host and the NAS's (which read nothing without a cluster or
-    a NAS), roles/truenas's status entry point's on the NAS's when there is one, the report's on the controller."""
+    """just status passes roles/status's checks with the tracked configuration and the sections it names, in each setup:
+    the main entry point's on the Proxmox host, the cluster's host and the NAS's (which read nothing without a cluster
+    or a NAS), roles/truenas's status entry point's on the NAS's when there is one, the report's on the controller."""
     types = ("-e", json.dumps({"types": " vms,, storage,apps "}))
     rc, out = argspec_pass(example_tree(tmp_path, local_yml), "status.yml", *extra, *types)
     assert rc == 0, out[-3000:]
@@ -1666,10 +1748,8 @@ def test_status_refuses_a_section_it_does_not_have(tmp_path):
     types = json.dumps({"types": "vms,disks"})
     rc, out = argspec_pass(example_tree(tmp_path), "status.yml", *CLUSTER_ARGS, "-e", types)
     assert rc != 0, out[-3000:]
-    message = (
-        "make status has no section disks: TYPE takes apps, admin, tailscale, vms, storage, backups, cluster, nas, "
-    )
-    message += "comma-separated."
+    message = "The report has no section disks: its sections are apps, admin, tailscale, vms, storage, backups, "
+    message += "cluster, nas."
     assert message in out, out[-3000:]
 
 
@@ -1682,7 +1762,7 @@ def test_status_refuses_a_backup_job_it_cannot_check(tmp_path):
 
 @pytest.mark.parametrize(("local_yml", "source"), [(None, "nas"), (PROXMOX_ONLY_LOCAL_YML, "")])
 def test_status_reads_the_nas_as_its_play_reaches_it(tmp_path, local_yml, source):
-    """make status reads the NAS through roles/truenas's status entry point, with the NAS play's own connection
+    """just status reads the NAS through roles/truenas's status entry point, with the NAS play's own connection
     settings (the static address, then the bootstrap one; the pinned certificate), and only with a NAS."""
     tree = example_tree(tmp_path, local_yml)
     names = "{'status_source': status_source, 'truenas_api_hosts': truenas_api_hosts}"
@@ -1709,7 +1789,7 @@ def test_status_reads_the_nas_as_its_play_reaches_it(tmp_path, local_yml, source
     ids=["off", "host-only", "routes"],
 )
 def test_status_reads_tailscale_as_the_proxmox_play_keeps_it(tmp_path, more, enabled):
-    """make status reads the Proxmox host's Tailscale through roles/proxmox_tailscale's status entry point, with the
+    """just status reads the Proxmox host's Tailscale through roles/proxmox_tailscale's status entry point, with the
     variables proxmox.yml gives the role (group_vars/proxmox/tailscale.yml), and only when the setup turns it on."""
     tree = example_tree(tmp_path, PROXMOX_ONLY_LOCAL_YML + more)
     names = "{'enabled': proxmox_tailscale_enabled, 'tags': proxmox_tailscale_tags}"
@@ -1731,7 +1811,7 @@ def test_status_reads_tailscale_as_the_proxmox_play_keeps_it(tmp_path, more, ena
     ids=["nas", "proxmox-only"],
 )
 def test_status_checks_the_backup_job_the_proxmox_play_makes(tmp_path, local_yml, storage):
-    """make status checks the host's backup job against roles/proxmox_backup's own (none without a NAS and without
+    """just status checks the host's backup job against roles/proxmox_backup's own (none without a NAS and without
     vm_backup_storage, which it reports), and finds the etcd snapshots where roles/talos takes them."""
     tree = example_tree(tmp_path, local_yml)
     jobs = resolve_on(tree, "homeserver", "status_backup_jobs == proxmox_backup_jobs", *CLUSTER_ARGS)
@@ -1747,7 +1827,7 @@ def test_status_checks_the_backup_job_the_proxmox_play_makes(tmp_path, local_yml
 
 
 def test_status_reads_the_cluster_as_it_is_built(tmp_path):
-    """make status reads the cluster with roles/talos's credentials and endpoint, finds the apps as make suspend does,
+    """just status reads the cluster with roles/talos's credentials and endpoint, finds the apps as just suspend does,
     shows every Talos user volume the nodes declare by its mount, and reads Alertmanager's pod by the name
     kube-prometheus-stack gives it."""
     tree = example_tree(tmp_path, PROXMOX_ONLY_CLUSTER_LOCAL_YML)
@@ -1825,7 +1905,7 @@ def test_status_reads_the_cluster_as_it_is_built(tmp_path):
     ],
 )
 def test_status_reports_on_the_vms_the_backup_covers(tmp_path, local_yml, extra):
-    """The VMs make status names are this repo's own, the same the nightly backup covers; any other VM on the host is
+    """The VMs just status names are this repo's own, the same the nightly backup covers; any other VM on the host is
     only counted."""
     tree = example_tree(tmp_path, local_yml)
     reported = resolve_on(tree, "homeserver", "status_vms | map(attribute='vmid') | list", *extra)
@@ -1883,7 +1963,7 @@ def test_status_reads_only_through_status_read():
 
 
 def test_the_nas_is_read_with_truenas_info_alone():
-    """roles/truenas's status entry point, which make status runs on the NAS, calls truenas_info alone, the module
+    """roles/truenas's status entry point, which just status runs on the NAS, calls truenas_info alone, the module
     that only reads, with its status option, without the pool scan, each address tried once, and never fails."""
     tasks = list(tasks_in(yaml.safe_load((ROOT / "roles" / "truenas" / "tasks" / "status.yml").read_text())))
     assert [sorted(set(t) - TASK_KEYWORDS) for t in tasks] == [["truenas_info"]]

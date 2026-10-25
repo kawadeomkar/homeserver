@@ -142,32 +142,32 @@ VMS = [
     {
         "vmid": 300,
         "name": "homeserver-cp-1",
-        "made_by": "make deploy TYPE=kubernetes",
-        "start": "make resume ALL=1",
+        "made_by": "just deploy kubernetes",
+        "start": "just resume --all",
         "node": "homeserver-cp-1",
     },
     {
         "vmid": 301,
         "name": "homeserver-worker-1",
-        "made_by": "make deploy TYPE=kubernetes",
-        "start": "make resume ALL=1",
+        "made_by": "just deploy kubernetes",
+        "start": "just resume --all",
         "node": "homeserver-worker-1",
     },
     {
         "vmid": 310,
         "name": "homeassistant",
-        "made_by": "make deploy TYPE=homeassistant",
-        "start": "make resume ONLY=homeassistant",
+        "made_by": "just deploy homeassistant",
+        "start": "just resume --only homeassistant",
         "guest_agent": True,
         "app": {"name": "homeassistant", "url": "", "port": 8123},
     },
 ]
 COMMANDS = {
-    "upgrade": "make deploy TYPE=proxmox",
-    "resume": "make resume ONLY={names}",
-    "talos_upgrade": "make check TYPE=talos-upgrade, then make talos-upgrade",
-    "credentials": "make deploy TYPE=kubernetes",
-    "allowlist": "the first visits, then make deploy TYPE=kubernetes",
+    "upgrade": "just deploy proxmox",
+    "resume": "just resume --only {names}",
+    "talos_upgrade": "just talos-upgrade --check, then just talos-upgrade",
+    "credentials": "just deploy kubernetes",
+    "allowlist": "the first visits, then just deploy kubernetes",
     "secrets": "k8s/README-secrets.md",
 }
 # Home Assistant OS's interfaces, its Docker bridges and the loopback beside its own. The bridges' and the link-local
@@ -362,7 +362,7 @@ def test_what_needs_attention_and_the_exit_code():
     model = fs.report({"proxmox": found()}, SETUP, [], "2026-10-21 14:40 PDT", commands=COMMANDS)
     subjects = [(a["level"], a["subject"]) for a in model["attention"]]
     assert subjects == [("todo", "reboot"), ("todo", "upgrades"), ("todo", "restart")]
-    assert model["attention"][1]["command"] == "make deploy TYPE=proxmox"
+    assert model["attention"][1]["command"] == "just deploy proxmox"
     assert model["attention"][2]["text"] == "301 homeserver-worker-1 waits for a restart to apply memory, watchdog"
     assert model["attention"][2]["command"] == "qm reboot 301"
     assert model["exit"] == 0 and model["types"] == [
@@ -387,9 +387,9 @@ def test_stopped_and_missing_vms_say_what_starts_or_makes_them():
     model = fs.report({"proxmox": found(resources=ok(stopped + RESOURCES[3:]))}, SETUP)
     items = {a["subject"]: a for a in model["attention"]}
     assert items["stopped"]["text"] == "300 homeserver-cp-1 and 301 homeserver-worker-1 are stopped"
-    assert items["stopped"]["command"] == "make resume ALL=1"
+    assert items["stopped"]["command"] == "just resume --all"
     assert items["missing"]["text"] == "VM 310 homeassistant is not on this host"
-    assert items["missing"]["command"] == "make deploy TYPE=homeassistant"
+    assert items["missing"]["command"] == "just deploy homeassistant"
 
 
 def test_a_full_storage_is_a_problem():
@@ -463,14 +463,14 @@ def test_the_text_says_what_matters():
     out = report_text()
     assert out.startswith("homeserver  2026-10-21 14:40 PDT · Proxmox only + Home Assistant\n")
     assert "ATTENTION  0 problems · 3 to do" in out
-    assert "→ qm reboot 301" in out and "→ make deploy TYPE=proxmox" in out
+    assert "→ qm reboot 301" in out and "→ just deploy proxmox" in out
     assert "VMS  pve · Proxmox VE 9.2.21 · kernel 7.0.14-22-pve · up 13 d" in out
     assert "/mnt/data 4.9 / 30" in out and "Home Assistant OS 18.3" in out
     assert "+ 1 other VM (9001), 4 cores, 8.0 GiB, 1 running and 1 template (9000), not this repo's" in out
     assert "the host's view: ballooning is off" in out
     assert "disks 68 of 68 GiB budgeted" in out
     assert out.rstrip().endswith(
-        "exit 0 · nothing is wrong · TYPE=apps|admin|tailscale|vms|storage|backups|cluster|nas · JSON=1"
+        "exit 0 · nothing is wrong · sections: apps admin tailscale vms storage backups cluster nas · --json"
     )
 
 
@@ -504,7 +504,7 @@ def test_the_text_of_a_host_not_read():
     out = fs.text(fs.report({"proxmox": {"unread": "it did not answer"}}, SETUP), False)
     assert "ATTENTION  1 problem · 0 to do" in out and "could not be read: it did not answer" in out
     assert "VMS" not in out and out.rstrip().endswith(
-        "exit 2 · 1 source not read · TYPE=apps|admin|tailscale|vms|storage|backups|cluster|nas · JSON=1"
+        "exit 2 · 1 source not read · sections: apps admin tailscale vms storage backups cluster nas · --json"
     )
 
 
@@ -1201,7 +1201,7 @@ def test_a_healthy_cluster_asks_for_nothing():
     assert subjects == ["suspended", "reboot", "upgrades", "restart"], model["attention"]
     suspended = model["attention"][0]
     assert suspended["text"] == f"sonarr is suspended since {iso(SUSPENDED_AT)[:10]}"
-    assert suspended["command"] == "make resume ONLY=sonarr" and model["exit"] == 0
+    assert suspended["command"] == "just resume --only sonarr" and model["exit"] == 0
 
 
 def attention_of(model):
@@ -1399,7 +1399,7 @@ TIB = 2**40
 NAS_NOW = 1792540800  # 2026-10-21 00:00 UTC
 NAS_SETUP = {"nas": True, "cluster": False, "home_assistant": False}
 NAS_COMMANDS = {
-    "nas": "make deploy TYPE=truenas",
+    "nas": "just deploy truenas",
     "nas_release": "raise truenas_supported_version",
     "nas_network": "commit them on the NAS",
 }
@@ -1623,7 +1623,7 @@ def test_a_healthy_nas_asks_for_nothing():
         ),
         pytest.param(
             nas_state(pools=[pool("persistent", 2.2, 4.9, scrub=None)]),
-            ("todo", "persistent", "no scrub task scrubs it", "make deploy TYPE=truenas"),
+            ("todo", "persistent", "no scrub task scrubs it", "just deploy truenas"),
             id="no-scrub-task",
         ),
         pytest.param(
@@ -1647,7 +1647,7 @@ def test_a_healthy_nas_asks_for_nothing():
                 "problem",
                 "nfs",
                 "the NFS service is stopped, so its 3 shares are not served",
-                "make deploy TYPE=truenas",
+                "just deploy truenas",
             ),
             id="nfs-stopped",
         ),
@@ -1776,9 +1776,9 @@ DAY = 86400
 NEXT_RUN = NOW + 4 * 3600
 DUE = NEXT_RUN - DAY
 BACKUP_COMMANDS = COMMANDS | {
-    "backup": "make deploy TYPE=proxmox",
-    "backup_target": "vm_backup_storage in local.yml, then make deploy TYPE=proxmox",
-    "etcd_snapshot": "make etcd-snapshot",
+    "backup": "just deploy proxmox",
+    "backup_target": "vm_backup_storage in local.yml, then just deploy proxmox",
+    "etcd_snapshot": "just etcd-snapshot",
 }
 NAMES = {300: "homeserver-cp-1", 301: "homeserver-worker-1", 310: "homeassistant"}
 
@@ -1908,7 +1908,7 @@ def test_the_backups_as_read():
         "failure": None,
     }
     assert found_["running"] is None
-    # Not asked for (TYPE without backups): no reads, no section.
+    # Not asked for (sections without backups): no reads, no section.
     assert found()["backups"] is None
 
 
@@ -1926,7 +1926,7 @@ def test_a_healthy_backup_asks_for_nothing():
         "dir": "~/.talos/homeserver/etcd",
         "count": 2,
         "age": NOW - int(datetime(2026, 10, 20, 3, 50, 37, tzinfo=UTC).timestamp()),
-        "command": "make etcd-snapshot",
+        "command": "just etcd-snapshot",
     }
     # The raw reads are not in the report twice.
     assert "backups" not in model["proxmox"]
@@ -2006,10 +2006,10 @@ def test_a_daylight_saving_change_is_no_missed_run():
 
 
 def test_a_vm_the_job_leaves_out_or_has_not_reached_yet():
-    # A VM added to local.yml's extra VMIDs since the job was applied: left out until make deploy TYPE=proxmox.
+    # A VM added to local.yml's extra VMIDs since the job was applied: left out until just deploy proxmox.
     left_out = backed_up(**{"backup-jobs": ok([hosted_job(vmid="300,301")])})
     assert backup_attention(backup_report(left_out)) == [
-        ("todo", "the backup job vm-nightly leaves out 310 homeassistant", "make deploy TYPE=proxmox")
+        ("todo", "the backup job vm-nightly leaves out 310 homeassistant", "just deploy proxmox")
     ]
     assert next(vm for vm in left_out["backups"]["vms"] if vm["vmid"] == 310)["job"] == ""
     # A VM with no backup yet, the job not run since it was added.
@@ -2033,7 +2033,7 @@ def test_a_vm_the_job_leaves_out_or_has_not_reached_yet():
 )
 def test_a_job_that_differs_from_its_configuration(hosted, text):
     model = backup_report(backed_up(**{"backup-jobs": ok(hosted)}))
-    assert backup_attention(model)[0] == ("todo", text, "make deploy TYPE=proxmox")
+    assert backup_attention(model)[0] == ("todo", text, "just deploy proxmox")
     assert model["exit"] == 0
 
 
@@ -2045,7 +2045,7 @@ def test_nothing_backed_up_without_a_job():
             "todo",
             "nothing is backed up: no backup job covers 300 homeserver-cp-1, 301 homeserver-worker-1 and 310 "
             "homeassistant",
-            "vm_backup_storage in local.yml, then make deploy TYPE=proxmox",
+            "vm_backup_storage in local.yml, then just deploy proxmox",
         )
     ]
     assert model["exit"] == 0
@@ -2079,7 +2079,7 @@ def test_the_backups_text():
 def test_the_text_without_a_job_or_a_snapshot():
     out = fs.text(backup_report(backed_up(jobs=()), snapshots={"dir": "~/.talos/pve-2/etcd", "files": []}), False)
     assert "BACKUPS  no backup job: 300, 301 and 310 are not backed up" in out
-    assert "       etcd snapshot                —  none yet  in ~/.talos/pve-2/etcd  → make etcd-snapshot" in out
+    assert "       etcd snapshot                —  none yet  in ~/.talos/pve-2/etcd  → just etcd-snapshot" in out
     assert "  300 " not in out
     # Not shown unless asked for, and nothing without a cluster's snapshots.
     assert "BACKUPS" not in fs.text(backup_report(types=("vms",)), False)
@@ -2097,8 +2097,8 @@ ROUTE = "192.0.2.0/24"
 SUFFIX = "tail0example" + ".ts.net"
 TAILNET_IPV4 = ".".join(["100", "64", "0", "20"])
 TAILSCALE_COMMANDS = {
-    "tailscale": "make deploy TYPE=proxmox",
-    "tailscale_login": "an auth key in the vault, then make deploy TYPE=proxmox",
+    "tailscale": "just deploy proxmox",
+    "tailscale_login": "an auth key in the vault, then just deploy proxmox",
     "split_dns": "the admin console's DNS page",
 }
 NODE_PAGE = {"name": "Proxmox VE", "url": "https://192.0.2.20:8006", "tailscale_node": True}
@@ -2264,7 +2264,7 @@ def test_a_host_on_the_tailnet_without_routes():
     [
         (
             {"installed": False, "running": False, "why": "No such file"},
-            [("todo", "Tailscale is not on the Proxmox host yet", "make deploy TYPE=proxmox")],
+            [("todo", "Tailscale is not on the Proxmox host yet", "just deploy proxmox")],
         ),
         (
             {"running": False, "why": "failed to connect to local tailscaled"},
@@ -2272,7 +2272,7 @@ def test_a_host_on_the_tailnet_without_routes():
                 (
                     "problem",
                     "tailscaled does not answer on the Proxmox host: failed to connect to local tailscaled",
-                    "make deploy TYPE=proxmox",
+                    "just deploy proxmox",
                 )
             ],
         ),
@@ -2282,13 +2282,13 @@ def test_a_host_on_the_tailnet_without_routes():
                 (
                     "todo",
                     "the Proxmox host is not logged in to the tailnet",
-                    "an auth key in the vault, then make deploy TYPE=proxmox",
+                    "an auth key in the vault, then just deploy proxmox",
                 )
             ],
         ),
         (
             {"backend": "Stopped"},
-            [("problem", "Tailscale is stopped on the Proxmox host (tailscale down)", "make deploy TYPE=proxmox")],
+            [("problem", "Tailscale is stopped on the Proxmox host (tailscale down)", "just deploy proxmox")],
         ),
         (
             {"guard": {"loaded": False}},
@@ -2296,7 +2296,7 @@ def test_a_host_on_the_tailnet_without_routes():
                 (
                     "problem",
                     "the tailnet guard's table is not loaded, so tailscaled runs unguarded",
-                    "make deploy TYPE=proxmox",
+                    "just deploy proxmox",
                 )
             ],
         ),
@@ -2306,17 +2306,17 @@ def test_a_host_on_the_tailnet_without_routes():
                 (
                     "todo",
                     "the tailnet guard on the host is not the one this configuration describes",
-                    "make deploy TYPE=proxmox",
+                    "just deploy proxmox",
                 )
             ],
         ),
         (
             {"forwarding": False},
-            [("problem", f"the host forwards no IPv4, so {ROUTE} leads nowhere", "make deploy TYPE=proxmox")],
+            [("problem", f"the host forwards no IPv4, so {ROUTE} leads nowhere", "just deploy proxmox")],
         ),
         (
             {"differ": ["accept-dns"]},
-            [("todo", "the host's Tailscale preferences differ: accept-dns", "make deploy TYPE=proxmox")],
+            [("todo", "the host's Tailscale preferences differ: accept-dns", "just deploy proxmox")],
         ),
         (
             {

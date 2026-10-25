@@ -16,11 +16,12 @@ without a kind, are not objects.
 - Only those namespaces and kube-system hold pods that Pod Security Admission's baseline level rejects for the
   privilege they ask for: privileged containers, added capabilities, host namespaces and host ports.
 - The hostPath volumes, in pods and in PersistentVolumes, are exactly the ones listed below; in what the charts
-  render (make lint TYPE=charts), the ones listed for them.
+  render (just lint charts), the ones listed for them.
 - The apps (k8s/apps/) run one replica each, replaced whole (Recreate), Homepage aside; every container refuses
   privilege escalation under the RuntimeDefault seccomp profile; every Ingress uses Traefik and the domain setting;
   every pod that mounts a shared NAS or static volume chowns its mount point first, and none sets fsGroup on an NFS
-  volume, which would chown the whole volume at every start.
+  volume, which would chown the whole volume at every start. No app container limits its CPU or memory, so a spike is
+  neither throttled nor OOM-killed: a limit there asks only for a device (the iGPU).
 - No PodDisruptionBudget: with one node for the apps, it would only stop a drain.
 - Every app namespace has a NetworkPolicy over all its pods that limits who reaches them and keeps them from the one
   hosts they must never reach (EGRESS_DENIED_ADDRESS, the NAS or the Proxmox host without one, and PROXMOX_ADDRESS).
@@ -51,7 +52,7 @@ ROOT = Path(__file__).resolve().parents[2]
 APPS = ROOT / "k8s" / "apps"
 K8S = ROOT / "k8s"
 CLUSTERS = K8S / "clusters"
-# What make lint TYPE=charts rendered the charts into (its HELM_RENDERED), .cache/helm-rendered by default.
+# What just lint charts rendered the charts into (its HELM_RENDERED), .cache/helm-rendered by default.
 RENDERED = ROOT / os.environ.get("HELM_RENDERED", ".cache/helm-rendered")
 
 # Pod Security Admission exempts these, so they need no label. Talos exempts kube-system by default.
@@ -64,7 +65,7 @@ UNDECLARED_NAMESPACES = {"kube-system", "flux-system"}
 # the pull request, and the label a comment saying why.
 PRIVILEGED_NAMESPACES = {"intel-gpu-plugin", "local-path-storage", "metallb-system", "monitoring"}
 # Of those, the ones whose privileged pods only a chart renders (MetalLB's speaker, node-exporter): checked against
-# what make lint TYPE=charts renders. The others' need shows in the repository's own manifests (Intel's GPU plugin,
+# what just lint charts renders. The others' need shows in the repository's own manifests (Intel's GPU plugin,
 # vendored; the Job that makes the static volumes' directories in local-path-storage).
 CHART_PRIVILEGED = {"metallb-system", "monitoring"}
 
@@ -81,7 +82,7 @@ HOST_PATHS = {
     ("DaemonSet intel-gpu-plugin/intel-gpu-plugin", "/var/run/cdi"),
 }
 
-# The hostPath volumes in what the charts render (make lint TYPE=charts): a chart bump that adds one fails here before
+# The hostPath volumes in what the charts render (just lint charts): a chart bump that adds one fails here before
 # it merges. csi-driver-nfs mounts the kubelet's directories, in kube-system, which Talos exempts from Pod Security;
 # node-exporter reads the host's root, /proc and /sys, in monitoring; MetalLB's speaker needs none.
 CHART_HOST_PATHS = {
@@ -576,7 +577,7 @@ def quantities(obj):
 def test_quantities_parse_once_substituted():
     """A resource limit of "${GPU_I915}" becomes a quantity only when Flux substitutes it, and a typo such as 2Gb never
     does. kubeconform accepts any string there, and kube-linter silently skips an object it cannot decode, taking it
-    out of every check: make lint TYPE=manifests lints the substituted manifests, and this makes sure they parse."""
+    out of every check: just lint manifests lints the substituted manifests, and this makes sure they parse."""
     fixtures = yaml.safe_load((ROOT / "tests" / "fixtures" / "cluster-settings.yaml").read_text())
     wrong = []
     for setup in flux_kustomizations():
@@ -661,12 +662,26 @@ def test_linuxserver_tags_are_immutable():
     assert mutable == {}, "LinuxServer.io re-points x.y.z at every build: pin x.y.z-lsNNN (CLAUDE.md)"
 
 
+def test_apps_set_no_cpu_or_memory_limits():
+    if not APPS.is_dir():
+        pytest.skip("no apps under k8s/apps/ yet")
+    capped = [
+        f"{label(obj)} {container['name']}: {key}"
+        for path, obj, spec in workloads()
+        if path.is_relative_to("k8s/apps")
+        for container in containers(spec)
+        for key in (container.get("resources") or {}).get("limits") or {}
+        if key in ("cpu", "memory")
+    ]
+    assert capped == [], "a CPU or memory limit throttles or OOM-kills an app at a spike: set requests (CLAUDE.md)"
+
+
 # --------------------------------------------------------------------------------- what the charts render ---
 
 
 @functools.cache
 def rendered():
-    """What make lint TYPE=charts rendered, as (path, object); empty when it has not run (make test TYPE=policy alone,
+    """What just lint charts rendered, as (path, object); empty when it has not run (just test policy alone,
     offline)."""
     if not RENDERED.is_dir():
         return ()
@@ -728,27 +743,27 @@ def test_chart_sources_are_pinned():
     assert wrong == []
 
 
-@pytest.mark.skipif(not RENDERED.is_dir(), reason="make lint TYPE=charts renders the charts first")
+@pytest.mark.skipif(not RENDERED.is_dir(), reason="just lint charts renders the charts first")
 def test_chart_images_are_pinned_by_digest():
     """Every image a chart runs is pinned in the release's values: the chart's defaults are tags."""
     wrong = sorted({f"{owner}: {image}" for _, owner, image in image_refs(rendered()) if not DIGEST.search(image)})
     assert wrong == []
 
 
-@pytest.mark.skipif(not RENDERED.is_dir(), reason="make lint TYPE=charts renders the charts first")
+@pytest.mark.skipif(not RENDERED.is_dir(), reason="just lint charts renders the charts first")
 def test_chart_host_paths_are_pinned():
     found = set().union(*(host_paths(obj) for _, obj in rendered()))
     assert sorted(found - CHART_HOST_PATHS) == [], "a chart mounts a new hostPath: check why, then pin it here"
     assert sorted(CHART_HOST_PATHS - found) == [], "these are gone from the charts: remove them from the list"
 
 
-@pytest.mark.skipif(not RENDERED.is_dir(), reason="make lint TYPE=charts renders the charts first")
+@pytest.mark.skipif(not RENDERED.is_dir(), reason="just lint charts renders the charts first")
 def test_charts_open_no_node_port():
     """Traefik's LoadBalancer comes from its chart: a chart bump that starts allocating node ports fails here."""
     assert node_port_services(rendered()) == [], "set the chart's value that keeps node ports off"
 
 
-@pytest.mark.skipif(not RENDERED.is_dir(), reason="make lint TYPE=charts renders the charts first")
+@pytest.mark.skipif(not RENDERED.is_dir(), reason="just lint charts renders the charts first")
 def test_chart_privileged_namespaces_are_still_needed():
     """A namespace labelled privileged for a chart's sake still holds a rendered pod that needs it: a chart bump that
     drops node-exporter's host namespaces must not leave monitoring privileged for good."""
@@ -758,7 +773,7 @@ def test_chart_privileged_namespaces_are_still_needed():
     )
 
 
-@pytest.mark.skipif(not RENDERED.is_dir(), reason="make lint TYPE=charts renders the charts first")
+@pytest.mark.skipif(not RENDERED.is_dir(), reason="just lint charts renders the charts first")
 def test_chart_privileged_pods_only_in_privileged_namespaces():
     allowed = PRIVILEGED_NAMESPACES | SYSTEM_NAMESPACES
     wrong = {
@@ -769,7 +784,7 @@ def test_chart_privileged_pods_only_in_privileged_namespaces():
     assert wrong == {}, "a chart's pod needs more than baseline: label its namespace, saying why"
 
 
-@pytest.mark.skipif(not RENDERED.is_dir(), reason="make lint TYPE=charts renders the charts first")
+@pytest.mark.skipif(not RENDERED.is_dir(), reason="just lint charts renders the charts first")
 def test_chart_scrapes_send_no_token_over_plain_http():
     """kube-prometheus-stack gives its scrapes of the cluster's components Prometheus's service account token, the
     plain-HTTP ones too (etcd, kube-proxy, CoreDNS), where it would cross the LAN or the pod network in clear. None of
@@ -786,7 +801,7 @@ def test_chart_scrapes_send_no_token_over_plain_http():
 
 
 def test_chart_fixtures_match_the_settings(settings):
-    """make lint TYPE=charts renders the charts with tests/fixtures/cluster-settings.yaml's placeholders; each setup
+    """just lint charts renders the charts with tests/fixtures/cluster-settings.yaml's placeholders; each setup
     there has exactly the keys roles/flux_bootstrap puts in that setup's cluster-settings."""
     fixtures = yaml.safe_load((ROOT / "tests" / "fixtures" / "cluster-settings.yaml").read_text())
     assert {setup: set(keys) for setup, keys in fixtures.items()} == settings
@@ -1051,6 +1066,37 @@ def test_network_policies_are_enforced():
     """NetworkPolicies do nothing unless Flannel runs its policy agent, which a control-plane patch turns on."""
     patches = (ROOT / "group_vars" / "kubernetes" / "talos.yml").read_text()
     assert "kind: KubeFlannelCNIConfig\n  kubeNetworkPoliciesEnabled: true" in patches
+
+
+# --------------------------------------------------------------------------------------- app selection ---
+# local.yml's kubernetes_apps names the app groups a host runs, out of group_vars/all/kubernetes.yml's
+# kubernetes_app_groups; roles/flux_bootstrap drops the others' Flux Kustomizations from the sync, and Homepage shows a
+# section for each group that runs.
+def app_groups():
+    return yaml.safe_load((ROOT / "group_vars" / "all" / "kubernetes.yml").read_text())["kubernetes_app_groups"]
+
+
+def test_app_groups_are_the_groups_flux_applies():
+    """Each app group is one Flux Kustomization, apps-<group>, applying k8s/apps/<group>, in both setups, and no other
+    Flux Kustomization applies an app."""
+    for setup, kustomizations in flux_kustomizations().items():
+        apps = {name: path for name, (path, _) in kustomizations.items() if path.startswith("k8s/apps/")}
+        assert apps == {f"apps-{group}": f"k8s/apps/{group}" for group in app_groups()}, setup
+
+
+def test_homepage_has_a_section_for_every_group():
+    """Homepage joins its services.yaml from homepage-tiles: a section for each group but its own, and Home
+    Assistant's, which group_vars/kubernetes/flux.yml names in HOMEPAGE_SERVICES. Joined in that order, they are
+    Homepage's list of sections."""
+    names = [group for group in app_groups() if group != "homepage"] + ["home"]
+    tiles = APPS / "homepage" / "tiles"
+    assert sorted(p.name for p in tiles.iterdir()) == sorted(f"{n}.yaml.tmpl" for n in names)
+    kustomization = yaml.safe_load((APPS / "homepage" / "kustomization.yaml").read_text())
+    generator = next(g for g in kustomization["configMapGenerator"] if g["name"] == "homepage-tiles")
+    assert sorted(generator["files"]) == sorted(f"{n}.yaml=tiles/{n}.yaml.tmpl" for n in names)
+    sections = yaml.safe_load("".join((tiles / f"{n}.yaml.tmpl").read_text() for n in names))
+    assert [next(iter(s)) for s in sections] == ["Media", "Cloud", "Photos", "Cameras", "Home"], sections
+    assert all(isinstance(tile, dict) for s in sections for tile in next(iter(s.values()))), sections
 
 
 # ----------------------------------------------------------------------------------------------- Renovate ---

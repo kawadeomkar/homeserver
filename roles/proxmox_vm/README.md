@@ -64,7 +64,7 @@ A download's own task status is checked: `pvesh` can exit 0 for a download that 
 | `proxmox_vm_allow_overcommit` | `false` | Let the disks on thin LVM, ZFS, a directory or BTRFS add up to more than it holds |
 | `proxmox_vm_host_headroom_gib` | `0` | GiB of a ZFS, directory or BTRFS storage kept out of the disk budget, for the host's own files |
 | `proxmox_vm_ignore_existing_volumes` | `false` | Create a missing VM over its VMID's old disks or backups |
-| `proxmox_vm_rebuild_command` | `""` | How to run the role again with that switch, which the refusal names: the play's make target, say |
+| `proxmox_vm_rebuild_command` | `""` | How to run the role again with that switch, which the refusal names: the play's just recipe, say |
 | `proxmox_vm_node` | `""` | Node name; empty means the host's short hostname |
 | `proxmox_vm_power` | `""` | The power entry point: `stopped` or `running`; empty does nothing |
 | `proxmox_vm_power_vmids` | `[]` | The power entry point's VMs |
@@ -141,5 +141,5 @@ This repository's configuration, `group_vars/proxmox/vms.yml`, maps the Kubernet
 
 ## Reference
 
-[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make fix TYPE=docs` from the role itself:
+[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `just fix docs` from the role itself:
 its argument specs, defaults and vars, and each tasks file as a table and a flow graph. Never edit it by hand.

@@ -13,7 +13,7 @@ group_vars/proxmox) and test addresses on loopback, with a NAS and, for the Prox
 Nothing here can reach a real machine: the inventory, config and addresses are all local to this
 directory.
 
-Needs the project virtualenv and openssl. Run: make test TYPE=idempotence
+Needs the project virtualenv and openssl. Run: just test idempotence
 """
 
 import base64
@@ -472,6 +472,11 @@ def pve_vars(tmp_path, settled=False, nas=True):
         (sources / name).write_text(("Enabled: false\n" if settled and enterprise else "") + text)
     if settled:
         (sources / "proxmox.sources").write_text(NO_SUBSCRIPTION)
+    # Mode 0644, as the installer leaves them and the role writes proxmox.sources, whatever this process's umask:
+    # under a user's 0002, a settled file would read 0664, and a run would report changing it.
+    for path in sources.iterdir():
+        path.chmod(0o644)
+    if settled:
         s = fake_pve.fresh_state()
         s["packages"]["installed"] = s["packages"]["lists"] = dict(s["packages"]["repository"])
         write(state, s)
@@ -1105,6 +1110,83 @@ def test_proxmox_backup_without_a_nas(tmp_path):
         assert rc != 0 and message in out, out[-3000:]
 
 
+# ---------------------------------------------------------------------------------- Node exporter ---
+
+EXPORTER = "prometheus-node-exporter.service"
+
+
+def exporter_vars(tmp_path, cluster=True):
+    """Variables for the node exporter's test playbook: the fake host's state, a scratch systemd directory, and with a
+    cluster its two nodes, the addresses the exporter lets in."""
+    extra = {
+        "fake_pve_state": str(tmp_path / "pve.json"),
+        "proxmox_node_exporter_systemd_dir": str(tmp_path / "systemd"),
+        "truenas_static_address": "127.0.0.10/24",
+    }
+    return extra | {"kubernetes_node_addresses": NODE_ADDRESSES} if cluster else extra
+
+
+def exporter_dropin(extra):
+    """The drop-in that lets only the scrapers and the host itself reach the exporter."""
+    return Path(extra["proxmox_node_exporter_systemd_dir"]) / f"{EXPORTER}.d" / "10-allowed-addresses.conf"
+
+
+def test_proxmox_node_exporter_role_is_idempotent(tmp_path):
+    """With a cluster: the exporter installed once, after the drop-in that lets in only the cluster's nodes and the
+    host itself is loaded, so it never runs without it; then nothing changes, and drift is corrected once. New
+    addresses restart it with them."""
+    extra = exporter_vars(tmp_path)
+    state = Path(extra["fake_pve_state"])
+
+    result = run("proxmox_node_exporter.yml", extra, check=True)
+    expect(result, "homeserver", changed=True, note="dry run")
+    assert "Would install prometheus-node-exporter" in result[2], result[2][-3000:]
+    assert not state.exists() or read(state)["mutations"] == 0, "the dry run changed the host"
+    assert not exporter_dropin(extra).exists()
+
+    expect(run("proxmox_node_exporter.yml", extra), "homeserver", changed=4, note="first run")
+    result = run("proxmox_node_exporter.yml", extra)
+    expect(result, "homeserver", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")
+    expect(run("proxmox_node_exporter.yml", extra, check=True), "homeserver", changed=0, note="dry run after applying")
+
+    allowed = "[Service]\nIPAddressDeny=any\nIPAddressAllow=localhost 127.0.0.30 127.0.0.31\n"
+    assert exporter_dropin(extra).read_text().endswith(allowed), exporter_dropin(extra).read_text()
+    s = read(state)
+    assert s["packages"]["installed"]["prometheus-node-exporter"] == fake_pve.DEBIAN["prometheus-node-exporter"]
+    # The package's scripts started it, and systemd had the drop-in by then.
+    assert s["units"][EXPORTER]["enabled"] and s["units"][EXPORTER]["active"]
+    assert s["units"][EXPORTER]["started_with"].endswith(allowed), s["units"][EXPORTER]
+
+    # Drift: stopped and disabled by hand. Enabled and started again, once.
+    s["units"][EXPORTER].update(enabled=False, active=False)
+    write(state, s)
+    expect(run("proxmox_node_exporter.yml", extra), "homeserver", changed=2, note="run after drift")
+    expect(run("proxmox_node_exporter.yml", extra), "homeserver", changed=0, note="second run after drift")
+    assert read(state)["units"][EXPORTER]["active"] and read(state)["units"][EXPORTER]["enabled"]
+
+    # The worker at another address: the drop-in rewritten, systemd reloaded and the running exporter restarted.
+    moved = extra | {"kubernetes_node_addresses": NODE_ADDRESSES | {"homeserver-worker-1": "127.0.0.32"}}
+    result = run("proxmox_node_exporter.yml", moved, check=True)
+    expect(result, "homeserver", changed=True, note="dry run with a new address")
+    assert "Would restart it (its addresses changed)" in result[2], result[2][-3000:]
+    expect(run("proxmox_node_exporter.yml", moved), "homeserver", changed=3, note="run with a new address")
+    expect(run("proxmox_node_exporter.yml", moved), "homeserver", changed=0, note="second run with a new address")
+    assert read(state)["units"][EXPORTER]["started_with"].endswith(allowed.replace("127.0.0.31", "127.0.0.32"))
+
+    # A string for the list is refused before anything runs, naming the variable.
+    rc, _, out = run("proxmox_node_exporter.yml", extra | {"proxmox_node_exporter_scrapers": "127.0.0.31"})
+    assert rc != 0 and "proxmox_node_exporter_scrapers must be a list, not a string." in out, out[-3000:]
+
+
+def test_proxmox_node_exporter_without_a_cluster(tmp_path):
+    """Without a cluster there is no Prometheus to serve: nothing is installed, written or run."""
+    extra = exporter_vars(tmp_path, cluster=False)
+    state = Path(extra["fake_pve_state"])
+    for check in (True, False):
+        expect(run("proxmox_node_exporter.yml", extra, check=check), "homeserver", changed=0, note="no cluster")
+    assert not state.exists() and not exporter_dropin(extra).exists()
+
+
 # --------------------------------------------------------------------------------------- The cluster's VMs ---
 
 
@@ -1184,15 +1266,15 @@ def test_proxmox_vm_with_a_nas(tmp_path):
     expect(result, "homeserver", changed=True, note="dry run on a fresh host")
     out = result[2]
     assert re.search(
-        r'storage pending: make deploy TYPE=proxmox adds it: run that first"?:\s*\[\s*"homeserver-persistent"', out
+        r'storage pending: just deploy proxmox adds it: run that first"?:\s*\[\s*"homeserver-persistent"', out
     ), out[-3000:]
     assert re.search(r'homeserver-worker-1"?:\s*"?create', out) and "Would download: talos-v1.14.2" in out, out[-3000:]
     assert read(state)["mutations"] == 0, "the dry run changed the host"
 
     rc, _, out = run("kubernetes.yml", extra)
-    assert (
-        rc != 0 and "homeserver-persistent: does not exist (make deploy TYPE=proxmox adds it: run that first)" in out
-    ), out[-3000:]
+    assert rc != 0 and "homeserver-persistent: does not exist (just deploy proxmox adds it: run that first)" in out, (
+        out[-3000:]
+    )
     assert vms_of(state) == {}
 
     seed_storage(state, PERSISTENT_NFS)
@@ -1439,7 +1521,8 @@ def test_proxmox_vm_refuses_to_build_over_old_volumes(tmp_path):
             -3000:
         ]
         assert "VM 300 (homeserver-cp-1) does not exist" in out and "qmrestore" in out, out[-3000:]
-        assert "scripts/runbooks/vm-restore.md" in out and "proxmox_vm_ignore_existing_volumes=true'" in out
+        assert "scripts/runbooks/vm-restore.md" in out, out[-3000:]
+        assert "run just deploy kubernetes -e proxmox_vm_ignore_existing_volumes=true" in out, out[-3000:]
         assert "appliance.ova" not in out
     assert vms_of(state) == {}
 
@@ -1487,7 +1570,7 @@ def test_proxmox_vm_refuses_to_build_over_old_volumes(tmp_path):
 @pytest.mark.cluster
 def test_proxmox_vm_starts_vms_restored_after_a_host_reinstall(tmp_path):
     """After a reinstall the VMs come back from their backups, stopped, their CD-ROM naming a Talos ISO that went with
-    the boot disk, so starting them by hand fails (scripts/runbooks/vm-restore.md). make deploy TYPE=kubernetes
+    the boot disk, so starting them by hand fails (scripts/runbooks/vm-restore.md). just deploy kubernetes
     downloads the ISO again and then starts them, creating nothing."""
     extra = cluster_vars(tmp_path)
     state = Path(extra["fake_pve_state"])
@@ -1739,7 +1822,7 @@ def test_talos_with_a_nas(tmp_path, factory):
     expect(result, "homeserver-k8s", changed=0, note="second run after drift on the control plane")
     assert "service etcd restart" not in result[2]
 
-    # A pin bump: nothing is applied or upgraded, and the run says what waits for make talos-upgrade.
+    # A pin bump: nothing is applied or upgraded, and the run says what waits for just talos-upgrade.
     before = read(state)
     bumped = extra | {"talos_version": "v1.14.3", "talos_kubernetes_version": "1.37.2"}
     result = run("talos.yml", bumped, env=env)
@@ -1747,7 +1830,7 @@ def test_talos_with_a_nas(tmp_path, factory):
     expect(result, "homeserver-k8s", changed=0, note="run with bumped pins")
     after = read(state)
     assert after["nodes"] == before["nodes"] and after.get("upgrades") is None and after["k8s_version"] == "1.37.1"
-    assert "make talos-upgrade" in result[2] and "homeserver-worker-1: Talos v1.14.3" in result[2], result[2][-3000:]
+    assert "just talos-upgrade" in result[2] and "homeserver-worker-1: Talos v1.14.3" in result[2], result[2][-3000:]
     assert "kubernetes: 1.37.2" in result[2]
     no_talos_secret(outputs)
 
@@ -2064,9 +2147,9 @@ def test_talos_renews_expiring_credentials(tmp_path, factory):
 
 @pytest.mark.cluster
 def test_talos_upgrade_and_etcd_snapshot(tmp_path, factory):
-    """make check TYPE=talos-upgrade changes nothing and shows the plan; make talos-upgrade snapshots etcd first,
-    upgrades the control plane before the worker, then Kubernetes, and has nothing left to do the second time. make
-    etcd-snapshot writes a snapshot and nothing else."""
+    """just talos-upgrade --check changes nothing and shows the plan; just talos-upgrade snapshots etcd first,
+    upgrades the control plane before the worker, then Kubernetes, and has nothing left to do the second time.
+    just etcd-snapshot writes a snapshot and nothing else."""
     extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
     state = Path(extra["fake_talos_state"])
     talos_state(state)
@@ -2093,7 +2176,7 @@ def test_talos_upgrade_and_etcd_snapshot(tmp_path, factory):
 
     bumped = extra | {"talos_version": "v1.14.3", "talos_kubernetes_version": "1.37.2"}
     result = run("talos_upgrade.yml", bumped, check=True, env=env)
-    expect(result, "homeserver-k8s", changed=True, note="check TYPE=talos-upgrade")
+    expect(result, "homeserver-k8s", changed=True, note="talos-upgrade --check")
     assert "Talos v1.14.2 -> v1.14.3" in result[2] and "1.37.1 -> 1.37.2" in result[2], result[2][-3000:]
     assert "no deprecated APIs found" in result[2] and read(state)["mutations"] == after["mutations"]
     assert not read(state).get("pre_pulls"), "the dry run pulled images onto the nodes"
@@ -2242,6 +2325,9 @@ def test_flux_bootstrap(tmp_path, operator_releases, nas):
     }
     assert "kustomize" not in instance, "no feature gate is set: strict substitution is Flux 2.9's default"
     settings = objects["ConfigMap/flux-system/cluster-settings"]["data"]
+    # Flux reconciles what reads the settings as soon as they change.
+    labels = objects["ConfigMap/flux-system/cluster-settings"]["metadata"]["labels"]
+    assert labels == {"reconcile.fluxcd.io/watch": "Enabled"}
     media = {"MEDIA_LOCAL_PATH": "/var/mnt/media/library", "FRIGATE_LOCAL_PATH": "/var/mnt/media/frigate"}
     assert settings["DOMAIN"] == "homeserver.internal" and settings["DATA_NODE"] == "homeserver-worker-1"
     assert all(isinstance(v, str) for v in settings.values())
@@ -2299,6 +2385,71 @@ def test_flux_bootstrap(tmp_path, operator_releases, nas):
     expect(result, "homeserver-k8s", changed=True, note="an operator bump")
     assert read(state)["operator_installs"][1] == f"flux-operator:v0.62.0@{OPERATOR_DIGEST}"
     no_age_key(outputs)
+
+
+GROUPS = ["apps-media", "apps-nextcloud", "apps-photoprism", "apps-frigate", "apps-homepage"]
+
+
+def kustomizations_in(objects):
+    return {k.rpartition("/")[2] for k in objects if k.startswith("Kustomization/")}
+
+
+@pytest.mark.cluster
+def test_flux_bootstrap_leaves_groups_out(tmp_path, operator_releases):
+    """local.yml's kubernetes_apps reaches Flux through the FluxInstance alone: the groups it does not name are dropped
+    from the sync by one patch, which prunes them, and the run waits until they are gone. A Deployment just suspend
+    holds there is skipped by Flux's prune and stays at zero; a dry run changes nothing. Running every group again
+    takes the patch away, and the groups come back."""
+    extra, env = flux_vars(tmp_path, operator_releases), talos_env(tmp_path)
+    state = Path(extra["fake_talos_state"])
+    (Path(extra["talos_config_dir"]) / "kubeconfig").write_text("apiVersion: v1\n")
+    write(state, {"nodes": {}, "mutations": 0, "bootstrapped": True, "synced": GROUPS})
+    expect(run("flux.yml", extra, env=env), "homeserver-k8s", changed=True, note="every group")
+    objects = flux_objects(state)
+    assert "kustomize" not in objects["FluxInstance/flux-system/flux"]["spec"]
+    assert "patches" not in objects["Kustomization/flux-system/flux-system"]["spec"]
+    assert kustomizations_in(objects) == {"flux-system", *GROUPS}
+
+    # The apps as Flux applied them, PhotoPrism held at zero by just suspend.
+    s = read(state)
+    for namespace, name, group, replicas in [
+        ("media", "jellyfin", "apps-media", 1),
+        ("photoprism", "photoprism", "apps-photoprism", 0),
+        ("photoprism", "photoprism-db", "apps-photoprism", 1),
+    ]:
+        s["objects"][f"Deployment/{namespace}/{name}"] = deployment(namespace, name, group, replicas)
+    s["objects"]["Deployment/photoprism/photoprism"]["metadata"]["annotations"] = {RECONCILE: "disabled", RECORDED: "1"}
+    write(state, s)
+
+    chosen = extra | {"kubernetes_apps": ["media", "nextcloud", "homepage"]}
+    mutations = read(state)["mutations"]
+    expect(run("flux.yml", chosen, check=True, env=env), "homeserver-k8s", changed=True, note="dry run leaving out")
+    assert read(state)["mutations"] == mutations
+
+    expect(run("flux.yml", chosen, env=env), "homeserver-k8s", changed=True, note="leaving groups out")
+    objects = flux_objects(state)
+    patches = objects["FluxInstance/flux-system/flux"]["spec"]["kustomize"]["patches"]
+    assert [p["target"]["name"] for p in patches] == ["flux-system"]
+    sync = objects["Kustomization/flux-system/flux-system"]["spec"]["patches"]
+    assert [p["target"]["name"] for p in sync] == ["(apps-photoprism|apps-frigate)"]
+    assert sync[0]["patch"].startswith("$patch: delete\n")
+    assert kustomizations_in(objects) == {"flux-system", "apps-media", "apps-nextcloud", "apps-homepage"}
+    assert "wait deleted kustomization/apps-photoprism kustomization/apps-frigate" in read(state)["events"]
+    # Flux pruned PhotoPrism's database; PhotoPrism, held, stays at zero until just resume once its group is back.
+    deployments = {k.partition("/")[2] for k in objects if k.startswith("Deployment/") and "flux-operator" not in k}
+    assert deployments == {"media/jellyfin", "photoprism/photoprism"}
+    assert objects["ConfigMap/flux-system/cluster-settings"]["data"]["HOMEPAGE_SERVICES"] == "media nextcloud"
+
+    for check in (False, True):
+        result = run("flux.yml", chosen, check=check, env=env)
+        expect(result, "homeserver-k8s", changed=0, note=f"{'dry run' if check else 'second run'} leaving out")
+
+    # Every group again: no patch anywhere, and every group back.
+    expect(run("flux.yml", extra, env=env), "homeserver-k8s", changed=True, note="every group again")
+    objects = flux_objects(state)
+    assert "kustomize" not in objects["FluxInstance/flux-system/flux"]["spec"]
+    assert "patches" not in objects["Kustomization/flux-system/flux-system"]["spec"]
+    assert kustomizations_in(objects) == {"flux-system", *GROUPS}
 
 
 @pytest.mark.cluster
@@ -2676,7 +2827,7 @@ def held(replicas):
 def test_app_scale_down_and_up(tmp_path):
     """Down stops every app, apps before their databases, and holds each against Flux, leaving the platform alone;
     up brings back what down stopped, databases first. Both change nothing a second time, and a dry run nothing
-    at all. ONLY narrows either to apps or groups, and a name that is neither is refused before anything changes."""
+    at all. --only narrows either to apps or groups, and a name that is neither is refused before anything changes."""
     extra, env = apps_vars(tmp_path), talos_env(tmp_path)
     state = Path(extra["fake_talos_state"])
     apps_state(state)
@@ -2786,7 +2937,7 @@ def test_app_scale_refusals_and_timeouts(tmp_path):
 
 @pytest.mark.cluster
 def test_haos_power(tmp_path):
-    """make suspend shuts Home Assistant's VM down through its own shutdown, never a forced stop, and make resume starts
+    """just suspend shuts Home Assistant's VM down through its own shutdown, never a forced stop, and just resume starts
     it again; each leaves a VM already as asked alone, a dry run changes nothing, a VMID that does not exist is
     refused, and a shutdown that never finishes fails the run with the VM still running."""
     extra = {"fake_pve_state": str(tmp_path / "pve.json"), "haos_mac": mac(9)}

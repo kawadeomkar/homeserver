@@ -41,7 +41,7 @@ audit of the tree before the cluster was built.
       page leaves its eight stage tags blank. Both are reported upstream (docsible#137, docsible#138) and still
       on its main branch, which fixes multi-line comments in tables (docsible#135) and `!unsafe` tags
       (docsible#134), unreleased. With a release that has them, bump the pin, think again about `--comments`,
-      check whether #137 and #138 are fixed too, and run `make fix TYPE=docs`
+      check whether #137 and #138 are fixed too, and run `just fix docs`
 
 ## TrueNAS
 
@@ -57,7 +57,7 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       2. Destroy the pool in the TrueNAS UI. The role never destroys a pool.
       3. In `local.yml`, remove `truenas_pool_persistent`, key the five disk serials under `persistent`, and
          set `truenas_pool_allow_create: true`.
-      4. Run `make check TYPE=truenas`, then `make deploy TYPE=truenas`.
+      4. Run `just check truenas`, then `just deploy truenas`.
       5. Remove `truenas_pool_allow_create`.
 
       This is the first real run of the role's pool creation, which no test exercises. Leave the `ephemeral`
@@ -93,7 +93,7 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       the default login method, and the library is maintained alongside each release. It is not on
       PyPI, publishes no release assets (only tags such as `TS-25.10.7`), and Poetry records no hash
       for a git dependency: pin it in `pyproject.toml` as the tag's commit archive URL
-      (`https://github.com/truenas/api_client/archive/<commit>.tar.gz`), check that `make lock` writes
+      (`https://github.com/truenas/api_client/archive/<commit>.tar.gz`), check that `just lock` writes
       a hash for it, and bump it by hand (Dependabot will not). GitHub keeps generated archives
       byte-stable only with advance notice, so a hash failure there means re-check the commit and
       relock. The archive is a source distribution, which `installer.only-binary` (`poetry.toml`)
@@ -110,15 +110,12 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
 
 ## Proxmox
 
-- [ ] `make deploy TYPE=proxmox` says when the host needs a reboot and leaves it to a person. Once the Talos VMs exist,
+- [ ] `just deploy proxmox` says when the host needs a reboot and leaves it to a person. Once the Talos VMs exist,
       decide how that reboot is done: drain the cluster first, or let Proxmox stop the VMs and start them
       again after the boot delay
-- [ ] Move the home host to the owner-and-class storage ids, once, by hand: check with `pvesm list` that
-      `truenas-persistent` and `truenas-ephemeral` hold no volume, `pvesm remove` both (until they are gone
-      every run refuses, naming them), then `make check`, `make deploy` twice, and grant `claude-on-proxmox`'s
-      token its pool
-      (`pveum aclmod /storage/claude-on-proxmox-ephemeral …`, the line from that project's README). Nothing
-      in `claude-on-proxmox` changes: its `local.yml` for this host sets `proxmox_storage` to the id
+- [ ] After the home host's next reboot, remove the two empty mount points the old ids left behind,
+      `/mnt/pve/truenas-persistent` and `/mnt/pve/truenas-ephemeral`. `pvesm remove` does not unmount an NFS
+      storage, so until that reboot both exports stay mounted a second time, at paths nothing uses
 - [ ] Pick a quota for `claude-on-proxmox-ephemeral` (`quota` on its `vm_storage_consumers` entry, in bytes or
       with a binary suffix such as `200G`); the parent's 1 TiB applies meanwhile
 - [ ] Turn on remote access through the host's Tailscale (`scripts/runbooks/tailscale.md`):
@@ -128,7 +125,7 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       - two-factor for `root@pam`;
       - a one-off tagged key in the vault, and `tailscale_enabled` (and, for the subnet router,
         `tailscale_advertise_routes`) in `local.yml`;
-      - `make check TYPE=proxmox` and `make deploy TYPE=proxmox` from home;
+      - `just check proxmox` and `just deploy proxmox` from home;
       - the checks from outside, with routes each control alone.
 
       Then compare `tailscale status --json` and `tailscale get --json` on the host with `fake_tailscale.py`, which
@@ -137,8 +134,8 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       assumes from tailscaled's source. And at the console, while no one needs remote access, check the guard's
       `Conflicts=`, which only systemd's documentation vouches for: `systemctl start nftables` must stop tailscaled
       before the flush (`journalctl -u tailscaled -u nftables -n 20` shows tailscaled stopping first); then
-      `systemctl stop nftables`, and `make deploy TYPE=proxmox` brings the guard and tailscaled back
-- [ ] A `make` target that prints the tailnet's policy for this setup as JSON, to copy and paste into the admin
+      `systemctl stop nftables`, and `just deploy proxmox` brings the guard and tailscaled back
+- [ ] A `just` recipe that prints the tailnet's policy for this setup as JSON, to copy and paste into the admin
       console's Access controls: section 1 of `scripts/runbooks/tailscale.md` rendered from `local.yml` (the LAN's
       prefix from `tailscale_advertise_routes`, the NAS's addresses, the Proxmox host's, the tag from
       `proxmox_tailscale_tags`), with or without a NAS, and its `tests` with the owner's login (asked for, or a

@@ -1,5 +1,5 @@
 ---
-# Read-only, for make status (status.yml, roles/status): the NAS's state and health in one login, and never an error.
+# Read-only, for just status (status.yml, roles/status): the NAS's state and health in one login, and never an error.
 # A NAS that does not answer, refuses the key or presents another certificate than the pinned one leaves
 # truenas_status without an api_host, with why in its msg, for the report to say; the key goes to no other server.
 

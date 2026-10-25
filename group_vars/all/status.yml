@@ -1,5 +1,5 @@
 ---
-# make status (status.yml, roles/status): what this setup has, and the VMs it reports on, which every play that
+# just status (status.yml, roles/status): what this setup has, and the VMs it reports on, which every play that
 # reports reads. These are the VMs this repo makes, the same ones the nightly backup covers (vm_backup_vmids,
 # group_vars/proxmox/backup.yml): the cluster's nodes, Home Assistant's, and local.yml's vm_backup_extra_vmids. Any
 # other VM on the Proxmox host, another project's, is only counted, never named as a problem.
@@ -14,12 +14,12 @@ status_setup:
 status_vms: >-
   {%- set out = [] -%}
   {%- for n in kubernetes_nodes if kubernetes_present -%}
-  {%-   set _ = out.append({'vmid': n.vmid | int, 'name': n.name, 'made_by': 'make deploy TYPE=kubernetes',
-                            'start': 'make resume ALL=1', 'guest_agent': false, 'node': n.name}) -%}
+  {%-   set _ = out.append({'vmid': n.vmid | int, 'name': n.name, 'made_by': 'just deploy kubernetes',
+                            'start': 'just resume --all', 'guest_agent': false, 'node': n.name}) -%}
   {%- endfor -%}
   {%- if haos_present -%}
   {%-   set _ = out.append({'vmid': haos_vm_vmid | int, 'name': 'homeassistant',
-                            'made_by': 'make deploy TYPE=homeassistant', 'start': 'make resume ONLY=homeassistant',
+                            'made_by': 'just deploy homeassistant', 'start': 'just resume --only homeassistant',
                             'guest_agent': true,
                             'app': {'name': 'homeassistant', 'url': haos_url | default('', true), 'port': 8123}}) -%}
   {%- endif -%}
@@ -47,28 +47,28 @@ status_admin: >-
   {%-   set _ = out.append({'name': 'Talos API', 'url': cp ~ ':50000'}) -%}
   {%- endif -%}
   {{ out }}
-# What the report suggests for each kind of thing to do; {names} is the apps make suspend stopped.
+# What the report suggests for each kind of thing to do; {names} is the apps just suspend stopped.
 status_commands:
-  upgrade: make deploy TYPE=proxmox
-  resume: make resume ONLY={names}
-  talos_upgrade: make check TYPE=talos-upgrade, then make talos-upgrade
-  credentials: make deploy TYPE=kubernetes, which renews them
+  upgrade: just deploy proxmox
+  resume: just resume --only {names}
+  talos_upgrade: just talos-upgrade --check, then just talos-upgrade
+  credentials: just deploy kubernetes, which renews them
   allowlist: >-
-    the first visits (scripts/runbooks/first-run.md), then kubernetes_ingress_allowed_range in local.yml and make
-    deploy TYPE=kubernetes
+    the first visits (scripts/runbooks/first-run.md), then kubernetes_ingress_allowed_range in local.yml and just
+    deploy kubernetes
   secrets: k8s/README-secrets.md says how to make it
-  nas: make deploy TYPE=truenas
+  nas: just deploy truenas
   nas_release: >-
-    make deploy TYPE=truenas refuses it until truenas_supported_version (roles/truenas) is raised, once TrueNAS's API
+    just deploy truenas refuses it until truenas_supported_version (roles/truenas) is raised, once TrueNAS's API
     changes are checked
-  nas_network: commit or roll them back on the NAS's Network page; make deploy TYPE=truenas refuses to run until then
-  backup: make deploy TYPE=proxmox
+  nas_network: commit or roll them back on the NAS's Network page; just deploy truenas refuses to run until then
+  backup: just deploy proxmox
   backup_target: >-
-    vm_backup_storage in local.yml names where they go (a USB disk, or a Proxmox Backup Server), then make deploy
-    TYPE=proxmox
-  etcd_snapshot: make etcd-snapshot
-  tailscale: make deploy TYPE=proxmox
+    vm_backup_storage in local.yml names where they go (a USB disk, or a Proxmox Backup Server), then just deploy
+    proxmox
+  etcd_snapshot: just etcd-snapshot
+  tailscale: just deploy proxmox
   tailscale_login: >-
-    a one-off auth key in the vault (make vault; scripts/runbooks/tailscale.md, section 4), then make deploy
-    TYPE=proxmox
+    a one-off auth key in the vault (just vault; scripts/runbooks/tailscale.md, section 4), then just deploy
+    proxmox
   split_dns: Tailscale's admin console, DNS (scripts/runbooks/tailscale.md, section 2)

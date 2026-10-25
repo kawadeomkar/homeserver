@@ -1,5 +1,5 @@
 ---
-# Placeholder cluster settings per setup, for make lint TYPE=charts (scripts/ci/render_helm.py): what
+# Placeholder cluster settings per setup, for just lint charts (scripts/ci/render_helm.py): what
 # roles/flux_bootstrap puts in the cluster-settings ConfigMap, with RFC 5737 addresses. tests/policy/test_k8s.py checks
 # that each setup here has exactly the keys the configuration gives that setup.
 nas:
@@ -16,6 +16,7 @@ nas:
   LB_TRAEFIK_IP: 192.0.2.40
   LB_FRIGATE_IP: 192.0.2.41
   DATA_NODE: homeserver-worker-1
+  HOMEPAGE_SERVICES: media nextcloud photoprism frigate
   NAS_ADDRESS: 192.0.2.10
   NAS_POOL_PERSISTENT: persistent
   NAS_POOL_EPHEMERAL: ephemeral
@@ -34,5 +35,6 @@ local:
   LB_TRAEFIK_IP: 192.0.2.40
   LB_FRIGATE_IP: 192.0.2.41
   DATA_NODE: homeserver-worker-1
+  HOMEPAGE_SERVICES: media nextcloud photoprism frigate
   MEDIA_LOCAL_PATH: /var/mnt/media/library
   FRIGATE_LOCAL_PATH: /var/mnt/media/frigate

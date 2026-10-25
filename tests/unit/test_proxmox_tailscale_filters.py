@@ -1,5 +1,5 @@
 """Unit tests for roles/proxmox_tailscale's filters: what node.yml reports for the admin console, which preferences
-differ, and the node's state for make status, which keeps only the node's own entry of tailscale status --json.
+differ, and the node's state for just status, which keeps only the node's own entry of tailscale status --json.
 
 The shapes are Tailscale 1.104.2's on a Proxmox host and nft 1.1.3's listing of the guard's table, captured on a real
 host, with every address and name replaced: RFC 5737 for the LAN, built at run time for the tailnet's, since the leak
@@ -121,7 +121,7 @@ def state(status=None, prefs=None, serve=None, table=NFT_LISTING, forwarding="1\
 
 
 def test_the_console_says_what_node_yml_always_said():
-    """The same sentences node.yml's report wrote before they moved here, which make deploy prints."""
+    """The same sentences node.yml's report wrote before they moved here, which just deploy prints."""
     found = pt.console(
         tailscale_status(tags=(), KeyExpiry="2027-04-15T00:00:00Z") | {"Health": ["UDP GRO is off"]},
         {"TCP": {"443": {}}},

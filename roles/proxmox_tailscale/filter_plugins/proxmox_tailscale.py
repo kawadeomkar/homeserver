@@ -1,9 +1,9 @@
-"""The judgments roles/proxmox_tailscale makes in Python, so that its own runs and make status say the same thing:
+"""The judgments roles/proxmox_tailscale makes in Python, so that its own runs and just status say the same thing:
 
 - proxmox_tailscale_differ: which of the node's preferences differ from the role's, which node.yml then sets;
 - proxmox_tailscale_console: what only the tailnet's admin console, or the owner on the node, can fix, which node.yml
-  reports on every run and make status lists;
-- proxmox_tailscale_status: the node's Tailscale, its guard and its forwarding, for make status (tasks/status.yml).
+  reports on every run and just status lists;
+- proxmox_tailscale_status: the node's Tailscale, its guard and its forwarding, for just status (tasks/status.yml).
 
 tailscale status --json lists every device and login on the tailnet. Only the node's own entry is ever kept: no other
 device, login or the tailnet's name (a login's address, for a personal tailnet) leaves these functions.
@@ -135,7 +135,7 @@ def status(
     guard_hosts=(),
     guard_allow=(),
 ):
-    """The node as make status reports it, from tasks/status.yml's reads (each a registered command result): tailscale
+    """The node as just status reports it, from tasks/status.yml's reads (each a registered command result): tailscale
     status --json, get --json, serve status --json, nft list table inet tailnet_guard and sysctl -n
     net.ipv4.ip_forward. Only the node's own entry of the status is kept."""
     routes = [str(r) for r in routes or []]

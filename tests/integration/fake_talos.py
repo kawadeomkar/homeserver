@@ -19,9 +19,9 @@ State is a JSON file named by $FAKE_TALOS_STATE:
   `bootstrap_precondition_count` (bootstrap answers FailedPrecondition that many times first) and
   `operator_never_available` (for kubectl wait).
 - `objects`: {"<kind>/<namespace>/<name>": manifest} for kubectl, with `pods_linger`, `never_available` and
-  `events` (fake_kubectl.py's docstring), and what make status's reads list (`node_stats`, `alerts`, `pod_states`,
+  `events` (fake_kubectl.py's docstring), and what just status's reads list (`node_stats`, `alerts`, `pod_states`,
   `pods_node`).
-- `remote_heads`: {ref: commit} for git ls-remote, which make status runs on the branch Flux syncs.
+- `remote_heads`: {ref: commit} for git ls-remote, which just status runs on the branch Flux syncs.
 
 Written from talosctl v1.14.2's flags and output and the Talos documentation, not from a node: `version` prints the
 client's block first, then each node's under `NODE:`; a node in maintenance mode answers only --insecure, a
@@ -56,7 +56,7 @@ def load():
 
 
 def save(state):
-    """Written whole, then moved into place, so that the commands make status runs at once never read half a file."""
+    """Written whole, then moved into place, so that the commands just status runs at once never read half a file."""
     path = state_path()
     scratch = path.with_name(f".{path.name}.{os.getpid()}")
     scratch.write_text(json.dumps(state, indent=1, sort_keys=True))
@@ -598,7 +598,7 @@ def kubectl(state, args):
 
 
 def git(state, args):
-    """git ls-remote <url> <ref>, as make status asks which commit the branch Flux syncs points at: the state's
+    """git ls-remote <url> <ref>, as just status asks which commit the branch Flux syncs points at: the state's
     `remote_heads` ({ref: commit}); a ref it does not have prints nothing, as git does."""
     if len(args) != 3 or args[0] != "ls-remote":
         fail(f"the fake runs git ls-remote <url> <ref> only: {args}")

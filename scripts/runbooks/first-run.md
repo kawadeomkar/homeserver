@@ -16,6 +16,8 @@ export KUBECONFIG=~/.talos/homeserver/kubeconfig
 kubectl -n media port-forward svc/sonarr 8989      # then http://localhost:8989; Ctrl-C when done
 ```
 
+Only the apps this host runs are there: all of them, unless `local.yml`'s `kubernetes_apps` chooses some.
+
 | App | Namespace | Forward | What the first visit asks |
 |---|---|---|---|
 | Sonarr | `media` | `svc/sonarr 8989` | Authentication: method **Forms**, a username and a long password from your password manager |
@@ -40,14 +42,14 @@ start; regenerate it (Settings → General → Security) if it was ever seen out
 
 ## Opening the LAN
 
-Once every app above is set up, set the range of addresses Traefik serves, usually the LAN's, in
+Once every app above that this host runs is set up, set the range of addresses Traefik serves, usually the LAN's, in
 `group_vars/all/local.yml`:
 
 ```yaml
 kubernetes_ingress_allowed_range: 192.0.2.0/24
 ```
 
-Then `make deploy TYPE=kubernetes`, which writes it into the cluster's settings, and
+Then `just deploy kubernetes`, which writes it into the cluster's settings, and
 `flux reconcile kustomization infra-configs -n flux-system` to apply it without waiting. Each app answers at
 `https://<app>.<domain>` from then on, once the device trusts the cluster's CA (`scripts/runbooks/tls.md`). Check
 that one app answers from a device in the range and that a request from outside it gets 403. An app added later has

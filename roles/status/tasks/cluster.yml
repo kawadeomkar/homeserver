@@ -23,7 +23,7 @@
          if status_cluster_server and status_cluster_access.server != status_cluster_server
          else '' }}
 
-# Every kind the report reads, none a Secret: the Deployments with the times each field was set (when make suspend
+# Every kind the report reads, none a Secret: the Deployments with the times each field was set (when just suspend
 # stopped an app), each node's kubelet statistics (its memory, and its disks: Talos's guest agent lists none),
 # Alertmanager's firing alerts, etcd's state, and the commit the branch Flux syncs points at now.
 - name: cluster | Read the cluster, at once

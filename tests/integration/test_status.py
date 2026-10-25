@@ -1,21 +1,20 @@
-"""Runs make status, the real status.yml with its callback and make's exit codes, against the fake Proxmox host, the
-fake cluster and the fake NAS.
+"""Runs just status, the real status.yml with its callback and the recipe's exit codes, against the fake Proxmox host,
+the fake cluster and the fake NAS.
 
-The playbook, roles, group_vars and Makefile are copied into a scratch tree with a local.yml of a Proxmox-only setup
-with a cluster and Home Assistant, as the policy tests do. The Proxmox host is reached locally with the fake's
-commands first on PATH, and the cluster through fake_talos.py's kubectl, talosctl and git, with credentials of its own
-in a directory under the test's own HOME, so no run ever reads the workstation's. Checked: the report's file and
-text, the callback's output (one line on what was read, then the report, and no task banners), that nothing on the
-host or in the cluster changed, the apps and their states, the nodes' memory and disks from kubelet in place of
-Proxmox's view, the exit codes (make's own, 0 or 2 as for any failed recipe, and the report's, 1 for a problem, 2 for
-a source that could not be read, 3 for a refused run, on the report's last line and in make's "Error N"), JSON=1,
-another cluster's kubeconfig, and a host that does not answer at all. With a NAS (local.yml.example's setup), the NAS
-is read through roles/truenas's status entry point against fake_truenas.py: one login, no change, no secret in the
-report, and a NAS that does not answer or presents another certificate is a source not read. The apps' probes ask
-addresses that never answer here, under a domain that never resolves (.invalid), so what they find does not depend on
-the network.
+The playbook, roles, group_vars and justfile are copied into a scratch tree with a local.yml of a Proxmox-only setup
+with a cluster and Home Assistant, as the policy tests do. The Proxmox host is reached locally with the fake's commands
+first on PATH, and the cluster through fake_talos.py's kubectl, talosctl and git, with credentials of its own in a
+directory under the test's own HOME, so no run ever reads the workstation's. Checked: the report's file and text, the
+callback's output (one line on what was read, then the report, and no task banners), that nothing on the host or in the
+cluster changed, the apps and their states, the nodes' memory and disks from kubelet in place of Proxmox's view, the
+exit codes (the report's own, which just exits with: 0 when nothing is wrong, 1 for a problem, 2 for a source that could
+not be read, 3 for a refused run, also on the report's last line), --json, a section the recipe does not have, another
+cluster's kubeconfig, and a host that does not answer at all. With a NAS (local.yml.example's setup), the NAS is read
+through roles/truenas's status entry point against fake_truenas.py: one login, no change, no secret in the report, and a
+NAS that does not answer or presents another certificate is a source not read. The apps' probes ask addresses that never
+answer here, under a domain that never resolves (.invalid), so what they find does not depend on the network.
 
-Run: make test TYPE=idempotence
+Run: just test idempotence
 """
 
 import json
@@ -198,7 +197,7 @@ def summary(memory_used, memory_available, var_used, var_total, volumes=()):
 
 
 def seed_cluster(path, domain="homeserver.invalid", **more):
-    """The cluster as Flux leaves it: Homepage, Jellyfin, Sonarr (suspended by make suspend two days ago), Nextcloud
+    """The cluster as Flux leaves it: Homepage, Jellyfin, Sonarr (suspended by just suspend two days ago), Nextcloud
     and its database, and Grafana from its chart; every Kustomization applied at the commit the branch points at,
     Traefik's allowlist still closed, nothing firing but the Watchdog."""
     data = "/var/mnt/local-path-provisioner"
@@ -400,11 +399,11 @@ def seed(path, **more):
 
 @pytest.fixture
 def tree(tmp_path):
-    """The repository's playbooks, roles, group_vars, callback and Makefile, with a Proxmox-only cluster's local.yml,
+    """The repository's playbooks, roles, group_vars, callback and justfile, with a Proxmox-only cluster's local.yml,
     the cluster's credentials in a directory of their own, and the fake cluster's state beside the fake host's."""
     root = example_tree(tmp_path / "tree", PROXMOX_ONLY_CLUSTER_LOCAL_YML)
     shutil.copytree(ROOT / "callback_plugins", root / "callback_plugins")
-    shutil.copy(ROOT / "Makefile", root)
+    shutil.copy(ROOT / "justfile", root)
     (root / "run").mkdir()
     (tmp_path / "home").mkdir()
     credentials(talos_dir(tmp_path))
@@ -412,19 +411,18 @@ def tree(tmp_path):
     return root
 
 
-# What make passes a make run inside it: make test TYPE=idempotence's own TYPE would reach make status through these.
-MAKE_VARIABLES = {"MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEOVERRIDES", "TYPE", "JSON"}
+# What just reads from the environment, which the just that runs the tests (just test idempotence) would hand on: its
+# own settings, and the virtualenv it chose, which each run here names itself.
+JUST_VARIABLES = ("JUST_", "VENV", "VIRTUAL_ENV")
 
 
 def environment(tree, state, fake=True, **more):
     """The fakes first on PATH (without fake_pve's, when not `fake`: a host without Proxmox's commands), each with
     its state, and HOME the test's own, so that nothing reads the workstation's credentials. SSH shares no
-    connection, whose socket's path under that HOME would be too long. Nothing of the make that runs the tests."""
+    connection, whose socket's path under that HOME would be too long. Nothing of the just that runs the tests."""
     fakes = [str(HERE / "fake_talos_bin"), *([str(HERE / "fake_pve_bin")] if fake else [])]
     env = {
-        k: v
-        for k, v in os.environ.items()
-        if not k.startswith(("ANSIBLE_", "STATUS_", "NO_COLOR")) and k not in MAKE_VARIABLES
+        k: v for k, v in os.environ.items() if not k.startswith(("ANSIBLE_", "STATUS_", "NO_COLOR", *JUST_VARIABLES))
     }
     return env | {
         "ANSIBLE_CONFIG": str(tree / "ansible.cfg"),
@@ -465,11 +463,12 @@ def playbook(tree, state, *args, **env):
     return proc.returncode, proc.stdout, proc.stderr
 
 
-def make_status(tree, state, *args, fake=True, inventory="inventory.example", local=True, cluster=True, **more):
-    """make status in the tree, with this test's inventory and variables passed through ANSIBLE_ARGS."""
-    ansible_args = f"-i {inventory} -e '{extra_vars(tree, local, cluster, **more)}'"
-    cmd = ["make", "--no-print-directory", "status", f"VENV={sys.prefix}", f"ANSIBLE_ARGS={ansible_args}", *args]
-    env = environment(tree, state, fake=fake)
+def just_status(tree, state, *args, fake=True, inventory="inventory.example", local=True, cluster=True, **more):
+    """just status in the tree with `args` (sections, --json), this Python's virtualenv, and this test's inventory and
+    variables after them, which the recipe hands ansible-playbook."""
+    ansible_args = ["-i", inventory, "-e", extra_vars(tree, local, cluster, **more)]
+    cmd = ["just", "status", *args, "--", *ansible_args]
+    env = environment(tree, state, fake=fake) | {"VENV": sys.prefix}
     env.pop("ANSIBLE_STDOUT_CALLBACK")
     proc = subprocess.run(cmd, cwd=tree, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL)
     return proc.returncode, proc.stdout, proc.stderr
@@ -477,12 +476,6 @@ def make_status(tree, state, *args, fake=True, inventory="inventory.example", lo
 
 def report_of(tree):
     return json.loads((tree / ".cache" / "status" / "report.json").read_text())
-
-
-def make_failed(err, code):
-    """Whether make said its status recipe failed with `code`: "[status] Error 2" from GNU make 3.81 (macOS's),
-    "[Makefile:415: status] Error 2" from 4.x (Linux's)."""
-    return re.search(rf"\[(?:[^]\s]+:\d+: )?status\] Error {code}\b", err) is not None
 
 
 def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
@@ -504,22 +497,22 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
     assert report["setup"] == {"nas": False, "cluster": True, "home_assistant": True}
     assert report["exit"] == 0, report["attention"]
     assert [(a["subject"], a["command"]) for a in report["attention"]] == [
-        ("suspended", "make resume ONLY=sonarr"),
+        ("suspended", "just resume --only sonarr"),
         (
             "allowlist",
             "the first visits (scripts/runbooks/first-run.md), then kubernetes_ingress_allowed_range in local.yml "
-            "and make deploy TYPE=kubernetes",
+            "and just deploy kubernetes",
         ),
         ("reboot", "reboot it at a quiet time"),
-        ("upgrades", "make deploy TYPE=proxmox"),
+        ("upgrades", "just deploy proxmox"),
         ("restart", "qm reboot 301"),
         # The disks provisioned on local-lvm add up to more than it holds, as on a host run with overcommit allowed.
         ("local-lvm", "keep its use well below 100% (pvesm status)"),
         # Without a NAS and without vm_backup_storage there is no backup job.
         (
             "backup",
-            "vm_backup_storage in local.yml names where they go (a USB disk, or a Proxmox Backup Server), then make "
-            "deploy TYPE=proxmox",
+            "vm_backup_storage in local.yml names where they go (a USB disk, or a Proxmox Backup Server), then just "
+            "deploy proxmox",
         ),
     ]
     assert report["attention"][0]["text"] == f"sonarr is suspended since {at(days=-2)[:10]}"
@@ -577,43 +570,43 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
     assert f" Flux       main@{COMMIT[:7]}, the same as the branch · 5 of 5 Kustomizations ready" in out
     assert " Kubernetes API   https://192.0.2.30:6443" in out
     assert "BACKUPS  no backup job: 300, 301 and 310 are not backed up" in out
-    assert "etcd snapshot                —  none yet  in ~/.talos/homeserver/etcd  → make etcd-snapshot" in out
-    assert out.rstrip().endswith(" · TYPE=apps|admin|tailscale|vms|storage|backups|cluster|nas · JSON=1"), out
+    assert "etcd snapshot                —  none yet  in ~/.talos/homeserver/etcd  → just etcd-snapshot" in out
+    assert out.rstrip().endswith(" · sections: apps admin tailscale vms storage backups cluster nas · --json"), out
     assert max(len(line) for line in lines) <= 100, out
 
 
-def test_make_status_exits_with_the_reports_code(tree, tmp_path):
-    """make exits 0 when nothing is wrong, and otherwise 2, as for any failed recipe; the report's own code ends its
-    last line and is the "Error N" make names."""
+def test_just_status_exits_with_the_reports_code(tree, tmp_path):
+    """just status exits with the report's own code, which also ends its last line, and adds no line of its own."""
     state = tmp_path / "pve.json"
     seed(state)
-    rc, out, err = make_status(tree, state)
+    rc, out, err = just_status(tree, state)
     assert rc == 0, out + err
     assert out.startswith("reading  ") and "exit 0 · nothing is wrong" in out, out
 
     # A storage that is not available is a problem: exit 1.
     seed(state, storage_total={"local-lvm": 200 * GIB, "local": 64 * GIB}, inactive=["local"])
-    rc, out, err = make_status(tree, state)
-    assert rc == 2 and "exit 1 · 1 problem" in out and make_failed(err, 1), out + err
+    rc, out, err = just_status(tree, state)
+    assert rc == 1 and "exit 1 · 1 problem" in out and "error:" not in err, out + err
     assert "the storage is unknown" in out
 
     # A host whose commands are not there could not be read: exit 2.
     seed(state)
-    rc, out, err = make_status(tree, state, fake=False)
-    assert rc == 2 and "exit 2 · 1 source not read" in out and make_failed(err, 2), out + err
+    rc, out, err = just_status(tree, state, fake=False)
+    assert rc == 2 and "exit 2 · 1 source not read" in out, out + err
     assert "could not be read: pvesh get /cluster/resources" in out
 
-    # A section make status does not have: make refuses it before anything runs.
-    rc, out, err = make_status(tree, state, "TYPE=vms,disks")
-    assert (
-        rc == 2 and "make status takes TYPE=apps,admin,tailscale,vms,storage,backups,cluster,nas, not disks" in err
-    ), out + err
+    # A section just status does not have: the recipe refuses it before anything runs, with 3.
+    rc, out, err = just_status(tree, state, "vms", "disks")
+    assert rc == 3 and "just status has no section disks: it takes apps admin tailscale vms storage" in err, out + err
     assert "ATTENTION" not in out and "reading" not in out
+    # And a make-style parameter, rather than reading it as a section.
+    rc, out, err = just_status(tree, state, "TYPE=vms")
+    assert rc == 3 and "TYPE=vms: just takes no make-style parameter" in err, out + err
 
     # The playbook refuses it too, given by hand: exit 3, the run having failed, and no report.
-    rc, out, err = make_status(tree, state, types="vms,disks")
-    assert rc == 2 and make_failed(err, 3), out + err
-    assert "make status has no section disks" in out + err and "the run failed" in err
+    rc, out, err = just_status(tree, state, types="vms,disks")
+    assert rc == 3, out + err
+    assert "The report has no section disks" in out + err and "the run failed" in err
     assert not (tree / ".cache" / "status" / "report.json").exists()
 
 
@@ -622,8 +615,8 @@ def test_an_app_that_fails_is_a_problem(tree, tmp_path):
     seed(state)
     crash = {"reason": "CrashLoopBackOff", "message": "back-off 5m0s", "restarts": 14, "finished": at(minutes=-2)}
     seed_cluster(tmp_path / "talos.json", pod_states={"jellyfin": crash})
-    rc, out, err = make_status(tree, state, "TYPE=apps")
-    assert rc == 2 and make_failed(err, 1), out + err
+    rc, out, err = just_status(tree, state, "apps")
+    assert rc == 1, out + err
     problem = report_of(tree)["attention"][0]
     assert (problem["level"], problem["subject"]) == ("problem", "jellyfin")
     assert problem["text"] == "CrashLoopBackOff, 14 restarts, the last 2 m ago"
@@ -635,7 +628,7 @@ def test_an_app_that_fails_is_a_problem(tree, tmp_path):
 def test_json_prints_the_report_alone(tree, tmp_path):
     state = tmp_path / "pve.json"
     seed(state)
-    rc, out, err = make_status(tree, state, "JSON=1", "TYPE=storage")
+    rc, out, err = just_status(tree, state, "storage", "--json")
     assert rc == 0, out + err
     report = json.loads(out)
     assert report["types"] == ["storage"] and report == report_of(tree)
@@ -649,8 +642,8 @@ def test_another_clusters_credentials_are_not_read_with(tree, tmp_path):
     seed(state)
     credentials(talos_dir(tmp_path), server="https://192.0.2.99:6443")
     (tmp_path / "talos.json").write_text(json.dumps({"mutations": 0}))
-    rc, out, err = make_status(tree, state)
-    assert rc == 2 and make_failed(err, 2), out + err
+    rc, out, err = just_status(tree, state)
+    assert rc == 2, out + err
     unread = report_of(tree)["attention"][0]
     assert unread["subject"] == "cluster" and "names the server https://192.0.2.99:6443, not" in unread["text"]
     assert "another cluster's credentials" in unread["text"]
@@ -665,11 +658,11 @@ def test_a_stopped_cluster_is_no_unread_source(tree, tmp_path):
         pve["vms"][vmid]["status"] = "stopped"
     state.write_text(json.dumps(pve))
     seed_cluster(tmp_path / "talos.json", bootstrapped=False)
-    rc, out, err = make_status(tree, state, status_timeout=5)
+    rc, out, err = just_status(tree, state, status_timeout=5)
     report = report_of(tree)
     assert rc == 0 and report["exit"] == 0, out + err
     assert [(a["subject"], a["command"]) for a in report["attention"] if a["subject"] == "stopped"] == [
-        ("stopped", "make resume ALL=1")
+        ("stopped", "just resume --all")
     ]
     assert "CLUSTER  not read: 300 homeserver-cp-1 and 301 homeserver-worker-1 are stopped" in out, out
 
@@ -680,10 +673,10 @@ def test_the_apps_are_asked_from_here(tree, tmp_path):
     state = tmp_path / "pve.json"
     seed(state)
     start = time.monotonic()
-    rc, out, err = make_status(tree, state, "TYPE=apps", status_probe_apps=True, status_probe_timeout=1)
+    rc, out, err = just_status(tree, state, "apps", status_probe_apps=True, status_probe_timeout=1)
     assert time.monotonic() - start < 60
     report = report_of(tree)
-    assert rc == 2 and report["exit"] == 1, out + err
+    assert rc == report["exit"] == 1, out + err
     assert report["dns"]["state"] == "missing" and report["dns"]["address"] == "192.0.2.40"
     assert all(u["error"] for a in report["apps"] if a["name"] != "homeassistant" for u in a["urls"])
     assert ("problem", "traefik") in [(a["level"], a["subject"]) for a in report["attention"]]
@@ -706,8 +699,8 @@ def test_a_host_that_does_not_answer(tree, tmp_path):
         f"[proxmox]\nhomeserver ansible_connection=ssh ansible_host=127.0.0.1 ansible_port={free_port()}\n"
         "[nas]\ntruenas\n[kubernetes]\nhomeserver-k8s\n"
     )
-    rc, out, err = make_status(tree, state, inventory="unreachable.ini", local=False)
-    assert rc == 2 and make_failed(err, 2), out + err
+    rc, out, err = just_status(tree, state, inventory="unreachable.ini", local=False)
+    assert rc == 2, out + err
     assert "proxmox did not answer" in out.splitlines()[0], out
     assert "the Proxmox host could not be read: " in out and "Connection refused" in out and "VMS" not in out
     assert report_of(tree)["exit"] == 2
@@ -847,7 +840,7 @@ def test_tailscale_that_is_not_running_is_a_problem(tree, tmp_path):
     report = report_of(tree)
     assert report["exit"] == 1
     item = next(a for a in report["attention"] if a["subject"] == "tailscale")
-    assert item["level"] == "problem" and item["command"] == "make deploy TYPE=proxmox"
+    assert item["level"] == "problem" and item["command"] == "just deploy proxmox"
     assert item["text"].startswith(
         "tailscaled does not answer on the Proxmox host: failed to connect to local tailscaled"
     )
@@ -947,7 +940,7 @@ def nas_tree(tmp_path):
     the tree fixture has them."""
     root = example_tree(tmp_path / "tree")
     shutil.copytree(ROOT / "callback_plugins", root / "callback_plugins")
-    shutil.copy(ROOT / "Makefile", root)
+    shutil.copy(ROOT / "justfile", root)
     (root / "run").mkdir()
     (tmp_path / "home").mkdir()
     credentials(talos_dir(tmp_path))
@@ -992,9 +985,9 @@ def test_the_nas_is_read_through_its_api(nas_tree, nas, tmp_path):
     }
     seed_nas(nas["state"], alerts=[alert, alert | {"uuid": "2", "level": "WARNING", "dismissed": True}])
     nas["calls"].write_text("")
-    rc, out, err = make_status(nas_tree, state, **nas_vars(nas))
+    rc, out, err = just_status(nas_tree, state, **nas_vars(nas))
     report = report_of(nas_tree)
-    assert rc == 2 and report["exit"] == 1, out + err
+    assert rc == report["exit"] == 1, out + err
     assert "nas ok " in out.splitlines()[0], out
     found = report["nas"]
     assert [(p["name"], p["layout"], p["status"]) for p in found["pools"]] == [
@@ -1022,13 +1015,13 @@ def test_a_nas_on_another_release_is_a_thing_to_do(nas_tree, nas, tmp_path):
     state = tmp_path / "pve.json"
     seed(state)
     seed_nas(nas["state"], version="26.04.1")
-    rc, out, err = make_status(nas_tree, state, "TYPE=nas", **nas_vars(nas))
+    rc, out, err = just_status(nas_tree, state, "nas", **nas_vars(nas))
     assert rc == 0, out + err
     todo = [a for a in report_of(nas_tree)["attention"] if a["subject"] == "nas"]
     assert [(a["level"], a["text"]) for a in todo] == [
         ("todo", "the NAS runs TrueNAS 26.04.1, and its configuration is written for 25.10")
     ]
-    assert todo[0]["command"].startswith("make deploy TYPE=truenas refuses it until truenas_supported_version")
+    assert todo[0]["command"].startswith("just deploy truenas refuses it until truenas_supported_version")
 
 
 @pytest.mark.parametrize(
@@ -1048,9 +1041,9 @@ def test_a_nas_that_is_not_read(nas_tree, nas, tmp_path, given, why):
     seed_nas(nas["state"])
     nas["calls"].write_text("")
     given = {k: (free_port() if v is None else v) for k, v in given.items()}
-    rc, out, err = make_status(nas_tree, state, **nas_vars(nas, **given))
+    rc, out, err = just_status(nas_tree, state, **nas_vars(nas, **given))
     report = report_of(nas_tree)
-    assert rc == 2 and report["exit"] == 2, out + err
+    assert rc == report["exit"] == 2, out + err
     assert "nas not read " in out.splitlines()[0], out
     unread = next(a for a in report["attention"] if a["subject"] == "nas")
     assert unread["level"] == "unread" and unread["text"].startswith("the NAS could not be read: ")
@@ -1116,9 +1109,9 @@ def test_the_backups_of_this_setups_vms(nas_tree, nas, tmp_path):
     taken = datetime.now(UTC) - timedelta(days=3, hours=1)
     (snapshots / f"etcd-{taken:%Y%m%dT%H%M%SZ}.db").write_text("")
     seed_nas(nas["state"])
-    rc, out, err = make_status(nas_tree, state, "TYPE=backups", **nas_vars(nas))
+    rc, out, err = just_status(nas_tree, state, "backups", **nas_vars(nas))
     report = report_of(nas_tree)
-    assert rc == 2 and report["exit"] == 1, out + err
+    assert rc == report["exit"] == 1, out + err
     # The ages are the wall clock's: the run started 20 h before the report, give or take the run's own seconds.
     attention = [(a["level"], re.sub(r"\d\d h (ago|old)", r"NN h \1", a["text"])) for a in report["attention"]]
     assert attention == [
@@ -1188,7 +1181,7 @@ def test_each_setup_reports_what_it_has(setup, nas, tmp_path):
     local_yml, sections, attention, code = SETUPS[setup]
     root = example_tree(tmp_path / "tree", local_yml)
     shutil.copytree(ROOT / "callback_plugins", root / "callback_plugins")
-    shutil.copy(ROOT / "Makefile", root)
+    shutil.copy(ROOT / "justfile", root)
     (root / "run").mkdir()
     (tmp_path / "home").mkdir()
     credentials(talos_dir(tmp_path))
@@ -1199,11 +1192,11 @@ def test_each_setup_reports_what_it_has(setup, nas, tmp_path):
         seed_backups(state, [(0, {})])
     seed_nas(nas["state"])
     given = nas_vars(nas) if setup.startswith("nas") else {}
-    rc, out, err = make_status(root, state, cluster=setup.endswith("cluster"), **given)
+    rc, out, err = just_status(root, state, cluster=setup.endswith("cluster"), **given)
     assert (root / ".cache" / "status" / "report.json").exists(), out + err
     report = report_of(root)
     headers = [m.group(1) for m in map(re.compile(r"([A-Z]{3,})(  |$)").match, out.splitlines()) if m]
     assert headers[1:] == sections, out
     assert [(a["level"], a["subject"]) for a in report["attention"]] == attention, out
-    assert (rc, report["exit"]) == (2 if code else 0, code), out + err
+    assert rc == report["exit"] == code, out + err
     assert max(len(line) for line in out.splitlines()) <= 100, out

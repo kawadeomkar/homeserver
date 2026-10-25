@@ -1,0 +1,6 @@
+# Written by roles/proxmox_node_exporter. The exporter answers the node itself and the addresses that scrape it,
+# nothing else: systemd drops every other packet to or from its processes, whatever the firewalls allow. It needs a
+# kernel with cgroup eBPF, as every Proxmox VE kernel has; without one, systemd ignores these lines.
+[Service]
+IPAddressDeny=any
+IPAddressAllow=localhost {{ proxmox_node_exporter_scrapers | unique | join(' ') }}

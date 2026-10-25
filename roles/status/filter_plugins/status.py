@@ -1,4 +1,4 @@
-"""What make status reports, worked out from what roles/status read, and the report as text.
+"""What just status reports, worked out from what roles/status read, and the report as text.
 
 The role's tasks read each host through status_read and pass the results here: status_proxmox for the Proxmox host (with
 status_backup_failed_runs naming the failed backup runs whose logs are read next), status_cluster for the cluster (with
@@ -11,10 +11,10 @@ anywhere, and is unit-tested in tests/unit/test_status_filters.py, with the shap
 and from the cluster on one, the NAS's as TrueNAS 25.10's API reference documents them (and seen since on a real NAS),
 and Tailscale's from 1.104.2 on a Proxmox host and 1.102.4 on a Mac.
 
-The report is a mapping that JSON=1 prints as it is: every source's findings, the attention list (problems, things
-to do, and sources that could not be read, each with the command that deals with it), and the exit code make status
-returns: 2 when a source could not be read, else 1 when there is a problem, else 0. The commands it suggests are
-configuration (status_commands), so the role names none of this repo's make targets itself.
+The report is a mapping that just status --json prints as it is: every source's findings, the attention list
+(problems, things to do, and sources that could not be read, each with the command that deals with it), and the exit
+code just status returns: 2 when a source could not be read, else 1 when there is a problem, else 0. The commands it
+suggests are configuration (status_commands), so the role names none of this repo's recipes itself.
 """
 
 import base64
@@ -44,7 +44,7 @@ IMAGE_FILESYSTEMS = ("erofs", "squashfs", "iso9660")
 SMALL_FILESYSTEM = GIB
 # A storage this full is a thing to do, and this full a problem.
 STORAGE_TODO, STORAGE_PROBLEM = 0.8, 0.9
-# The sections make status knows, in the order it shows them.
+# The sections just status knows, in the order it shows them.
 TYPES = ("apps", "admin", "tailscale", "vms", "storage", "backups", "cluster", "nas")
 # A guest's interfaces that are never the address it is reached at: loopback, container bridges, tunnels.
 INNER_INTERFACES = ("lo", "docker", "hassio", "veth", "br-", "cni", "flannel", "tailscale", "virbr")
@@ -604,7 +604,7 @@ def pods_health(pods, now):
 
 
 def app_state(deployment, pods, annotation, now):
-    """An app's state: running, starting, waiting (for a Secret), failing, suspended (by make suspend, which records
+    """An app's state: running, starting, waiting (for a Secret), failing, suspended (by just suspend, which records
     its replicas in `annotation`) or stopped (scaled to zero otherwise), with what explains it."""
     meta, spec, status = (deployment.get(k) or {} for k in ("metadata", "spec", "status"))
     wanted, ready = int(spec.get("replicas", 1)), int(status.get("readyReplicas") or 0)
@@ -960,7 +960,7 @@ def cluster(
     by name (nodes, deployments, pods, services, ingresses, persistentvolumes, kustomizations, helmreleases,
     fluxinstances, certificates, settings, stats-<node>, alerts, etcd, remote) and what status_credentials found in
     the credentials. `nodes` is the cluster's nodes, each {name, role}; `apps_path` the path under which Flux's
-    Kustomizations apply the apps; `annotation` the one make suspend records an app's replicas in; `database_label`
+    Kustomizations apply the apps; `annotation` the one just suspend records an app's replicas in; `database_label`
     (key=value) marks an app's database; `volumes` {path: label} names the nodes' volumes; `settings` {allowlist}
     names the cluster settings' key for Traefik's allowed range; `pins` {talos, kubernetes} the versions the
     configuration pins; `kubeconfig` the kubeconfig as the kubectl commands the report suggests name it; `now`
@@ -1596,7 +1596,7 @@ def _apps_attention(rows, dns, clu, tls, commands, kubeconfig):
             elif part["state"] == "waiting":
                 out.append(_item("todo", part["name"], part["detail"], commands.get("secrets", "")))
             elif part["state"] == "stopped" and part.get("deployment"):
-                out.append(_item("todo", part["name"], "is scaled to zero, though not by make suspend"))
+                out.append(_item("todo", part["name"], "is scaled to zero, though not by just suspend"))
         if row["state"] == "suspended":
             suspended.append(row)
         elif row["state"] == "running" and row.get("deployment"):
@@ -1814,7 +1814,7 @@ def _admin_pages(admin, tail):
 
 def _tailscale_attention(tail, commands):
     """Problems and things to do about the Proxmox host's Tailscale. What only the admin console can fix comes from
-    roles/proxmox_tailscale's own judgment, word for word as make deploy reports it; Tailscale's health warnings are
+    roles/proxmox_tailscale's own judgment, word for word as just deploy reports it; Tailscale's health warnings are
     only shown."""
     out = []
     deploy = commands.get("tailscale", "")
@@ -2883,7 +2883,7 @@ def text(model, color=False):
         else "nothing is wrong"
     )
     foot = _Line().add(f"exit {model['exit']}", "r" if model["exit"] else "g")
-    lines.append(foot.add(f" · {summary} · TYPE={'|'.join(TYPES)} · JSON=1", "d"))
+    lines.append(foot.add(f" · {summary} · sections: {' '.join(TYPES)} · --json", "d"))
     return "\n".join(line.text(color) for line in lines) + "\n"
 
 

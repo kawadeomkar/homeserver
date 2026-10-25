@@ -48,7 +48,7 @@ re-applied, since TrueNAS keeps those on the boot drive. This repo's full proced
 | `truenas_alerts` | The outgoing mail server (its password compared but never printed), and alert services | `truenas_mail`, `truenas_mail_password`, `truenas_alert_services` |
 | `truenas_services` | Enables, disables, starts and stops services, last | `truenas_services` |
 
-A second entry point, `status` (`tasks_from: status`), is what `make status` runs on the NAS: `truenas_info` with its
+A second entry point, `status` (`tasks_from: status`), is what `just status` runs on the NAS: `truenas_info` with its
 `status` option, which adds each pool's health, capacity, layout and last scrub, TrueNAS's alerts that are not
 dismissed, each snapshot task's last run and the uptime to what it reads, in the same login. It changes nothing, tries
 each address once, and never fails: a NAS that does not answer, refuses the key or presents another certificate than
@@ -118,5 +118,5 @@ truenas_services:
 
 ## Reference
 
-[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make fix TYPE=docs` from the role itself:
+[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `just fix docs` from the role itself:
 its argument specs, defaults and vars, and each tasks file as a table and a flow graph. Never edit it by hand.

@@ -9,7 +9,7 @@ description:
     so a play can reach a NAS that is either on its configured static address or still on the
     address it was installed with.
   - Makes no changes. C(pool.import_find) is a job, but it only scans disks.
-  - With O(status), also reports what make status shows, in the same login - each pool's health, capacity, layout
+  - With O(status), also reports what just status shows, in the same login - each pool's health, capacity, layout
     and last scrub, TrueNAS's alerts that are not dismissed, each periodic snapshot task's last run, and the uptime.
   - Runs on the controller and needs the websocket-client Python package there.
 options:
@@ -119,7 +119,7 @@ def _layout(topology):
 
 
 def health(api, info, pools, datasets):
-    """What make status shows of the NAS, from what gather read and three more calls."""
+    """What just status shows of the NAS, from what gather read and three more calls."""
     roots = {d.get("id"): d for d in datasets if "/" not in str(d.get("id"))}
     scrubs = {s.get("pool_name"): pick(s, ["threshold", "enabled"]) for s in api.call("pool.scrub.query")}
     scan_fields = ["function", "state", "percentage", "errors"]

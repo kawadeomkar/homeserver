@@ -1,5 +1,5 @@
 ---
-# Reads the host the play runs on for make status, as status_source names it, and leaves what it found in the fact
+# Reads the host the play runs on for just status, as status_source names it, and leaves what it found in the fact
 # status_found, which the report entry point (report.yml) puts together with the other hosts'. Nothing here changes
 # anything: every command goes through status_read, which runs them at once and refuses any that is not on its read
 # list, and the NAS is read before, through its API (status_nas_state). The parsing is a filter plugin
@@ -16,8 +16,8 @@
       {%- set out = [] -%}
       {%- set unknown = status_types | status_unknown_types -%}
       {%- if unknown -%}
-      {%-   set _ = out.append('make status has no section ' ~ unknown | join(', ') ~ ': TYPE takes '
-                               ~ [] | status_types_shown | join(', ') ~ ', comma-separated.') -%}
+      {%-   set _ = out.append('The report has no section ' ~ unknown | join(', ') ~ ': its sections are '
+                               ~ [] | status_types_shown | join(', ') ~ '.') -%}
       {%- endif -%}
       {%- if status_source == 'cluster' and not status_cluster_kubeconfig -%}
       {%-   set _ = out.append('status_cluster_kubeconfig must be set to read the cluster.') -%}

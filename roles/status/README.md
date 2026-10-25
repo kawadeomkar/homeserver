@@ -1,7 +1,7 @@
 # status
 
 Reads the homeserver's machines without changing anything, and reports what runs, where to reach it, and what needs
-doing: what `make status` runs. With only its defaults it reads nothing.
+doing: what `just status` runs. With only its defaults it reads nothing.
 
 Two entry points:
 
@@ -33,15 +33,14 @@ Two entry points:
 - **report** (`tasks_from: report`) puts together what each of `status_hosts` found, asks each app's addresses from
   this machine (unless `status_probe_apps` is off), ranks what needs attention (sources not read, problems, things to
   do, each with the command from `status_commands` that deals with it), writes the report to `status_report_file` as
-  JSON, mode 0600, and shows it as text unless `status_quiet`. It writes in a dry run too, since `make status` runs
-  as one and takes its exit code from the file: 2 when a source could not be read, else 1 for a problem, else 0 (make
-  itself then exits 0 or 2, as for any recipe).
+  JSON, mode 0600, and shows it as text unless `status_quiet`. It writes in a dry run too, since `just status` runs
+  as one and takes its exit code from the file: 2 when a source could not be read, else 1 for a problem, else 0.
 
 **An app** is each Ingress's backend Service, then the Deployment whose pods that Service selects, so a chart's app
 such as Grafana is one too, and every other Deployment that a Flux Kustomization under `status_cluster_apps_path`
 applies. A Deployment labelled `status_cluster_database_label` is listed under its app. Its state: running, starting,
 waiting (for a Secret that does not exist yet), failing (a crash loop, an image that does not pull, a pod that cannot
-be scheduled or stays pending, a rollout past its deadline), suspended (`make suspend` recorded its replicas in
+be scheduled or stays pending, a rollout past its deadline), suspended (`just suspend` recorded its replicas in
 `status_cluster_annotation`, and when), stopped (scaled to zero otherwise) or not applied (its Kustomization failed
 before anything ran). Home Assistant, a VM of its own, is an app too, through `status_vms`' `app`.
 
@@ -105,7 +104,7 @@ kubelet, since Talos's guest agent lists no filesystem.
 | `status_cluster_server` | `""` | The API server the kubeconfig must name; empty checks nothing |
 | `status_cluster_nodes` | `[]` | The nodes, each `{name, role}`, whose kubelet statistics are read |
 | `status_cluster_apps_path` | `""` | The path under which Flux's Kustomizations apply the apps |
-| `status_cluster_annotation` | `""` | The annotation in which `make suspend` records an app's replicas |
+| `status_cluster_annotation` | `""` | The annotation in which `just suspend` records an app's replicas |
 | `status_cluster_database_label` | `""` | The label (`key=value`) of an app's database |
 | `status_cluster_volumes` | `{}` | The nodes' own volumes to show, `{mount path: name}` |
 | `status_cluster_settings` | `{}` | The settings ConfigMap, `{namespace, name, allowlist}`; empty reads none |
@@ -135,7 +134,7 @@ flag, the nightly backup job roles/proxmox_backup keeps, the Tailscale state rol
 `group_vars/kubernetes/status.yml` (the credentials roles/talos writes, the apps as roles/app_scale finds them, the
 worker's user volumes, the settings roles/flux_bootstrap keeps, Alertmanager's pod, the pins, where roles/talos keeps
 the etcd snapshots) and `group_vars/nas/status.yml` (what roles/truenas's `status` entry point read, and the release
-that role is written for). `make status` runs it as a dry run with the stdout callback
+that role is written for). `just status` runs it as a dry run with the stdout callback
 `callback_plugins/homeserver_status.py`, which prints one line on what was read and how long the probes took, then the
 report.
 
@@ -170,5 +169,5 @@ report.
 
 ## Reference
 
-[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `make fix TYPE=docs` from the role itself:
+[REFERENCE.md](REFERENCE.md) is docsible's page for this role, written by `just fix docs` from the role itself:
 its argument specs, defaults and vars, and each tasks file as a table and a flow graph. Never edit it by hand.

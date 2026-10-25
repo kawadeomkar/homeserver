@@ -20,7 +20,7 @@ unexpected command fails the test. A state's `storage_total` gives a storage's s
 Backup jobs: `pvesh get|create /cluster/backup` and `pvesh get|set /cluster/backup/<id>`, from Proxmox VE 9's
 API schema, and since 2026-10-21 checked against a host's: a job's prune settings come back as an object and its
 enabled flag as a number (the role reads text as well), and only the listing carries `next-run`. Ids follow
-Proxmox's pve-configid rule, and an option the schema lacks fails as it does there. The backup runs make status
+Proxmox's pve-configid rule, and an option the schema lacks fails as it does there. The backup runs just status
 reads are described under backup_run().
 
 VMs: `qm create|set|config|status|start|shutdown` and `qm disk resize`, and pvesh's /nodes/<node>/qemu,
@@ -55,7 +55,7 @@ USB devices (usb0 to usb14) reach a running VM at once (hotplug). `qm guest cmd 
 for a running VM as the QEMU guest agent does, its NIC with the VM's MAC and the state's `guest_ip` (127.0.0.1
 otherwise), beside the loopback and a Docker bridge; `agent_down` counts calls that fail first, as while it boots.
 
-make status's reads (roles/status), in the shapes captured from a Proxmox VE 9.2 host on 2026-10-21:
+just status's reads (roles/status), in the shapes captured from a Proxmox VE 9.2 host on 2026-10-21:
 `pvesh get /cluster/resources`, the node, every VM (a template among them, with `template: 1`) and every storage in
 one list, a VM's use from the state's `usage` (cpu, mem and uptime by VMID; a running VM otherwise uses a tenth of
 its CPU and half its memory, and a stopped one nothing); `/nodes/<node>/rrddata` and `.../qemu/<id>/rrddata` with
@@ -64,7 +64,7 @@ first one carrying only its time, as for a VM started since; `/nodes/<node>/stat
 kernel, the uptime and the root filesystem besides the memory; and `qm guest cmd <id> get-fsinfo` and `get-osinfo`
 for a running VM, from the state's `guest_fsinfo` and `guest_osinfo` by VMID, which answer as Talos's agent does
 otherwise: no filesystem, and no OS name. The state file is replaced whole on every save, so that commands run at
-the same time, as make status runs them, never read one half written.
+the same time, as just status runs them, never read one half written.
 
 apt-get reads the deb822 .sources files in $FAKE_PVE_SOURCES_DIR, the directory the role is given. `update`
 fails with 401 Unauthorized, as the real one does, when an enterprise.proxmox.com repository is still
@@ -75,6 +75,15 @@ simulation's `Inst <package> [<old>] (<new> ...)`, without the old version for a
 `Unpacking <package> (<new>) over (<old>) ...`, without `over` for a new one. With the state's `dpkg_fails` set,
 dist-upgrade unpacks everything and then fails as dpkg does when a package's script fails, with apt's error and
 exit status 100.
+
+`apt-get install` installs from Debian's own repository (`DEBIAN`), which apt knows whatever $FAKE_PVE_SOURCES_DIR
+holds, as a real host's debian.sources is always there, and from the package lists; it needs -y and
+DEBIAN_FRONTEND=noninteractive, and a package apt does not know fails with exit status 100. Installing one with a unit
+runs its scripts as a real install does: the unit is enabled and started. `dpkg-query --show
+--showformat=${db:Status-Status} <package>` prints `installed`, and fails as dpkg-query does for a package it has
+never seen. `systemctl daemon-reload` also reads the drop-ins under $FAKE_PVE_SYSTEMD_DIR, when it is set, and a unit
+started or restarted keeps the drop-ins it started with (`started_with`), so a test can tell what a running service
+was started with; `is-enabled`, `is-active`, `enable` and `restart` answer for the units installed packages bring.
 """
 
 import hashlib
@@ -108,6 +117,11 @@ PACKAGES = {
     },
     "lists": {},
 }
+
+
+# Debian's own packages, by version, and the unit each brings.
+DEBIAN = {"prometheus-node-exporter": "1.9.0-1"}
+UNITS = {"prometheus-node-exporter": "prometheus-node-exporter.service"}
 
 
 def fresh_state():
@@ -337,7 +351,7 @@ def set_backup_job(state, jid, opts):
 
 
 # ------------------------------------------------------------------------------------------ backup runs ---
-# make status reads when a schedule fires (/cluster/jobs/schedule-analyze), the backup runs (/nodes/<node>/tasks with
+# just status reads when a schedule fires (/cluster/jobs/schedule-analyze), the backup runs (/nodes/<node>/tasks with
 # --typefilter vzdump) and a run's log (/nodes/<node>/tasks/<upid>/log), in the shapes captured from a Proxmox VE 9.2
 # host on 2026-10-21: a finished run's `status` is OK or its error, a running one has neither status nor end time,
 # and a log is numbered lines that end with TASK OK or TASK ERROR. Runs come from the state's `tasks`, which
@@ -1170,14 +1184,79 @@ def apt_get(state, args):
                 print("E: Sub-process /usr/bin/dpkg returned an error code (1)", file=sys.stderr)
                 save(state)
                 sys.exit(100)
+    elif verbs[:1] == ["install"] and len(verbs) > 1:
+        if "-y" not in flags or os.environ.get("DEBIAN_FRONTEND") != "noninteractive":
+            fail("fake apt-get: install would stop to ask: it needs -y and DEBIAN_FRONTEND=noninteractive")
+        known = DEBIAN | packages["lists"]
+        unknown = [name for name in verbs[1:] if name not in known]
+        if unknown:
+            save(state)
+            print(f"E: Unable to locate package {unknown[0]}", file=sys.stderr)
+            sys.exit(100)
+        new = {name: known[name] for name in verbs[1:] if name not in packages["installed"]}
+        print(f"0 upgraded, {len(new)} newly installed, 0 to remove and 0 not upgraded.")
+        for name, version in sorted(new.items()):
+            print(f"Unpacking {name} ({version}) ...")
+            packages["installed"][name] = version
+            if name in UNITS:
+                state.setdefault("units", {})[UNITS[name]] = {"enabled": True}
+                start(state, UNITS[name])
+        if new:
+            state["mutations"] += 1
     else:
         fail(f"fake apt-get: unsupported {args}")
 
 
+def dpkg_query(state, args):
+    if len(args) != 3 or args[:2] != ["--show", "--showformat=${db:Status-Status}"]:
+        fail(f"fake dpkg-query: unsupported {args}")
+    if args[2] not in state["packages"]["installed"]:
+        print(f"dpkg-query: no packages found matching {args[2]}", file=sys.stderr)
+        sys.exit(1)
+    print("installed", end="")
+
+
+def dropins():
+    """The drop-ins under $FAKE_PVE_SYSTEMD_DIR, by unit: what a daemon-reload reads."""
+    directory = os.environ.get("FAKE_PVE_SYSTEMD_DIR")
+    out = {}
+    for path in sorted(Path(directory).glob("*.d/*.conf")) if directory else []:
+        out[path.parent.name[: -len(".d")]] = out.get(path.parent.name[: -len(".d")], "") + path.read_text()
+    return out
+
+
+def start(state, name):
+    state["units"][name].update(active=True, started_with=state.get("loaded_dropins", {}).get(name, ""))
+
+
 def systemctl(state, args):
-    if args != ["daemon-reload"]:
+    if args == ["daemon-reload"]:
+        state["daemon_reloads"] = state.get("daemon_reloads", 0) + 1
+        if os.environ.get("FAKE_PVE_SYSTEMD_DIR"):
+            state["loaded_dropins"] = dropins()
+        return
+    if len(args) != 2:
         fail(f"fake systemctl: unsupported {args}")
-    state["daemon_reloads"] = state.get("daemon_reloads", 0) + 1
+    verb, name = args
+    unit = state.get("units", {}).get(name)
+    if verb == "is-active":
+        print("active" if unit and unit.get("active") else "inactive")
+        sys.exit(0 if unit and unit.get("active") else 3)
+    if verb == "is-enabled" and unit is None:
+        print(f"Failed to get unit file state for {name}: No such file or directory", file=sys.stderr)
+        sys.exit(1)
+    if unit is None:
+        fail(f"Failed to {verb} {name}: Unit {name} not found.")
+    if verb == "is-enabled":
+        print("enabled" if unit["enabled"] else "disabled")
+        sys.exit(0 if unit["enabled"] else 1)
+    if verb == "enable":
+        unit["enabled"] = True
+    elif verb == "restart":
+        start(state, name)
+    else:
+        fail(f"fake systemctl: unsupported {args}")
+    state["mutations"] += 1
 
 
 def hostname(state, args):
@@ -1197,6 +1276,7 @@ def main():
         "hostname": hostname,
         "systemctl": systemctl,
         "apt-get": apt_get,
+        "dpkg-query": dpkg_query,
     }
     tools[tool](state, args)
     save(state)

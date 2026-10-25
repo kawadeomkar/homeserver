@@ -29,7 +29,7 @@ from websockets.asyncio.server import serve
 API_KEY = "1-fake-api-key-for-tests"
 # Stands in for the UI certificate's private key; the tests check it never reaches Ansible output.
 PRIVATE_KEY = "FAKE-PRIVATE-KEY-MUST-NOT-LEAK"
-# Stands in for the machine's serial number, which system.info returns; make status's report never carries it.
+# Stands in for the machine's serial number, which system.info returns; just status's report never carries it.
 SYSTEM_SERIAL = "FAKE-SYSTEM-SERIAL-MUST-NOT-LEAK"
 BOOT_POOL = "boot-pool"
 TIB = 2**40

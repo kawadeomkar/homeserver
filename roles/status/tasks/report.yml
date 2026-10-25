@@ -1,7 +1,7 @@
 ---
 # tasks_from: report. Puts together what each host of status_hosts found (status_found, from the main entry point),
 # asks each app's addresses from this machine, ranks what needs attention, writes the report to status_report_file
-# and shows it as text. make status runs as a dry run and takes its exit code from that file, so the file is written
+# and shows it as text. just status runs as a dry run and takes its exit code from that file, so the file is written
 # in a dry run too; it holds addresses, so only its owner may read it.
 
 - name: report | Put the findings together

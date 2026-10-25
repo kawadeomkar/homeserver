@@ -1,7 +1,7 @@
 ---
-# Copy to group_vars/all/local.yml (git-ignored) and fill in your environment, or run make init, which
+# Copy to group_vars/all/local.yml (git-ignored) and fill in your environment, or run just init, which
 # writes it from this file with every setting commented out, asks for each value, writes it there and says
-# what is still missing (make init TYPE=full asks for the less used settings too). A setting added here is
+# what is still missing (just init --full asks for the less used settings too). A setting added here is
 # added to its list too: scripts/init/settings.py.
 #
 # This repo is public, so no address is ever written in a task, a role default
@@ -48,7 +48,7 @@ truenas_pool_disks:
 # truenas_pool_ephemeral: scratch
 # Alert e-mail (a degraded pool, a pool filling up): the mail server the NAS
 # sends through, and where alerts go. Its password goes in the vault, as
-# vault_truenas_mail_password (make vault). Without these, no mail is set.
+# vault_truenas_mail_password (just vault). Without these, no mail is set.
 # With a server, a sender address is required: truenas_mail_from, or
 # truenas_mail_user when that is an address. An alert address needs a server.
 # truenas_mail_server: smtp.example.org
@@ -139,7 +139,7 @@ flux_sync_url: https://github.com/<you>/homeserver.git
 # own devices'. Leave it unset on a new cluster: Traefik then answers everyone
 # with 403 while you set each app up through kubectl port-forward, since several
 # make their first visitor the admin (scripts/runbooks/first-run.md). Set it
-# once they are all set up, and run make deploy TYPE=kubernetes.
+# once they are all set up, and run just deploy kubernetes.
 # kubernetes_ingress_allowed_range: 192.0.2.0/24
 # Extra names for the Kubernetes API's certificate, set before the first build,
 # so the API can later be reached by name.
@@ -150,6 +150,11 @@ flux_sync_url: https://github.com/<you>/homeserver.git
 # kubernetes_node_sizes:
 #   homeserver-worker-1: {cores: 6, memory_mib: 24576, system_disk_gib: 64, data_disk_gib: 150, media_disk_gib: 1000}
 #   homeserver-cp-1: {cores: 2, memory_mib: 4096, system_disk_gib: 32}
+# The app groups this host runs; unset, every one: media (Jellyfin, Seerr,
+# Sonarr, Radarr, Prowlarr, SABnzbd, FileBrowser), nextcloud, photoprism,
+# frigate and homepage. Leaving one out stops it and keeps its data. A small
+# worker can run a few, say:
+# kubernetes_apps: [media, nextcloud, homepage]
 # Without a NAS and with no room for a media disk: keep the media and camera
 # recordings on the data volume, where they are backed up and share its space.
 # Nothing caps them there: a growing library, SABnzbd's downloads or Frigate's
@@ -166,11 +171,11 @@ flux_sync_url: https://github.com/<you>/homeserver.git
 # haos_url: http://homeassistant.home.arpa/
 
 # ----------------------------------------------------------- Home Assistant ---
-# No Home Assistant? Delete this section. With it, make deploy TYPE=homeassistant creates
+# No Home Assistant? Delete this section. With it, just deploy homeassistant creates
 # Home Assistant OS as a VM of its own on the Proxmox host (VMID 310), with or
 # without a cluster or a NAS, gives it its owner account, and the nightly backup
 # covers it (scripts/runbooks/haos.md). The owner's password is the vault's
-# vault_haos_owner_password (make vault).
+# vault_haos_owner_password (just vault).
 #
 # Its MAC, chosen by you and reserved in the router's DHCP before the first run,
 # with the hostname homeassistant: locally administered, in lower case, its

@@ -3,7 +3,7 @@
 # Dependabot bumps a pin in pyproject.toml, or a package only poetry.lock names, and re-locks with a
 # Poetry of its own (which must satisfy requires-poetry, or it opens no PR). It does not read poetry.toml,
 # so its cooldown below, not solver.min-release-age, decides how old a bumped release must be. It cannot
-# see the actionlint, kubeconform and gitleaks versions and checksums in ci.yml, or the Makefile's schema
+# see the actionlint, kubeconform and gitleaks versions and checksums in ci.yml, or the justfile's schema
 # pins, or the Poetry version CI installs; CLAUDE.md lists those, which are bumped by hand.
 # Every Dependabot PR is read before it is merged, never merged only because CI is green.
 version: 2

@@ -1,9 +1,9 @@
 ---
-# Brings back what make suspend stopped, every app or those ONLY names, handing each back to Flux, and starts Home
+# Brings back what just suspend stopped, every app or those --only names, handing each back to Flux, and starts Home
 # Assistant's VM:
-#   make check TYPE=resume
-#   make resume ONLY=jellyfin,homeassistant
-# ALL=1 starts the cluster's VMs first, the control plane before the worker, and the apps wait for every node.
+#   just resume --check
+#   just resume --only jellyfin,homeassistant
+# --all starts the cluster's VMs first, the control plane before the worker, and the apps wait for every node.
 # Without a cluster, or without Home Assistant, its play ends by itself.
 # An inventory made before the cluster has no kubernetes group, and the apps' play would match no host and end
 # without a word: refused here instead, as kubernetes.yml refuses it.
@@ -24,16 +24,16 @@
   hosts: proxmox
   gather_facts: false
   vars:
-    # make's ONLY, comma-separated names, passed as -e '{"only": "<names>"}', and its ALL, as {"cluster_vms": true}.
+    # just's --only, comma-separated names, passed as -e '{"only": "<names>"}', and its --all, as {"cluster_vms": true}.
     only_names: "{{ (only | default('')).split(',') | map('trim') | select | list }}"
   pre_tasks:
-    - name: Refuse ALL with ONLY
+    - name: Refuse --all with --only
       ansible.builtin.assert:
         that: not (cluster_vms | default(false) | bool) or only_names | length == 0
-        fail_msg: ALL=1 starts everything, the cluster's VMs first, so it takes no ONLY.
+        fail_msg: --all starts everything, the cluster's VMs first, so it takes no --only.
         quiet: true
       tags: [always]
-    - name: Leave the cluster's VMs alone without ALL=1
+    - name: Leave the cluster's VMs alone without --all
       ansible.builtin.meta: end_host
       when: not (cluster_vms | default(false) | bool)
       tags: [always]
@@ -60,7 +60,7 @@
   hosts: kubernetes
   gather_facts: false
   vars:
-    # make's ONLY, comma-separated names, passed as -e '{"only": "<names>"}'.
+    # just's --only, comma-separated names, passed as -e '{"only": "<names>"}'.
     only_names: "{{ (only | default('')).split(',') | map('trim') | select | list }}"
   pre_tasks:
     - name: Refuse NAS settings that come without a NAS address
@@ -84,7 +84,7 @@
       ansible.builtin.meta: end_host
       when: not kubernetes_present
       tags: [always]
-    # With ALL=1 the VMs were only just started: the apps wait until every node is Ready. A dry run asks once.
+    # With --all the VMs were only just started: the apps wait until every node is Ready. A dry run asks once.
     - name: Wait for the cluster's nodes
       ansible.builtin.command:
         argv: [kubectl, --kubeconfig, "{{ app_scale_kubeconfig }}", wait, --for=condition=Ready, nodes, --all, --timeout=20s]
@@ -109,8 +109,8 @@
     - name: Leave the apps for the real run
       ansible.builtin.meta: end_host
       when: (cluster_vms | default(false) | bool) and ansible_check_mode and up_nodes.rc != 0
-    # So that make suspend ONLY=homeassistant needs no answer from the cluster.
-    - name: Leave the apps alone when ONLY names Home Assistant alone
+    # So that just suspend --only homeassistant needs no answer from the cluster.
+    - name: Leave the apps alone when --only names Home Assistant alone
       ansible.builtin.meta: end_host
       when: only_names == ['homeassistant'] and haos_present
       tags: [always]
@@ -118,7 +118,7 @@
     - role: app_scale
       vars:
         app_scale_state: up
-        # Accepted in ONLY besides the apps and groups: Home Assistant, which the next play takes.
+        # Accepted in --only besides the apps and groups: Home Assistant, which the next play takes.
         app_scale_other_names: "{{ ['homeassistant'] if haos_present else [] }}"
         app_scale_only: "{{ only_names }}"
 
@@ -128,7 +128,7 @@
   hosts: proxmox
   gather_facts: false
   vars:
-    # make's ONLY, as in the apps' play.
+    # just's --only, as in the apps' play.
     only_names: "{{ (only | default('')).split(',') | map('trim') | select | list }}"
   pre_tasks:
     - name: Refuse NAS settings that come without a NAS address
@@ -153,7 +153,7 @@
       ansible.builtin.assert:
         that: kubernetes_present or _unknown | length == 0
         fail_msg: >-
-          This setup has no cluster, so make resume knows no {{ _unknown | join(', ') }}{{
+          This setup has no cluster, so just resume knows no {{ _unknown | join(', ') }}{{
           ': only homeassistant' if haos_present else ', nor any other name: it has no Home Assistant either' }}.
         quiet: true
       tags: [always]
@@ -168,7 +168,7 @@
       ansible.builtin.meta: end_host
       when: not haos_present
       tags: [always]
-    - name: Leave Home Assistant alone when ONLY names others
+    - name: Leave Home Assistant alone when --only names others
       ansible.builtin.meta: end_host
       when: only_names | length > 0 and 'homeassistant' not in only_names
       tags: [always]

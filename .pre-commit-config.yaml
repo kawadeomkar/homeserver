@@ -1,7 +1,8 @@
 ---
-# Git hooks for leaks, installed by `make init`. Each runs a script of scripts/ci/ and needs only bash
-# and gitleaks (Homebrew), so it works in any shell, whether or not the project's virtualenv is active.
-# The linters stay in `make lint` and CI.
+# Git hooks, installed by `just init`. The leak checks each run a script of scripts/ci/ and need only bash and
+# gitleaks (Homebrew), so they work in any shell, whether or not the project's virtualenv is active. The role
+# references are docsible's, from the project's virtualenv, which just finds as it always does: that hook needs just
+# on PATH, as every other entry point does. The linters stay in `just lint` and CI.
 default_install_hook_types: [pre-commit, pre-push]
 repos:
   - repo: local
@@ -10,6 +11,15 @@ repos:
         name: gitleaks (staged changes)
         entry: scripts/ci/check-staged.sh
         language: system
+        pass_filenames: false
+        stages: [pre-commit]
+      # A commit that changes a role writes every role's REFERENCE.md again from the staged roles. pre-commit fails a
+      # commit whose hook changed a file and never stages it: add the pages it wrote, then commit again.
+      - id: role-references
+        name: role references (just fix docs)
+        entry: just fix docs
+        language: system
+        files: ^roles/
         pass_filenames: false
         stages: [pre-commit]
       - id: leaks-push

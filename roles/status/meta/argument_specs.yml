@@ -1,7 +1,7 @@
 ---
 argument_specs:
   main:
-    short_description: Read a host for make status, without changing anything
+    short_description: Read a host for just status, without changing anything
     description:
       - Reads the host the play runs on, as status_source names it, and leaves what it found in the fact
         status_found for the report entry point. Every command goes through the role's module status_read, which
@@ -138,7 +138,7 @@ argument_specs:
       status_cluster_annotation:
         type: str
         default: ""
-        description: The annotation in which make suspend records an app's replicas, which marks it suspended.
+        description: The annotation in which just suspend records an app's replicas, which marks it suspended.
       status_cluster_database_label:
         type: str
         default: ""
@@ -241,11 +241,11 @@ argument_specs:
           allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale,
           tailscale_login, split_dns. One left out is suggested by text alone.
   report:
-    short_description: Put make status's findings together, write the report and show it
+    short_description: Put just status's findings together, write the report and show it
     description:
       - Puts together what each host of status_hosts found (its status_found), ranks what needs attention, writes
         the report to status_report_file as JSON, mode 0600, and shows it as text, unless status_quiet.
-      - Writes the report in a dry run too, since make status runs as one and takes its exit code from the file.
+      - Writes the report in a dry run too, since just status runs as one and takes its exit code from the file.
       - Unless status_probe_apps is off, first asks each app's addresses from this machine with the role's module
         status_probe, checking no certificate and sending no credentials.
     options:

@@ -186,7 +186,7 @@ argument_specs:
         default: {}
         description: Service name to {enabled, state}; state is started or stopped.
   status:
-    short_description: Read the NAS's state and health for make status, in one login, changing nothing
+    short_description: Read the NAS's state and health for just status, in one login, changing nothing
     description:
       - Runs truenas_info with its status option and records the result in truenas_status, for roles/status to
         report. Tries each of truenas_api_hosts once, so a NAS that does not answer costs a few seconds.

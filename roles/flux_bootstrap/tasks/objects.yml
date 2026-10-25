@@ -120,16 +120,46 @@
       - name: flux
         manifest: "{{ _instance | to_nice_yaml(indent=2) }}"
   vars:
+    # Labelled for kustomize-controller to watch: a change reconciles every Kustomization that substitutes from it at
+    # once, where Flux would otherwise read it only at each one's next interval (up to 10 minutes later).
     _settings:
       apiVersion: v1
       kind: ConfigMap
-      metadata: {name: cluster-settings, namespace: flux-system}
+      metadata:
+        name: cluster-settings
+        namespace: flux-system
+        labels: {reconcile.fluxcd.io/watch: Enabled}
       data: "{{ flux_bootstrap_settings }}"
     # Flux's strict substitution turns a manifest that names a missing setting into a failure rather than an empty
     # string: a misspelt ${DOMIAN} would otherwise give every app the host "sonarr.". kustomize-controller turns it on
     # by default from 1.9 (Flux 2.9), so nothing here sets it: a feature gate a later release has dropped would stop
     # kustomize-controller from starting. A policy test keeps the version at 2.9 or later.
-    _instance:
+    # What the sync leaves out (flux_bootstrap_sync_exclude): a patch of the FluxInstance's own adds to the sync
+    # Kustomization's spec.patches one strategic-merge delete, whose target names every Kustomization left out, as
+    # kustomize's anchored regular expression. A target that matches nothing is no error, where a patch without one
+    # that names an object the build lacks would fail the whole sync; with a target, kustomize gives the patch the
+    # kind and name of what it matches, so those in the patch only need to be there. The operator applies its patches
+    # to its whole build, the sync included (its guide patches the sync so:
+    # docs/guides/instance/instance-customization.md), though its API reference speaks of the controllers alone; a
+    # run waits below for what is left out to be gone.
+    _sync_patches:
+      - target:
+          group: kustomize.toolkit.fluxcd.io
+          kind: Kustomization
+          name: "({{ flux_bootstrap_sync_exclude | join('|') }})"
+        patch: |
+          $patch: delete
+          apiVersion: kustomize.toolkit.fluxcd.io/v1
+          kind: Kustomization
+          metadata:
+            name: excluded
+    _instance: >-
+      {{ _instance_base | combine({'spec': {'kustomize': {'patches': [
+           {'target': {'group': 'kustomize.toolkit.fluxcd.io', 'kind': 'Kustomization', 'name': 'flux-system'},
+            'patch': [{'op': 'add', 'path': '/spec/patches', 'value': _sync_patches}] | to_json}]}}},
+           recursive=True)
+         if flux_bootstrap_sync_exclude else _instance_base }}
+    _instance_base:
       apiVersion: fluxcd.controlplane.io/v1
       kind: FluxInstance
       metadata: {name: flux, namespace: flux-system}
@@ -234,6 +264,22 @@
       - --timeout={{ flux_bootstrap_wait_timeout }}
   changed_when: false
   when: not ansible_check_mode
+
+# A Kustomization dropped from the sync is pruned, and its finalizer deletes what it applied, bar what is marked never
+# to be pruned (the claims and namespaces) and what just suspend holds (kustomize.toolkit.fluxcd.io/reconcile:
+# disabled), which stays at zero replicas and comes back held with its group. kubectl's wait for a deletion passes for
+# one already gone, so this waits for the rest; it times out should a release of the operator stop passing its patches
+# on to the sync.
+- name: objects | Wait for the Kustomizations left out to be deleted
+  ansible.builtin.command:
+    argv: >-
+      {{ ['kubectl', '--kubeconfig', flux_bootstrap_kubeconfig, 'wait', '--for=delete']
+         + (flux_bootstrap_sync_exclude | map('regex_replace', '^', 'kustomization/') | list)
+         + ['-n', 'flux-system', '--timeout=' ~ flux_bootstrap_wait_timeout] }}
+  changed_when: false
+  when:
+    - not ansible_check_mode
+    - flux_bootstrap_sync_exclude | length > 0
 
 # The FluxInstance is ready once its own sync has applied, which leaves the Kustomizations that sync creates, the ones
 # that apply the apps, still reconciling, or failing: a manifest that breaks in one setup's tree only, say. Each must

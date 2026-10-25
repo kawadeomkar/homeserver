@@ -1,18 +1,22 @@
-"""make init: ask for the settings a deployment needs, write them, and say what is still missing.
+"""just init: ask for the settings a deployment needs, write them, and say what is still missing.
 
 Settings go in group_vars/all/local.yml and secrets in the vault (group_vars/all/local.vault.yml, opened with
 .vault_pass), both git-ignored, one top-level key at a time, so the rest of each file and its comments stay as they are.
 Each answer is written at once: stopping halfway keeps what was answered. A setting already set is shown, and Enter
-keeps it, so make init can be run again to change a setting or fill in one that was skipped. Secrets are never shown,
+keeps it, so just init can be run again to change a setting or fill in one that was skipped. Secrets are never shown,
 only whether they are set.
 
 A new local.yml is local.yml.example with every setting commented out, so the playbooks read nothing from it until
-a setting is answered. One an older make init copied from the example loses the example's own values the same way,
+a setting is answered. One an older just init copied from the example loses the example's own values the same way,
 and keeps whatever was changed.
 
-A plain run asks for the required and recommended settings and the popular optional ones; --full (make init
-TYPE=full) asks for every one. It ends with a summary: what is still required (settings left unset, what the
+A plain run asks for the required and recommended settings and the popular optional ones; --full (just init
+--full) asks for every one. It ends with a summary: what is still required (settings left unset, what the
 playbooks' own checks would refuse, files the cluster needs, tools), then the steps only done by hand.
+
+Its first question is the setup, when there is one to choose (scripts/init/setups.py): the three files of one machine
+kept outside the checkout and linked in, which the answers then go into. Enter keeps the setup the checkout uses; a
+new name makes one and switches to it. A checkout with its own files is offered to keep them as a setup.
 
 Without a terminal it asks nothing and prints the summary alone.
 """
@@ -37,15 +41,14 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import settings as cfg
+import setups
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-LOCAL = Path("group_vars/all/local.yml")
+LOCAL, VAULT, VAULT_PASS = (setups.FILES[f] for f in ("local.yml", "vault.yml", "vault_pass"))
 EXAMPLE = Path("group_vars/all/local.yml.example")
-VAULT = Path("group_vars/all/local.vault.yml")
-# Where the vault was committed until 2026-10-20: a checkout from before moves it (README.md, The vault).
-OLD_VAULT = Path("group_vars/all/vault.yml")
-VAULT_PASS = Path(".vault_pass")
+# Where the vault was committed until 2026-10-20: a checkout from before moves it (README.md, Setups and the vault).
+OLD_VAULT = setups.OLD_VAULT
 INVENTORY = Path("inventory")
 VALIDATE = Path("scripts/init/validate.yml")
 
@@ -66,6 +69,8 @@ def render(key: str, value: Any) -> list[str]:
     """A setting's lines: a mapping one entry per line, anything else on one line, as local.yml.example writes them."""
     if isinstance(value, dict) and value:
         return [f"{key}:", *(f"  {_flow({k: v})[1:-1]}" for k, v in value.items())]
+    if value == "":
+        return [f'{key}: ""']  # as the examples write it, where YAML's dump would write ''
     return [_flow({key: value})[1:-1]]
 
 
@@ -112,8 +117,8 @@ class YamlKeys:
         return None
 
     def _to_block_style(self) -> None:
-        """A mapping written in flow style, such as the {} make vault TYPE=new encrypts, as one line per key: a key
-        added after a flow mapping would not parse."""
+        """A mapping written in flow style, such as the {} just vault new encrypted before it wrote the template, as
+        one line per key: a key added after a flow mapping would not parse."""
         start = next(
             (i for i, line in enumerate(self.lines) if line.strip() and not line.startswith(("#", "---"))), None
         )
@@ -198,7 +203,9 @@ def temp_copy(path: Path) -> Path:
 
 def write_file(path: Path, data: bytes, mode: int) -> None:
     """Written whole or not at all, readable by its owner alone unless it already was by more. The copy is made anew,
-    so it never takes an older one's mode, and removed when the write fails or is interrupted."""
+    so it never takes an older one's mode, and removed when the write fails or is interrupted. A link is followed, so
+    a setup's file is written, beside it, never the checkout's link to it replaced."""
+    path = Path(os.path.realpath(path))
     tmp = temp_copy(path)
     tmp.unlink(missing_ok=True)
     try:
@@ -210,6 +217,15 @@ def write_file(path: Path, data: bytes, mode: int) -> None:
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+
+
+def commented_example(root: Path) -> str:
+    """local.yml.example with every setting commented out, as a new local.yml starts: the playbooks read nothing from
+    it until a setting is answered."""
+    doc = YamlKeys((root / EXAMPLE).read_text())
+    for key in doc.values():
+        doc.comment_out(key)
+    return doc.text
 
 
 def has_value(value: Any) -> bool:
@@ -257,33 +273,21 @@ class Vault:
         if not self.path.is_file():
             self.state = "not moved" if (self.root / OLD_VAULT).is_file() else "missing"
             return
-        from ansible.errors import AnsibleError
-        from ansible.parsing.vault import VaultLib, VaultSecret, parse_vaulttext_envelope
+        from ansible.parsing.vault import parse_vaulttext_envelope
 
-        secret = VaultSecret(self.password_file.read_bytes().strip())
+        password = self.password_file.read_bytes().strip()
         raw = self.path.read_bytes()
-        try:
-            plain = VaultLib([("default", secret)]).decrypt(raw)
-        except AnsibleError:
+        plain = setups.decrypt(raw, password)
+        if plain is None:
             self.state = "does not open"
             return
-        self._lib = VaultLib([("default", secret)])
-        self._secret = secret
+        self._password = password
         self._vault_id = parse_vaulttext_envelope(raw)[3]
         self.doc = YamlKeys(plain.decode())
         self.state = "open"
 
     def opens_with(self, password: str) -> bool:
-        from ansible.errors import AnsibleError
-        from ansible.parsing.vault import VaultLib, VaultSecret
-
-        if not self.path.is_file():
-            return False
-        try:
-            VaultLib([("default", VaultSecret(password.encode()))]).decrypt(self.path.read_bytes())
-        except AnsibleError:
-            return False
-        return True
+        return self.path.is_file() and setups.decrypt(self.path.read_bytes(), password.encode()) is not None
 
     def get(self, key: str) -> Any:
         return self.doc.values().get(key) if self.doc else None
@@ -292,12 +296,8 @@ class Vault:
         self.doc.set(key, value, order)
         self._save()
 
-    def unset(self, key: str) -> None:
-        if self.doc.unset(key):
-            self._save()
-
     def _save(self) -> None:
-        data = self._lib.encrypt(self.doc.text.encode(), secret=self._secret, vault_id=self._vault_id)
+        data = setups.encrypt(self.doc.text, self._password, self._vault_id)
         write_file(self.path, data, stat.S_IMODE(self.path.stat().st_mode))
         self.changed = True
 
@@ -337,10 +337,11 @@ class Init:
         self.order = [s.key for s in cfg.SETTINGS]
         self.local_path = root / LOCAL
         self.example = YamlKeys((root / EXAMPLE).read_text()).values()
-        source = self.local_path if self.local_path.is_file() else root / EXAMPLE
-        self.local = YamlKeys(source.read_text())
+        self.load()
         self.examples_left: list[str] = []  # local.yml.example's values local.yml still holds on disk
         self.vault = Vault(root)
+        self.setup: Path | None = None  # the setup the checkout links to; None for files of its own
+        self.broken: str | None = None  # why the setup's links are not whole, which stops everything else
         self.ssh: tuple[bool, str] | None = None
         self.offered_macs: set[str] = set()
         self.chosen: dict[str, bool] = {}  # what the person said the setup has, before its settings exist
@@ -387,6 +388,11 @@ class Init:
     def asked(self, s: cfg.Setting) -> bool:
         return self.full or self.needed(s) in ("required", "recommended") or s.popular
 
+    def load(self) -> None:
+        """local.yml as it is, or local.yml.example for a new one."""
+        source = self.local_path if self.local_path.is_file() else self.root / EXAMPLE
+        self.local = YamlKeys(source.read_text())
+
     def save_local(self) -> None:
         mode = stat.S_IMODE(self.local_path.stat().st_mode) if self.local_path.exists() else 0o600
         self.local.values()  # never write a file YAML cannot read back
@@ -397,10 +403,11 @@ class Init:
             return  # unchanged: the file keeps its own way of writing it
         try:
             if s.secret:
-                if answer is CLEAR:
-                    self.vault.unset(s.key)
-                else:
+                if answer is not CLEAR:
                     self.vault.set(s.key, answer, self.order)
+                elif has_value(self.current(s)):
+                    # Emptied, as just vault new writes it, so its line stays under its comment.
+                    self.vault.set(s.key, "", self.order)
                 return
             if answer is CLEAR:
                 if self.local.unset(s.key):
@@ -409,7 +416,7 @@ class Init:
                 self.local.set(s.key, answer, self.order)
                 self.save_local()
         except EditError as e:
-            where = "the vault: make vault" if s.secret else str(LOCAL)
+            where = "the vault: just vault" if s.secret else str(LOCAL)
             self.console.say(f"  Not saved: {e}. Change it by hand in {where}.")
 
     def unset_local(self, key: str) -> bool:
@@ -495,6 +502,8 @@ class Init:
             self.apply(s, self.ask_value(s, self.current(s), None, lambda t: cfg.parse(s, t), secret=True))
         elif s.kind == "bool":
             self.ask_bool(s)
+        elif s.kind == "app_list":
+            self.ask_app_list(s)
         elif s.kind in ("node_map_ipv4", "node_map_mac"):
             self.ask_node_map(s)
         elif s.kind == "node_sizes":
@@ -519,6 +528,20 @@ class Init:
             raise ValueError("answer y or n")
 
         self.console.say("  Answer y or n.")
+        self.apply(s, self.ask_value(s, self.current(s), None, parse))
+
+    def ask_app_list(self, s: cfg.Setting) -> None:
+        """kubernetes_apps, checked against the groups the playbooks read."""
+        groups = yaml.safe_load((self.root / "group_vars/all/kubernetes.yml").read_text())["kubernetes_app_groups"]
+        self.console.say(f"  The groups: {', '.join(groups)}.")
+
+        def parse(text: str) -> list[str]:
+            entries = cfg.parse(s, text)
+            unknown = [e for e in entries if e not in groups]
+            if unknown:
+                raise ValueError(f"no such group: {unknown[0]}")
+            return entries
+
         self.apply(s, self.ask_value(s, self.current(s), None, parse))
 
     def ask_node_map(self, s: cfg.Setting) -> None:
@@ -722,7 +745,7 @@ class Init:
 
     def offer_removal(self, s: cfg.Setting) -> None:
         """A setting this setup does not read: the playbooks refuse some (vm_backup_storage with a NAS, an alert
-        address without a mail server), and make init would never ask for it again, so it offers to delete it."""
+        address without a mail server), and just init would never ask for it again, so it offers to delete it."""
         if s.key not in self.values:
             return
         value = self.values[s.key]
@@ -794,13 +817,97 @@ class Init:
             ):
                 path.chmod(0o600)
 
+    # ---------------------------------------------------------------------------------------------- setup ---
+    def choose_setup(self) -> None:
+        """The setup the answers go into, asked before anything is read: Enter keeps the one the checkout uses, a name
+        switches to that setup or makes it. A checkout with files of its own is offered to keep them as a setup; one
+        with neither files nor setups is asked nothing. A local.yml that sets nothing, as the first just init writes it,
+        gives way to a setup; files that hold more are refused by name, and Enter keeps them."""
+        try:
+            where = setups.store(self.root)
+        except setups.Refused as e:
+            self.console.say(f"\n{e}")
+            return
+        found = setups.names(where)
+        broken = False
+        try:
+            current = setups.active(self.root)
+        except setups.Refused as e:
+            current, broken = None, True
+            self.console.say(f"\n{e}")
+        if current is None and not broken:
+            if self.adoptable():
+                self.offer_setup(where, found)
+                return
+            if not found:
+                return
+        keep = current.name if current else ""
+        self.console.say(
+            f"\nSetups, in {setups.shown(where)}: {', '.join(found) or 'none yet'}. Each holds one machine's "
+            "local.yml, vault and .vault_pass, and the answers below go into the one chosen; a new name makes one. "
+            + (f"Enter keeps {keep}, which this checkout uses." if keep else "Enter keeps this checkout as it is.")
+        )
+        while True:
+            name = self.console.ask(f"Which setup? [{keep}] ", "setup").strip()
+            if not name or name == keep:
+                return
+            try:
+                setups.check_name(name)
+                if name in found:
+                    setups.switch(self.root, where, name)
+                elif self.yes_no(
+                    f"There is no setup {name}. Make it, with an empty vault and a new password, and use it?",
+                    True,
+                    "setup-new",
+                ):
+                    setups.new(self.root, where, name, commented_example(self.root))
+                else:
+                    continue
+            except setups.Refused as e:
+                self.console.say(f"  {e}")
+                continue
+            self.console.say(f"  This checkout uses setup {name} now: the answers below go into it.")
+            return
+
+    def adoptable(self, opens: bool | None = None) -> bool:
+        """Whether this checkout's own files can become a setup; opens, once the vault is read."""
+        try:
+            setups.adoptable(self.root, opens)
+        except setups.Refused:
+            return False
+        return True
+
+    def offer_setup(self, where: Path, found: list[str]) -> None:
+        """This checkout's own three files kept as a setup, if the person agrees, and linked back."""
+        self.console.say(
+            "\nThis checkout keeps its own local.yml, vault and .vault_pass. Kept as a named setup instead, in "
+            f"{setups.shown(where)}, they can be switched with another machine's"
+            + (f" ({', '.join(found)})" if found else "")
+            + ": just vault switch."
+        )
+        if not self.yes_no("Keep them as a setup?", False, "setup-adopt"):
+            return
+        default = "" if "default" in found else "default"
+        while True:
+            name = self.console.ask(f"Its name? [{default}] ", "setup-name").strip() or default
+            if not name:
+                return
+            try:
+                setup = setups.adopt(self.root, where, name)
+            except setups.Refused as e:
+                self.console.say(f"  {e}")
+                default = ""  # Enter now gives up
+                continue
+            self.console.say(f"  Moved into setup {name}, {setups.shown(setup)}, and linked back.")
+            return
+
     # ---------------------------------------------------------------------------------------------- vault ---
     def vault_problem(self) -> str:
         return {
             "no password": "has no password: .vault_pass is missing",
             "missing": f"is missing: {VAULT}",
             "not moved": f"is still at {OLD_VAULT}, where it was committed until 2026-10-20: move it to {VAULT} "
-            "(README.md, The vault)",
+            "(README.md, Setups and the vault)",
             "does not open": "does not open with .vault_pass",
         }.get(self.vault.state, self.vault.state)
 
@@ -824,18 +931,24 @@ class Init:
                     self.console.say("  It opens: .vault_pass written, readable by you alone.")
                     return
                 self.console.say("  That password does not open the vault.")
-        if self.vault.state != "not moved" and self.yes_no(
-            "Make a new vault instead, empty, with a new password (make vault TYPE=new)?",
+        if self.vault.state == "not moved" or self.setup:
+            return  # a vault to move, or a setup's, which is restored rather than replaced
+        if self.yes_no(
+            "Make a new vault instead, empty, with a new password (just vault new)?",
             False,
             "vault-new",
         ):
-            result = run(["make", "vault", "TYPE=new", f"VENV={sys.prefix}"], cwd=self.root)
-            self.console.say(textwrap.indent((result.stdout + result.stderr).strip(), "  "))
+            # What just vault new runs, in this process: no task runner needed, and a refusal is said, not raised.
+            try:
+                said = setups.own_vault(self.root)
+            except (setups.Refused, OSError) as e:
+                said = str(e)
+            self.console.say(textwrap.indent(said, "  "))
             self.vault.open()
 
     # ------------------------------------------------------------------------------------------------ run ---
     def start_local(self) -> None:
-        """local.yml without local.yml.example's own values: written when it is new or a terminal runs make init;
+        """local.yml without local.yml.example's own values: written when it is new or a terminal runs just init;
         otherwise only read so, and the summary says what the file still holds."""
         new = not self.local_path.exists()
         dropped = self.drop_example_values()
@@ -870,18 +983,34 @@ class Init:
             dropped.append(key)
         return dropped
 
-    def run(self) -> None:
+    def read(self) -> bool:
+        """The setup the checkout uses, then local.yml and the vault read; False when its links are not whole, which
+        stops everything else."""
+        try:
+            self.setup = setups.active(self.root)
+        except setups.Refused as e:
+            self.broken = str(e)
+            return False
+        self.load()
         self.vault.open()
+        return True
+
+    def run(self) -> None:
+        if self.interactive:
+            self.choose_setup()
+        if not self.read():
+            self.console.say(self.summary())
+            return
         self.start_local()
         if self.interactive:
             self.console.say(
                 "Each setting shows its value: Enter keeps it, - clears it, ? explains it. Every answer is saved at "
-                "once, so you can stop at any time and run make init again later."
+                "once, so you can stop at any time and run just init again later."
                 + (
                     ""
                     if self.full
                     else " This asks for the required settings and the popular optional ones; "
-                    "make init TYPE=full asks for every one."
+                    "just init --full asks for every one."
                 )
             )
             self.offer_vault()
@@ -902,7 +1031,7 @@ class Init:
         """What the playbooks' own settings checks say: validate.yml, run on this machine alone. A check is a message
         (nas_section_error) or a list of them (the others), empty when it passes."""
         playbook = Path(sys.executable).parent / "ansible-playbook"
-        with tempfile.TemporaryDirectory(prefix="make-init-") as scratch:
+        with tempfile.TemporaryDirectory(prefix="init-") as scratch:
             out = Path(scratch) / "checks.json"
             result = run(
                 [str(playbook), str(VALIDATE), "-e", json.dumps({"init_checks_file": str(out)})],
@@ -940,6 +1069,14 @@ class Init:
         return missing
 
     def summary(self) -> str:
+        if self.vault.state == "unread" and not self.broken:
+            self.read()  # stopped at the setup question, before anything was read
+        if self.broken:
+            return banner(
+                "Setup: its links are not whole",
+                "Nothing was read or written.",
+                [("STILL REQUIRED", [self.broken], "x")],
+            )
         v = self.values
         on = {section: self.on(section) for section in cfg.SECTIONS}
         required: list[str] = []
@@ -948,11 +1085,16 @@ class Init:
         notes: list[str] = []
 
         if not (self.root / INVENTORY).is_file():
-            required.append("inventory is missing: make init copies it from inventory.example")
+            required.append("inventory is missing: just init copies it from inventory.example")
         if not self.vault.is_open:
             required.append(
-                f"The vault {self.vault_problem()}: restore it and .vault_pass from your password manager, or make "
-                "new ones with make vault TYPE=new (README.md, The vault)"
+                f"The vault {self.vault_problem()}: "
+                + (
+                    f"restore the setup's files, {setups.shown(self.setup)}, from your password manager"
+                    if self.setup
+                    else "restore it and .vault_pass from your password manager, or make new ones with just vault "
+                    "new (README.md, Setups and the vault)"
+                )
             )
         for s in cfg.SETTINGS:
             if not on[s.section] or not self.applies(s):
@@ -971,7 +1113,7 @@ class Init:
         if self.examples_left:
             required.append(
                 f"local.yml still holds local.yml.example's own values for {', '.join(self.examples_left)}, which the "
-                "playbooks would read as real ones: make init in a terminal comments them out and asks for them"
+                "playbooks would read as real ones: just init in a terminal comments them out and asks for them"
             )
 
         if on["cluster"]:
@@ -1023,7 +1165,7 @@ class Init:
         for s in cfg.SETTINGS:
             unread = on[s.section] and not s.secret and not self.applies(s) and has_value(v.get(s.key))
             if unread and not any(s.key in m for m in refused):
-                notes.append(f"local.yml sets {s.key}, but {self.unread(s)}: make init offers to delete it")
+                notes.append(f"local.yml sets {s.key}, but {self.unread(s)}: just init offers to delete it")
 
         if not self.ssh:
             manual.append(
@@ -1053,7 +1195,7 @@ class Init:
             if not has_value(v.get("kubernetes_ingress_allowed_range")):
                 manual.append(
                     "After the first build, each app's first visit through a port forward, then "
-                    "kubernetes_ingress_allowed_range and make deploy TYPE=kubernetes (scripts/runbooks/first-run.md)"
+                    "kubernetes_ingress_allowed_range and just deploy kubernetes (scripts/runbooks/first-run.md)"
                 )
             manual.append("Trust the cluster's CA on each device (scripts/runbooks/tls.md)")
             if has_value(v.get("kubernetes_gpu_mapping")):
@@ -1074,32 +1216,38 @@ class Init:
                     f"pvesm set {storage} --content <that list, plus whichever of import and images it lacks> "
                     "(scripts/runbooks/haos.md, step 5)"
                 )
-        keep = ["local.yml", "the vault", ".vault_pass"] + (
-            ["the cluster's credentials directory", "its age key"] if on["cluster"] else []
-        )
-        manual.append(
-            f"Keep copies of {', '.join(keep[:-1])} and {keep[-1]} in your password manager, and update them when "
-            "they change"
-        )
+        keep = (
+            [f"the setup's directory, {setups.shown(self.setup)}"]
+            if self.setup
+            else ["local.yml", "the vault", ".vault_pass"]
+        ) + (["the cluster's credentials directory", "its age key"] if on["cluster"] else [])
+        listed = keep[0] if len(keep) == 1 else f"{', '.join(keep[:-1])} and {keep[-1]}"
+        manual.append(f"Keep copies of {listed} in your password manager, and update them when they change")
+        if not self.setup and self.adoptable(self.vault.is_open):
+            notes.append(
+                "just vault new <name> --from current keeps local.yml, the vault and .vault_pass as a named "
+                "setup outside the checkout, to switch between machines (README.md, Setups and the vault)"
+            )
 
         if not self.full:
             more = [s for s in cfg.SETTINGS if on[s.section] and self.applies(s) and not self.asked(s)]
             if more:
                 notes.append(
-                    f"make init TYPE=full also asks for {len(more)} more optional setting{'s' if len(more) > 1 else ''}"
+                    f"just init --full also asks for {len(more)} more optional setting{'s' if len(more) > 1 else ''}"
                 )
 
         nexts = []
         if on["nas"]:
-            nexts.append("make check TYPE=truenas && make deploy TYPE=truenas")
-        nexts.append("make check TYPE=proxmox && make deploy TYPE=proxmox")
+            nexts.append("just check truenas && just deploy truenas")
+        nexts.append("just check proxmox && just deploy proxmox")
         if on["homeassistant"]:
-            nexts.append("make check TYPE=homeassistant && make deploy TYPE=homeassistant")
+            nexts.append("just check homeassistant && just deploy homeassistant")
         if on["cluster"]:
-            nexts.append("make check TYPE=kubernetes && make deploy TYPE=kubernetes")
+            nexts.append("just check kubernetes && just deploy kubernetes")
 
         parts = [cfg.SECTIONS[s] for s in cfg.SECTIONS if on[s]]
-        title = "Setup: " + ", ".join(parts[:-1]) + (" and " if len(parts) > 1 else "") + parts[-1]
+        name = f" {self.setup.name}" if self.setup else ""
+        title = f"Setup{name}: " + ", ".join(parts[:-1]) + (" and " if len(parts) > 1 else "") + parts[-1]
         status = (
             "Nothing required is missing."
             if not (required or refused)
@@ -1109,7 +1257,7 @@ class Init:
             ("STILL REQUIRED", required, "x"),
             ("THE PLAYBOOKS' CHECKS WOULD STOP WITH", refused, "x"),
             ("RECOMMENDED", recommended, "-"),
-            ("BY HAND, WHICH make init CANNOT CHECK", manual, "-"),
+            ("BY HAND, WHICH just init CANNOT CHECK", manual, "-"),
             ("NOTES", notes, "-"),
             ("THEN, IN THIS ORDER", nexts, " "),
         ]

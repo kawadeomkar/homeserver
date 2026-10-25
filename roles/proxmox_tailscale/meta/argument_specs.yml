@@ -80,7 +80,7 @@ argument_specs:
         default: /etc/systemd/system
         description: Where the guard's unit and tailscaled's drop-in go.
   status:
-    short_description: Read the node's Tailscale, its guard and its forwarding for make status, changing nothing
+    short_description: Read the node's Tailscale, its guard and its forwarding for just status, changing nothing
     description:
       - Reads tailscale status, get and serve status, the guard's nftables table and the node's IPv4 forwarding, and
         records in proxmox_tailscale_status_state what they say against this configuration, with what only the

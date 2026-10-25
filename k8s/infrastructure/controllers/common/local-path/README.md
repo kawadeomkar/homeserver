@@ -15,5 +15,5 @@ Renovate leaves this directory alone (`renovate.json`). To bump:
 
 1. Replace `local-path-storage.yaml` with the new release's `deploy/local-path-storage.yaml`.
 2. Put back the comment and the Namespace's three `pod-security.kubernetes.io/*: privileged` labels.
-3. Check the patches still apply (`make lint TYPE=manifests`), and the new release's notes for changes to the
+3. Check the patches still apply (`just lint manifests`), and the new release's notes for changes to the
    ConfigMap's keys, which the patches replace whole.

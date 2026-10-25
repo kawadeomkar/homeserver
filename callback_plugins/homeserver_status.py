@@ -1,18 +1,18 @@
-"""make status's stdout callback: one line on what was read, then the report, and none of Ansible's task output."""
+"""just status's stdout callback: one line on what was read, then the report, and none of Ansible's task output."""
 
 DOCUMENTATION = r"""
 name: homeserver_status
 type: stdout
-short_description: make status's report, without Ansible's task output
+short_description: just status's report, without Ansible's task output
 description:
   - Prints one line saying, for each host the reading play ran on, whether it answered and was read and how long
     it took, and how long asking the apps' addresses took, then the text of the task that shows the report (status.yml,
     roles/status's report entry point).
-  - Prints nothing on standard output when STATUS_QUIET is set, for make status JSON=1, which prints the report's
+  - Prints nothing on standard output when STATUS_QUIET is set, for just status --json, which prints the report's
     file instead.
   - Prints every failure and every unreachable host on standard error, and nothing else of Ansible's.
 requirements:
-  - Chosen with ANSIBLE_STDOUT_CALLBACK=homeserver_status, as make status does; Ansible finds it beside status.yml.
+  - Chosen with ANSIBLE_STDOUT_CALLBACK=homeserver_status, as just status does; Ansible finds it beside status.yml.
 """
 
 import os

@@ -22,6 +22,10 @@ flux_bootstrap_settings: {}
 flux_bootstrap_age_key_file: ""
 # How long a real run waits for the operator, the FluxInstance and Flux's Kustomizations to be ready.
 flux_bootstrap_wait_timeout: 10m
+# The Flux Kustomizations (in flux-system) the FluxInstance's sync leaves out of what the repository holds, which
+# prunes them and what they applied, bar objects marked kustomize.toolkit.fluxcd.io/prune: disabled. Empty leaves the
+# sync as the repository has it, with no patch.
+flux_bootstrap_sync_exclude: []
 # Let a run move the FluxInstance to another path. Flux prunes what the new path lacks, so this deletes everything
 # the old path applied; without it, a path other than the live one is refused.
 flux_bootstrap_allow_path_change: false

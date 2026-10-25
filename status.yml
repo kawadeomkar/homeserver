@@ -1,11 +1,11 @@
 ---
-# make status: what runs and what needs doing, read from the machines and never changed. Run it through make, which
-# runs it as a dry run with the repo's own stdout callback (callback_plugins/homeserver_status.py) and exits 0 when
-# nothing is wrong. The report's own code, 1 for a problem, 2 when a machine could not be read, 3 when the run itself
-# failed, ends its last line and is in JSON=1's exit; make exits 2 for any of them, as for every failed recipe.
-#   make status
-#   make status TYPE=vms,storage
-#   make status JSON=1
+# just status: what runs and what needs doing, read from the machines and never changed. Run it through just, which
+# runs it as a dry run with the repo's own stdout callback (callback_plugins/homeserver_status.py) and exits with the
+# report's own code: 0 when nothing is wrong, 1 for a problem, 2 when a machine could not be read, 3 when the run
+# itself failed. The code also ends the report's last line and is --json's exit.
+#   just status
+#   just status vms storage
+#   just status --json
 # Each host is read through roles/status, whose module status_read runs every command at once and refuses any that is
 # not on its read list: the Proxmox host over SSH, and the cluster from this machine with kubectl and talosctl; the
 # NAS through its API, with roles/truenas's read-only status entry point (one login), and the Proxmox host's Tailscale
@@ -20,7 +20,7 @@
   # No any_errors_fatal: Ansible would take a host that does not answer, which every read ignores, for an error and
   # end the run there. A refused host leaves no findings instead, and the report play ends without a report.
   vars:
-    # make's TYPE, comma-separated section names, passed as -e '{"types": "<names>"}'.
+    # The sections just status names, comma-separated, passed as -e '{"types": "<names>"}'.
     status_types: "{{ (types | default('')).split(',') | map('trim') | select | list }}"
   pre_tasks:
     - name: Refuse NAS settings that come without a NAS address
@@ -62,7 +62,7 @@
   vars:
     status_types: "{{ (types | default('')).split(',') | map('trim') | select | list }}"
     status_hosts: "{{ groups['proxmox'] | default([]) + groups['kubernetes'] | default([]) + groups['nas'] | default([]) }}"
-    # make status reads its exit code from here, and JSON=1 prints it.
+    # just status reads its exit code from here, and --json prints it.
     status_report_file: "{{ playbook_dir }}/.cache/status/report.json"
     status_color: "{{ lookup('ansible.builtin.env', 'STATUS_COLOR') == '1' }}"
     status_quiet: "{{ lookup('ansible.builtin.env', 'STATUS_QUIET') | length > 0 }}"

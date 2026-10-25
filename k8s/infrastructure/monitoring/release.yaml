@@ -4,7 +4,8 @@
 # whose node is smaller). The control plane's components serve metrics beyond localhost (roles/talos binds them to
 # 0.0.0.0): the controller manager and scheduler are static pods the chart's Services find by their component label,
 # and etcd, which is no pod on Talos, is found through the API server's (below), so no address is written here.
-# Every component requests CPU and memory (make lint TYPE=charts checks the rendered chart).
+# The Proxmox host's own exporter is scraped too, at the address the cluster's settings give (below).
+# Every component requests CPU and memory (just lint charts checks the rendered chart).
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -140,6 +141,16 @@ spec:
         serviceMonitorSelectorNilUsesHelmValues: false
         podMonitorSelectorNilUsesHelmValues: false
         ruleSelectorNilUsesHelmValues: false
+        # The Proxmox host's node exporter (roles/proxmox_node_exporter), which answers the cluster's nodes alone:
+        # what the nodes' exporters cannot see from inside their VMs, the host's CPU and memory across every guest,
+        # its disks, temperatures and systemd units. Under the nodes' own job, so the Node Exporter dashboards list
+        # the host beside them, by its address, and the chart's node alerts cover it; the cluster-wide USE dashboard
+        # then counts the nodes' share of the host twice. Here rather than in a ScrapeConfig, a kind this release's
+        # own CRDs bring: in the same Flux Kustomization, a fresh cluster would refuse it before the chart installs.
+        additionalScrapeConfigs:
+          - job_name: node-exporter
+            static_configs:
+              - targets: ["${PROXMOX_ADDRESS}:9100"]
         storageSpec:
           volumeClaimTemplate:
             spec:

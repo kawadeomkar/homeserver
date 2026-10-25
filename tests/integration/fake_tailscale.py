@@ -13,7 +13,7 @@ upgrading it restarts tailscaled, as the package's scripts do.
 
 tailscale follows Tailscale 1.104 on Linux: `status --json` shaped as 1.104.2 prints it on a Proxmox host, with
 `BackendState`, the tailnet's MagicDNS suffix and name (for a personal tailnet, its owner's login), another device in
-`Peer` and its owner in `User`, which make status must never keep, and `Self` leaving out `Tags`, `PrimaryRoutes` and
+`Peer` and its owner in `User`, which just status must never keep, and `Self` leaving out `Tags`, `PrimaryRoutes` and
 `KeyExpiry` when empty, as the real one does; `get --json`, keyed by `tailscale set`'s flag names,
 with `advertise-routes` a comma-separated string as captured from a real client (1.102); `up`, which takes its key only
 as `--auth-key=file:<path>` here, and refuses, like the real one, a change of settings that does not mention every
@@ -80,7 +80,7 @@ REPOSITORY = {"tailscale": "1.104.1", "tailscale-archive-keyring": "1.35.181"}
 SUFFIX = "tail0example" + ".ts.net"
 NODE_ADDRESSES = [".".join(["100", "64", "0", "20"]), ":".join(["fd7a", "115c", "a1e0", "", "14"])]
 PEER_ADDRESSES = [".".join(["100", "64", "0", "21"]), ":".join(["fd7a", "115c", "a1e0", "", "15"])]
-# What the tailnet's name is for a personal tailnet: its owner's login, which make status must never show.
+# What the tailnet's name is for a personal tailnet: its owner's login, which just status must never show.
 TAILNET_NAME = "owner@example.com"
 DEBIAN = {"nftables": "1.1.3-1"}
 

@@ -111,7 +111,7 @@ In the admin console, open Settings → Keys and generate an auth key:
 - not ephemeral;
 - with the shortest expiry that covers the run.
 
-Copy it once into the vault: `make vault`, as `vault_tailscale_auth_key`. The first run spends it; a spent key
+Copy it once into the vault: `just vault`, as `vault_tailscale_auth_key`. The first run spends it; a spent key
 left there does nothing.
 
 ## 5. The run, from home
@@ -119,25 +119,25 @@ left there does nothing.
 1. In `group_vars/all/local.yml`, set `tailscale_enabled: true`, and for the subnet router
    `tailscale_advertise_routes: [<the LAN's prefix>]`. Update the
    password-manager copy of `local.yml`.
-2. Run `make check TYPE=proxmox`. Expect:
+2. Run `just check proxmox`. Expect:
    - the keyring, `tailscale.sources`, the packages, the guard's three files and, with routes, the sysctl file;
    - "Would enable the guard at boot and load the guard";
    - with routes, "IPv4 forwarding is off" (without, forwarding is left alone);
    - "Would log the node in with the auth key".
-3. Run `make deploy TYPE=proxmox`, **from home**. `make deploy TYPE=proxmox` upgrades Tailscale with the rest of the
+3. Run `just deploy proxmox`, **from home**. `just deploy proxmox` upgrades Tailscale with the rest of the
    host whenever a new release is out, which restarts it. Run from away, that drops the connection the run itself uses.
    An OpenSSH session usually rides it out, but if dpkg is interrupted, `dpkg --configure -a` over a new session
    repairs it, and if Tailscale does not come back, remote access waits until you are home.
-4. Run `make deploy TYPE=proxmox` again. The Tailscale tasks report no change, and the last one says "Nothing for the
+4. Run `just deploy proxmox` again. The Tailscale tasks report no change, and the last one says "Nothing for the
    admin console to fix." It may also print Tailscale's own warning that UDP GRO forwarding is suboptimal on `vmbr0`;
    that concerns throughput only.
 5. On the host, check the guard:
    - `nft list table inet tailnet_guard` shows every address `local.yml` gives the NAS in `guarded`;
    - `systemctl show -p Requires,After tailscaled` names `tailnet-guard.service`.
 
-`make status TYPE=tailscale,admin` says the same from this machine at any time: the node, its routes as served or
+`just status tailscale admin` says the same from this machine at any time: the node, its routes as served or
 not, the guard as loaded, forwarding, what only the admin console can fix, and the tailnet address of each admin page.
-With a cluster, `make status TYPE=apps,tailscale` adds how the apps answer from the tailnet and whether the tailnet's
+With a cluster, `just status apps tailscale` adds how the apps answer from the tailnet and whether the tailnet's
 split DNS (step 2) sends their domain to the router, read from this machine's own Tailscale.
 
 ## 6. The machine in the console
@@ -204,16 +204,16 @@ Test the guard's fail-closed behaviour only at the console, never from away:
    restart stops `tailscaled` along with the guard, the guard fails to start again, and `tailscaled` stays down:
    `systemctl status tailscaled` names the failed dependency. The old table stays loaded, since the unit has no stop
    command.
-2. `make deploy TYPE=proxmox` puts the file back, loads the guard and starts `tailscaled` again.
+2. `just deploy proxmox` puts the file back, loads the guard and starts `tailscaled` again.
 
-`systemctl stop tailnet-guard` stops Tailscale the same way, and the next `make deploy TYPE=proxmox` starts both again.
+`systemctl stop tailnet-guard` stops Tailscale the same way, and the next `just deploy proxmox` starts both again.
 
 ## After a reinstall of the host
 
 The node's identity lived on the old boot drive.
 
 1. In the admin console, delete the old machine first, or the new one is named `<hostname>-1`.
-2. Make a new key (step 4) and run `make deploy TYPE=proxmox`.
+2. Make a new key (step 4) and run `just deploy proxmox`.
 
 With routes, the auto-approver approves the route again.
 

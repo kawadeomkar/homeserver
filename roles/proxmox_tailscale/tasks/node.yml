@@ -142,7 +142,7 @@
     fail_msg: >-
       The node is not logged in to a tailnet, and proxmox_tailscale_auth_key is empty. Make a one-off, pre-approved
       auth key tagged {{ proxmox_tailscale_tags | join(', ') }} in Tailscale's admin console, set it (in this repo:
-      vault_tailscale_auth_key in the vault, with make vault; scripts/runbooks/tailscale.md), and run again.
+      vault_tailscale_auth_key in the vault, with just vault; scripts/runbooks/tailscale.md), and run again.
     quiet: true
 
 # The key goes to the node in a file only root can read, and to tailscale as --auth-key=file:<path>, so it never
@@ -201,7 +201,7 @@
   when: not ansible_check_mode or proxmox_tailscale_backend == 'Running'
 
 # advertise-routes as a set, whether tailscale writes it as a list or a comma-separated string; every setting by its
-# flag name, as tailscale get --json keys it (filter_plugins/proxmox_tailscale.py, which make status shares).
+# flag name, as tailscale get --json keys it (filter_plugins/proxmox_tailscale.py, which just status shares).
 - name: node | Work out which preferences differ
   ansible.builtin.set_fact:
     proxmox_tailscale_differ: >-
@@ -243,7 +243,7 @@
   no_log: true
   when: proxmox_tailscale_status.rc == 0
 
-# What only the admin console, or the owner on the node, can fix. Reported on every run, never a failure; make status
+# What only the admin console, or the owner on the node, can fix. Reported on every run, never a failure; just status
 # lists the same, through the same filter (filter_plugins/proxmox_tailscale.py).
 - name: node | Report what the admin console must fix
   ansible.builtin.debug:

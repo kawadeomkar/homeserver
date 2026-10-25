@@ -193,7 +193,7 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Type**: str
     - **Default**: 
   
-    - **Description**: The annotation in which make suspend records an app's replicas, which marks it suspended.
+    - **Description**: The annotation in which just suspend records an app's replicas, which marks it suspended.
   
   
   
@@ -426,7 +426,7 @@ Description: Read the homeserver's machines without changing them, and report wh
 
 **Description**: 
 - Puts together what each host of status_hosts found (its status_found), ranks what needs attention, writes the report to status_report_file as JSON, mode 0600, and shows it as text, unless status_quiet.
-- Writes the report in a dry run too, since make status runs as one and takes its exit code from the file.
+- Writes the report in a dry run too, since just status runs as one and takes its exit code from the file.
 - Unless status_probe_apps is off, first asks each app's addresses from this machine with the role's module status_probe, checking no certificate and sending no credentials.
 
 

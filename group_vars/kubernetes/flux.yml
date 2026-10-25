@@ -27,8 +27,10 @@ flux_bootstrap_age_key_file: "{{ sops_age_key_file | default('~/.config/sops/age
 # appear in a manifest. With a NAS, its address, pools and the media dataset; without one, where the media and
 # camera recordings live on the worker: its media disk (Talos's media volume, /var/mnt/media), or its data volume when
 # local.yml keeps them there (kubernetes_media_on_data_volume), so one set of manifests serves both. HAOS_URL,
-# Home Assistant OS's address for Homepage's tile, only when local.yml sets haos_url. Prometheus keeps less history
-# without a NAS, whose host is usually the smaller.
+# Home Assistant OS's address for Homepage's tile, only when local.yml sets haos_url. HOMEPAGE_SERVICES, the sections
+# of Homepage's services.yaml in order (k8s/apps/homepage/tiles/): the groups this host runs but Homepage itself
+# (kubernetes_apps_enabled, group_vars/all/kubernetes.yml), then Home Assistant's when haos_url is set. Prometheus keeps
+# less history without a NAS, whose host is usually the smaller.
 # With the host's iGPU passed to the worker (local.yml's kubernetes_gpu_mapping), Jellyfin and Frigate ask for it
 # (GPU_I915 1) and Frigate detects on it; without, they ask for none (a limit of 0 schedules anywhere) and use the CPU.
 # INGRESS_ALLOWED_RANGE is who Traefik serves: local.yml's kubernetes_ingress_allowed_range, set once every app's
@@ -36,13 +38,17 @@ flux_bootstrap_age_key_file: "{{ sops_age_key_file | default('~/.config/sops/age
 # EGRESS_DENIED_ADDRESS and PROXMOX_ADDRESS are the hosts no app pod may reach (each app namespace's NetworkPolicy):
 # the NAS, whose NFS exports trust the worker's address, which pods' traffic leaves the node with, and the Proxmox
 # host, whose API and SSH answer the LAN. Without a NAS both are the Proxmox host's (a repeated address is valid).
+# Prometheus, outside the apps' namespaces, also scrapes PROXMOX_ADDRESS for the host's own metrics
+# (roles/proxmox_node_exporter).
 flux_bootstrap_settings: >-
   {{ {'DOMAIN': kubernetes_domain | default(kubernetes_domain_default, true),
       'TZ': kubernetes_timezone,
       'LB_RANGE': kubernetes_lb_range | string,
       'LB_TRAEFIK_IP': kubernetes_lb_traefik_ip | string,
       'LB_FRIGATE_IP': kubernetes_lb_frigate_ip | string,
-      'DATA_NODE': kubernetes_data_node}
+      'DATA_NODE': kubernetes_data_node,
+      'HOMEPAGE_SERVICES': (kubernetes_apps_enabled | reject('eq', 'homepage') | list
+                            + (['home'] if haos_url | default('', true) else [])) | join(' ')}
      | combine({'NAS_ADDRESS': nas_address, 'NAS_POOL_PERSISTENT': nas_pools.persistent,
                 'NAS_POOL_EPHEMERAL': nas_pools.ephemeral,
                 'MEDIA_DATASET': vm_storage_mount_root ~ '/' ~ nas_pools.ephemeral ~ '/jellyfin'} if nas_present else
@@ -58,3 +64,8 @@ flux_bootstrap_settings: >-
                 'EGRESS_DENIED_ADDRESS': (nas_address if nas_present else proxmox_address) | string | trim,
                 'PROXMOX_ADDRESS': proxmox_address | string | trim})
      | combine({'HAOS_URL': haos_url} if haos_url | default('', true) else {}) }}
+
+# The Flux Kustomizations of the groups this host leaves out, which roles/flux_bootstrap drops from the sync: Flux
+# prunes them and what they applied, bar the claims and namespaces marked never to be pruned, so the data stays.
+flux_bootstrap_sync_exclude: >-
+  {{ kubernetes_app_groups | reject('in', kubernetes_apps_enabled) | map('regex_replace', '^', 'apps-') | list }}

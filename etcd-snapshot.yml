@@ -1,5 +1,5 @@
 ---
-# An etcd snapshot of the control plane, into ~/.talos/homeserver/etcd/ (talos_config_dir): make etcd-snapshot.
+# An etcd snapshot of the control plane, into ~/.talos/homeserver/etcd/ (talos_config_dir): just etcd-snapshot.
 # talos-upgrade.yml takes one before every upgrade. Restore with talosctl bootstrap --recover-from=<snapshot>.
 # An inventory made before the cluster has no kubernetes group, and the play below would match no host and end
 # without a word: refused here instead, as kubernetes.yml refuses it.

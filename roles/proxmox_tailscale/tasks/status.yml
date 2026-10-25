@@ -1,5 +1,5 @@
 ---
-# Read-only, for make status (status.yml, roles/status): the node's Tailscale, its guard and its forwarding, and what
+# Read-only, for just status (status.yml, roles/status): the node's Tailscale, its guard and its forwarding, and what
 # only the admin console can fix, in proxmox_tailscale_status_state, and never an error. Whether tailscaled runs is
 # whether tailscale status answers, and whether the guard is loaded whether nft lists its table; a node that does not
 # answer is recorded as such. tailscale status --json lists every device and login on the tailnet, and Serve's

@@ -1,7 +1,7 @@
 ---
 # Build the Kubernetes cluster: its VMs on the Proxmox host, then Talos on them and Flux from this machine. Check
 # first:
-#   make check TYPE=kubernetes        (or: ansible-playbook kubernetes.yml --check --diff)
+#   just check kubernetes             (or: ansible-playbook kubernetes.yml --check --diff)
 # Without a cluster (no kubernetes_node_addresses in group_vars/all/local.yml) nothing happens: no VM is created,
 # and the second play ends by itself. Run proxmox.yml first, so the storages the VMs' disks go on exist. Moving
 # a running cluster to new pins is talos-upgrade.yml's job, never this one's.
@@ -21,7 +21,7 @@
         fail_msg: "{{ kubernetes_settings_error | join(' ') }}"
         quiet: true
       tags: [always]
-    # make init copies inventory.example only when there is no inventory, and one made before the cluster has no
+    # just init copies inventory.example only when there is no inventory, and one made before the cluster has no
     # kubernetes group: the VMs would be created and the play that builds Talos on them would match no host.
     - name: Refuse a cluster without the kubernetes inventory group
       ansible.builtin.assert:
