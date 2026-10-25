@@ -79,6 +79,10 @@ playbook_help := 'site (the default: every one, the NAS first), truenas, proxmox
 only_pattern := '[a-z0-9, -]*'
 only_help := 'some apps, groups or homeassistant, comma-separated'
 check_help := 'what it would do, changing nothing'
+# ansible-playbook's arguments: after the playbook for check and deploy, whose first argument is the playbook; after --
+# for the recipes with options of their own, since just reads every word that begins with - before it as one of them.
+playbook_args_help := "ansible-playbook's, after the playbook: --tags <stage>, -e <var>=<value>, -v"
+option_args_help := "ansible-playbook's, after --: before it, just reads a word that begins with - as one of this recipe's options"
 # status's sections, in the order the report shows them, and the file each run writes the report to, which the recipe
 # reads its exit code from.
 status_sections := 'apps|admin|tailscale|vms|storage|backups|cluster|nas'
@@ -117,12 +121,24 @@ k8s_rendered := '.cache/k8s-rendered'
 # tests/test.yml, which no role here has: without it docsible prints "playbook not found", which fails the run below.
 docsible := quote(bin / 'docsible') + ' --no-backup --no-docsible --graph --playbook "" --output REFERENCE.md'
 
-# help with a recipe's name shows how to call it; without one, every recipe. It takes the name as its argument, so
-# `just help deploy` never goes on to run deploy.
+# What `just` prints above the recipes: just writes each one's arguments in its own notation, where playbook='site' reads
+# as something to type, and has no setting to write them as --usage does ([playbook]). just --list prints without it.
+list_heading := """
+    Available recipes. An argument written name='x' can be left out, and is then x; give only its value
+    (just deploy proxmox). *name takes any number of values. [OPTIONS] are --flags, which just help <recipe>
+    lists; a recipe that has them takes ansible-playbook's arguments after -- (just suspend --check -- -v).
+""" + "\n"
+
+# help with recipes' names shows how to call each; without one, every recipe. It takes the names as its arguments, so
+# `just help deploy` never goes on to run deploy. --usage takes one recipe at a time.
 [default]
 [doc("Show the recipes; `just help <recipe>` for one's arguments and options")]
+[no-exit-message]
+[script]
 help *recipe:
-    @if [ $# -gt 0 ]; then {{ self }} --usage "$@"; else {{ self }} --list --unsorted; fi
+    [ $# -gt 0 ] || exec {{ self }} --list --unsorted --list-heading {{ quote(list_heading) }}
+    sep=
+    for r; do printf '%s' "$sep"; {{ self }} --usage "$r"; sep=$'\n'; done
 
 [doc("Install the locked tooling into the project's virtualenv (Poetry from PATH)")]
 [group('setup')]
@@ -163,6 +179,7 @@ lock *packages:
 # every key the playbooks read, each empty (unset) under a comment saying what it is for (scripts/init/setups.py says
 # the rest).
 [arg('action', pattern='edit|new|list|switch', help='edit (the default), new, list or switch')]
+[arg('setup', help="switch and edit: the setup; new: its name, or none for the checkout's own vault")]
 [arg('source', long='from', pattern='(current)?', help="new: this checkout's own local.yml, vault and .vault_pass become the setup")]
 [doc("Edit the vault's secrets, then lint them; or the setups: list, switch <setup>, new [<setup>] [--from current], edit <setup>")]
 [group('setup')]
@@ -190,7 +207,7 @@ vault action='edit' setup='' source='':
     esac
 
 [arg('types', pattern=lint_types + '|k8s')]
-[doc('Every linter, the failures named at the end; types: lock yaml ansible python docs github manifests charts talos, k8s')]
+[doc('Every linter, the failures named at the end; types: lock yaml ansible python docs github manifests charts talos, and k8s for the last three')]
 [group('code')]
 [no-exit-message]
 lint *types: _venv
@@ -401,7 +418,8 @@ _docsible dir:
 
 # check <playbook> is deploy <playbook> --check; the other playbook recipes take --check themselves.
 [arg('playbook', pattern=playbooks, help=playbook_help)]
-[doc('Dry run of deploy, or of one playbook: what it would change, with the diff; what follows goes to ansible-playbook')]
+[arg('ansible_args', help=playbook_args_help)]
+[doc("Dry run of deploy, or of one playbook: what it would change, with the diff; then ansible-playbook's arguments: just check site --tags truenas_nfs")]
 [group('machines')]
 [no-exit-message]
 check playbook='site' *ansible_args:
@@ -410,13 +428,15 @@ check playbook='site' *ansible_args:
 # Narrow a run to stages with --tags (just check truenas --tags truenas_pools), or pass a variable for one run:
 # just deploy kubernetes -e talos_allow_bootstrap=true.
 [arg('playbook', pattern=playbooks, help=playbook_help)]
-[doc('Build and configure everything, the NAS first, or one playbook; what follows goes to ansible-playbook')]
+[arg('ansible_args', help=playbook_args_help)]
+[doc("Build and configure everything, the NAS first, or one playbook; then ansible-playbook's arguments: just deploy truenas --tags truenas_pools")]
 [group('machines')]
 [no-exit-message]
 deploy playbook='site' *ansible_args:
     @{{ self }} _playbook deploy "$1" --diff "${@:2}"
 
 [arg('all', long='all', value='true', help="the cluster's VMs too, after everything else; not with --only")]
+[arg('ansible_args', help=option_args_help)]
 [arg('check', long='check', value='--check', help=check_help)]
 [arg('only', long='only', pattern=only_pattern, help=only_help)]
 [doc("Suspend the apps (scaled to zero, Flux told to leave them, data kept) and Home Assistant's VM")]
@@ -426,6 +446,7 @@ suspend only='' all='' check='' *ansible_args:
     @{{ self }} _scale suspend "$@"
 
 [arg('all', long='all', value='true', help="the cluster's VMs first; not with --only")]
+[arg('ansible_args', help=option_args_help)]
 [arg('check', long='check', value='--check', help=check_help)]
 [arg('only', long='only', pattern=only_pattern, help=only_help)]
 [doc('Bring back what just suspend stopped, the apps handed back to Flux')]
@@ -449,13 +470,15 @@ _scale recipe only all check *ansible_args:
     [ -z "$all" ] || args+=(-e '{"cluster_vms": true}')
     exec {{ self }} _playbook "$recipe" "$recipe" "${args[@]}" "$@"
 
+[arg('ansible_args', help="ansible-playbook's: --check shows the plan, changing nothing")]
 [doc('Move the running cluster to the pinned Talos and Kubernetes versions (etcd snapshot first); --check shows the plan')]
 [group('machines')]
 [no-exit-message]
 talos-upgrade *ansible_args:
     @{{ self }} _playbook talos-upgrade talos-upgrade --diff "$@"
 
-[doc('Snapshot etcd into ~/.talos/homeserver/etcd/')]
+[arg('ansible_args', help="ansible-playbook's: --check says what it would do")]
+[doc("Snapshot etcd into ~/.talos/homeserver/etcd/, or the etcd/ under local.yml's kubernetes_talos_config_dir")]
 [group('machines')]
 [no-exit-message]
 etcd-snapshot *ansible_args:
@@ -464,12 +487,14 @@ etcd-snapshot *ansible_args:
 # status reads the machines and changes nothing (status.yml), as a dry run with the repo's stdout callback, and keeps
 # no log. It exits with the report's code, read from the file the run writes, which just passes on as its own: 0 when
 # nothing is wrong, 1 for a problem, 2 when a machine could not be read, 3 when the run failed or was refused. The
-# sections to show come first (just status vms storage), checked here before anything runs and again by the role; from
-# the first word that begins with -, the rest goes to ansible-playbook (just status -- -e status_probe_apps=false).
+# sections to show come first (just status vms storage), checked here before anything runs and again by the role, and
+# ansible-playbook's arguments follow -- (just status vms -- -e status_probe_apps=false): before it, just reads a word
+# that begins with - as one of status's own options, and refuses one it does not have. The recipe hands on everything
+# from the first word that begins with -.
 # Colour only on a terminal, and never with NO_COLOR set. The setup's links are checked by vars_plugins/setup_links.py,
 # which keeps stdout to the report alone.
 [arg('json', long='json', value='true', help='the report as JSON, alone on stdout')]
-[arg('sections', help="some of apps admin tailscale vms storage backups cluster nas; from the first word that begins with -, ansible-playbook's arguments")]
+[arg('sections', help="some of apps admin tailscale vms storage backups cluster nas; then, after --, ansible-playbook's arguments")]
 [doc('What runs, where to reach it and what needs doing, read without changing anything; sections: apps admin tailscale vms storage backups cluster nas')]
 [group('machines')]
 [no-exit-message]
