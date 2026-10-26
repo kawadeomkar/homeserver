@@ -14,7 +14,9 @@ and Tailscale's from 1.104.2 on a Proxmox host and 1.102.4 on a Mac.
 The report is a mapping that just status --json prints as it is: every source's findings, the attention list
 (problems, things to do, and sources that could not be read, each with the command that deals with it), and the exit
 code just status returns: 2 when a source could not be read, else 1 when there is a problem, else 0. The commands it
-suggests are configuration (status_commands), so the role names none of this repo's recipes itself.
+suggests are configuration (status_commands), so the role names none of this repo's recipes itself. Which sources
+each section is worked out from is section_sources, so a host reads only what the sections shown need
+(status_host_reads), and a source no section shown needs is never missed.
 """
 
 import base64
@@ -1641,6 +1643,86 @@ def types_shown(types):
     return [t for t in TYPES if not types or t in types]
 
 
+# What the report is worked out from: the Proxmox host's findings (proxmox, and tailscale, its Tailscale), the
+# cluster's (cluster, and etcd_snapshots, the snapshot files on this machine), the NAS's (nas), and from this machine
+# the apps' probes and its own Tailscale's view of the tailnet's DNS (tailnet_dns). Each host reads only the sources
+# the sections shown need, so just status nas reads neither the Proxmox host nor the cluster.
+SOURCES = ("proxmox", "tailscale", "tailnet_dns", "cluster", "etcd_snapshots", "probes", "nas")
+HOST_SOURCES = {"proxmox": ("proxmox", "tailscale"), "cluster": ("cluster", "etcd_snapshots"), "nas": ("nas",)}
+
+
+def section_sources(section, types=()):
+    """The sources a section of the report is worked out from, when `types` are the sections shown. The apps list Home
+    Assistant's VM and say when the cluster's VMs are stopped, as the cluster does; the VMs and the storage show what
+    the cluster says of its nodes; the cluster's TLS line comes from the probes, which ask only when the apps are
+    shown; the apps say how they answer from the tailnet when Tailscale is shown too."""
+    shown = types_shown(types)
+    tailscale = ("tailscale", "tailnet_dns")
+    probes = ("probes",) if "apps" in shown else ()
+    return {
+        "apps": ("proxmox", "cluster", "probes", *(tailscale if "tailscale" in shown else ())),
+        "admin": ("tailscale",),
+        "tailscale": (*tailscale, "cluster"),
+        "vms": ("proxmox", "cluster"),
+        "storage": ("proxmox", "cluster"),
+        "backups": ("proxmox", "etcd_snapshots"),
+        "cluster": ("proxmox", "cluster", *probes),
+        "nas": ("nas",),
+    }[section]
+
+
+def sources(types=()):
+    """The sources the sections `types` asks for are worked out from, in SOURCES' order."""
+    needed = {s for t in types_shown(types) for s in section_sources(t, types)}
+    return [s for s in SOURCES if s in needed]
+
+
+def host_reads(source, types=()):
+    """What the host whose status_source is `source` reads for the sections `types` asks for: none, some or all of
+    the sources it has."""
+    needed = sources(types)
+    return [s for s in HOST_SOURCES.get(source, ()) if s in needed]
+
+
+# Whose findings say each source, by the label just status gives each host (proxmox, cluster, nas): the Proxmox
+# host's say its Tailscale and this machine's view of the tailnet's DNS (in status_early, before its own reads), the
+# probes come from the cluster's (its apps) and the Proxmox host's (Home Assistant's VM), both asked from this machine.
+SOURCE_HOSTS = {
+    "proxmox": ("proxmox",),
+    "tailscale": ("proxmox",),
+    "tailnet_dns": ("proxmox",),
+    "cluster": ("cluster",),
+    "etcd_snapshots": ("cluster",),
+    "probes": ("cluster", "proxmox"),
+    "nas": ("nas",),
+}
+
+
+def merge(found):
+    """What the hosts found (each one's status_found, in a list), as one {source: findings} for status_report, every
+    host's probes together."""
+    out, probes = {}, []
+    for each in found or []:
+        for key, value in (each or {}).items():
+            if key == "probes":
+                probes += value or []
+            else:
+                out[key] = value
+    return out | {"probes": probes}
+
+
+def sections_expected(setup, types=()):
+    """The sections shown that this setup can have: the NAS's only with a NAS, the cluster's only with a cluster, the
+    apps only with a cluster or Home Assistant."""
+    setup = setup or {}
+    can = {
+        "nas": setup.get("nas"),
+        "cluster": setup.get("cluster"),
+        "apps": setup.get("cluster") or setup.get("home_assistant"),
+    }
+    return [t for t in types_shown(types) if can.get(t, True)]
+
+
 def _host_of(url):
     return url.split("://", 1)[-1].split("/", 1)[0].rsplit("@", 1)[-1].split(":", 1)[0]
 
@@ -2206,26 +2288,32 @@ def report(
     ancestry=None,
 ):
     """The report: every source's findings, the attention list ranked (sources not read, problems, things to do),
-    and the exit code. `found` is {source: findings}; a source without findings was never read. `types` narrows the
-    sections; empty means every one. `probes` is what status_probe saw, `admin` the admin pages ({name, url, and
-    tailscale_node for the page the Proxmox host serves itself}) to list, `commands` the commands to suggest by
-    purpose (upgrade, resume with {names}, talos_upgrade, credentials, allowlist, secrets, nas, nas_release,
-    nas_network, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns, deploy_host), `now`
-    seconds since the epoch, `tailnet_dns` what tailscale dns status --json said on this machine, if it runs
-    Tailscale. `deploy` is this checkout's version, {commit, describe, date}, which each machine's version stamp is
-    placed against, with what the reads stamp_reads names found (`ancestry`)."""
+    how many problems and things to do each section has, and the exit code. `found` is {source: findings}, as
+    status_merge puts the hosts' together; a source without findings was never read. `types` narrows the sections;
+    empty means every one. `probes` is what status_probe saw, `found`'s own probes when not given, `admin` the admin
+    pages ({name, url, and tailscale_node for the page the Proxmox host serves itself}) to list, `commands` the
+    commands to suggest by purpose (upgrade, resume with {names}, talos_upgrade, credentials, allowlist, secrets, nas,
+    nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns,
+    deploy_host), `now` seconds since the epoch, `tailnet_dns` what tailscale dns status --json said on this machine,
+    if it runs Tailscale, `found`'s own when not given. `deploy` is this checkout's version, {commit, describe,
+    date}, which each machine's version stamp is placed against, with what the reads stamp_reads names found
+    (`ancestry`), the Proxmox host's own when not given."""
     shown, setup, commands = types_shown(types), dict(setup or {}), dict(commands or {})
+    needed = sources(types)
     found = found or {}
-    attention, unread = [], []
+    probes = found.get("probes") if probes is None else probes
+    tailnet_dns = found.get("tailnet_dns") if tailnet_dns is None else tailnet_dns
+    attention, unread = {t: [] for t in TYPES}, []
     prox = found.get("proxmox")
-    if prox is None:
+    if "proxmox" in needed and prox is None:
         unread.append(_item("unread", "proxmox", "the Proxmox host was not read"))
-    elif prox.get("unread"):
+    elif "proxmox" in needed and prox.get("unread"):
         unread.append(_item("unread", "proxmox", f"the Proxmox host could not be read: {prox['unread']}"))
     checkout = {k: str((deploy or {}).get(k) or "") for k in ("commit", "describe", "date")}
+    ancestry = (prox or {}).get("ancestry") if ancestry is None else ancestry
     prox = _with_deployed(prox or {}, checkout, ancestry, commands) if prox and not prox.get("unread") else prox or {}
     clu = found.get("cluster")
-    if setup.get("cluster"):
+    if setup.get("cluster") and "cluster" in needed:
         stopped = [
             f"{vm['vmid']} {vm['name']}" for vm in prox.get("vms") or [] if vm.get("node") and vm["status"] != "running"
         ]
@@ -2239,7 +2327,7 @@ def report(
     clu = clu or {}
     readable = clu and not clu.get("unread")
     nas_found = found.get("nas")
-    if setup.get("nas"):
+    if setup.get("nas") and "nas" in needed:
         if nas_found is None:
             unread.append(_item("unread", "nas", "the NAS was not read"))
         elif nas_found.get("unread"):
@@ -2253,24 +2341,25 @@ def report(
     tls = _tls(clu, probes, now) if readable else None
     prox_read = prox and not prox.get("unread")
     if "apps" in shown and readable:
-        attention += _apps_attention(rows, dns, clu, tls, commands, clu.get("kubeconfig", ""))
+        attention["apps"] += _apps_attention(rows, dns, clu, tls, commands, clu.get("kubeconfig", ""))
     if "vms" in shown and prox_read:
-        attention += _host_attention(prox, commands) + _vm_attention(prox) + _stamp_attention(prox, checkout)
+        attention["vms"] += _host_attention(prox, commands) + _vm_attention(prox) + _stamp_attention(prox, checkout)
     volumes = _volumes(clu) if readable else []
     if "storage" in shown:
-        attention += _storage_attention((prox.get("storages") or []) if prox_read else []) + _storage_attention(volumes)
+        attention["storage"] += _storage_attention((prox.get("storages") or []) if prox_read else [])
+        attention["storage"] += _storage_attention(volumes)
         for node in (clu.get("nodes") or []) if readable else []:
             for fs in node.get("filesystems") or []:
                 if fs["mount"] == "/var":
-                    attention += _fill_attention(f"{node['name']} /var", fs["used"], fs["total"])
+                    attention["storage"] += _fill_attention(f"{node['name']} /var", fs["used"], fs["total"])
     backed_up = None
     if "backups" in shown and prox_read:
         backed_up = _backups_model(prox, found.get("etcd_snapshots"), now, commands)
-        attention += _backup_attention(backed_up, commands) if backed_up else []
+        attention["backups"] += _backup_attention(backed_up, commands) if backed_up else []
     if "cluster" in shown and readable:
-        attention += _cluster_attention(clu, commands)
+        attention["cluster"] += _cluster_attention(clu, commands)
     if "nas" in shown and nas_read:
-        attention += _nas_attention(nas_found, commands)
+        attention["nas"] += _nas_attention(nas_found, commands)
     tail = _tailscale_model(
         found.get("tailscale"),
         admin,
@@ -2280,8 +2369,10 @@ def report(
         tailnet_dns,
     )
     if "tailscale" in shown and tail:
-        attention += _tailscale_attention(tail, commands)
-    ranked = unread + [a for a in attention if a["level"] == "problem"] + [a for a in attention if a["level"] == "todo"]
+        attention["tailscale"] += _tailscale_attention(tail, commands)
+    # In the order they were worked out, the Proxmox host's Tailscale last.
+    flat = [a for t in (*(t for t in TYPES if t != "tailscale"), "tailscale") for a in attention[t]]
+    ranked = unread + [a for a in flat if a["level"] == "problem"] + [a for a in flat if a["level"] == "todo"]
     problems = sum(1 for a in ranked if a["level"] == "problem")
     return {
         "read_at": read_at,
@@ -2290,12 +2381,19 @@ def report(
         "types": shown,
         "exit": 2 if unread else 1 if problems else 0,
         "attention": ranked,
+        "counts": {
+            t: {level: sum(1 for a in attention[t] if a["level"] == level) for level in ("problem", "todo")}
+            for t in shown
+        },
         "apps": rows,
         "traefik": _traefik(clu) if readable else "",
         "dns": dns,
         "tls": tls,
         "admin": _admin_pages(admin, tail),
-        "proxmox": _with_guest_view({k: v for k, v in prox.items() if k != "backups"}, clu if readable else None) or {},
+        "proxmox": _with_guest_view(
+            {k: v for k, v in prox.items() if k not in ("backups", "ancestry")}, clu if readable else None
+        )
+        or {},
         "volumes": volumes,
         "backups": backed_up,
         "cluster": clu,
@@ -3099,38 +3197,40 @@ def _error_lines(errors):
     return [*lines, _Line()] if lines else []
 
 
-def text(model, color=False):
-    """The report as the terminal shows it, with ANSI colours when `color`."""
-    lines = []
+def blocks(model, color=False):
+    """The report's text in blocks, in order, each (name, lines), with ANSI colours when `color`: the head, each section
+    shown that has anything to show, in TYPES' order, then the reads that failed (errors), what needs attention, last,
+    where a terminal leaves it in view, and the exit line. just status's callback prints them one by one, each section
+    as soon as the sources it is worked out from are read (section_sources), and text() joins them."""
+    out = []
     head = _Line().add("homeserver", "b")
     if model.get("read_at"):
         head.add(f"  {model['read_at']}", "d")
-    lines += [head.add(f" · {_setup_text(model.get('setup') or {})}", "d"), _Line()]
-    if model["attention"]:
-        lines += [*_attention_lines(model), _Line()]
+    out.append(("head", [head.add(f" · {_setup_text(model.get('setup') or {})}", "d"), _Line()]))
     types = model["types"]
     prox = model.get("proxmox") or {}
     clu = model.get("cluster") or {}
-    if "apps" in types and (model.get("apps") or clu):
-        lines += [*_apps_lines(model), _Line()]
-    if "admin" in types and model.get("admin"):
-        lines += [*_admin_lines(model), _Line()]
-    if "tailscale" in types and model.get("tailscale"):
-        lines += [*_tailscale_lines(model), _Line()]
     prox_read = prox and not prox.get("unread")
-    if "vms" in types and prox_read:
-        lines += [*_vm_lines(prox), _Line()]
     storages = ((prox.get("storages") or []) if prox_read else []) + (model.get("volumes") or [])
-    if "storage" in types and storages:
-        lines += [*_storage_lines(storages), _Line()]
     backed_up = model.get("backups") or {}
-    if "backups" in types and (backed_up.get("jobs") or backed_up.get("vms")):
-        lines += [*_backup_lines(model), _Line()]
-    if "cluster" in types and clu:
-        lines += [*_cluster_lines(model), _Line()]
-    if "nas" in types and (model.get("setup") or {}).get("nas"):
-        lines += [*_nas_lines(model), _Line()]
-    lines += _error_lines((prox.get("errors") or []) + (clu.get("errors") or []))
+    sections = {
+        "apps": (model.get("apps") or clu) and _apps_lines,
+        "admin": model.get("admin") and _admin_lines,
+        "tailscale": model.get("tailscale") and _tailscale_lines,
+        "vms": prox_read and (lambda m: _vm_lines(prox)),
+        "storage": storages and (lambda m: _storage_lines(storages)),
+        "backups": (backed_up.get("jobs") or backed_up.get("vms")) and _backup_lines,
+        "cluster": clu and _cluster_lines,
+        "nas": (model.get("setup") or {}).get("nas") and _nas_lines,
+    }
+    for name in TYPES:
+        if name in types and sections[name]:
+            out.append((name, [*sections[name](model), _Line()]))
+    errors = _error_lines((prox.get("errors") or []) + (clu.get("errors") or []))
+    if errors:
+        out.append(("errors", errors))
+    if model["attention"]:
+        out.append(("attention", [*_attention_lines(model), _Line()]))
     problems = sum(1 for a in model["attention"] if a["level"] == "problem")
     unread = sum(1 for a in model["attention"] if a["level"] == "unread")
     summary = (
@@ -3141,8 +3241,13 @@ def text(model, color=False):
         else "nothing is wrong"
     )
     foot = _Line().add(f"exit {model['exit']}", "r" if model["exit"] else "g")
-    lines.append(foot.add(f" · {summary} · sections: {' '.join(TYPES)} · --json", "d"))
-    return "\n".join(line.text(color) for line in lines) + "\n"
+    out.append(("exit", [foot.add(f" · {summary} · sections: {' '.join(TYPES)} · --json", "d")]))
+    return [(name, [line.text(color) for line in lines]) for name, lines in out]
+
+
+def text(model, color=False):
+    """The report as the terminal shows it, with ANSI colours when `color`: its blocks, joined."""
+    return "\n".join(line for _, lines in blocks(model, color) for line in lines) + "\n"
 
 
 class FilterModule:
@@ -3157,6 +3262,9 @@ class FilterModule:
             "status_probe_targets": probe_targets,
             "status_unknown_types": unknown_types,
             "status_types_shown": types_shown,
+            "status_sources": sources,
+            "status_host_reads": host_reads,
+            "status_merge": merge,
             "status_report": report,
             "status_text": text,
         }

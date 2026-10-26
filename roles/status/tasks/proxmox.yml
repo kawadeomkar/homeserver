@@ -2,6 +2,29 @@
 # The Proxmox host, in two reads: the node's name, which the API's paths need, then everything else at once. Each
 # pvesh or qm command starts Proxmox's Perl API afresh, a second of CPU, so they run in parallel; on a four-core host
 # the whole set takes about eight seconds. A host that does not answer is recorded, not a failure: the report says so.
+# status_reads (main.yml) says what the sections shown need: the host itself (proxmox), its Tailscale (tailscale,
+# which status.yml read before), or both.
+
+# This machine's view of the tailnet's DNS, beside the host's Tailscale, when the host advertises routes and this machine
+# runs Tailscale; then both, before the host's own reads, in status_early, for just status's callback to show the
+# sections that need nothing else as soon as they are read.
+- name: proxmox | Read this machine's Tailscale DNS
+  status_read:
+    commands:
+      dns: [tailscale, dns, status, --json]
+    timeout: "{{ status_probe_timeout }}"
+  delegate_to: localhost
+  register: status_tailnet_dns
+  when:
+    - "'tailscale' in status_reads"
+    - status_tailscale_state.routes | default([]) | selectattr('advertised') | list | length > 0
+
+- name: proxmox | Say what its Tailscale says
+  ansible.builtin.set_fact:
+    status_early:
+      tailscale: "{{ status_tailscale_state }}"
+      tailnet_dns: "{{ status_tailnet_dns.results.dns | default(none) }}"
+  when: "'tailscale' in status_reads"
 
 - name: proxmox | Read the node's name
   status_read:
@@ -10,13 +33,14 @@
     timeout: "{{ status_timeout }}"
   register: status_proxmox_name
   ignore_unreachable: true
-  when: status_proxmox_node | length == 0
+  when: "'proxmox' in status_reads and status_proxmox_node | length == 0"
 
 - name: proxmox | Use the node's name
   ansible.builtin.set_fact:
     status_proxmox_node_name: >-
       {{ status_proxmox_node if status_proxmox_node | length > 0
          else status_proxmox_name.results.node.stdout | default('') | trim }}
+  when: "'proxmox' in status_reads"
 
 # The day's history and the pending changes of each of this setup's VMs, a list of every current setting, the Notes
 # and their version stamp among them; the node's own configuration, for its Notes; the guest agent's filesystems and
@@ -33,7 +57,7 @@
     timeout: "{{ status_timeout }}"
   register: status_proxmox_reads
   ignore_unreachable: true
-  when: not (status_proxmox_name.unreachable | default(false))
+  when: "'proxmox' in status_reads and not (status_proxmox_name.unreachable | default(false))"
   vars:
     _node: "/nodes/{{ status_proxmox_node_name }}"
     _json: [--output-format, json]
@@ -103,14 +127,12 @@
 
 - name: proxmox | Work out what the host says
   ansible.builtin.set_fact:
-    status_found:
-      proxmox: >-
-        {{ {'unread': _unread, 'node': status_proxmox_node_name,
-            'results': status_proxmox_reads.results | default({}) | combine(status_proxmox_logs.results | default({}))}
-           | status_proxmox(status_vms, status_budget_storages, status_storage_headroom_gib,
-                            status_reboot_required_file, status_backup_jobs, status_notes_marker) }}
-      # What roles/proxmox_tailscale's status entry point read, before this role ran: {} when Tailscale is off.
-      tailscale: "{{ status_tailscale_state }}"
+    status_proxmox_found: >-
+      {{ {'unread': _unread, 'node': status_proxmox_node_name,
+          'results': status_proxmox_reads.results | default({}) | combine(status_proxmox_logs.results | default({}))}
+         | status_proxmox(status_vms, status_budget_storages, status_storage_headroom_gib,
+                          status_reboot_required_file, status_backup_jobs, status_notes_marker)
+         if 'proxmox' in status_reads else none }}
   vars:
     _missed: >-
       {{ [status_proxmox_name, status_proxmox_reads, status_proxmox_logs] | selectattr('unreachable', 'defined')
@@ -118,3 +140,39 @@
     _unread: >-
       {{ (_missed | first).msg | default('it did not answer') if _missed
          else ('' if status_proxmox_node_name | length > 0 else 'hostname -s named no node') }}
+
+# Where each machine's version stamp lies against this checkout's commit: whether git's history here has it before or
+# after, for each stamped commit but the checkout's own, asked on this machine, whose checkout it is. Nothing to read
+# when the stamps all match, or when this run has no version of its own (a tree that is no git checkout).
+- name: proxmox | Place the version stamps against this checkout
+  status_read:
+    commands: "{{ _commands }}"
+    parallel: "{{ status_parallel }}"
+    timeout: "{{ status_timeout }}"
+  delegate_to: localhost
+  register: status_stamp_ancestry
+  when: _commands | length > 0
+  vars:
+    _commands: "{{ {'proxmox': status_proxmox_found} | status_stamp_reads(status_deploy, status_checkout) }}"
+
+# The address of an app on a VM of its own (Home Assistant's), asked from this machine as the cluster's apps are.
+- name: proxmox | Ask Home Assistant's address
+  status_probe:
+    targets: "{{ _targets }}"
+    timeout: "{{ status_probe_timeout }}"
+  delegate_to: localhost
+  register: status_proxmox_probes
+  when: status_probe_apps and _targets | length > 0
+  vars:
+    _targets: "{{ {'proxmox': status_proxmox_found} | status_probe_targets(status_types) }}"
+
+- name: proxmox | Say what the host says
+  ansible.builtin.set_fact:
+    status_found:
+      proxmox: >-
+        {{ status_proxmox_found | combine({'ancestry': status_stamp_ancestry.results})
+           if status_stamp_ancestry.results is defined else status_proxmox_found }}
+      # What roles/proxmox_tailscale's status entry point read, before this role ran: {} when Tailscale is off.
+      tailscale: "{{ status_tailscale_state if 'tailscale' in status_reads else none }}"
+      tailnet_dns: "{{ status_tailnet_dns.results.dns | default(none) }}"
+      probes: "{{ status_proxmox_probes.results | default([]) }}"

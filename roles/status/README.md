@@ -31,10 +31,11 @@ Two entry points:
     each pool's health, use, layout and last scrub, TrueNAS's alerts, each snapshot task's last run, the NFS service
     and its shares, and whether the NAS runs `status_nas_release`. A NAS that did not answer, refused the key or
     presented another certificate than the pinned one is reported, not a failure.
-- **report** (`tasks_from: report`) puts together what each of `status_hosts` found, asks each app's addresses from
-  this machine (unless `status_probe_apps` is off), ranks what needs attention (sources not read, problems, things to
+- **report** (`tasks_from: report`) puts together what each of `status_hosts` found (`status_merge`), ranks what
+  needs attention (sources not read, problems, things to
   do, each with the command from `status_commands` that deals with it), writes the report to `status_report_file` as
-  JSON, mode 0600, and shows it as text unless `status_quiet`. It writes in a dry run too, since `just status` runs
+  JSON, mode 0600, and shows it as text unless `status_quiet`: the sections, then what needs attention, last, above
+  the exit line. It writes in a dry run too, since `just status` runs
   as one and takes its exit code from the file: 2 when a source could not be read, else 1 for a problem, else 0.
 
 **An app** is each Ingress's backend Service, then the Deployment whose pods that Service selects, so a chart's app
@@ -44,6 +45,13 @@ waiting (for a Secret that does not exist yet), failing (a crash loop, an image 
 be scheduled or stays pending, a rollout past its deadline), suspended (`just suspend` recorded its replicas in
 `status_cluster_annotation`, and when), stopped (scaled to zero otherwise) or not applied (its Kustomization failed
 before anything ran). Home Assistant, a VM of its own, is an app too, through `status_vms`' `app`.
+
+Each host reads only the sources the sections of `status_types` need (the filter `status_host_reads`): the Proxmox
+host's own reads and its Tailscale, the cluster and its etcd snapshots, the NAS. Shown the NAS alone, the role reads
+neither the Proxmox host nor the cluster, and a source no section shown needs is never one not read. Each host's play
+also asks from this machine the addresses of the apps it found (unless `status_probe_apps` is off): the cluster's
+from the cluster's host, Home Assistant's delegated from the Proxmox host's, which first says its Tailscale and this
+machine's view of the tailnet's DNS in the fact `status_early`.
 
 Every command goes through the role's module `status_read`, which runs a list of them at once and refuses the whole task
 if any is not on its read list: exact forms of `pvesh get`, `qm guest cmd` (`get-fsinfo`, `get-osinfo`,
@@ -57,7 +65,7 @@ status --json`. None of them writes or returns a secret. On a Proxmox host each 
 API afresh, about a second of CPU, so they run in parallel: on a four-core host the whole set takes about eight
 seconds, against twenty-five one after another. The cluster's take about a second.
 
-The report entry point's module `status_probe` looks each app's name up in DNS as this machine does and sends one
+The module `status_probe` looks each app's name up in DNS as this machine does and sends one
 `GET` per URL to the address the Ingress says Traefik answers on, whatever DNS says, closing the connection once the
 headers arrive. It checks no certificate and sends no credential, so it needs neither the cluster's CA nor a Secret;
 it reads the served certificate's issuer and expiry, which the report matches with the Certificate objects. A URL's
@@ -85,21 +93,21 @@ yet, left out of its job, or not read. A failed or missed backup is a problem; a
 disabled, writes elsewhere or leaves a VM out, a VM with no backup yet, and no job at all with VMs to back up are
 things to do.
 
-**A machine's version stamp**, with `status_notes_marker`: the block roles/proxmox_notes keeps in the Notes of the
-host and of each of `status_vms`, whose begin marker carries the commit, describe string and date the last deploy
-came from. The VMs' Notes come in the `.../pending` list read anyway, which holds every current setting; the host's
-need one more read, its `/nodes/<node>/config`. The report entry point places each stamp against `status_deploy`, the
-version of the checkout `just status` runs in: current; behind, when git's history in `status_checkout` has the
-stamp's commit before the checkout's (`git merge-base --is-ancestor`), a thing to do with the command that deploys the
-machine (its `made_by`, the host's `deploy_host`); ahead, or from another branch; a commit the checkout does not have;
-from uncommitted files (`-dirty`), a thing to do too; no stamp yet; not read, when reading the Notes failed, or not
-placed, when git could not say where it lies (a timeout, a checkout it does not trust), which the report's errors say
-too; or broken, Notes roles/proxmox_notes would refuse (a marker without its partner, two blocks, Notes ending inside
-a fenced code block), a thing to do, read by that role's own rule. Machines one command brings up from one version
-are one thing to do, and from a checkout with uncommitted changes, which `just deploy` refuses, each says to commit
-them first; a machine at the checkout's commit is then said to lack them. Without a version for the checkout (a tree
-that is no git checkout), each stamp is only shown, a thing to do for none, and a stamp from uncommitted files, or
-of a VM no command deploys, is never asked of git.
+**A machine's version stamp**, with `status_notes_marker`: the block roles/proxmox_notes keeps in the Notes of the host
+and of each of `status_vms`, whose begin marker carries the commit, describe string and date the last deploy came from.
+The VMs' Notes come in the `.../pending` list read anyway, which holds every current setting; the host's need one more
+read, its `/nodes/<node>/config`. The host's play then asks git, on this machine, where each stamp's commit lies against
+`status_deploy`, the version of the checkout `just status` runs in, and the report places each: current; behind, when
+git's history in `status_checkout` has the stamp's commit before the checkout's (`git merge-base --is-ancestor`), a
+thing to do with the command that deploys the machine (its `made_by`, the host's `deploy_host`); ahead, or from another
+branch; a commit the checkout does not have; from uncommitted files (`-dirty`), a thing to do too; no stamp yet; not
+read, when reading the Notes failed, or not placed, when git could not say where it lies (a timeout, a checkout it does
+not trust), which the report's errors say too; or broken, Notes roles/proxmox_notes would refuse (a marker without its
+partner, two blocks, Notes ending inside a fenced code block), a thing to do, read by that role's own rule. Machines one
+command brings up from one version are one thing to do, and from a checkout with uncommitted changes, which `just
+deploy` refuses, each says to commit them first; a machine at the checkout's commit is then said to lack them. Without a
+version for the checkout (a tree that is no git checkout), each stamp is only shown, a thing to do for none, and a stamp
+from uncommitted files, or of a VM no command deploys, is never asked of git.
 
 Memory is Proxmox's view, the host's, for a VM that is no cluster node: with ballooning off, as on every VM here, it
 counts every page the guest has touched, and the text marks it. A node's memory and disks are the guest's own, from
@@ -141,12 +149,14 @@ kubelet, since Talos's guest agent lists no filesystem.
 | `status_report_file` | `""` | report: where it writes the report as JSON; empty writes none |
 | `status_color` | `false` | report: whether the text is in colour |
 | `status_quiet` | `false` | report: whether it shows no text |
-| `status_probe_apps` | `true` | report: whether it asks each app's addresses from this machine |
-| `status_probe_timeout` | `5` | report: seconds each lookup and request may take |
+| `status_read_at` | `""` | report: when the report was read, as its first line says it; empty takes now |
+| `status_now` | `0` | report: when the report was read, in seconds since the epoch, which its ages count from; 0 takes now |
+| `status_probe_apps` | `true` | Whether each host's play asks the addresses of the apps it found from this machine |
+| `status_probe_timeout` | `5` | Seconds each lookup and request may take |
 | `status_admin` | `[]` | report: the admin pages it lists, each `{name, url}`; `tailscale_node: true` marks the page the Proxmox host serves itself |
 | `status_commands` | `{}` | report: the commands it suggests, by purpose (`upgrade`, `resume` with `{names}`, `talos_upgrade`, `credentials`, `allowlist`, `secrets`, `nas`, `nas_release`, `nas_network`, `backup`, `backup_target`, `etcd_snapshot`, `tailscale`, `tailscale_login`, `split_dns`, `deploy_host`) |
-| `status_deploy` | `{}` | report: this checkout's version, `{commit, describe, date}`, which each stamp is placed against; empty compares none |
-| `status_checkout` | `""` | report: the checkout's directory, where git says where a stamp's commit lies |
+| `status_deploy` | `{}` | This checkout's version, `{commit, describe, date}`, which each stamp is placed against; empty compares none |
+| `status_checkout` | `""` | The checkout's directory, where git on this machine says where a stamp's commit lies |
 
 This repository's `status.yml` reads the Proxmox host (and its Tailscale), the cluster and the NAS at once (`strategy:
 free`), then reports, with `group_vars/all/status.yml` (the VMs this repo makes, the same the nightly backup covers; the
@@ -156,8 +166,13 @@ flag, the nightly backup job roles/proxmox_backup keeps, the Tailscale state rol
 worker's user volumes, the settings roles/flux_bootstrap keeps, Alertmanager's pod, the pins, where roles/talos keeps
 the etcd snapshots) and `group_vars/nas/status.yml` (what roles/truenas's `status` entry point read, and the release
 that role is written for). `just status` runs it as a dry run with the stdout callback
-`callback_plugins/homeserver_status.py`, which prints one line on what was read and how long the probes took, then the
-report.
+`callback_plugins/homeserver_status.py`, which prints the report with one line on what was read and how long the probes
+took above its exit line. On a terminal it prints the report itself, from this role's filter and the settings the
+playbook's first play says (`status_settings`): each section in the report's order as soon as the sources it is worked
+out from are read (the filter's `section_sources` and `blocks`), with a line per section still to come and the line on
+what is read redrawn in place below, until what needs attention and the exit line end it. `status_read_at` and
+`status_now` give the report entry point the same time as the callback, and the settings' `deploy` the same checkout
+version as `status_deploy`, so that both print the same text.
 
 ## Example
 

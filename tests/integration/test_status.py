@@ -17,14 +17,19 @@ answer here, under a domain that never resolves (.invalid), so what they find do
 Run: just test idempotence
 """
 
+import fcntl
 import json
 import os
+import pty
 import re
+import select
 import shutil
 import socket
 import stat
+import struct
 import subprocess
 import sys
+import termios
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -478,6 +483,96 @@ def report_of(tree):
     return json.loads((tree / ".cache" / "status" / "report.json").read_text())
 
 
+def reading(out):
+    """The callback's line on what was read, which goes above the report's exit line."""
+    lines = out.rstrip("\n").splitlines()
+    assert len(lines) >= 2 and lines[-2].startswith("reading  "), out
+    return lines[-2]
+
+
+def just_status_on_a_terminal(tree, state, *args, rows=20, columns=120, **more):
+    """just status as just_status runs it, but on a terminal of its own, `rows` high, without colours: what the run
+    wrote to it, every control sequence included."""
+    master, terminal = pty.openpty()
+    fcntl.ioctl(terminal, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
+    ansible_args = ["-i", "inventory.example", "-e", extra_vars(tree, **more)]
+    env = environment(tree, state) | {"VENV": sys.prefix, "TERM": "xterm-256color", "NO_COLOR": "1"}
+    env.pop("ANSIBLE_STDOUT_CALLBACK")
+    proc = subprocess.Popen(
+        ["just", "status", *args, "--", *ansible_args],
+        cwd=tree,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=terminal,
+        stderr=terminal,
+    )
+    os.close(terminal)
+    chunks = []
+    while select.select([master], [], [], 120)[0]:
+        try:
+            data = os.read(master, 65536)
+        except OSError:  # EIO: every process that wrote to the terminal has ended
+            break
+        if not data:
+            break
+        chunks.append(data)
+    os.close(master)
+    return proc.wait(timeout=60), b"".join(chunks).decode()
+
+
+class Terminal:
+    """Enough of a terminal for just status's live lines: text, carriage returns and newlines, CSI n F (to the start
+    of the line n up, never above the screen's top row, where a real terminal stops), CSI J and CSI K (clear to the
+    end of the screen, and of the line), colours ignored. The lines that scrolled off the top stay, as a terminal's
+    scrollback does, so `text` is what scrolling back shows after the run."""
+
+    SEQUENCE = re.compile(r"\x1b\[([0-9;?]*)([A-Za-z])")
+
+    def __init__(self, rows):
+        self.rows, self.lines, self.row, self.column, self.top = rows, [""], 0, 0, 0
+        self.redraws = 0
+
+    def feed(self, data):
+        at = 0
+        for match in self.SEQUENCE.finditer(data):
+            self._print(data[at : match.start()])
+            at = match.end()
+            if match.group(2) == "F":
+                self.redraws += 1
+                self.row, self.column = max(self.row - int(match.group(1) or 1), self.top), 0
+            elif match.group(2) == "J":
+                self.lines[self.row] = self.lines[self.row][: self.column]
+                del self.lines[self.row + 1 :]
+            elif match.group(2) == "K":
+                self.lines[self.row] = self.lines[self.row][: self.column]
+        self._print(data[at:])
+
+    def _print(self, text):
+        for char in text:
+            if char == "\r":
+                self.column = 0
+            elif char == "\n":
+                self.row += 1
+                if self.row == len(self.lines):
+                    self.lines.append("")
+                # A clear leaves the rows on the screen: only what scrolls moves its top.
+                self.top = max(self.top, len(self.lines) - self.rows)
+            else:
+                line = self.lines[self.row].ljust(self.column)
+                self.lines[self.row] = line[: self.column] + char + line[self.column + 1 :]
+                self.column += 1
+
+    @property
+    def text(self):
+        return "\n".join(self.lines).rstrip("\n") + "\n"
+
+
+def without_times(text):
+    """A report's text without what differs between two runs: when it was read, and how long each host took."""
+    text = re.sub(r"\d\d:\d\d", "HH:MM", text)
+    return re.sub(r"\d+\.\d s", "N s", text)
+
+
 def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
     state = tmp_path / "pve.json"
     before = seed(state)
@@ -556,11 +651,13 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
     assert cluster["flux"]["applied"] == cluster["flux"]["remote"] == COMMIT
     assert cluster["alerts"] == [] and cluster["access"]["kubeconfig_days"] in (363, 364)
 
-    # The callback: what was read, then the report, and nothing of Ansible's own.
+    # The callback: the report, with what was read above its exit line, and nothing of Ansible's own.
     lines = out.splitlines()
-    assert lines[0].startswith("reading  ") and "proxmox ok " in lines[0] and "cluster ok " in lines[0], out
+    assert lines[0].startswith("homeserver  ") and lines[-1].startswith("exit 0 · "), out
+    line = reading(out)
+    assert "proxmox ok " in line and "cluster ok " in line, out
     # The NAS's host reads nothing without a NAS, so the line leaves it out.
-    assert " nas " not in lines[0] and "NAS  " not in out, out
+    assert " nas " not in line and "NAS  " not in out, out
     assert "TASK [" not in out and "PLAY RECAP" not in out and "\033[" not in out, out
     assert "VMS  pve · Proxmox VE 9.2.2-1 · kernel 7.0.2-6-pve" in out
     assert "+ 1 other VM (9001), 2 cores, 4.0 GiB, 1 running and 1 template (9000), not this repo's" in out
@@ -581,7 +678,7 @@ def test_just_status_exits_with_the_reports_code(tree, tmp_path):
     seed(state)
     rc, out, err = just_status(tree, state)
     assert rc == 0, out + err
-    assert out.startswith("reading  ") and "exit 0 · nothing is wrong" in out, out
+    assert out.startswith("homeserver  ") and reading(out) and "exit 0 · nothing is wrong" in out, out
 
     # A storage that is not available is a problem: exit 1.
     seed(state, storage_total={"local-lvm": 200 * GIB, "local": 64 * GIB}, inactive=["local"])
@@ -638,6 +735,9 @@ def test_each_machines_version_stamp(tree, tmp_path):
         return done.stdout.strip()
 
     git("init", "-q", "-b", "main")
+    # What a run writes, which the repository's .gitignore leaves out, as here: the report, and Python's bytecode.
+    (tree / ".git" / "info").mkdir(exist_ok=True)
+    (tree / ".git" / "info" / "exclude").write_text(".cache\n__pycache__/\n")
     git("add", "-A")
     git("commit", "-q", "-m", "the tree")
     before = git("rev-parse", "HEAD")
@@ -671,6 +771,13 @@ def test_each_machines_version_stamp(tree, tmp_path):
     assert f"deployed from {before[:12]} (2026-10-24) · behind this checkout" in out, out
     assert f"deployed from {head[:12]} (2026-10-25) · this checkout's" in out, out
     assert "no version stamp yet (a whole just deploy leaves one)" in out, out
+    # On a terminal the VMs' section is printed as soon as the Proxmox host is read, with what git said of each stamp
+    # and the checkout's version from the settings: the same as the report play's.
+    rc, stream = just_status_on_a_terminal(tree, state, "vms")
+    assert rc == 0, stream
+    terminal = Terminal(rows=20)
+    terminal.feed(stream)
+    assert without_times(terminal.text) == without_times(out), terminal.text
 
 
 def test_an_app_that_fails_is_a_problem(tree, tmp_path):
@@ -743,8 +850,36 @@ def test_the_apps_are_asked_from_here(tree, tmp_path):
     assert report["dns"]["state"] == "missing" and report["dns"]["address"] == "192.0.2.40"
     assert all(u["error"] for a in report["apps"] if a["name"] != "homeassistant" for u in a["urls"])
     assert ("problem", "traefik") in [(a["level"], a["subject"]) for a in report["attention"]]
-    assert "probes ok " in out.splitlines()[0], out
+    # Each host's play asked its own apps: the cluster's the apps, the Proxmox host's Home Assistant, at an address
+    # that never answers either.
+    apps = {a["name"]: a for a in report["apps"]}
+    assert apps["homeassistant"]["urls"][0]["error"], apps["homeassistant"]
     assert "Until DNS has them, these lines in /etc/hosts reach the apps from here:" in out
+
+
+SPINNER = re.compile(r"reading  .*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] \d+\.\d s")
+
+
+def test_on_a_terminal_each_section_shows_as_it_is_read(tree, tmp_path):
+    """On a terminal, the report's head comes at once, then each section in its order as the hosts it needs are read,
+    the sections still to come and the line on what is being read redrawn in place below them, a spinner beside what
+    is still waited for, then cleared: what the terminal holds after the run is the report as a pipe gets it."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    rc, plain, err = just_status(tree, state)
+    assert rc == 0, plain + err
+    rc, stream = just_status_on_a_terminal(tree, state)
+    assert rc == 0, stream
+    assert SPINNER.search(stream), stream
+    assert re.search(r" [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] APPS +waiting for the Proxmox host", stream), stream
+    assert stream.index("homeserver  ") < stream.index("reading  "), stream
+    terminal = Terminal(rows=20)
+    terminal.feed(stream)
+    assert terminal.redraws > 0, stream
+    assert without_times(terminal.text) == without_times(plain), terminal.text
+    # --json is no terminal's: the report alone, and nothing drawn.
+    rc, stream = just_status_on_a_terminal(tree, state, "--json")
+    assert rc == 0 and "\x1b[" not in stream and json.loads(stream) == report_of(tree), stream
 
 
 def free_port():
@@ -764,7 +899,7 @@ def test_a_host_that_does_not_answer(tree, tmp_path):
     )
     rc, out, err = just_status(tree, state, inventory="unreachable.ini", local=False)
     assert rc == 2, out + err
-    assert "proxmox did not answer" in out.splitlines()[0], out
+    assert "proxmox did not answer" in reading(out), out
     assert "the Proxmox host could not be read: " in out and "Connection refused" in out and "VMS" not in out
     assert report_of(tree)["exit"] == 2
 
@@ -831,18 +966,20 @@ def test_the_hosts_tailscale(tree, tmp_path, approved):
     out = proc.stdout
     assert proc.returncode == 0, out + proc.stderr
 
-    # Reads only: on the host, then this machine's own Tailscale for the tailnet's split DNS. (On Linux, Python's
-    # uuid.getnode(), which Ansible calls for its ids, runs `ip link` too, which the fake's ip on PATH records.)
+    # Reads only: on the host, all five at once, then this machine's own Tailscale for the tailnet's split DNS. (On
+    # Linux, Python's uuid.getnode(), which Ansible calls for its ids, runs `ip link` too, which the fake's ip on PATH
+    # records.)
     after = json.loads(tailscale.read_text())
     assert after["mutations"] == 0
-    assert [c for c in after["calls"] if c[0] != "ip"] == [
-        ["tailscale", "status", "--json"],
-        ["tailscale", "get", "--json"],
-        ["tailscale", "serve", "status", "--json"],
+    calls = [c for c in after["calls"] if c[0] != "ip"]
+    assert sorted(calls[:5]) == [
         ["nft", "list", "table", "inet", "tailnet_guard"],
         ["sysctl", "-n", "net.ipv4.ip_forward"],
-        ["tailscale", "dns", "status", "--json"],
+        ["tailscale", "get", "--json"],
+        ["tailscale", "serve", "status", "--json"],
+        ["tailscale", "status", "--json"],
     ]
+    assert calls[5:] == [["tailscale", "dns", "status", "--json"]]
 
     report = report_of(tree)
     tail = report["tailscale"]
@@ -941,7 +1078,8 @@ def seed_nas(path, **more):
     for guid in ("1001", "1002"):
         fake._import_pool({"guid": guid})
     for pool in fake.s["pools"]:
-        pool["scan"] = fake_truenas.finished_scrub(end=time.time() - 3 * 86400)
+        # Three days ago, and some minutes: the report's ages count from when the reading began.
+        pool["scan"] = fake_truenas.finished_scrub(end=time.time() - 3 * 86400 - 600)
     fake.s["datasets"]["persistent/nextcloud"] = fake.new_dataset("persistent/nextcloud", {})
     fake.m_sharing_nfs_create({"path": "/mnt/persistent/nextcloud", "hosts": ["192.0.2.31"]})
     fake.m_pool_snapshottask_create(
@@ -1051,7 +1189,7 @@ def test_the_nas_is_read_through_its_api(nas_tree, nas, tmp_path):
     rc, out, err = just_status(nas_tree, state, **nas_vars(nas))
     report = report_of(nas_tree)
     assert rc == report["exit"] == 1, out + err
-    assert "nas ok " in out.splitlines()[0], out
+    assert "nas ok " in reading(out), out
     found = report["nas"]
     assert [(p["name"], p["layout"], p["status"]) for p in found["pools"]] == [
         ("persistent", "raidz1", "ONLINE"),
@@ -1107,18 +1245,43 @@ def test_a_nas_that_is_not_read(nas_tree, nas, tmp_path, given, why):
     rc, out, err = just_status(nas_tree, state, **nas_vars(nas, **given))
     report = report_of(nas_tree)
     assert rc == report["exit"] == 2, out + err
-    assert "nas not read " in out.splitlines()[0], out
+    assert "nas not read " in reading(out), out
     unread = next(a for a in report["attention"] if a["subject"] == "nas")
     assert unread["level"] == "unread" and unread["text"].startswith("the NAS could not be read: ")
     assert why in unread["text"], unread
     assert "NAS  not read" in out and "auth.login_with_api_key" not in nas_calls(nas)
 
 
+def test_the_sections_shown_read_only_the_machines_they_need(nas_tree, nas, tmp_path):
+    """just status nas reads the NAS alone: a Proxmox host that would refuse the connection and another cluster's
+    kubeconfig, which a read of either would report, are never read; and the VMs and the storage read no NAS."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    seed_nas(nas["state"])
+    credentials(talos_dir(tmp_path), server="https://192.0.2.99:6443")
+    (nas_tree / "unreachable.ini").write_text(
+        f"[proxmox]\nhomeserver ansible_connection=ssh ansible_host=127.0.0.1 ansible_port={free_port()}\n"
+        "[nas]\ntruenas\n[kubernetes]\nhomeserver-k8s\n"
+    )
+    rc, out, err = just_status(nas_tree, state, "nas", inventory="unreachable.ini", local=False, **nas_vars(nas))
+    report = report_of(nas_tree)
+    assert rc == report["exit"] == 0, out + err
+    assert re.fullmatch(r"reading  nas ok \d+\.\d s", reading(out)), out
+    assert report["proxmox"] == {} and report["cluster"] == {} and report["attention"] == [], report
+    assert "NAS  truenas · TrueNAS 25.10.7" in out and "did not answer" not in out + err, out + err
+
+    credentials(talos_dir(tmp_path))
+    nas["calls"].write_text("")
+    rc, out, err = just_status(nas_tree, state, "vms", "storage", **nas_vars(nas))
+    assert rc == report_of(nas_tree)["exit"] == 0, out + err
+    assert " nas " not in reading(out) and report_of(nas_tree)["nas"] == {} and nas_calls(nas) == [], out
+
+
 # ------------------------------------------------------------------------------------------------ backups ---
 DAY = 86400
 
 
-def seed_backups(path, runs, vmids=(300, 301, 310), job=True, next_in=4 * 3600):
+def seed_backups(path, runs, vmids=(300, 301, 310), job=True, next_in=4 * 3600 - 30):
     """The NAS's backup storage on the fake host, the nightly job over `vmids` as roles/proxmox_backup makes it, due
     next in `next_in` seconds, and `runs` seeded through fake_pve.backup_run: each (days before the last run due,
     {vmid: why it failed})."""
@@ -1183,8 +1346,7 @@ def test_the_backups_of_this_setups_vms(nas_tree, nas, tmp_path):
     ], report["attention"]
     assert json.loads(state.read_text())["mutations"] == pve["mutations"]
     lines = [re.sub(r"\d\d h ago", "NN h ago", line) for line in out.splitlines()]
-    # The hosts are read at once, so the line names them in the order they finished.
-    assert lines[0].startswith("reading  ") and "proxmox ok " in lines[0], out
+    assert "proxmox ok " in reading(out), out
     assert max(len(line) for line in lines) <= 100, out
     assert "BACKUPS  vm-nightly → homeserver-backup · 02:00 · keeps 7 daily, 4 weekly · next in 3 h 59 m" in lines
     assert "  300  homeserver-cp-1       NN h ago  ok        7.0 GiB · 2 kept" in lines, out
@@ -1259,7 +1421,7 @@ def test_each_setup_reports_what_it_has(setup, nas, tmp_path):
     assert (root / ".cache" / "status" / "report.json").exists(), out + err
     report = report_of(root)
     headers = [m.group(1) for m in map(re.compile(r"([A-Z]{3,})(  |$)").match, out.splitlines()) if m]
-    assert headers[1:] == sections, out
+    assert headers == [*sections, "ATTENTION"], out
     assert [(a["level"], a["subject"]) for a in report["attention"]] == attention, out
     assert rc == report["exit"] == code, out + err
     assert max(len(line) for line in out.splitlines()) <= 100, out

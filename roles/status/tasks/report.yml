@@ -1,71 +1,36 @@
 ---
-# tasks_from: report. Puts together what each host of status_hosts found (status_found, from the main entry point),
-# asks each app's addresses from this machine, ranks what needs attention, writes the report to status_report_file
-# and shows it as text. just status runs as a dry run and takes its exit code from that file, so the file is written
-# in a dry run too; it holds addresses, so only its owner may read it.
+# tasks_from: report. Puts together what each host of status_hosts found (status_found, from the main entry point,
+# which also asked the apps' addresses), ranks what needs attention, writes the report to status_report_file and shows
+# it as text. just status runs as a dry run and takes its exit code from that file, so the file is written in a dry
+# run too; it holds addresses, so only its owner may read it.
 
 - name: report | Put the findings together
   ansible.builtin.set_fact:
     status_findings: >-
-      {%- set out = {} -%}
-      {%- for host in status_hosts -%}
-      {%-   set _ = out.update(hostvars[host].status_found | default({})) -%}
-      {%- endfor -%}
-      {{ out }}
+      {{ status_hosts | map('extract', hostvars) | map(attribute='status_found', default={}) | list | status_merge }}
 
-# A DNS lookup per app's name, and one GET per URL, sent to the address Traefik answers on whatever DNS says, closed
-# once the headers arrive. No certificate is checked, so no CA and no credential is needed.
-- name: report | Ask the apps' addresses
-  status_probe:
-    targets: "{{ _targets }}"
-    timeout: "{{ status_probe_timeout }}"
-  register: status_probes
-  when: status_probe_apps and _targets | length > 0
-  vars:
-    _targets: "{{ status_findings | status_probe_targets(status_types) }}"
-
-# Where the tailnet's split DNS sends the apps' domain, as this machine's own Tailscale has it, when the Proxmox host
-# advertises routes and this machine runs Tailscale; without it, the report says nothing of split DNS.
-- name: report | Read this machine's Tailscale DNS
-  status_read:
-    commands:
-      dns: [tailscale, dns, status, --json]
-    timeout: "{{ status_probe_timeout }}"
-  register: status_tailnet_dns
-  when: (status_findings.tailscale | default({})).routes | default([]) | selectattr('advertised') | list | length > 0
-
-# Where each machine's version stamp lies against this checkout's commit: whether git's history here has it before or
-# after, for each stamped commit but the checkout's own. Nothing to read when the stamps all match, or when this run
-# has no version of its own (a tree that is no git checkout).
-- name: report | Place the version stamps against this checkout
-  status_read:
-    commands: "{{ _commands }}"
-    parallel: "{{ status_parallel }}"
-    timeout: "{{ status_timeout }}"
-  register: status_stamp_ancestry
-  when: _commands | length > 0
-  vars:
-    _commands: "{{ status_findings | status_stamp_reads(status_deploy, status_checkout) }}"
-
+# When it was read, status_read_at and status_now (else now), and this checkout's version, status_deploy, as just
+# status's callback has them to show each section as soon as it is read.
 - name: report | Rank what needs attention
   ansible.builtin.set_fact:
     status_report: >-
       {{ status_findings
-         | status_report(status_setup, status_types, now().strftime('%Y-%m-%d %H:%M %Z') | trim,
-                         probes=status_probes.results | default([]), admin=status_admin, commands=status_commands,
-                         now=now().timestamp() | int,
-                         tailnet_dns=status_tailnet_dns.results.dns | default(none),
-                         deploy=status_deploy, ancestry=status_stamp_ancestry.results | default({})) }}
+         | status_report(status_setup, status_types,
+                         status_read_at or now().strftime('%Y-%m-%d %H:%M %Z') | trim,
+                         admin=status_admin, commands=status_commands,
+                         now=status_now or now().timestamp() | int, deploy=status_deploy) }}
 
 - name: report | Write the report
   when: status_report_file | length > 0
   block:
+    # Only the first time: a task less to wait for on every run after.
     - name: report | Make the report's directory
       ansible.builtin.file:
         path: "{{ status_report_file | dirname }}"
         state: directory
         mode: "0700"
       check_mode: false
+      when: status_report_file | dirname is not directory
 
     - name: report | Write the report as JSON
       ansible.builtin.copy:

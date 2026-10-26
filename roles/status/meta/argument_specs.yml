@@ -7,7 +7,9 @@ argument_specs:
         status_found for the report entry point. Every command goes through the role's module status_read, which
         runs them at once and refuses any that is not on its read list.
       - On the Proxmox host (proxmox) it reads the host, its storages and the VMs of status_vms; every other VM is
-        only counted.
+        only counted. With status_notes_marker it reads each one's version stamp too, from the Notes of the node and
+        of each VM, and asks git on this machine, in status_checkout, where each stamp's commit lies against
+        status_deploy's.
       - For the cluster (cluster), on this machine, it reads the nodes, the apps (each Ingress's Service, then the
         Deployment it selects, and every Deployment a Flux Kustomization under status_cluster_apps_path applies),
         Flux, the certificates, the nodes' kubelet statistics, Alertmanager's alerts, etcd's state and the newest
@@ -17,6 +19,11 @@ argument_specs:
       - For the NAS (nas) it reads nothing itself, and works out what status_nas_state says, the result of
         truenas_info with its status option, which roles/truenas's status entry point reads in one login - the
         pools' health, capacity and last scrub, TrueNAS's alerts, the snapshot tasks' last runs, the NFS service.
+      - Unless status_probe_apps is off, asks from this machine the addresses of the apps it found (the cluster's,
+        and an app on a VM of its own) with the role's module status_probe, checking no certificate and sending no
+        credentials.
+      - Reads only the sources the sections of status_types need (the filter status_host_reads); on the Proxmox host
+        it says what its Tailscale says first, in the fact status_early.
       - A host that does not answer is recorded as such, not a failure, so the report can say so.
       - Refuses a section name that is not one of the report's.
       - The defaults read nothing.
@@ -224,10 +231,20 @@ argument_specs:
         type: bool
         default: false
         description: Whether the report entry point shows no report.
+      status_read_at:
+        type: str
+        default: ""
+        description: When the report was read, as its first line says it; empty takes now.
+      status_now:
+        type: int
+        default: 0
+        description: When the report was read, in seconds since the epoch, which its ages count from; 0 takes now.
       status_probe_apps:
         type: bool
         default: true
-        description: Whether the report asks each app's addresses from this machine, a DNS lookup and one GET per URL.
+        description: >-
+          Whether the main entry point asks each app's addresses from this machine, a DNS lookup and one GET per URL:
+          the cluster's apps, and an app on a VM of its own.
       status_probe_timeout:
         type: int
         default: 5
@@ -250,22 +267,21 @@ argument_specs:
         type: dict
         default: {}
         description: >-
-          This checkout's version, {commit, describe, date}, which the report entry point places each machine's
-          version stamp against; empty compares none.
+          This checkout's version, {commit, describe, date}, which each machine's version stamp is placed against;
+          empty compares none.
       status_checkout:
         type: str
         default: ""
-        description: The checkout's directory, where the report entry point asks git where a stamp's commit lies.
+        description: The checkout's directory, where git on this machine says where a stamp's commit lies.
   report:
     short_description: Put just status's findings together, write the report and show it
     description:
       - Puts together what each host of status_hosts found (its status_found), ranks what needs attention, writes
         the report to status_report_file as JSON, mode 0600, and shows it as text, unless status_quiet.
       - Writes the report in a dry run too, since just status runs as one and takes its exit code from the file.
-      - Unless status_probe_apps is off, first asks each app's addresses from this machine with the role's module
-        status_probe, checking no certificate and sending no credentials.
-      - Places each machine's version stamp against status_deploy, with git merge-base --is-ancestor in
-        status_checkout for a stamp of another commit.
+      - What each host found includes what its apps' addresses answered, which the main entry point asks.
+      - Places each machine's version stamp against status_deploy, from what git said of each stamp's commit,
+        which the main entry point asks.
     options:
       status_types:
         type: list
@@ -293,14 +309,14 @@ argument_specs:
         type: bool
         default: false
         description: Whether no report is shown.
-      status_probe_apps:
-        type: bool
-        default: true
-        description: Whether the report asks each app's addresses from this machine, a DNS lookup and one GET per URL.
-      status_probe_timeout:
+      status_read_at:
+        type: str
+        default: ""
+        description: When the report was read, as its first line says it; empty takes now.
+      status_now:
         type: int
-        default: 5
-        description: Seconds each lookup and each request may take.
+        default: 0
+        description: When the report was read, in seconds since the epoch, which its ages count from; 0 takes now.
       status_admin:
         type: list
         elements: dict
@@ -321,15 +337,3 @@ argument_specs:
         description: >-
           This checkout's version, {commit, describe, date}, which each machine's version stamp is placed against
           (current, behind, ahead, from another branch, from uncommitted files); empty compares none.
-      status_checkout:
-        type: str
-        default: ""
-        description: The checkout's directory, where git tells whether a stamp's commit comes before this one's.
-      status_parallel:
-        type: int
-        default: 8
-        description: How many of git's reads, which place the version stamps, run at once.
-      status_timeout:
-        type: int
-        default: 30
-        description: Seconds each of git's reads may take.

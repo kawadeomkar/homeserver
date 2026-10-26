@@ -3,7 +3,8 @@
 # then everything else at once, each read a fraction of a second. The credentials hold the cluster's admin keys, so
 # they are read under no_log and only the server the kubeconfig names and when each client certificate expires are
 # kept. Another cluster's kubeconfig, such as the home cluster's on a test host whose local.yml leaves
-# kubernetes_talos_config_dir unset, is reported, never read with.
+# kubernetes_talos_config_dir unset, is reported, never read with. status_reads (main.yml) says what the sections shown
+# need: the cluster itself (cluster), its etcd snapshots on this machine (etcd_snapshots), or both.
 
 - name: cluster | Read the credentials' server and expiry
   ansible.builtin.set_fact:
@@ -13,6 +14,7 @@
          | status_credentials(lookup('ansible.builtin.file', status_cluster_talosconfig) | from_yaml
                               if status_cluster_talosconfig and status_cluster_talosconfig is file else {}) }}
   no_log: true
+  when: "'cluster' in status_reads"
 
 - name: cluster | Check the credentials are this cluster's
   ansible.builtin.set_fact:
@@ -22,6 +24,7 @@
                ~ status_cluster_server ~ ": another cluster's credentials, not read with")
          if status_cluster_server and status_cluster_access.server != status_cluster_server
          else '' }}
+  when: "'cluster' in status_reads"
 
 # Every kind the report reads, none a Secret: the Deployments with the times each field was set (when just suspend
 # stopped an app), each node's kubelet statistics (its memory, and its disks: Talos's guest agent lists none),
@@ -32,7 +35,7 @@
     parallel: "{{ status_parallel }}"
     timeout: "{{ status_timeout }}"
   register: status_cluster_reads
-  when: status_cluster_unread | length == 0
+  when: "'cluster' in status_reads and status_cluster_unread | length == 0"
   vars:
     _kubectl:
       - kubectl
@@ -71,19 +74,38 @@
 # was taken.
 - name: cluster | Work out what the cluster says
   ansible.builtin.set_fact:
-    status_found:
-      etcd_snapshots: >-
-        {{ {'dir': status_cluster_snapshot_dir | regex_replace(_home, '~/'),
-            'files': query('ansible.builtin.fileglob', status_cluster_snapshot_dir ~ '/*.db') | map('basename') | list}
-           if status_cluster_snapshot_dir else none }}
-      cluster: >-
-        {{ {'unread': status_cluster_unread, 'results': status_cluster_reads.results | default({}),
-            'access': status_cluster_access}
-           | status_cluster(nodes=status_cluster_nodes, apps_path=status_cluster_apps_path,
-                            annotation=status_cluster_annotation, database_label=status_cluster_database_label,
-                            volumes=status_cluster_volumes, settings=status_cluster_settings,
-                            pins=status_cluster_pins, kubeconfig=_shown, now=now().timestamp() | int) }}
+    status_cluster_snapshots: >-
+      {{ {'dir': status_cluster_snapshot_dir | regex_replace(_home, '~/'),
+          'files': query('ansible.builtin.fileglob', status_cluster_snapshot_dir ~ '/*.db') | map('basename') | list}
+         if 'etcd_snapshots' in status_reads and status_cluster_snapshot_dir else none }}
+    status_cluster_found: >-
+      {{ {'unread': status_cluster_unread, 'results': status_cluster_reads.results | default({}),
+          'access': status_cluster_access}
+         | status_cluster(nodes=status_cluster_nodes, apps_path=status_cluster_apps_path,
+                          annotation=status_cluster_annotation, database_label=status_cluster_database_label,
+                          volumes=status_cluster_volumes, settings=status_cluster_settings,
+                          pins=status_cluster_pins, kubeconfig=_shown, now=now().timestamp() | int)
+         if 'cluster' in status_reads else none }}
   vars:
     _home: "{{ '^' ~ (lookup('ansible.builtin.env', 'HOME') | regex_escape) ~ '/' }}"
     # The kubeconfig as the kubectl commands the report suggests name it.
     _shown: "{{ status_cluster_kubeconfig | regex_replace(_home, '~/') }}"
+
+# A DNS lookup per app's name, and one GET per URL, sent to the address Traefik answers on whatever DNS says, closed
+# once the headers arrive. No certificate is checked, so no CA and no credential is needed. The cluster's host is this
+# machine, so the apps are asked from here.
+- name: cluster | Ask the apps' addresses
+  status_probe:
+    targets: "{{ _targets }}"
+    timeout: "{{ status_probe_timeout }}"
+  register: status_cluster_probes
+  when: status_probe_apps and _targets | length > 0
+  vars:
+    _targets: "{{ {'cluster': status_cluster_found} | status_probe_targets(status_types) }}"
+
+- name: cluster | Say what the cluster says
+  ansible.builtin.set_fact:
+    status_found:
+      etcd_snapshots: "{{ status_cluster_snapshots }}"
+      cluster: "{{ status_cluster_found }}"
+      probes: "{{ status_cluster_probes.results | default([]) }}"
