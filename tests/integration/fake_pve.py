@@ -23,7 +23,7 @@ enabled flag as a number (the role reads text as well), and only the listing car
 Proxmox's pve-configid rule, and an option the schema lacks fails as it does there. The backup runs just status
 reads are described under backup_run().
 
-VMs: `qm create|set|config|status|start|shutdown` and `qm disk resize`, and pvesh's /nodes/<node>/qemu,
+VMs: `qm create|set|config|status|start|shutdown`, `qm disk resize` and `qm disk move`, and pvesh's /nodes/<node>/qemu,
 /nodes/<node>/lxc (the state's `containers`), .../qemu/<id>/config and .../pending, /nodes/<node>/status,
 /nodes/<node>/storage, .../storage/<id>/content (filtered by --content and --vmid; as on Proxmox, files that belong
 to no VMID, such as imports and snippets, match any --vmid, and a container's volumes are listed as rootdir when the
@@ -35,8 +35,12 @@ number, an EFI disk 4M; it stores tags lower-cased and sorted and a MAC in upper
 is given. On a running VM, `qm set` leaves what Proxmox cannot change live (cores, CPU, memory, ballooning, the
 watchdog, the agent, the boot order, PCI devices) pending until the next `qm start`, and the configuration pvesh
 returns shows pending values applied, as Proxmox's does by default. Deleting a drive drops it from the boot order,
-and adding it back does not restore it. `qm disk resize` grows only. A download that fails (the state's
-`download_fails`) leaves no file and still exits 0, as pvesh may; only the task's status says it failed.
+and adding it back does not restore it. `qm disk resize` grows only. `qm disk move` copies a disk, running or not, to
+a new volume named as `qm create` names one, raw on block storage and otherwise in `--format` or the disk's own,
+keeps its options, and deletes the old volume with `--delete 1` or leaves it as `unusedN`; it refuses the CD-ROM, a
+storage that holds no images and the same storage in the same format, as Proxmox does, and records each move in the
+state's `moves`. A download that fails (the state's `download_fails`) leaves no file and still exits 0, as pvesh
+may; only the task's status says it failed.
 `start_fails` makes the next `qm start` fail once and `shutdown_hangs` every `qm shutdown` time out (the guest
 never powers off); both refuse a VM already as asked, as qm does, and `qm start` also refuses a VM one of whose
 drives, the CD-ROM included, names a volume that is not there, as Proxmox does when it activates them. A backup
@@ -544,20 +548,27 @@ def new_disk(state, vmid, slot, value):
                 "use <storage ID>:0,import-from=<source>"
             )
         size = str(import_size(state, source) // 2**30)
-    content = state.setdefault("content", {}).setdefault(sid, [])
-    taken = {v["volid"] for v in content}
+    volid, fmt = allocate(state, sid, vmid, opts.pop("format", None))
+    nbytes = 4 * 2**20 if slot == "efidisk0" else parse_size(f"{size}G")
+    state["content"][sid].append(
+        {"volid": volid, "content": "images", "vmid": int(vmid), "size": nbytes, "format": fmt}
+    )
+    return ",".join([volid, *(f"{k}={v}" for k, v in sorted(opts.items())), f"size={size_text(nbytes)}"])
+
+
+def allocate(state, sid, vmid, fmt=None):
+    """A new volume's id and format on a storage, named as Proxmox names it: vm-<id>-disk-<n> on block storage, always
+    raw, and <id>/vm-<id>-disk-<n>.<format> on a file or NFS storage, in the format asked for or the storage's own; n
+    the next number free there."""
+    entry = storage_entry(state, sid)
+    taken = {v["volid"] for v in state.setdefault("content", {}).setdefault(sid, [])}
     number = 0
     while any(f"vm-{vmid}-disk-{number}" in volid for volid in taken):
         number += 1
     if entry["type"] in BLOCK_TYPES:
-        volid, fmt = f"{sid}:vm-{vmid}-disk-{number}", "raw"
-    else:
-        fmt = opts.pop("format", entry.get("format", "raw"))
-        volid = f"{sid}:{vmid}/vm-{vmid}-disk-{number}.{fmt}"
-    opts.pop("format", None)
-    nbytes = 4 * 2**20 if slot == "efidisk0" else parse_size(f"{size}G")
-    content.append({"volid": volid, "content": "images", "vmid": int(vmid), "size": nbytes, "format": fmt})
-    return ",".join([volid, *(f"{k}={v}" for k, v in sorted(opts.items())), f"size={size_text(nbytes)}"])
+        return f"{sid}:vm-{vmid}-disk-{number}", "raw"
+    fmt = fmt or entry.get("format", "raw")
+    return f"{sid}:{vmid}/vm-{vmid}-disk-{number}.{fmt}", fmt
 
 
 def import_size(state, source):
@@ -766,6 +777,40 @@ def qm(state, args):
         for volume in state["content"][volid.split(":")[0]]:
             if volume["volid"] == volid:
                 volume["size"] = wanted
+    elif verb == "disk" and args[1:2] == ["move"] and len(args) >= 5:
+        vmid, slot, sid, opts = args[2], args[3], args[4], options(args[5:])
+        unknown = sorted(set(opts) - {"delete", "format"})
+        if unknown:
+            fail(f"400 Parameter verification failed.\n{unknown[0]}: property is not defined in schema")
+        if opts.get("format", "raw") not in ("raw", "qcow2", "vmdk"):
+            fail(
+                f"400 Parameter verification failed.\nformat: value '{opts['format']}' does not have a value in the "
+                "enumeration 'raw, qcow2, vmdk'"
+            )
+        vm = vm_of(state, vmid)
+        if slot not in vm["config"]:
+            fail(f"disk '{slot}' does not exist")
+        volid, _, rest = vm["config"][slot].partition(",")
+        if "media=cdrom" in rest.split(","):
+            fail("you can't move a cdrom")
+        entry = storage_entry(state, sid)
+        if "images" not in entry["content"].split(","):
+            fail(f"storage '{sid}' does not support vm images")
+        source = next(v for v in state["content"][volid.split(":", 1)[0]] if v["volid"] == volid)
+        fmt = "raw" if entry["type"] in BLOCK_TYPES else opts.get("format") or source.get("format", "raw")
+        if sid == volid.split(":", 1)[0] and fmt == source.get("format", "raw"):
+            fail("you can't move to the same storage with same format")
+        new, fmt = allocate(state, sid, vmid, fmt)
+        state["content"][sid].append(source | {"volid": new, "format": fmt})
+        vm["config"][slot] = ",".join([new, rest])
+        if opts.get("delete") in ("1", "yes", "true", "on"):
+            state["content"][volid.split(":", 1)[0]].remove(source)
+        else:
+            free = next(n for n in range(256) if f"unused{n}" not in vm["config"])
+            vm["config"][f"unused{free}"] = volid
+        state.setdefault("moves", []).append(
+            {"vmid": vmid, "slot": slot, "from": volid, "to": new, "running": vm["status"] == "running"}
+        )
     else:
         fail(f"fake qm: unsupported {args}")
     state["mutations"] += 1

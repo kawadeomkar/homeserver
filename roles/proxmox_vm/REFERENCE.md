@@ -20,7 +20,8 @@ Description: Create Proxmox VE VMs and keep the settings it manages as configure
 
 **Description**: 
 - Downloads the ISOs of proxmox_vm_isos and the images of proxmox_vm_imports (checking each file's sha256), creates each VM of proxmox_vm_vms with qm, every option given, a disk with import_from imported from its image and grown to its size, and on later runs corrects its cores, memory, CPU type, ballooning, start-on-boot, startup order, watchdog, agent, tags, PCI and USB devices and CD-ROM, adds a configured disk it lacks and grows a disk configured larger. Starts a stopped VM marked start.
-- Never moves, shrinks or detaches a disk, never deletes a VM or an ISO, and never restarts a VM; a setting that waits for a restart is reported.
+- Moves a disk that is on another storage than configured only with proxmox_vm_move_disks, and refuses it otherwise.
+- Never shrinks or detaches a disk, never deletes a VM or an ISO, and never restarts a VM; a setting that waits for a restart is reported.
 - Refuses a VMID that belongs to another VM, a missing VM whose VMID still has disks or backups, a disk storage that does not exist or holds no images, and disks whose provisioned sizes would add up to more than a thin LVM, ZFS, directory or BTRFS storage holds, less proxmox_vm_host_headroom_gib on all but thin LVM. Warns when the VMs' memory would exceed the node's.
 - The defaults change nothing.
 
@@ -120,6 +121,26 @@ Description: Create Proxmox VE VMs and keep the settings it manages as configure
     - **Default**: 
   
     - **Description**: How to run the role again with proxmox_vm_ignore_existing_volumes, named when a missing VM is refused over its old volumes. Empty means the play again with -e proxmox_vm_ignore_existing_volumes=true.
+  
+  
+  
+
+  - **proxmox_vm_move_disks**
+    - **Required**: false
+    - **Type**: bool
+    - **Default**: False
+  
+    - **Description**: Move a disk that is on another storage than configured there, with qm disk move, the VM running or not, in the configured format, deleting the old volume once the VM uses the copy. Without it, such a disk is refused.
+  
+  
+  
+
+  - **proxmox_vm_move_command**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: How to run the role again with proxmox_vm_move_disks, named when a disk on another storage is refused. Empty means the play again with -e proxmox_vm_move_disks=true.
   
   
   
@@ -248,10 +269,12 @@ Description: Create Proxmox VE VMs and keep the settings it manages as configure
 | [proxmox_vm_host_headroom_gib](defaults/main.yml#L29)   | int | `0` |    
 | [proxmox_vm_ignore_existing_volumes](defaults/main.yml#L32)   | bool | `False` |    
 | [proxmox_vm_rebuild_command](defaults/main.yml#L35)   | str |  |    
-| [proxmox_vm_node](defaults/main.yml#L37)   | str |  |    
-| [proxmox_vm_power](defaults/main.yml#L40)   | str |  |    
-| [proxmox_vm_power_vmids](defaults/main.yml#L41)   | list | `[]` |    
-| [proxmox_vm_power_timeout](defaults/main.yml#L42)   | int | `180` |    
+| [proxmox_vm_move_disks](defaults/main.yml#L38)   | bool | `False` |    
+| [proxmox_vm_move_command](defaults/main.yml#L41)   | str |  |    
+| [proxmox_vm_node](defaults/main.yml#L43)   | str |  |    
+| [proxmox_vm_power](defaults/main.yml#L46)   | str |  |    
+| [proxmox_vm_power_vmids](defaults/main.yml#L47)   | list | `[]` |    
+| [proxmox_vm_power_timeout](defaults/main.yml#L48)   | int | `180` |    
 
 
 
@@ -289,7 +312,7 @@ Description: Create Proxmox VE VMs and keep the settings it manages as configure
 | Read the volumes on each budgeted storage | ansible.builtin.command | False |  |
 | Read each budgeted storage's size | ansible.builtin.command | False |  |
 | Read the node's memory | ansible.builtin.command | False |  |
-| Work out what to create, correct, grow and start | ansible.builtin.set_fact | False |  |
+| Work out what to create, correct, move, grow and start | ansible.builtin.set_fact | False |  |
 | Refuse what the role will not do | ansible.builtin.assert | False |  |
 | Show what each VM needs | ansible.builtin.debug | False |  |
 | Warn about the node's memory and the VMs' MACs | ansible.builtin.debug | True |  |
@@ -297,6 +320,7 @@ Description: Create Proxmox VE VMs and keep the settings it manages as configure
 | Read the created VMs' configuration | ansible.builtin.command | False |  |
 | Grow the created VMs' imported disks to their size | ansible.builtin.command | False |  |
 | Correct the VMs' settings | ansible.builtin.command | False |  |
+| Move the disks to their storage | ansible.builtin.command | False |  |
 | Grow the disks | ansible.builtin.command | False |  |
 | Start the VMs | ansible.builtin.command | False |  |
 | Read the VMs' configuration and pending changes again | ansible.builtin.command | True |  |
@@ -360,21 +384,22 @@ classDef rescue stroke:#665352,stroke-width:2px;
   Work_out_the_storages_whose_space_is_budgeted19-->|Task| Read_the_volumes_on_each_budgeted_storage20[read the volumes on each budgeted storage]:::task
   Read_the_volumes_on_each_budgeted_storage20-->|Task| Read_each_budgeted_storage_s_size21[read each budgeted storage s size]:::task
   Read_each_budgeted_storage_s_size21-->|Task| Read_the_node_s_memory22[read the node s memory]:::task
-  Read_the_node_s_memory22-->|Task| Work_out_what_to_create__correct__grow_and_start23[work out what to create  correct  grow and start]:::task
-  Work_out_what_to_create__correct__grow_and_start23-->|Task| Refuse_what_the_role_will_not_do24[refuse what the role will not do]:::task
+  Read_the_node_s_memory22-->|Task| Work_out_what_to_create__correct__move__grow_and_start23[work out what to create  correct  move  grow and<br>start]:::task
+  Work_out_what_to_create__correct__move__grow_and_start23-->|Task| Refuse_what_the_role_will_not_do24[refuse what the role will not do]:::task
   Refuse_what_the_role_will_not_do24-->|Task| Show_what_each_VM_needs25[show what each vm needs]:::task
   Show_what_each_VM_needs25-->|Task| Warn_about_the_node_s_memory_and_the_VMs__MACs26[warn about the node s memory and the vms  macs<br>When: **proxmox vm plan warnings   length   0**]:::task
   Warn_about_the_node_s_memory_and_the_VMs__MACs26-->|Task| Create_the_VMs27[create the vms]:::task
   Create_the_VMs27-->|Task| Read_the_created_VMs__configuration28[read the created vms  configuration]:::task
   Read_the_created_VMs__configuration28-->|Task| Grow_the_created_VMs__imported_disks_to_their_size29[grow the created vms  imported disks to their size]:::task
   Grow_the_created_VMs__imported_disks_to_their_size29-->|Task| Correct_the_VMs__settings30[correct the vms  settings]:::task
-  Correct_the_VMs__settings30-->|Task| Grow_the_disks31[grow the disks]:::task
-  Grow_the_disks31-->|Task| Start_the_VMs32[start the vms]:::task
-  Start_the_VMs32-->|Task| Read_the_VMs__configuration_and_pending_changes_again33[read the vms  configuration and pending changes<br>again<br>When: **not ansible check mode**]:::task
-  Read_the_VMs__configuration_and_pending_changes_again33-->|Task| Show_each_VM_s_MAC__and_what_waits_for_a_restart34[show each vm s mac  and what waits for a restart]:::task
-  Show_each_VM_s_MAC__and_what_waits_for_a_restart34-->|Task| Show_the_old_ISOs_and_images_no_VM_uses35[show the old isos and images no vm uses<br>When: **unused   length   0**]:::task
-  Show_the_old_ISOs_and_images_no_VM_uses35-.->|End of Block| Create_and_correct_the_VMs1_block_start_0
-  Show_the_old_ISOs_and_images_no_VM_uses35-->End
+  Correct_the_VMs__settings30-->|Task| Move_the_disks_to_their_storage31[move the disks to their storage]:::task
+  Move_the_disks_to_their_storage31-->|Task| Grow_the_disks32[grow the disks]:::task
+  Grow_the_disks32-->|Task| Start_the_VMs33[start the vms]:::task
+  Start_the_VMs33-->|Task| Read_the_VMs__configuration_and_pending_changes_again34[read the vms  configuration and pending changes<br>again<br>When: **not ansible check mode**]:::task
+  Read_the_VMs__configuration_and_pending_changes_again34-->|Task| Show_each_VM_s_MAC__and_what_waits_for_a_restart35[show each vm s mac  and what waits for a restart]:::task
+  Show_each_VM_s_MAC__and_what_waits_for_a_restart35-->|Task| Show_the_old_ISOs_and_images_no_VM_uses36[show the old isos and images no vm uses<br>When: **unused   length   0**]:::task
+  Show_the_old_ISOs_and_images_no_VM_uses36-.->|End of Block| Create_and_correct_the_VMs1_block_start_0
+  Show_the_old_ISOs_and_images_no_VM_uses36-->End
 ```
 
 

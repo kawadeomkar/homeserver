@@ -1206,6 +1206,12 @@ PERSISTENT_NFS = {
     "options": "vers=4.2",
     "path": "/mnt/pve/homeserver-persistent",
 }
+# Where the worker's system disk goes with a NAS.
+EPHEMERAL_NFS = PERSISTENT_NFS | {
+    "storage": "homeserver-ephemeral",
+    "export": "/mnt/ephemeral/proxmox/vm",
+    "path": "/mnt/pve/homeserver-ephemeral",
+}
 ISO = "local:iso/talos-v1.14.2-ce4c9805-metal-amd64.iso"
 
 
@@ -1256,8 +1262,9 @@ def cluster_vars(tmp_path, nas=True, **more):
 
 @pytest.mark.cluster
 def test_proxmox_vm_with_a_nas(tmp_path):
-    """With a NAS: a dry run on a fresh host passes, the persistent storage pending; a real run without that storage
-    is refused; then both VMs are created, started and left alone; drift is corrected; a shrink is refused."""
+    """With a NAS: a dry run on a fresh host passes, the NAS's storages pending; a real run without them is refused;
+    then both VMs are created, every disk on the NAS but the EFI disks, started and left alone; drift is corrected; a
+    shrink is refused."""
     extra = cluster_vars(tmp_path)
     state = Path(extra["fake_pve_state"])
     vm_state(state)
@@ -1266,7 +1273,9 @@ def test_proxmox_vm_with_a_nas(tmp_path):
     expect(result, "homeserver", changed=True, note="dry run on a fresh host")
     out = result[2]
     assert re.search(
-        r'storage pending: just deploy proxmox adds it: run that first"?:\s*\[\s*"homeserver-persistent"', out
+        r'storage pending: just deploy proxmox adds it: run that first"?:\s*\[\s*"homeserver-ephemeral",'
+        r'\s*"homeserver-persistent"',
+        out,
     ), out[-3000:]
     assert re.search(r'homeserver-worker-1"?:\s*"?create', out) and "Would download: talos-v1.14.2" in out, out[-3000:]
     assert read(state)["mutations"] == 0, "the dry run changed the host"
@@ -1277,7 +1286,7 @@ def test_proxmox_vm_with_a_nas(tmp_path):
     )
     assert vms_of(state) == {}
 
-    seed_storage(state, PERSISTENT_NFS)
+    seed_storage(state, PERSISTENT_NFS, EPHEMERAL_NFS)
     expect(run("kubernetes.yml", extra), "homeserver", changed=True, note="first run")
     result = run("kubernetes.yml", extra)
     expect(result, "homeserver", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")
@@ -1287,7 +1296,11 @@ def test_proxmox_vm_with_a_nas(tmp_path):
     vms = vms_of(state)
     assert sorted(vms) == ["300", "301"] and all(vm["status"] == "running" for vm in vms.values())
     worker = vms["301"]["config"]
-    assert worker["scsi0"].startswith("local-lvm:vm-301-disk-1,") and "size=64G" in worker["scsi0"]
+    assert worker["efidisk0"].startswith("local-lvm:vm-301-disk-0,"), worker["efidisk0"]
+    assert worker["scsi0"].startswith("homeserver-ephemeral:301/vm-301-disk-0.qcow2,") and "size=64G" in worker["scsi0"]
+    control_plane = vms["300"]["config"]
+    assert control_plane["efidisk0"].startswith("local-lvm:vm-300-disk-0,"), control_plane["efidisk0"]
+    assert control_plane["scsi0"].startswith("homeserver-persistent:300/vm-300-disk-0.qcow2,"), control_plane["scsi0"]
     assert (
         worker["scsi1"].startswith("homeserver-persistent:301/vm-301-disk-0.qcow2,") and "size=200G" in worker["scsi1"]
     )
@@ -1340,7 +1353,8 @@ def test_proxmox_vm_with_a_nas(tmp_path):
     result = run("kubernetes.yml", extra)
     expect(result, "homeserver", changed=1, note="a system disk replaced by hand")
     worker = vms_of(state)["301"]
-    assert worker["pending"]["boot"] == "order=scsi0;ide2" and worker["config"]["scsi0"].startswith("local-lvm:")
+    assert worker["pending"]["boot"] == "order=scsi0;ide2"
+    assert worker["config"]["scsi0"].startswith("homeserver-ephemeral:"), worker["config"]["scsi0"]
     assert re.search(r'"301":\s*\[[^\]]*"boot"', result[2]), result[2][-3000:]
     expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="a system disk replaced, again")
 
@@ -1460,12 +1474,65 @@ def test_proxmox_vm_without_a_nas(tmp_path):
 
 
 @pytest.mark.cluster
+def test_proxmox_vm_moves_disks_only_when_told(tmp_path):
+    """A cluster whose system disks are on the installer's storage, as it was built with a NAS before 2026-10-25: the
+    play refuses each disk on another storage than configured, in a dry run too, naming the command, and changes
+    nothing. Told to, a dry run lists the moves and makes none; a real run moves both, the VMs running, into qcow2 on
+    the NAS, deleting the old volumes, and leaves the EFI disks where they are. A second run changes nothing."""
+    extra = cluster_vars(tmp_path)
+    state = Path(extra["fake_pve_state"])
+    vm_state(state)
+    seed_storage(state, PERSISTENT_NFS, EPHEMERAL_NFS)
+    expect(run("kubernetes.yml", extra), "homeserver", changed=True, note="first run")
+    for vmid in ("300", "301"):
+        by_hand = fake_pve_command(state, "qm", "disk", "move", vmid, "scsi0", "local-lvm", "--delete", "1")
+        assert by_hand.returncode == 0, by_hand.stderr
+    mutations = read(state)["mutations"]
+
+    for check in (True, False):
+        rc, _, out = run("kubernetes.yml", extra, check=check)
+        assert rc != 0, out[-3000:]
+        for vmid, storage in (("300", "homeserver-persistent"), ("301", "homeserver-ephemeral")):
+            assert f"VM {vmid}'s scsi0 is on local-lvm, configured on {storage}. The role moves a disk only" in out, (
+                out[-3000:]
+            )
+        assert "run just deploy kubernetes -e proxmox_vm_move_disks=true" in out, out[-3000:]
+    assert read(state)["mutations"] == mutations, "the refused run changed the host"
+
+    told = extra | {"proxmox_vm_move_disks": True}
+    result = run("kubernetes.yml", told, check=True)
+    expect(result, "homeserver", changed=True, note="dry run of the moves")
+    assert re.search(r'"homeserver-cp-1":\s*\[\s*"move scsi0 to homeserver-persistent"', result[2]), result[2][-3000:]
+    assert re.search(r'"homeserver-worker-1":\s*\[\s*"move scsi0 to homeserver-ephemeral"', result[2]), result[2][
+        -3000:
+    ]
+    assert read(state)["mutations"] == mutations, "the dry run changed the host"
+
+    expect(run("kubernetes.yml", told), "homeserver", changed=1, note="the moves")
+    vms = vms_of(state)
+    for vmid, storage, size in (("300", "homeserver-persistent", 32), ("301", "homeserver-ephemeral", 64)):
+        disk = vms[vmid]["config"]["scsi0"]
+        assert disk.startswith(f"{storage}:{vmid}/") and ".qcow2," in disk, disk
+        assert "serial=talos-system" in disk and f"size={size}G" in disk, disk
+        assert vms[vmid]["status"] == "running" and not any(k.startswith("unused") for k in vms[vmid]["config"])
+    assert [m["running"] for m in read(state)["moves"][2:]] == [True, True], "a VM was not running when moved"
+    assert sorted(v["volid"] for v in read(state)["content"]["local-lvm"]) == [
+        "local-lvm:vm-300-disk-0",
+        "local-lvm:vm-301-disk-0",
+    ], "only the EFI disks stay on local-lvm"
+
+    result = run("kubernetes.yml", told)
+    expect(result, "homeserver", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")
+    expect(run("kubernetes.yml", extra, check=True), "homeserver", changed=0, note="dry run without the switch")
+
+
+@pytest.mark.cluster
 @pytest.mark.parametrize("built_with_nas", [True, False], ids=["nas-to-local", "local-to-nas"])
 def test_a_built_cluster_cannot_switch_setups(tmp_path, built_with_nas):
-    """Both setups build the same two VMs, and only the worker's disks live elsewhere. With local.yml rewritten for
-    the other setup, the cluster's play refuses before changing anything, in a dry run too, because the worker's data
-    disk is on the other storage: which is why the worker always has a data disk. The backup job keeps both VMs
-    either way. Put back, nothing changes."""
+    """Both setups build the same two VMs, their disks on other storages. With local.yml rewritten for the other
+    setup, the cluster's play refuses before changing anything, in a dry run too, because the disks are on the other
+    storages, naming the command that moves them. The backup job keeps both VMs either way. Put back, nothing
+    changes."""
     built, switched = cluster_vars(tmp_path, nas=built_with_nas), cluster_vars(tmp_path, nas=not built_with_nas)
     state = Path(built["fake_pve_state"])
     vm_state(state)
@@ -1476,7 +1543,7 @@ def test_a_built_cluster_cannot_switch_setups(tmp_path, built_with_nas):
         "content": "backup",
         "is_mountpoint": "1",
     }
-    seed_storage(state, PERSISTENT_NFS, BACKUP_NFS, usb_storage)
+    seed_storage(state, PERSISTENT_NFS, EPHEMERAL_NFS, BACKUP_NFS, usb_storage)
     usb = {"vm_backup_storage": "usb-backup"}
     expect(run("kubernetes.yml", built), "homeserver", changed=True, note="build")
     expect(run("proxmox_backup.yml", built | usb), "homeserver", changed=1, note="backup job")
@@ -1486,9 +1553,10 @@ def test_a_built_cluster_cannot_switch_setups(tmp_path, built_with_nas):
     on, wanted = ("homeserver-persistent", "local-lvm") if built_with_nas else ("local-lvm", "homeserver-persistent")
     for check in (True, False):
         rc, _, out = run("kubernetes.yml", switched | usb, check=check)
-        assert rc != 0 and f"VM 301's scsi1 is on {on}, configured on {wanted}: moving it is by hand" in out, out[
+        assert rc != 0 and f"VM 301's scsi1 is on {on}, configured on {wanted}. The role moves a disk" in out, out[
             -3000:
         ]
+        assert "run just deploy kubernetes -e proxmox_vm_move_disks=true" in out, out[-3000:]
     assert read(state)["mutations"] == mutations, "the refused switch changed the host"
     expect(run("proxmox_backup.yml", switched | usb), "homeserver", changed=1, note="backup job after the switch")
     assert backup_job(state)["vmid"] == "300,301", "the switch dropped a VM from the backup"
@@ -1504,7 +1572,7 @@ def test_proxmox_vm_refuses_to_build_over_old_volumes(tmp_path):
     extra = cluster_vars(tmp_path)
     state = Path(extra["fake_pve_state"])
     vm_state(state)
-    seed_storage(state, PERSISTENT_NFS)
+    seed_storage(state, PERSISTENT_NFS, EPHEMERAL_NFS)
     s = read(state)
     s["content"] = {
         "local-lvm": [{"volid": "local-lvm:vm-301-disk-0", "content": "images", "vmid": 301, "size": 2**30}],
@@ -1552,9 +1620,8 @@ def test_proxmox_vm_refuses_to_build_over_old_volumes(tmp_path):
     rebuild = extra | {"proxmox_vm_ignore_existing_volumes": True}
     expect(run("kubernetes.yml", rebuild), "homeserver", changed=True, note="a deliberate rebuild")
     worker = vms_of(state)["301"]["config"]
-    assert worker["efidisk0"].startswith("local-lvm:vm-301-disk-1,") and worker["scsi0"].startswith(
-        "local-lvm:vm-301-disk-2,"
-    )
+    assert worker["efidisk0"].startswith("local-lvm:vm-301-disk-1,"), worker["efidisk0"]
+    assert worker["scsi0"].startswith("homeserver-ephemeral:301/vm-301-disk-0.qcow2,"), worker["scsi0"]
 
     # VMID 300 now belongs to another VM, and 301 to a container.
     s = read(state)
@@ -1575,7 +1642,7 @@ def test_proxmox_vm_starts_vms_restored_after_a_host_reinstall(tmp_path):
     extra = cluster_vars(tmp_path)
     state = Path(extra["fake_pve_state"])
     vm_state(state)
-    seed_storage(state, PERSISTENT_NFS)
+    seed_storage(state, PERSISTENT_NFS, EPHEMERAL_NFS)
     expect(run("kubernetes.yml", extra), "homeserver", changed=True, note="first run")
     s = read(state)
     s["content"]["local"] = []
@@ -1600,7 +1667,7 @@ def test_proxmox_vm_recovers_from_a_failed_download_and_start(tmp_path):
     extra = cluster_vars(tmp_path)
     state = Path(extra["fake_pve_state"])
     vm_state(state, download_fails=True)
-    seed_storage(state, PERSISTENT_NFS)
+    seed_storage(state, PERSISTENT_NFS, EPHEMERAL_NFS)
     rc, _, out = run("kubernetes.yml", extra)
     assert rc != 0 and "Downloading talos-v1.14.2-ce4c9805-metal-amd64.iso" in out and "404 Not Found" in out, out[
         -3000:
@@ -2601,7 +2668,7 @@ def test_haos_with_a_nas(tmp_path, home_assistant):
     rc, _, out = run("homeassistant.yml", extra)
     assert rc != 0 and "homeserver-persistent: does not exist" in out and vms_of(state) == {}, out[-3000:]
 
-    seed_storage(state, PERSISTENT_NFS)
+    seed_storage(state, PERSISTENT_NFS, EPHEMERAL_NFS)
     ha["not_ready"] = 3
     result = run("homeassistant.yml", extra)
     expect(result, "homeserver", changed=True, note="first run")

@@ -25,8 +25,9 @@ its size, property strings in any order, numbers as text), so every setting is c
   cores, CPU, memory, ballooning, the watchdog, the agent, the boot order and PCI devices only at the next start);
   ISOs and images named like the role's own that no VM on the node uses (an image is used only to create its VM,
   so the pinned one stays, for a rebuild).
-- **Never** moves, shrinks or detaches a disk, deletes a VM, an ISO or an image, ejects the CD-ROM, or restarts a
-  VM.
+- **Moves** a disk that is on another storage than configured, only when `proxmox_vm_move_disks` is set
+  (below).
+- **Never** shrinks or detaches a disk, deletes a VM, an ISO or an image, ejects the CD-ROM, or restarts a VM.
 - **Refuses**, before changing anything:
   - a VMID that belongs to a VM of another name, or to a container;
   - a missing VM whose VMID still has disks or backups on any of the node's storages (files that belong to no
@@ -46,8 +47,8 @@ its size, property strings in any order, numbers as text), so every setting is c
     filesystem's, which the host's own files share the same way. `proxmox_vm_host_headroom_gib` keeps that much of
     such a storage out of the budget, and a plan that passed can still be refused later. An NFS storage is not
     budgeted: cap it where it lives, such as with a quota on the NAS. `proxmox_vm_allow_overcommit` lifts it;
-  - a disk configured smaller than it is, on another storage than it is, or a disk slot the configuration no
-    longer lists.
+  - a disk configured smaller than it is, on another storage than it is (unless `proxmox_vm_move_disks` is set), or
+    a disk slot the configuration no longer lists.
 - **Warns** when the running VMs' memory plus the VMs it would start exceed the node's memory less 2 GiB.
 
 A download's own task status is checked: `pvesh` can exit 0 for a download that failed.
@@ -65,6 +66,8 @@ A download's own task status is checked: `pvesh` can exit 0 for a download that 
 | `proxmox_vm_host_headroom_gib` | `0` | GiB of a ZFS, directory or BTRFS storage kept out of the disk budget, for the host's own files |
 | `proxmox_vm_ignore_existing_volumes` | `false` | Create a missing VM over its VMID's old disks or backups |
 | `proxmox_vm_rebuild_command` | `""` | How to run the role again with that switch, which the refusal names: the play's just recipe, say |
+| `proxmox_vm_move_disks` | `false` | Move a disk that is on another storage than configured, instead of refusing it |
+| `proxmox_vm_move_command` | `""` | How to run the role again with that switch, which the refusal names |
 | `proxmox_vm_node` | `""` | Node name; empty means the host's short hostname |
 | `proxmox_vm_power` | `""` | The power entry point: `stopped` or `running`; empty does nothing |
 | `proxmox_vm_power_vmids` | `[]` | The power entry point's VMs |
@@ -82,7 +85,7 @@ A VM:
   efidisk_storage: local-lvm
   cpu: host                           # default
   scsihw: virtio-scsi-pci             # default; virtio-scsi-single is accepted too
-  disks:                              # created once; grown, never moved, shrunk or detached
+  disks:                              # created once; grown, moved only when asked, never shrunk or detached
     - {slot: scsi0, storage: local-lvm, size_gib: 32, serial: talos-system}
     - {slot: scsi1, storage: nas-vm, size_gib: 200, format: qcow2, serial: talos-data}
     - {slot: scsi2, storage: local-lvm, size_gib: 500, serial: talos-media, backup: false}
@@ -115,6 +118,19 @@ refuses, naming the `pvesm set` that enables them, before creating anything.
 Every disk is created with `discard=on,ssd=1`. A `serial` is passed to the guest, but on virtio-scsi Proxmox also
 sets `device_id=drive-<slot>`, which names the disk's `/dev/disk/by-id/` link (`scsi-0QEMU_QEMU_HARDDISK_drive-scsiN`):
 a guest finds a disk by its slot, so keep each disk in its slot.
+
+## Moving a disk to another storage
+
+A disk whose volume is on another storage than its `storage` says, because the configuration changed or someone
+moved it by hand, is refused before anything changes, in a dry run too, naming `proxmox_vm_move_command`: a
+configuration that names the wrong storage by mistake would otherwise move the disk, a large one for a long time.
+Run with `proxmox_vm_move_disks: true` (`-e proxmox_vm_move_disks=true`, for that run alone) and it moves the disk
+there with `qm disk move <vmid> <slot> <storage> --delete 1`, with `--format` when the disk has one (without it,
+Proxmox keeps the disk's own format, raw onto NFS too). Proxmox mirrors a running VM's disk while the guest goes on
+writing to it and switches the VM to the copy, or copies a stopped VM's, then deletes the old volume. The VM is
+never stopped for it. The disk keeps its slot and options, so the guest sees the same device, and the disk budget
+counts it whole on its new storage. A dry run lists `move <slot> to <storage>` under the VM. An EFI disk is never
+moved: its storage counts only when the VM is created.
 
 ## Shutting VMs down and starting them
 

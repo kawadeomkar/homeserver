@@ -103,8 +103,9 @@ vm_storage_ephemeral_reservation: null
 
 # The most the persistent VMs' disks may take on the redundant pool, their snapshots included, with a NAS: a quota
 # on the persistent class's dataset, in GiB. The pool also holds the VMs' backups, which a full pool would stop,
-# and a thin qcow2 disk only grows. The cluster's settings check refuses a worker data disk above three quarters of
-# it, leaving the rest for its snapshots and the other persistent VMs. Set here, not in local.yml.
+# and a thin qcow2 disk only grows. The cluster's settings check refuses its worker's data disk and its control
+# plane's system disk above three quarters of it together, leaving the rest for their snapshots and the other
+# persistent VMs. Set here, not in local.yml.
 vm_storage_persistent_quota_gib: 1024
 
 # The VMs' backups, with a NAS: a dataset on the redundant pool, exported to the Proxmox host and mounted as a

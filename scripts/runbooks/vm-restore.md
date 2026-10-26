@@ -27,8 +27,8 @@ datasets. So the drill restores to a scratch VMID, with a new MAC, and never let
    qmrestore <archive> 9301 --unique 1 --start 0 --storage <storage>
    ```
 
-   With a NAS, use `homeserver-ephemeral`: the installer's storage has no room for a second system disk, since
-   the provisioned disks there never add up to more than its size. Without a NAS, check `pvesm status` first.
+   With a NAS, use `homeserver-ephemeral`, the storage for VMs that can be thrown away, as this copy is. Without a
+   NAS, check `pvesm status` first: the installer's storage may have no room for a second copy of a node's disks.
 2. Before anything starts it, cut its network and keep it from starting at boot:
 
    ```bash

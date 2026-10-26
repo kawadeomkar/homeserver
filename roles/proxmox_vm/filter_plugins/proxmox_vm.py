@@ -314,8 +314,10 @@ def disks_of(config):
     return out
 
 
-def drift(vm, config):
-    """How an existing VM differs: the qm set arguments, the disks to grow, and what is refused."""
+def drift(vm, config, move=False, move_command=""):
+    """How an existing VM differs: the qm set arguments, the disks to grow, and what is refused. A disk on another
+    storage than configured is refused unless `move` is true, when moves() puts it there; `move_command` is how to run
+    the role so, which the refusal names."""
     wanted = wanted_settings(vm)
     options, delete, resize, refused = [], [], [], []
     for key, value in wanted.items():
@@ -352,10 +354,12 @@ def drift(vm, config):
             continue
         volume, size = current[slot]
         want = int(disk["size_gib"]) * GIB
-        if volume_storage(volume) != disk["storage"]:
+        if volume_storage(volume) != disk["storage"] and not move:
             refused.append(
-                f"VM {vm['vmid']}'s {slot} is on {volume_storage(volume)}, configured on {disk['storage']}: moving it "
-                f"is by hand (qm disk move {vm['vmid']} {slot} {disk['storage']} --delete 1)"
+                f"VM {vm['vmid']}'s {slot} is on {volume_storage(volume)}, configured on {disk['storage']}. The role "
+                f"moves a disk only when told to: to move it there, the VM running or not, run "
+                f"{move_command or 'the play again with -e proxmox_vm_move_disks=true'}; if the configuration is "
+                f"what is wrong, correct it instead"
             )
             continue
         # Its serial and whether backups include it are the volume's options, set again on the same volume. Backups
@@ -387,6 +391,32 @@ def drift(vm, config):
     return options, resize, refused
 
 
+def moves(vm, config):
+    """The disks of an existing VM that are on another storage than configured, each with the `qm disk move` that puts
+    it there, in the configured format (without one Proxmox keeps the disk's own, raw onto NFS too), and deletes the
+    old volume once the VM uses the copy. Proxmox mirrors a running VM's disk while the guest goes on writing to it,
+    and copies a stopped VM's."""
+    current = disks_of(config)
+    out = []
+    for disk in vm["disks"]:
+        slot = disk["slot"]
+        if slot not in current or volume_storage(current[slot][0]) == disk["storage"]:
+            continue
+        argv = ["qm", "disk", "move", str(vm["vmid"]), slot, disk["storage"]]
+        if disk.get("format"):
+            argv += ["--format", disk["format"]]
+        out.append(
+            {
+                "vmid": str(vm["vmid"]),
+                "name": vm["name"],
+                "slot": slot,
+                "storage": disk["storage"],
+                "argv": [*argv, "--delete", "1"],
+            }
+        )
+    return out
+
+
 def growth(vms, configs):
     """The disks of VMs the role has just created that are smaller than configured: an imported disk takes its
     image's size. `configs` maps each created VM's vmid to its configuration as read after the creation."""
@@ -415,9 +445,10 @@ def configured_mac(config):
 def plan(vms, facts):
     """Everything the role does on this run, from what it read. `facts`:
 
-    check_mode, pending_storages, allow_overcommit, ignore_existing_volumes: the role's switches; pending_hint: what
-    creates the pending storages, said when one is missing on a real run; rebuild_command: how to run the role
-    again with ignore_existing_volumes, named when a missing VM is refused over its old volumes;
+    check_mode, pending_storages, allow_overcommit, ignore_existing_volumes, move_disks: the role's switches;
+    pending_hint: what creates the pending storages, said when one is missing on a real run; rebuild_command: how to
+    run the role again with ignore_existing_volumes, named when a missing VM is refused over its old volumes;
+    move_command: how to run it with move_disks, named when a disk is refused for being on another storage;
     storage_config: `pvesh get /storage`; qemu: `pvesh get /nodes/<node>/qemu`; lxc: `pvesh get /nodes/<node>/lxc`;
     node_storage: `pvesh get /nodes/<node>/storage`, which says whether each storage is active;
     configs and pending: per existing VM's vmid, its configuration and its pending changes;
@@ -433,7 +464,7 @@ def plan(vms, facts):
     config = facts.get("storage_config") or []
     qemu = {str(entry["vmid"]): entry for entry in facts.get("qemu") or []}
     errors, warnings = [], []
-    result = {"create": [], "set": [], "resize": [], "start": [], "restart": {}, "macs": {}, "summary": {}}
+    result = {"create": [], "set": [], "move": [], "resize": [], "start": [], "restart": {}, "macs": {}, "summary": {}}
 
     # Every storage a VM's disks go on must exist, be enabled and hold images.
     for storage in sorted(
@@ -493,13 +524,17 @@ def plan(vms, facts):
             )
             continue
         current = (facts.get("configs") or {}).get(vmid, {})
-        options, resize, refused = drift(vm, current)
+        move = bool(facts.get("move_disks"))
+        options, resize, refused = drift(vm, current, move, facts.get("move_command") or "")
         errors += refused
         changes = [option[2:] for option in options if option.startswith("--") and option != "--delete"]
         if "--delete" in options:
             changes += options[options.index("--delete") + 1].split(",")
         if options:
             result["set"].append({"vmid": vmid, "name": vm["name"], "argv": ["qm", "set", vmid, *options]})
+        moved = moves(vm, current) if move else []
+        result["move"] += moved
+        changes += [f"move {m['slot']} to {m['storage']}" for m in moved]
         result["resize"] += resize
         changes += [f"grow {r['slot']} to {r['size']}" for r in resize]
         if found.get("status") != "running" and vm.get("start", True):
@@ -528,7 +563,9 @@ def plan(vms, facts):
     # dataset's use plus the pool's free space, and the pool also holds the host's own datasets (the installer's root
     # filesystem and local on rpool): it shrinks as they grow, so a plan that passed can be refused later, and disks
     # budgeted to the last byte would fill the host's root filesystem as they fill. A directory or BTRFS storage's size
-    # is its filesystem's, which the host's own files share in the same way. host_headroom keeps room for them.
+    # is its filesystem's, which the host's own files share in the same way. host_headroom keeps room for them. A disk
+    # moved from another storage counts whole on its new one, and still on its old one, which holds it until the copy
+    # is done.
     types = {entry["storage"]: entry.get("type") for entry in config}
     additions = {}
     for vm in vms:
@@ -539,7 +576,9 @@ def plan(vms, facts):
             additions[vm["efidisk_storage"]] = additions.get(vm["efidisk_storage"], 0) + EFI_DISK_BYTES
         for disk in vm["disks"]:
             want = int(disk["size_gib"]) * GIB
-            have = current.get(disk["slot"], (None, 0))[1] if not creating else 0
+            volume, have = current.get(disk["slot"], (None, 0))
+            if volume is not None and volume_storage(volume) != disk["storage"]:
+                have = 0
             if want > have:
                 additions[disk["storage"]] = additions.get(disk["storage"], 0) + want - have
     for storage, added in sorted(additions.items()):

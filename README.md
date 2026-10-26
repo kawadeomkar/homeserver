@@ -298,7 +298,7 @@ checks the section and names any setting it lacks. Fill in, from `local.yml.exam
   small host, size the control plane down too;
 - on a host too small for every app, the app groups it runs (`kubernetes_apps`: `media`, `nextcloud`, `photoprism`,
   `frigate`, `homepage`). The rest are left out of what Flux applies, their data kept;
-- on a ZFS install, `proxmox_local_vm_storage: local-zfs`, with a NAS too: the nodes' system disks go on the
+- on a ZFS install, `proxmox_local_vm_storage: local-zfs`, with a NAS too: the nodes' EFI disks go on the
   installer's storage in both setups, and `just deploy proxmox` checks that storage whenever there is a cluster.
 
 Choose the MACs and reserve the addresses in the router before the first run: the VMs lease their address the
@@ -336,13 +336,24 @@ cluster's VMs down too, the worker first and the control plane last, each throug
 `just resume --all` starts them, the control plane first, waits until every node is Ready, then brings everything else
 back. `--all` takes no `--only`.
 
-A node that stays down: `scripts/runbooks/dead-worker.md`. The playbook never moves, shrinks or deletes their disks, and it refuses to create a VM over the disks or backups an
+A node that stays down: `scripts/runbooks/dead-worker.md`. The playbook moves their disks only when told to (below),
+never shrinks or deletes them, and it refuses to create a VM over the disks or backups an
 earlier one left under the same VMID: restore it instead (`scripts/runbooks/vm-restore.md`). On thin LVM, ZFS, a
 directory or BTRFS it also refuses disks that would add up to more than the storage holds, other VMs' included,
 and on all but thin LVM it keeps 16 GiB out of that sum for the host's own files, its root filesystem among them.
-With a NAS, the worker's data disk goes on the NAS, whose quota on the persistent VMs' dataset
-(`vm_storage_persistent_quota_gib`, 1 TiB) keeps a disk that fills from filling the pool under the backups; the disk
-may take three quarters of it. A BTRFS install keeps ISOs on `local-btrfs`: name it in `kubernetes_iso_storage` too.
+With a NAS, every disk of the cluster but the two 4 MiB EFI disks goes on the NAS, so the host's own disk, which
+other projects' VMs share, holds none of it: the control plane's system disk, which holds etcd, and the worker's data
+disk on the persistent VMs' dataset, whose quota (`vm_storage_persistent_quota_gib`, 1 TiB) keeps a disk that fills
+from filling the pool under the backups, the two together taking at most three quarters of it; the worker's system
+disk, whose images, logs and transcoding scratch a reinstall brings back, on the ephemeral one, which neither waits
+for every write nor keeps snapshots. A BTRFS install keeps ISOs on `local-btrfs`: name it in `kubernetes_iso_storage`
+too.
+
+A disk on another storage than the configuration says, such as the system disks of a cluster built with a NAS before
+2026-10-25, when they went on the installer's storage, stops `just deploy kubernetes` before it changes anything. Run
+`just check kubernetes -e proxmox_vm_move_disks=true` to see the moves, then `just deploy kubernetes -e
+proxmox_vm_move_disks=true`, which moves each disk while its VM runs (`qm disk move`, Proxmox mirroring it as the
+guest writes) and deletes the old volume once the VM uses the copy.
 Taking a cluster down again, a test deployment say, and what it brought with it: `scripts/runbooks/teardown.md`.
 
 With a NAS, `just deploy truenas` then creates the datasets the cluster mounts (`persistent/nextcloud`,
@@ -359,22 +370,22 @@ it, the same manifests run both apps on the CPU.
 
 #### Switching setups
 
-Both setups build the same two VMs. What differs is where the worker's disks live: its data disk on the NAS
-(`homeserver-persistent`, qcow2) with one, and on the installer's storage without, beside a media disk unless media
-goes on the data volume. So once the VMs exist, `just deploy kubernetes` with a `local.yml` for the other setup
-stops before it changes anything: the worker's data disk is on the other storage, and the refusal names the
-`qm disk move` that would put it where the new setup wants it. The nightly backup covers both VMs in either setup. A
-switch is a migration by hand, not yet tried on a real host:
+Both setups build the same two VMs. What differs is where their disks live: on the NAS with one (in qcow2), and on
+the installer's storage without, beside a media disk unless media goes on the data volume. So once the VMs exist,
+`just deploy kubernetes` with a `local.yml` for the other setup stops before it changes anything: the disks are on
+the other storages, and the refusal names `just deploy kubernetes -e proxmox_vm_move_disks=true`, which moves them
+where the new setup wants them. The nightly backup covers both VMs in either setup. The rest of a switch is by hand,
+not yet tried on a real host:
 
 - **Adding a NAS:** set the NAS up (`just deploy truenas`), give `local.yml` its addresses, drop the worker's media
   disk from `kubernetes_node_sizes`, and run `just deploy proxmox`, which adds the NAS's storages. Shut the worker
-  down (`qm shutdown 301`), copy what its media disk holds to the NAS, then move its data disk with
-  `qm disk move 301 scsi1 homeserver-persistent --format qcow2 --delete 1` (without `--format` the copy stays raw)
-  and detach the media disk (`qm disk unlink 301 --idlist scsi2`). Run `just deploy kubernetes`.
-- **Removing the NAS**, while it still runs: shut the worker down and move its data disk off it,
-  `qm disk move 301 scsi1 local-lvm --delete 1` (or your `proxmox_local_vm_storage`). Then remove the NAS from
-  `local.yml`, size the worker with a media disk (or set `kubernetes_media_on_data_volume`), and run
-  `just deploy proxmox` and `just deploy kubernetes`, which adds the media disk empty.
+  down (`qm shutdown 301`), copy what its media disk holds to the NAS and detach it (`qm disk unlink 301 --idlist
+  scsi2`), then run `just deploy kubernetes -e proxmox_vm_move_disks=true`, which moves the disks onto the NAS and
+  starts the worker.
+- **Removing the NAS**, while it still runs: remove the NAS from `local.yml`, size the worker with a media disk (or
+  set `kubernetes_media_on_data_volume`), and run `just deploy kubernetes -e proxmox_vm_move_disks=true`, which
+  moves the disks off the NAS onto the installer's storage, if its disk budget has room, and adds the media disk
+  empty. Then run `just deploy proxmox`.
 
 Flux's path follows the setup too (`k8s/clusters/nas` or `local`), and `just deploy kubernetes` refuses to move it
 until run once as `just deploy kubernetes -e flux_bootstrap_allow_path_change=true`: Flux prunes what the old path applied, so
@@ -390,8 +401,8 @@ which leaves the data where it is, since they are `Retain`); then change the pat
 kind, and run `just resume`. Switching between a media disk and `kubernetes_media_on_data_volume` moves `media` and
 `frigate-media` the same way.
 
-A NAS that is lost takes the worker's data disk with it: that is a restore from backup
-(`scripts/runbooks/vm-restore.md`), not a switch.
+A NAS that is lost takes the cluster's disks with it, etcd included, whose snapshots `just etcd-snapshot` keeps on
+the workstation: that is a restore from backup (`scripts/runbooks/vm-restore.md`), not a switch.
 
 ### Backups
 

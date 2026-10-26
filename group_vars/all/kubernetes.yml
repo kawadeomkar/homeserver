@@ -97,13 +97,19 @@ kubernetes_apps_enabled: >-
 kubernetes_domain_default: homeserver.internal
 kubernetes_timezone: America/Los_Angeles
 
-# Where the VMs' disks go. System disks on the installer's storage in both setups (vm_storage_installer:
-# local-lvm, or local.yml's proxmox_local_vm_storage, which a ZFS install needs with a NAS too); the worker's data
-# disk on the NAS's persistent storage with a NAS, under its quota, on the installer's storage without one. On thin
-# LVM and ZFS the disks' provisioned sizes, other VMs' included, never add up to more than the storage
-# (proxmox_vm's disk budget).
-kubernetes_system_storage: "{{ vm_storage_installer }}"
-kubernetes_data_storage: "{{ vm_storage_classes.persistent.proxmox_id if nas_present else kubernetes_system_storage }}"
+# Where the VMs' disks go, by the node's role. With a NAS, every disk the cluster writes to is on it, and the
+# installer's storage, which other projects' VMs share and whose disks never add up to more than it holds
+# (proxmox_vm's disk budget), keeps only the two 4 MiB EFI disks: the control plane's system disk, which holds etcd, on
+# the persistent storage, where synchronous writes are honoured (each takes a few milliseconds more than on the host's
+# own disk, which a single-member etcd bears); the worker's on the ephemeral one, which neither waits for every write
+# nor keeps snapshots, since all it holds (images, logs, Jellyfin's transcoding scratch) comes back with a reinstall;
+# and the worker's data disk on the persistent one, under its quota. Without a NAS, every disk on the installer's
+# storage (vm_storage_installer: local-lvm, or local.yml's proxmox_local_vm_storage). A built cluster's disks move
+# only with just deploy kubernetes -e proxmox_vm_move_disks=true.
+kubernetes_system_storage:
+  controlplane: "{{ vm_storage_classes.persistent.proxmox_id if nas_present else vm_storage_installer }}"
+  worker: "{{ vm_storage_classes.ephemeral.proxmox_id if nas_present else vm_storage_installer }}"
+kubernetes_data_storage: "{{ vm_storage_classes.persistent.proxmox_id if nas_present else vm_storage_installer }}"
 
 # Problems with the Kubernetes section of local.yml, one message each, naming the variable to change. Every
 # playbook asserts this is empty first, as it does nas_section_error, because the NAS and Proxmox plays read
@@ -120,8 +126,9 @@ kubernetes_data_storage: "{{ vm_storage_classes.persistent.proxmox_id if nas_pre
 #     little more), a system disk under the 10 GiB Talos installs on, a worker's under 32 GiB (every app's image), a
 #     control plane with a data or media disk or under 2 GiB of memory, and a worker without a data disk, where the
 #     apps' data lives;
-#   - with a NAS, its bootstrap address alone (a DHCP lease the NAS play replaces), a worker data disk above three
-#     quarters of the persistent VM dataset's quota (vm_storage_persistent_quota_gib), which its snapshots share,
+#   - with a NAS, its bootstrap address alone (a DHCP lease the NAS play replaces), a worker data disk and a
+#     control plane system disk above three quarters of the persistent VM dataset's quota together
+#     (vm_storage_persistent_quota_gib), which their snapshots share,
 #     and the settings for media without a NAS: a worker media disk, which would hold nothing, and
 #     kubernetes_media_on_data_volume;
 #   - without a NAS, a worker without every size, since the defaults fit the home host, or without a media disk
@@ -362,17 +369,20 @@ kubernetes_settings_error: >-
                                ~ 'the node evicts pods.') -%}
   {%-     endif -%}
   {%-     set quota = vm_storage_persistent_quota_gib | int -%}
+  {#-     With a NAS, the worker's data disk and the control plane's system disk share the persistent VM dataset. -#}
+  {%-     set persistent = (worker.data_disk_gib | int) + (cp.system_disk_gib | int) -%}
   {%-     if (worker.data_disk_gib | int) < 11 -%}
   {%-       set _ = out.append(worker.name ~ ' runs the apps, and their data lives on its data disk: its data_disk_gib in '
                                ~ 'kubernetes_node_sizes must be at least 11, not ' ~ worker.data_disk_gib ~ '. Without '
                                ~ 'a data disk the apps would write to its system disk, which a reinstall wipes.') -%}
-  {%-     elif nas_present and (worker.data_disk_gib | int) > quota * 3 // 4 -%}
-  {%-       set _ = out.append('With a NAS, ' ~ worker.name ~ "'s data disk (" ~ worker.data_disk_gib ~ " GiB) goes on "
-                               ~ "the NAS's persistent VM dataset, whose quota of " ~ quota ~ ' GiB '
-                               ~ '(vm_storage_persistent_quota_gib in group_vars/all/storage.yml) also holds its '
-                               ~ 'snapshots and the other persistent VMs: keep data_disk_gib in kubernetes_node_sizes '
-                               ~ 'to at most ' ~ quota * 3 // 4 ~ ', or raise the quota, within what the pool holds '
-                               ~ 'beside the backups.') -%}
+  {%-     elif nas_present and persistent > quota * 3 // 4 -%}
+  {%-       set _ = out.append('With a NAS, ' ~ worker.name ~ "'s data disk and " ~ cp.name ~ "'s system disk ("
+                               ~ persistent ~ " GiB together) go on the NAS's persistent VM dataset, whose quota of "
+                               ~ quota ~ ' GiB (vm_storage_persistent_quota_gib in group_vars/all/storage.yml) also '
+                               ~ 'holds their snapshots and the other persistent VMs: keep ' ~ worker.name
+                               ~ "'s data_disk_gib and " ~ cp.name ~ "'s system_disk_gib in kubernetes_node_sizes to "
+                               ~ 'at most ' ~ quota * 3 // 4 ~ ' together, or raise the quota, within what the pool '
+                               ~ 'holds beside the backups.') -%}
   {%-     endif -%}
   {%-   endif -%}
   {#- Without a NAS the host is not the one the defaults fit, and the media need a home on it. -#}

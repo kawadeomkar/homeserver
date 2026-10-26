@@ -80,7 +80,9 @@ The NAS was reinstalled on TrueNAS Community Edition and is configured only thro
       nightly backup has run, and again after any change to the backup job
 - [ ] Measure synchronous write speed on the persistent storage (`fio` with `fsync=1`). The pool's
       drives have no power-loss protection and there is no log device; a slow result calls for a log
-      device, not `sync=disabled`
+      device, not `sync=disabled`. The control plane's system disk, and so etcd, lives there since
+      2026-10-25: the worker's data disk there averaged 7 ms a write that day, against under 1 ms on the
+      host's `local-lvm`, so watch etcd's `etcd_disk_wal_fsync_duration_seconds` p99 in Grafana
 - [ ] Decide whether to delete the TrueNAS CORE leftovers on the `ephemeral` pool: an orphaned snapshot of
       the media dataset and the old `.system` dataset. The role leaves both alone
 - [ ] Decide whether the NAS keeps IPv6 autoconfiguration (`truenas_ipv6_auto`)

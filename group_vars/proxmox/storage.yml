@@ -9,7 +9,7 @@ proxmox_storage_nfs_server: "{{ nas_address }}"
 # With a NAS, its shares, one per VM class and per project pool; without one, nothing to add.
 proxmox_storage_nfs: "{{ vm_storage_nfs_exports if nas_present else [] }}"
 # The installer's storage must be able to hold VM disks without a NAS, when it is the ephemeral class and the only
-# one, and with a cluster in either setup, since the cluster's system disks go on it: local-lvm, or
+# one, and with a cluster in either setup, since the cluster's EFI disks go on it: local-lvm, or
 # proxmox_local_vm_storage from local.yml (vm_storage_installer, group_vars/all/storage.yml). That is the variable
 # to change when the role refuses the storage.
 proxmox_storage_local: "{{ [vm_storage_installer] if not nas_present or kubernetes_present else [] }}"
