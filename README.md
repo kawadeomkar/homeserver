@@ -337,17 +337,18 @@ cluster's VMs down too, the worker first and the control plane last, each throug
 back. `--all` takes no `--only`.
 
 A node that stays down: `scripts/runbooks/dead-worker.md`. The playbook moves their disks only when told to (below),
-never shrinks or deletes them, and it refuses to create a VM over the disks or backups an
+deleting the old copy once the VM uses the new one, never shrinks or otherwise deletes them, and it refuses to create a VM over the disks or backups an
 earlier one left under the same VMID: restore it instead (`scripts/runbooks/vm-restore.md`). On thin LVM, ZFS, a
 directory or BTRFS it also refuses disks that would add up to more than the storage holds, other VMs' included,
 and on all but thin LVM it keeps 16 GiB out of that sum for the host's own files, its root filesystem among them.
 With a NAS, every disk of the cluster but the two 4 MiB EFI disks goes on the NAS, so the host's own disk, which
-other projects' VMs share, holds none of it: the control plane's system disk, which holds etcd, and the worker's data
-disk on the persistent VMs' dataset, whose quota (`vm_storage_persistent_quota_gib`, 1 TiB) keeps a disk that fills
-from filling the pool under the backups, the two together taking at most three quarters of it; the worker's system
-disk, whose images, logs and transcoding scratch a reinstall brings back, on the ephemeral one, which neither waits
-for every write nor keeps snapshots. A BTRFS install keeps ISOs on `local-btrfs`: name it in `kubernetes_iso_storage`
-too.
+other projects' VMs share, holds none of it: the control plane's system disk, which holds etcd, and the worker's
+data disk on the persistent VMs' dataset, whose quota (`vm_storage_persistent_quota_gib`, 1 TiB) keeps a disk that
+fills from filling the pool under the backups, the two and Home Assistant's disk taking at most three quarters of
+it; the worker's system disk, whose images, logs and transcoding scratch a reinstall brings back, on the ephemeral
+one, which neither waits for every write nor keeps snapshots, and keeps the disk's size for it (a refreservation),
+so neither the media nor another project's pool can fill the space under the worker. A BTRFS install keeps ISOs on
+`local-btrfs`: name it in `kubernetes_iso_storage` too.
 
 A disk on another storage than the configuration says, such as the system disks of a cluster built with a NAS before
 2026-10-25, when they went on the installer's storage, stops `just deploy kubernetes` before it changes anything. Run
@@ -381,11 +382,13 @@ not yet tried on a real host:
   disk from `kubernetes_node_sizes`, and run `just deploy proxmox`, which adds the NAS's storages. Shut the worker
   down (`qm shutdown 301`), copy what its media disk holds to the NAS and detach it (`qm disk unlink 301 --idlist
   scsi2`), then run `just deploy kubernetes -e proxmox_vm_move_disks=true`, which moves the disks onto the NAS and
-  starts the worker.
+  starts the worker, and `just deploy homeassistant -e proxmox_vm_move_disks=true`, which moves Home Assistant's
+  disk and its EFI disk there too.
 - **Removing the NAS**, while it still runs: remove the NAS from `local.yml`, size the worker with a media disk (or
   set `kubernetes_media_on_data_volume`), and run `just deploy kubernetes -e proxmox_vm_move_disks=true`, which
   moves the disks off the NAS onto the installer's storage, if its disk budget has room, and adds the media disk
-  empty. Then run `just deploy proxmox`.
+  empty, and `just deploy homeassistant -e proxmox_vm_move_disks=true`, which moves Home Assistant's disk and its
+  EFI disk the same way. Then run `just deploy proxmox`.
 
 Flux's path follows the setup too (`k8s/clusters/nas` or `local`), and `just deploy kubernetes` refuses to move it
 until run once as `just deploy kubernetes -e flux_bootstrap_allow_path_change=true`: Flux prunes what the old path applied, so

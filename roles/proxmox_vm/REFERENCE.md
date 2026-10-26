@@ -20,7 +20,7 @@ Description: Create Proxmox VE VMs and keep the settings it manages as configure
 
 **Description**: 
 - Downloads the ISOs of proxmox_vm_isos and the images of proxmox_vm_imports (checking each file's sha256), creates each VM of proxmox_vm_vms with qm, every option given, a disk with import_from imported from its image and grown to its size, and on later runs corrects its cores, memory, CPU type, ballooning, start-on-boot, startup order, watchdog, agent, tags, PCI and USB devices and CD-ROM, adds a configured disk it lacks and grows a disk configured larger. Starts a stopped VM marked start.
-- Moves a disk that is on another storage than configured only with proxmox_vm_move_disks, and refuses it otherwise.
+- Moves a disk that is on another storage than configured, its EFI disk too, only with proxmox_vm_move_disks, and refuses it otherwise.
 - Never shrinks or detaches a disk, never deletes a VM or an ISO, and never restarts a VM; a setting that waits for a restart is reported.
 - Refuses a VMID that belongs to another VM, a missing VM whose VMID still has disks or backups, a disk storage that does not exist or holds no images, and disks whose provisioned sizes would add up to more than a thin LVM, ZFS, directory or BTRFS storage holds, less proxmox_vm_host_headroom_gib on all but thin LVM. Warns when the VMs' memory would exceed the node's.
 - The defaults change nothing.
@@ -130,7 +130,7 @@ Description: Create Proxmox VE VMs and keep the settings it manages as configure
     - **Type**: bool
     - **Default**: False
   
-    - **Description**: Move a disk that is on another storage than configured there, with qm disk move, the VM running or not, in the configured format, deleting the old volume once the VM uses the copy. Without it, such a disk is refused.
+    - **Description**: Move a disk that is on another storage than configured there, its EFI disk too, with qm disk move, the VM running or not, in the configured format, deleting the old volume once the VM uses the copy. Without it, such a disk is refused.
   
   
   

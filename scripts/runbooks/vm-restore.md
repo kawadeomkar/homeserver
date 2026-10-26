@@ -69,15 +69,26 @@ bootstrapped before, rather than building an empty cluster over the old data.
 3. **Restore the worker** the same way, as VMID 301. Without a NAS its data disk comes back from the backup, as of
    02:00, and its media disk, never backed up, is lost: `just deploy kubernetes` adds it again, empty, and once the cluster
    is up, `kubectl -n local-path-storage delete job static-volume-directories` has Flux make the library's and the
-   recordings' directories on it again (the restored Job ran before, on the old disk). With a NAS its data
-   disk lives on `homeserver-persistent`, on the NAS, so it survived the host and is newer than the backup: after
-   the restore, point `scsi1` back at the surviving volume, and delete the restored copy only once the apps check
-   out:
+   recordings' directories on it again (the restored Job ran before, on the old disk).
+
+   **With a NAS, put back the disks that survived.** Every disk of both VMs but the EFI disks lives on the NAS, so
+   it survived the host and is newer than the backup: the control plane's system disk, which holds etcd, and the
+   worker's data disk on `homeserver-persistent`, the worker's system disk on `homeserver-ephemeral`. Left as
+   restored, etcd would go back to 02:00, and a volume claimed since would get a new, empty directory beside its
+   data. Point each slot back at its surviving volume, the one `pvesm list` shows and `qm config` does not name:
 
    ```bash
-   pvesm list homeserver-persistent --vmid 301           # the surviving data disk's volid
+   qm config 300 | grep scsi0; pvesm list homeserver-persistent --vmid 300
+   qm set 300 --scsi0 <volid>,discard=on,ssd=1,serial=talos-system,format=qcow2
+   qm config 301 | grep scsi1; pvesm list homeserver-persistent --vmid 301
    qm set 301 --scsi1 <volid>,discard=on,ssd=1,serial=talos-data,format=qcow2
+   qm config 301 | grep scsi0; pvesm list homeserver-ephemeral --vmid 301
+   qm set 301 --scsi0 <volid>,discard=on,ssd=1,serial=talos-system,format=qcow2
    ```
+
+   Each restored copy stays beside it as `unusedN`: delete them (`qm disk unlink <vmid> --idlist unusedN --force 1`)
+   only once the cluster and the apps check out. A disk whose storage did not survive, the worker's system disk after
+   the ephemeral pool's disk failed too, stays as restored.
 
 4. **Leave them stopped, and run `just check kubernetes`, then `just deploy kubernetes`.** Do not start them
    by hand: their CD-ROM names the Talos ISO in `local`, which was on the lost boot disk, and Proxmox refuses to start a
@@ -104,9 +115,32 @@ Flux recreates every app. With a NAS, its datasets (Nextcloud's and PhotoPrism's
 data; without one, nothing outside the VMs held any. The apps' local volumes, their databases and settings, start
 empty.
 
-**With a NAS, the worker's old data disk survived** on `homeserver-persistent`, holding those local volumes. The
-rebuild gives VM 301 a new, empty data disk beside it, so swap the old one in before Talos formats the new one:
-run the VMs' play alone first (`--limit homeserver`), then the rest.
+**With a NAS, the cluster's disks survived** on the NAS, all but the EFI disks: the control plane's system disk,
+which holds etcd, so the cluster itself, and the worker's data disk on `homeserver-persistent`, the worker's system
+disk on `homeserver-ephemeral`. Build new VMs, then swap each old disk in before anything installs on the new ones,
+and the cluster comes back as it was, with no new bootstrap and no data to move: run the VMs' play alone first
+(`--limit homeserver`), which starts the new VMs in maintenance mode, then put the old disks in their slots, the old
+volume being the one `pvesm list` shows and `qm config` does not name, and remove the new ones:
+
+```bash
+just deploy kubernetes -e proxmox_vm_ignore_existing_volumes=true --limit homeserver
+qm stop 300; qm stop 301
+qm config 300 | grep scsi0; pvesm list homeserver-persistent --vmid 300
+qm set 300 --scsi0 <old volid>,discard=on,ssd=1,serial=talos-system,format=qcow2
+qm config 301 | grep scsi; pvesm list homeserver-persistent --vmid 301; pvesm list homeserver-ephemeral --vmid 301
+qm set 301 --scsi0 <old volid>,discard=on,ssd=1,serial=talos-system,format=qcow2
+qm set 301 --scsi1 <old volid>,discard=on,ssd=1,serial=talos-data,format=qcow2
+qm disk unlink 300 --idlist unused0 --force 1    # the new, empty ones
+qm disk unlink 301 --idlist unused0,unused1 --force 1
+just deploy kubernetes
+```
+
+`just deploy kubernetes` starts the VMs, which boot from their old system disks, and finds etcd running. A system
+disk that did not survive (the worker's, after the ephemeral pool's disk failed too) stays new: leave its slot as
+built, and `-e talos_reinstall=homeserver-worker-1` installs the worker on it.
+
+Without the control plane's old system disk, the cluster is new, as above, but the worker's old data disk still
+holds the apps' local volumes: swap it alone in, before Talos formats the new one, and bootstrap a new cluster:
 
 ```bash
 just deploy kubernetes -e proxmox_vm_ignore_existing_volumes=true --limit homeserver

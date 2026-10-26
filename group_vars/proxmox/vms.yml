@@ -26,7 +26,7 @@ proxmox_vm_host_headroom_gib: 16
 # disk and the worker's data disk, which holds the apps' local volumes, on the persistent storage, the worker's
 # system disk on the ephemeral one (kubernetes_system_storage, group_vars/all/kubernetes.yml). Without one, every disk
 # on the installer's storage, the worker's media disk among them, never backed up. The EFI disks stay on the
-# installer's storage in both setups: 4 MiB each, which the role never moves. A built cluster moved to the other
+# installer's storage in both setups: 4 MiB each. A built cluster moved to the other
 # setup is refused by proxmox_vm before anything changes, its disks being on the other storages, until run with
 # proxmox_vm_move_disks (README.md, "Switching setups"). Each sits in its slot of kubernetes_disk_slots, whose by-id
 # link Talos's disk selectors match; the serials only name the disks for whoever reads the VM's configuration. The

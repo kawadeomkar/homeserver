@@ -35,12 +35,12 @@ number, an EFI disk 4M; it stores tags lower-cased and sorted and a MAC in upper
 is given. On a running VM, `qm set` leaves what Proxmox cannot change live (cores, CPU, memory, ballooning, the
 watchdog, the agent, the boot order, PCI devices) pending until the next `qm start`, and the configuration pvesh
 returns shows pending values applied, as Proxmox's does by default. Deleting a drive drops it from the boot order,
-and adding it back does not restore it. `qm disk resize` grows only. `qm disk move` copies a disk, running or not, to
-a new volume named as `qm create` names one, raw on block storage and otherwise in `--format` or the disk's own,
+and adding it back does not restore it. `qm disk resize` grows only. `qm disk move` copies a disk, running or not,
+to a new volume named as `qm create` names one, raw on block storage and otherwise in `--format` or the disk's own,
 keeps its options, and deletes the old volume with `--delete 1` or leaves it as `unusedN`; it refuses the CD-ROM, a
-storage that holds no images and the same storage in the same format, as Proxmox does, and records each move in the
-state's `moves`. A download that fails (the state's `download_fails`) leaves no file and still exits 0, as pvesh
-may; only the task's status says it failed.
+volume that is not there, a storage that holds no images and the same storage in the same format, as Proxmox does,
+and records each move in the state's `moves`. A download that fails (the state's `download_fails`) leaves no file
+and still exits 0, as pvesh may; only the task's status says it failed.
 `start_fails` makes the next `qm start` fail once and `shutdown_hangs` every `qm shutdown` time out (the guest
 never powers off); both refuse a VM already as asked, as qm does, and `qm start` also refuses a VM one of whose
 drives, the CD-ROM included, names a volume that is not there, as Proxmox does when it activates them. A backup
@@ -796,7 +796,9 @@ def qm(state, args):
         entry = storage_entry(state, sid)
         if "images" not in entry["content"].split(","):
             fail(f"storage '{sid}' does not support vm images")
-        source = next(v for v in state["content"][volid.split(":", 1)[0]] if v["volid"] == volid)
+        source = next((v for v in state["content"].get(volid.split(":", 1)[0], []) if v["volid"] == volid), None)
+        if source is None:
+            fail(f"volume '{volid}' does not exist")
         fmt = "raw" if entry["type"] in BLOCK_TYPES else opts.get("format") or source.get("format", "raw")
         if sid == volid.split(":", 1)[0] and fmt == source.get("format", "raw"):
             fail("you can't move to the same storage with same format")

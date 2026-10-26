@@ -47,9 +47,9 @@ talos_installer_digests:
 kubernetes_iso_storage: local
 
 # The cluster's shape, the same in both setups: a control plane that runs Talos, etcd and the API alone, and a worker
-# that runs the apps and holds their data disk. Only where the worker's disks live depends on the NAS: its data disk
-# on the NAS with one, and with an optional media disk on the host's own storage without one
-# (group_vars/proxmox/vms.yml). The sizes fit the home host; local.yml's kubernetes_node_sizes changes them per node,
+# that runs the apps and holds their data disk. Only where the disks live depends on the NAS: all but the EFI disks on
+# the NAS with one (kubernetes_system_storage below), and all on the host's own storage without one, the worker's
+# optional media disk among them (group_vars/proxmox/vms.yml). The sizes fit the home host; local.yml's kubernetes_node_sizes changes them per node,
 # never here, and without a NAS it must size the worker to the host. Whether the worker gets the host's iGPU is per
 # host too, so it comes from local.yml (kubernetes_gpu_mapping).
 kubernetes_node_shape:
@@ -110,6 +110,17 @@ kubernetes_system_storage:
   controlplane: "{{ vm_storage_classes.persistent.proxmox_id if nas_present else vm_storage_installer }}"
   worker: "{{ vm_storage_classes.ephemeral.proxmox_id if nas_present else vm_storage_installer }}"
 kubernetes_data_storage: "{{ vm_storage_classes.persistent.proxmox_id if nas_present else vm_storage_installer }}"
+# What the cluster's disks on the NAS's ephemeral VM storage add up to, in GiB: the worker's system disk. Its pool also
+# holds the media, and its parent dataset's quota the project pools, either of which could fill it, and a worker whose
+# disk cannot grow pauses, every app with it; so the ephemeral class's dataset keeps this much for them, a
+# refreservation (group_vars/nas/truenas.yml). 0 without a NAS or a cluster.
+kubernetes_ephemeral_disks_gib: >-
+  {%- set out = [] -%}
+  {%- for n in kubernetes_nodes if kubernetes_present and nas_present
+        and kubernetes_system_storage[n.role] == vm_storage_classes.ephemeral.proxmox_id -%}
+  {%-   set _ = out.append(n.system_disk_gib | int) -%}
+  {%- endfor -%}
+  {{ out | sum }}
 
 # Problems with the Kubernetes section of local.yml, one message each, naming the variable to change. Every
 # playbook asserts this is empty first, as it does nas_section_error, because the NAS and Proxmox plays read
@@ -126,8 +137,8 @@ kubernetes_data_storage: "{{ vm_storage_classes.persistent.proxmox_id if nas_pre
 #     little more), a system disk under the 10 GiB Talos installs on, a worker's under 32 GiB (every app's image), a
 #     control plane with a data or media disk or under 2 GiB of memory, and a worker without a data disk, where the
 #     apps' data lives;
-#   - with a NAS, its bootstrap address alone (a DHCP lease the NAS play replaces), a worker data disk and a
-#     control plane system disk above three quarters of the persistent VM dataset's quota together
+#   - with a NAS, its bootstrap address alone (a DHCP lease the NAS play replaces), a worker data disk, a control
+#     plane system disk and Home Assistant's disk above three quarters of the persistent VM dataset's quota together
 #     (vm_storage_persistent_quota_gib), which their snapshots share,
 #     and the settings for media without a NAS: a worker media disk, which would hold nothing, and
 #     kubernetes_media_on_data_volume;
@@ -369,20 +380,24 @@ kubernetes_settings_error: >-
                                ~ 'the node evicts pods.') -%}
   {%-     endif -%}
   {%-     set quota = vm_storage_persistent_quota_gib | int -%}
-  {#-     With a NAS, the worker's data disk and the control plane's system disk share the persistent VM dataset. -#}
-  {%-     set persistent = (worker.data_disk_gib | int) + (cp.system_disk_gib | int) -%}
+  {#-     With a NAS, the worker's data disk, the control plane's system disk and Home Assistant's disk share the
+          persistent VM dataset. -#}
+  {%-     set haos = haos_present is sameas true -%}
+  {%-     set persistent = (worker.data_disk_gib | int) + (cp.system_disk_gib | int)
+                           + ((haos_vm_size.disk_gib | int) if haos else 0) -%}
   {%-     if (worker.data_disk_gib | int) < 11 -%}
   {%-       set _ = out.append(worker.name ~ ' runs the apps, and their data lives on its data disk: its data_disk_gib in '
                                ~ 'kubernetes_node_sizes must be at least 11, not ' ~ worker.data_disk_gib ~ '. Without '
                                ~ 'a data disk the apps would write to its system disk, which a reinstall wipes.') -%}
   {%-     elif nas_present and persistent > quota * 3 // 4 -%}
-  {%-       set _ = out.append('With a NAS, ' ~ worker.name ~ "'s data disk and " ~ cp.name ~ "'s system disk ("
+  {%-       set _ = out.append('With a NAS, ' ~ worker.name ~ "'s data disk" ~ (', ' if haos else ' and ') ~ cp.name
+                               ~ "'s system disk" ~ (" and Home Assistant's disk" if haos else '') ~ ' ('
                                ~ persistent ~ " GiB together) go on the NAS's persistent VM dataset, whose quota of "
                                ~ quota ~ ' GiB (vm_storage_persistent_quota_gib in group_vars/all/storage.yml) also '
-                               ~ 'holds their snapshots and the other persistent VMs: keep ' ~ worker.name
-                               ~ "'s data_disk_gib and " ~ cp.name ~ "'s system_disk_gib in kubernetes_node_sizes to "
-                               ~ 'at most ' ~ quota * 3 // 4 ~ ' together, or raise the quota, within what the pool '
-                               ~ 'holds beside the backups.') -%}
+                               ~ 'holds their snapshots and any other persistent VM: before the VMs exist, keep their '
+                               ~ 'sizes in kubernetes_node_sizes' ~ (' and haos_size' if haos else '') ~ ' to at most '
+                               ~ quota * 3 // 4 ~ ' GiB together; once they do, since a disk is never shrunk, raise '
+                               ~ 'the quota instead, within what the pool holds beside the backups.') -%}
   {%-     endif -%}
   {%-   endif -%}
   {#- Without a NAS the host is not the one the defaults fit, and the media need a home on it. -#}

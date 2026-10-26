@@ -1475,10 +1475,11 @@ def test_proxmox_vm_without_a_nas(tmp_path):
 
 @pytest.mark.cluster
 def test_proxmox_vm_moves_disks_only_when_told(tmp_path):
-    """A cluster whose system disks are on the installer's storage, as it was built with a NAS before 2026-10-25: the
-    play refuses each disk on another storage than configured, in a dry run too, naming the command, and changes
-    nothing. Told to, a dry run lists the moves and makes none; a real run moves both, the VMs running, into qcow2 on
-    the NAS, deleting the old volumes, and leaves the EFI disks where they are. A second run changes nothing."""
+    """A cluster whose system disks are on the installer's storage, as it was built with a NAS before 2026-10-25, and
+    whose control plane's EFI disk was moved onto the NAS by hand: the play refuses each disk on another storage than
+    configured, the EFI disk too, in a dry run too, naming the command, and changes nothing. Told to, a dry run lists
+    the moves and makes none; a real run moves them all, the VMs running, the system disks into qcow2 on the NAS and the
+    EFI disk back, deleting the old volumes. A second run changes nothing."""
     extra = cluster_vars(tmp_path)
     state = Path(extra["fake_pve_state"])
     vm_state(state)
@@ -1487,6 +1488,8 @@ def test_proxmox_vm_moves_disks_only_when_told(tmp_path):
     for vmid in ("300", "301"):
         by_hand = fake_pve_command(state, "qm", "disk", "move", vmid, "scsi0", "local-lvm", "--delete", "1")
         assert by_hand.returncode == 0, by_hand.stderr
+    by_hand = fake_pve_command(state, "qm", "disk", "move", "300", "efidisk0", "homeserver-persistent", "--delete", "1")
+    assert by_hand.returncode == 0, by_hand.stderr
     mutations = read(state)["mutations"]
 
     for check in (True, False):
@@ -1496,13 +1499,16 @@ def test_proxmox_vm_moves_disks_only_when_told(tmp_path):
             assert f"VM {vmid}'s scsi0 is on local-lvm, configured on {storage}. The role moves a disk only" in out, (
                 out[-3000:]
             )
+        assert "VM 300's efidisk0 is on homeserver-persistent, configured on local-lvm." in out, out[-3000:]
         assert "run just deploy kubernetes -e proxmox_vm_move_disks=true" in out, out[-3000:]
     assert read(state)["mutations"] == mutations, "the refused run changed the host"
 
     told = extra | {"proxmox_vm_move_disks": True}
     result = run("kubernetes.yml", told, check=True)
     expect(result, "homeserver", changed=True, note="dry run of the moves")
-    assert re.search(r'"homeserver-cp-1":\s*\[\s*"move scsi0 to homeserver-persistent"', result[2]), result[2][-3000:]
+    assert re.search(
+        r'"homeserver-cp-1":\s*\[\s*"move scsi0 to homeserver-persistent",\s*"move efidisk0 to local-lvm"', result[2]
+    ), result[2][-3000:]
     assert re.search(r'"homeserver-worker-1":\s*\[\s*"move scsi0 to homeserver-ephemeral"', result[2]), result[2][
         -3000:
     ]
@@ -1515,7 +1521,11 @@ def test_proxmox_vm_moves_disks_only_when_told(tmp_path):
         assert disk.startswith(f"{storage}:{vmid}/") and ".qcow2," in disk, disk
         assert "serial=talos-system" in disk and f"size={size}G" in disk, disk
         assert vms[vmid]["status"] == "running" and not any(k.startswith("unused") for k in vms[vmid]["config"])
-    assert [m["running"] for m in read(state)["moves"][2:]] == [True, True], "a VM was not running when moved"
+    assert [(m["vmid"], m["slot"], m["running"]) for m in read(state)["moves"][3:]] == [
+        ("300", "scsi0", True),
+        ("300", "efidisk0", True),
+        ("301", "scsi0", True),
+    ], "a VM was not running when moved"
     assert sorted(v["volid"] for v in read(state)["content"]["local-lvm"]) == [
         "local-lvm:vm-300-disk-0",
         "local-lvm:vm-301-disk-0",

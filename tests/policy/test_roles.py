@@ -671,6 +671,31 @@ def test_vm_reservation_on_the_ephemeral_pool(tmp_path):
     assert properties["reservation"] == "200G" and "refreservation" not in properties
 
 
+@pytest.mark.parametrize(
+    ("local_yml", "extra", "kept_gib"),
+    [
+        pytest.param(None, CLUSTER_ARGS, 64, id="cluster"),
+        pytest.param(
+            None,
+            (
+                "-e",
+                json.dumps(CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"system_disk_gib": 80}}}),
+            ),
+            80,
+            id="bigger-worker",
+        ),
+        pytest.param(example_without_kubernetes(), (), 0, id="no-cluster"),
+    ],
+)
+def test_the_ephemeral_vm_dataset_keeps_room_for_the_worker(tmp_path, local_yml, extra, kept_gib):
+    """With a NAS and a cluster, the worker's system disk goes on the ephemeral class's dataset, which keeps its size
+    for it (a refreservation): the media and the project pools share its pool and its parent's quota, and a worker
+    whose disk cannot grow pauses. Without a cluster it keeps nothing, sent as 0, so it goes when the cluster does."""
+    expression = "(truenas_datasets | selectattr('name', 'equalto', 'ephemeral/proxmox/vm') | first).properties"
+    properties = resolve_on(example_tree(tmp_path, local_yml), "truenas", expression, *extra)
+    assert properties == {"sync": "DISABLED", "recordsize": "64K", "refreservation": kept_gib * 2**30}
+
+
 def test_pool_names_follow_local_yml(tmp_path):
     """The pools are named by class unless local.yml names them otherwise, and every pool, dataset, share and
     Proxmox export follows those names, so no tracked file has to name anyone's hardware."""
@@ -991,17 +1016,19 @@ def without(settings, *names):
         ),
         pytest.param(
             None,
-            CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"data_disk_gib": 737}}},
+            CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"data_disk_gib": 705}}},
             [
-                "With a NAS, homeserver-worker-1's data disk and homeserver-cp-1's system disk (769 GiB together) go "
-                "on the NAS's persistent VM dataset, whose quota of 1024 GiB (vm_storage_persistent_quota_gib in "
-                "group_vars/all/storage.yml) also holds their snapshots"
+                "With a NAS, homeserver-worker-1's data disk, homeserver-cp-1's system disk and Home Assistant's disk "
+                "(769 GiB together) go on the NAS's persistent VM dataset, whose quota of 1024 GiB "
+                "(vm_storage_persistent_quota_gib in group_vars/all/storage.yml) also holds their snapshots and any "
+                "other persistent VM: before the VMs exist, keep their sizes in kubernetes_node_sizes and haos_size to "
+                "at most 768 GiB together; once they do, since a disk is never shrunk, raise the quota instead"
             ],
             id="nas-persistent-disks-above-the-quota",
         ),
         pytest.param(
             None,
-            CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"data_disk_gib": 736}}},
+            CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"data_disk_gib": 704}}},
             [],
             id="nas-persistent-disks-within-the-quota",
         ),

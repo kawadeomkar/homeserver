@@ -6,7 +6,7 @@
 # import_from}), net ({bridge, mac}), and optionally machine, bios, efidisk_storage, cpu, scsihw, iso, boot,
 # watchdog ({model, action}), onboot, startup, tags, hostpci ([{mapping, pcie}]), usb ([{host or mapping, usb3}]),
 # import_working_storage (where Proxmox extracts a disk out of an OVA) and start. A VM is created once, then
-# corrected; a disk is only ever grown, and moved only when asked.
+# corrected; a disk is only ever grown, and moved only when asked, the EFI disk too.
 proxmox_vm_vms: []
 # ISOs to download into a storage, each: storage, filename, url and sha256, which Proxmox checks before storing the
 # file. Never deleted.
@@ -33,8 +33,8 @@ proxmox_vm_ignore_existing_volumes: false
 # How to run the role again with proxmox_vm_ignore_existing_volumes, which that refusal names: the play's own just
 # recipe, say. Empty: the play again with -e proxmox_vm_ignore_existing_volumes=true.
 proxmox_vm_rebuild_command: ""
-# A disk on another storage than its configuration says is refused. True moves it there with qm disk move, the VM
-# running or not, in the configured format, and deletes the old volume once the VM uses the copy.
+# A disk on another storage than its configuration says, the EFI disk too, is refused. True moves it there with qm
+# disk move, the VM running or not, in the configured format, and deletes the old volume once the VM uses the copy.
 proxmox_vm_move_disks: false
 # How to run the role again with proxmox_vm_move_disks, which that refusal names. Empty: the play again with
 # -e proxmox_vm_move_disks=true.

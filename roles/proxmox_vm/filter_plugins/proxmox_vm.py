@@ -314,10 +314,37 @@ def disks_of(config):
     return out
 
 
+def misplaced(vm, config):
+    """The disks of an existing VM that are on another storage than configured, its EFI disk among them, in the
+    order moves() moves them: {slot: (the storage configured, the format configured or None)}. drift() refuses them,
+    unless the role is told to move them. An EFI disk has no format of its own here: Proxmox keeps its format where
+    the storage takes it, and uses the storage's own where not."""
+    current = disks_of(config)
+    out = {
+        disk["slot"]: (disk["storage"], disk.get("format"))
+        for disk in vm["disks"]
+        if disk["slot"] in current and volume_storage(current[disk["slot"]][0]) != disk["storage"]
+    }
+    efi = props(config["efidisk0"], "volume")["volume"] if config.get("efidisk0") else None
+    if efi and vm.get("bios", "ovmf") == "ovmf" and volume_storage(efi) != vm["efidisk_storage"]:
+        out["efidisk0"] = (vm["efidisk_storage"], None)
+    return out
+
+
+def misplaced_refusal(vm, config, slot, storage, move_command):
+    volume = props(config[slot], "volume")["volume"]
+    return (
+        f"VM {vm['vmid']}'s {slot} is on {volume_storage(volume)}, configured on {storage}. The role moves a disk only "
+        f"when told to: to move it there, the VM running or not, run "
+        f"{move_command or 'the play again with -e proxmox_vm_move_disks=true'}; if the configuration is what is "
+        f"wrong, correct it instead"
+    )
+
+
 def drift(vm, config, move=False, move_command=""):
     """How an existing VM differs: the qm set arguments, the disks to grow, and what is refused. A disk on another
-    storage than configured is refused unless `move` is true, when moves() puts it there; `move_command` is how to run
-    the role so, which the refusal names."""
+    storage than configured, the EFI disk too, is refused unless `move` is true, when moves() puts it there;
+    `move_command` is how to run the role so, which the refusal names."""
     wanted = wanted_settings(vm)
     options, delete, resize, refused = [], [], [], []
     for key, value in wanted.items():
@@ -327,6 +354,7 @@ def drift(vm, config, move=False, move_command=""):
         if (key.startswith("hostpci") or USB_SLOT.match(key)) and key not in wanted:
             delete.append(key)
     current = disks_of(config)
+    away = misplaced(vm, config)
     wanted_slots = {disk["slot"] for disk in vm["disks"]}
     # A volume left unused, such as the disk a restore over the VM kept because the backup excluded it: a slot is
     # never filled with a new, empty disk while it may hold that slot's data.
@@ -354,13 +382,8 @@ def drift(vm, config, move=False, move_command=""):
             continue
         volume, size = current[slot]
         want = int(disk["size_gib"]) * GIB
-        if volume_storage(volume) != disk["storage"] and not move:
-            refused.append(
-                f"VM {vm['vmid']}'s {slot} is on {volume_storage(volume)}, configured on {disk['storage']}. The role "
-                f"moves a disk only when told to: to move it there, the VM running or not, run "
-                f"{move_command or 'the play again with -e proxmox_vm_move_disks=true'}; if the configuration is "
-                f"what is wrong, correct it instead"
-            )
+        if slot in away and not move:
+            refused.append(misplaced_refusal(vm, config, slot, disk["storage"], move_command))
             continue
         # Its serial and whether backups include it are the volume's options, set again on the same volume. Backups
         # include a disk unless it says backup=0.
@@ -378,6 +401,8 @@ def drift(vm, config, move=False, move_command=""):
             )
         elif size < want:
             resize.append({"vmid": str(vm["vmid"]), "name": vm["name"], "slot": slot, "size": f"{disk['size_gib']}G"})
+    if "efidisk0" in away and not move:
+        refused.append(misplaced_refusal(vm, config, "efidisk0", away["efidisk0"][0], move_command))
     for slot in sorted(set(current) - wanted_slots):
         refused.append(
             f"VM {vm['vmid']}'s {slot} ({current[slot][0]}) is not in its configuration: a disk is never detached "
@@ -392,25 +417,20 @@ def drift(vm, config, move=False, move_command=""):
 
 
 def moves(vm, config):
-    """The disks of an existing VM that are on another storage than configured, each with the `qm disk move` that puts
-    it there, in the configured format (without one Proxmox keeps the disk's own, raw onto NFS too), and deletes the
-    old volume once the VM uses the copy. Proxmox mirrors a running VM's disk while the guest goes on writing to it,
-    and copies a stopped VM's."""
-    current = disks_of(config)
+    """The disks of an existing VM that are on another storage than configured (misplaced()), its EFI disk among
+    them, each with the `qm disk move` that puts it there, in the configured format (without one Proxmox keeps the
+    disk's own where the storage takes it, raw onto NFS too), and deletes the old volume once the VM uses the copy.
+    Proxmox mirrors a running VM's disk while the guest goes on writing to it, its EFI disk too, and copies a stopped
+    VM's."""
     out = []
-    for disk in vm["disks"]:
-        slot = disk["slot"]
-        if slot not in current or volume_storage(current[slot][0]) == disk["storage"]:
-            continue
-        argv = ["qm", "disk", "move", str(vm["vmid"]), slot, disk["storage"]]
-        if disk.get("format"):
-            argv += ["--format", disk["format"]]
+    for slot, (storage, fmt) in misplaced(vm, config).items():
+        argv = ["qm", "disk", "move", str(vm["vmid"]), slot, storage, *(["--format", fmt] if fmt else [])]
         out.append(
             {
                 "vmid": str(vm["vmid"]),
                 "name": vm["name"],
                 "slot": slot,
-                "storage": disk["storage"],
+                "storage": storage,
                 "argv": [*argv, "--delete", "1"],
             }
         )
@@ -483,6 +503,7 @@ def plan(vms, facts):
         if int(entry.get("enabled", 1) or 0) == 1 and int(entry.get("active") or 0) != 1
     )
     rebuild = facts.get("rebuild_command") or "the play again with -e proxmox_vm_ignore_existing_volumes=true"
+    move = bool(facts.get("move_disks"))
     for vm in vms:
         vmid = str(vm["vmid"])
         found = qemu.get(vmid)
@@ -524,7 +545,6 @@ def plan(vms, facts):
             )
             continue
         current = (facts.get("configs") or {}).get(vmid, {})
-        move = bool(facts.get("move_disks"))
         options, resize, refused = drift(vm, current, move, facts.get("move_command") or "")
         errors += refused
         changes = [option[2:] for option in options if option.startswith("--") and option != "--delete"]
@@ -565,20 +585,21 @@ def plan(vms, facts):
     # budgeted to the last byte would fill the host's root filesystem as they fill. A directory or BTRFS storage's size
     # is its filesystem's, which the host's own files share in the same way. host_headroom keeps room for them. A disk
     # moved from another storage counts whole on its new one, and still on its old one, which holds it until the copy
-    # is done.
+    # is done. One that is refused, the role not being told to move it, counts nowhere new.
     types = {entry["storage"]: entry.get("type") for entry in config}
     additions = {}
     for vm in vms:
         vmid = str(vm["vmid"])
         creating = any(c["vmid"] == vmid for c in result["create"])
-        current = disks_of((facts.get("configs") or {}).get(vmid, {})) if not creating else {}
-        if creating and vm.get("bios", "ovmf") == "ovmf":
+        found = (facts.get("configs") or {}).get(vmid, {}) if not creating else {}
+        current, away = disks_of(found), misplaced(vm, found)
+        if vm.get("bios", "ovmf") == "ovmf" and (creating or ("efidisk0" in away and move)):
             additions[vm["efidisk_storage"]] = additions.get(vm["efidisk_storage"], 0) + EFI_DISK_BYTES
         for disk in vm["disks"]:
+            if disk["slot"] in away and not move:
+                continue
             want = int(disk["size_gib"]) * GIB
-            volume, have = current.get(disk["slot"], (None, 0))
-            if volume is not None and volume_storage(volume) != disk["storage"]:
-                have = 0
+            have = 0 if disk["slot"] in away else current.get(disk["slot"], (None, 0))[1]
             if want > have:
                 additions[disk["storage"]] = additions.get(disk["storage"], 0) + want - have
     for storage, added in sorted(additions.items()):

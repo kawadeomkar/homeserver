@@ -272,6 +272,54 @@ class TestMoves:
         assert len(result["errors"]) == 1, result["errors"]
         assert "provisioned at 112 GiB (80 GiB there now, 32 GiB more" in result["errors"][0]
 
+    def test_a_refused_disk_adds_nothing_to_the_budget(self):
+        """Not told to move it, the role refuses the disk, and says nothing of a budget it would not touch."""
+        on_nas = config(scsi0="nas:300/vm-300-disk-0.qcow2,discard=on,serial=sys,size=32G,ssd=1")
+        other = {"volid": "local-lvm:vm-200-disk-0", "content": "images", "size": 80 * GIB}
+        result = pv.plan(
+            [vm()],
+            facts(storage_config=[*STORAGE, NAS], configs={"300": on_nas}, contents={"local-lvm": [other]}),
+        )
+        assert len(result["errors"]) == 1 and "The role moves a disk only when told to" in result["errors"][0]
+
+    def test_an_efi_disk_on_another_storage_is_refused(self):
+        """Left behind on a NAS that goes, it would keep the VM from starting."""
+        found = config(efidisk0="nas:300/vm-300-disk-0.qcow2,efitype=4m,pre-enrolled-keys=0,size=528K")
+        result = pv.plan([vm()], facts(storage_config=[*STORAGE, NAS], configs={"300": found}))
+        assert result["move"] == [] and result["set"] == []
+        assert result["errors"] == [
+            "VM 300's efidisk0 is on nas, configured on local-lvm. The role moves a disk only when told to: to move "
+            "it there, the VM running or not, run the play again with -e proxmox_vm_move_disks=true; if the "
+            "configuration is what is wrong, correct it instead"
+        ]
+
+    def test_an_efi_disk_moves_after_the_disks_in_the_format_proxmox_picks(self):
+        found = config(efidisk0="local-lvm:vm-300-disk-0,efitype=4m,pre-enrolled-keys=0,size=4M")
+        result = pv.plan(
+            [vm(disks=ON_NAS, efidisk_storage="nas")],
+            facts(storage_config=[*STORAGE, NAS], configs={"300": found}, move_disks=True),
+        )
+        assert result["errors"] == []
+        assert [m["argv"] for m in result["move"]] == [
+            MOVE,
+            ["qm", "disk", "move", "300", "efidisk0", "nas", "--delete", "1"],
+        ]
+        assert result["summary"] == {"node-1": ["move scsi0 to nas", "move efidisk0 to nas"]}
+
+    def test_an_efi_disk_moved_onto_a_budgeted_storage_counts(self):
+        found = config(efidisk0="nas:300/vm-300-disk-0.qcow2,efitype=4m,pre-enrolled-keys=0,size=528K")
+        full = {"volid": "local-lvm:vm-200-disk-0", "content": "images", "size": 68 * GIB}
+        result = pv.plan(
+            [vm()],
+            facts(
+                storage_config=[*STORAGE, NAS],
+                configs={"300": found},
+                contents={"local-lvm": [full, *facts()["contents"]["local-lvm"]]},
+                move_disks=True,
+            ),
+        )
+        assert len(result["errors"]) == 1 and result["errors"][0].startswith("local-lvm: its disks would be"), result
+
 
 class TestPlan:
     def test_a_missing_vm_is_created_and_started(self):

@@ -8,8 +8,8 @@ argument_specs:
         image and grown to its size, and on later runs corrects its cores, memory, CPU type, ballooning,
         start-on-boot, startup order, watchdog, agent, tags, PCI and USB devices and CD-ROM, adds a configured disk
         it lacks and grows a disk configured larger. Starts a stopped VM marked start.
-      - Moves a disk that is on another storage than configured only with proxmox_vm_move_disks, and refuses it
-        otherwise.
+      - Moves a disk that is on another storage than configured, its EFI disk too, only with proxmox_vm_move_disks,
+        and refuses it otherwise.
       - Never shrinks or detaches a disk, never deletes a VM or an ISO, and never restarts a VM; a setting that waits
         for a restart is reported.
       - Refuses a VMID that belongs to another VM, a missing VM whose VMID still has disks or backups, a disk
@@ -75,9 +75,9 @@ argument_specs:
         type: bool
         default: false
         description: >-
-          Move a disk that is on another storage than configured there, with qm disk move, the VM running or not, in
-          the configured format, deleting the old volume once the VM uses the copy. Without it, such a disk is
-          refused.
+          Move a disk that is on another storage than configured there, its EFI disk too, with qm disk move, the VM
+          running or not, in the configured format, deleting the old volume once the VM uses the copy. Without it,
+          such a disk is refused.
       proxmox_vm_move_command:
         type: str
         default: ""

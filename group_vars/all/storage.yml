@@ -74,8 +74,8 @@ nas_pools:
 
 # The storage the Proxmox installer created, for the VM disks that stay on the host: local-lvm on an LVM install,
 # or whatever local.yml names as proxmox_local_vm_storage (local-zfs on a ZFS install), a blank value counting as
-# unset. Without a NAS it is the ephemeral class, and the only VM storage there is; in both setups the cluster's
-# system disks go on it (group_vars/all/kubernetes.yml). proxmox_local_vm_storage is read here and never set: a
+# unset. Without a NAS it is the ephemeral class, and the only VM storage there is; with one the cluster's EFI
+# disks still go on it (group_vars/proxmox/vms.yml). proxmox_local_vm_storage is read here and never set: a
 # group_vars/all/ directory is read alphabetically and the last file wins, so a value set in this file would
 # silently override local.yml's.
 vm_storage_installer: "{{ (proxmox_local_vm_storage | default('', true) | string | trim) or 'local-lvm' }}"
@@ -103,9 +103,9 @@ vm_storage_ephemeral_reservation: null
 
 # The most the persistent VMs' disks may take on the redundant pool, their snapshots included, with a NAS: a quota
 # on the persistent class's dataset, in GiB. The pool also holds the VMs' backups, which a full pool would stop,
-# and a thin qcow2 disk only grows. The cluster's settings check refuses its worker's data disk and its control
-# plane's system disk above three quarters of it together, leaving the rest for their snapshots and the other
-# persistent VMs. Set here, not in local.yml.
+# and a thin qcow2 disk only grows. The cluster's settings check refuses its worker's data disk, its control
+# plane's system disk and Home Assistant's disk above three quarters of it together, leaving the rest for their
+# snapshots and any other persistent VM. Set here, not in local.yml.
 vm_storage_persistent_quota_gib: 1024
 
 # The VMs' backups, with a NAS: a dataset on the redundant pool, exported to the Proxmox host and mounted as a

@@ -129,8 +129,10 @@ there with `qm disk move <vmid> <slot> <storage> --delete 1`, with `--format` wh
 Proxmox keeps the disk's own format, raw onto NFS too). Proxmox mirrors a running VM's disk while the guest goes on
 writing to it and switches the VM to the copy, or copies a stopped VM's, then deletes the old volume. The VM is
 never stopped for it. The disk keeps its slot and options, so the guest sees the same device, and the disk budget
-counts it whole on its new storage. A dry run lists `move <slot> to <storage>` under the VM. An EFI disk is never
-moved: its storage counts only when the VM is created.
+counts it whole on its new storage. A dry run lists `move <slot> to <storage>` under the VM. An EFI disk on another
+storage than `efidisk_storage` is refused and moved the same way, after the VM's other disks, without `--format`:
+Proxmox keeps its format where the storage takes it and uses the storage's own where not. Left behind on a storage
+that goes, it would keep the VM from starting.
 
 ## Shutting VMs down and starting them
 
