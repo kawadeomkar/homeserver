@@ -150,7 +150,8 @@ class Progress:
     early). Once every host is read, what is left follows. A section printed early is the one the report play's own
     text has, since it depends on nothing that is not read yet (tests/unit/test_status_filters.py checks it). It
     prints nothing more after a host failed, which leaves the run without a report. `filters` is the filter's module,
-    `settings` what status.yml's first play says (setup, types, read_at, now, admin, commands, hosts by label)."""
+    `settings` what status.yml's first play says (setup, types, read_at, now, admin, commands, deploy, hosts by
+    label)."""
 
     def __init__(self, filters, settings, color=False):
         self.f, self.settings, self.color = filters, settings, color
@@ -200,6 +201,7 @@ class Progress:
             admin=settings.get("admin") or [],
             commands=settings.get("commands") or {},
             now=settings.get("now") or 0,
+            deploy=settings.get("deploy") or {},
         )
 
     def blocks(self):

@@ -62,3 +62,15 @@
   roles:
     - role: talos
     - role: flux_bootstrap
+
+# The version this run came from, in the Notes of the cluster's VMs (roles/proxmox_notes, group_vars/proxmox/notes.yml).
+# A play of its own on the Proxmox host, last: a failure above ends the run before it, so only a run that built
+# everything leaves the stamp. Without a cluster there are no VMs to stamp.
+- name: Stamp the cluster's VMs with the version deployed
+  hosts: proxmox
+  gather_facts: false
+  vars:
+    homeserver_deployed_by: just deploy kubernetes
+    proxmox_notes_vmids: "{{ proxmox_vm_vms | map(attribute='vmid') | map('int') | list }}"
+  roles:
+    - role: proxmox_notes

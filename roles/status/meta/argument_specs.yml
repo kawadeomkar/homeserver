@@ -7,7 +7,9 @@ argument_specs:
         status_found for the report entry point. Every command goes through the role's module status_read, which
         runs them at once and refuses any that is not on its read list.
       - On the Proxmox host (proxmox) it reads the host, its storages and the VMs of status_vms; every other VM is
-        only counted.
+        only counted. With status_notes_marker it reads each one's version stamp too, from the Notes of the node and
+        of each VM, and asks git on this machine, in status_checkout, where each stamp's commit lies against
+        status_deploy's.
       - For the cluster (cluster), on this machine, it reads the nodes, the apps (each Ingress's Service, then the
         Deployment it selects, and every Deployment a Flux Kustomization under status_cluster_apps_path applies),
         Flux, the certificates, the nodes' kubelet statistics, Alertmanager's alerts, etcd's state and the newest
@@ -90,6 +92,12 @@ argument_specs:
         type: str
         default: ""
         description: The Proxmox node's name; empty takes the host's short hostname.
+      status_notes_marker:
+        type: str
+        default: ""
+        description: >-
+          The word that marks the version stamp's block in the Notes of the host and of this setup's VMs
+          (roles/proxmox_notes), whose begin marker carries the commit; empty reads none.
       status_budget_storages:
         type: list
         elements: str
@@ -254,7 +262,17 @@ argument_specs:
         description: >-
           The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials,
           allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale,
-          tailscale_login, split_dns. One left out is suggested by text alone.
+          tailscale_login, split_dns, deploy_host. One left out is suggested by text alone.
+      status_deploy:
+        type: dict
+        default: {}
+        description: >-
+          This checkout's version, {commit, describe, date}, which each machine's version stamp is placed against;
+          empty compares none.
+      status_checkout:
+        type: str
+        default: ""
+        description: The checkout's directory, where git on this machine says where a stamp's commit lies.
   report:
     short_description: Put just status's findings together, write the report and show it
     description:
@@ -262,6 +280,8 @@ argument_specs:
         the report to status_report_file as JSON, mode 0600, and shows it as text, unless status_quiet.
       - Writes the report in a dry run too, since just status runs as one and takes its exit code from the file.
       - What each host found includes what its apps' addresses answered, which the main entry point asks.
+      - Places each machine's version stamp against status_deploy, from what git said of each stamp's commit,
+        which the main entry point asks.
     options:
       status_types:
         type: list
@@ -310,4 +330,10 @@ argument_specs:
         description: >-
           The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials,
           allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale,
-          tailscale_login, split_dns. One left out is suggested by text alone.
+          tailscale_login, split_dns, deploy_host. One left out is suggested by text alone.
+      status_deploy:
+        type: dict
+        default: {}
+        description: >-
+          This checkout's version, {commit, describe, date}, which each machine's version stamp is placed against
+          (current, behind, ahead, from another branch, from uncommitted files); empty compares none.

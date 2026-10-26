@@ -124,27 +124,37 @@ waits for a reboot, which is then done by hand.
 app (its state, version and URLs, with what each answered from this machine, through Traefik's address whatever DNS
 says, and how they answer from the tailnet), the admin pages (on the tailnet too), the Proxmox host's Tailscale (its
 tailnet name, routes, guard, forwarding and preferences), each of this setup's VMs (CPU over the last day, memory and
-disks: a node's from kubelet, Home Assistant's from its guest agent), each storage's use with the worker's own volumes,
-the backups (the nightly job and its next run, each VM's newest backup with its size and how many are kept, why a run
-failed, and the cluster's etcd snapshots), the cluster (nodes, pins, Flux's commit against the branch, addresses, GPU,
-TLS, credentials, alerts), and the NAS (pools, snapshot tasks, NFS, alerts), then, last, above its exit line, what needs
-doing, each with the command that deals with it (an app failing or waiting for its Secret, apps `just suspend` stopped,
-Traefik's allowed range still closed, DNS missing for the apps' names, a reboot an upgrade asked for, upgrades waiting,
-a VM stopped or waiting for a restart, a storage filling up or provisioned beyond its size, a VM's backup that failed or
-was missed, the backup job not as configured or missing, a node not Ready, etcd or Flux in trouble, the nodes behind the
-pins, a certificate or credential running out, Alertmanager's firing alerts, Tailscale down, unguarded or with a route
-not approved, the tailnet's split DNS missing, a NAS pool degraded, filling up or behind on its scrub, a snapshot task
-failing, TrueNAS's own alerts). On a terminal, each section shows as soon as the machines it needs are read, always in
-the same order, with a line for each still to come, and the line on what is being read, kept up to date below. `just
-status vms storage` shows some sections (of apps, admin, tailscale, vms, storage, backups, cluster and nas), reading
-only the machines they need, and `--json` prints the report as JSON. It exits with the report's own code: 0 when nothing
-is wrong, 1 for a problem, 2 when a source could not be read, 3 when the run failed; the code also ends its last line
-and is the `exit` field of `--json`. Another project's VMs on the host are counted, never named. It reads no Secret and
-checks no certificate, and never uses a kubeconfig of another cluster.
+disks: a node's from kubelet, Home Assistant's from its guest agent, and the version each was deployed from, as the
+host's too), each storage's use with the worker's own volumes, the backups (the nightly job and its next run, each VM's
+newest backup with its size and how many are kept, why a run failed, and the cluster's etcd snapshots), the cluster
+(nodes, pins, Flux's commit against the branch, addresses, GPU, TLS, credentials, alerts), and the NAS (pools, snapshot
+tasks, NFS, alerts), then, last, above its exit line, what needs doing, each with the command that deals with it (an app
+failing or waiting for its Secret, apps `just suspend` stopped, Traefik's allowed range still closed, DNS missing for
+the apps' names, a reboot an upgrade asked for, upgrades waiting, a VM stopped or waiting for a restart, a storage
+filling up or provisioned beyond its size, a VM's backup that failed or was missed, the backup job not as configured or
+missing, a node not Ready, etcd or Flux in trouble, the nodes behind the pins, a certificate or credential running out,
+Alertmanager's firing alerts, Tailscale down, unguarded or with a route not approved, the tailnet's split DNS missing, a
+NAS pool degraded, filling up or behind on its scrub, a snapshot task failing, TrueNAS's own alerts). On a terminal,
+each section shows as soon as the machines it needs are read, always in the same order, with a line for each still to
+come, and the line on what is being read, kept up to date below. `just status vms storage` shows some sections (of apps,
+admin, tailscale, vms, storage, backups, cluster and nas), reading only the machines they need, and `--json` prints the
+report as JSON. It exits with the report's own code: 0 when nothing is wrong, 1 for a problem, 2 when a source could not
+be read, 3 when the run failed; the code also ends its last line and is the `exit` field of `--json`. Another project's
+VMs on the host are counted, never named. It reads no Secret and checks no certificate, and never uses a kubeconfig of
+another cluster.
 
 Whatever follows the playbook goes to ansible-playbook as typed, so a variable for one run is
 `just deploy kubernetes -e talos_allow_bootstrap=true`, and one host's play `just deploy proxmox --limit homeserver`.
 `just deploy` alone runs every playbook; to pass anything with it, name `site`: `just check site --tags truenas_nfs`.
+
+Every run says which version of this repository it runs (`Version: homeserver 2026.11.0-3-g5de78852f353 (committed
+2026-10-24)`), the commit that last changed a file Ansible may read, and its log's first line says the same. Each
+deploy stamps it in the Proxmox Notes of the machines it deployed: the host's, Home Assistant's VM's and the cluster's
+VMs', shown on each one's Summary in the web UI, beside any notes of your own. `just status` shows every stamp
+against this checkout's version, and says which machine a deploy would bring up to date. A real `just deploy` refuses
+a tree that is no git checkout, and uncommitted changes to what Ansible reads unless given `--allow-dirty` after the
+playbook (`just deploy proxmox --allow-dirty`), so that every stamp names a commit. Tags name commits:
+`scripts/runbooks/tags.md` says how to cut one.
 
 Alert e-mail is optional: with `truenas_mail_server` and `truenas_alert_email` in `local.yml`, and the server's
 password in the vault as `vault_truenas_mail_password` (`just vault`), the NAS mails its warnings, a

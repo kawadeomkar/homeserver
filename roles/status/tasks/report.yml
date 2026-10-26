@@ -9,8 +9,8 @@
     status_findings: >-
       {{ status_hosts | map('extract', hostvars) | map(attribute='status_found', default={}) | list | status_merge }}
 
-# When it was read: status_read_at and status_now, as just status's callback has them to show each section as soon as
-# it is read, else now.
+# When it was read, status_read_at and status_now (else now), and this checkout's version, status_deploy, as just
+# status's callback has them to show each section as soon as it is read.
 - name: report | Rank what needs attention
   ansible.builtin.set_fact:
     status_report: >-
@@ -18,7 +18,7 @@
          | status_report(status_setup, status_types,
                          status_read_at or now().strftime('%Y-%m-%d %H:%M %Z') | trim,
                          admin=status_admin, commands=status_commands,
-                         now=status_now or now().timestamp() | int) }}
+                         now=status_now or now().timestamp() | int, deploy=status_deploy) }}
 
 - name: report | Write the report
   when: status_report_file | length > 0

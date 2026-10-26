@@ -1,9 +1,11 @@
-"""The ruleset body and the workflow agree on the gate.
+"""The ruleset bodies, and the workflow agreeing with them on the gate.
 
 .github/rulesets/main.json is applied to the "Protect main" ruleset by hand, and GitHub never reads the file.
 If it named a check the workflow does not report, every pull request would wait on it forever; if the workflow
 added a job that ci-success does not wait for, that job could fail and the pull request still merge. ci-success
-also lets a job be skipped only if it is skipped on pushes alone, so no pull request can skip it.
+also lets a job be skipped only if it is skipped on pushes alone, so no pull request can skip it. Pull requests
+merge with merge commits alone, so the count git describe gives after a tag (--first-parent) is merges on main.
+.github/rulesets/tags.json, applied by hand too (scripts/runbooks/tags.md), makes every pushed tag write-once.
 """
 
 import json
@@ -41,6 +43,21 @@ def test_ruleset_protects_the_default_branch():
     assert body["conditions"]["ref_name"]["include"] == ["~DEFAULT_BRANCH"]
     assert body["bypass_actors"] == []
     assert {"deletion", "non_fast_forward", "pull_request"} <= {rule["type"] for rule in body["rules"]}
+
+
+def test_pull_requests_merge_with_merge_commits_alone():
+    rules = {rule["type"]: rule.get("parameters", {}) for rule in ruleset()["rules"]}
+    assert rules["pull_request"]["allowed_merge_methods"] == ["merge"]
+
+
+def test_every_tag_is_write_once():
+    body = json.loads((ROOT / ".github" / "rulesets" / "tags.json").read_text())
+    # The name scripts/runbooks/tags.md knows it by.
+    assert body["name"] == "Protect tags"
+    assert (body["target"], body["enforcement"]) == ("tag", "active")
+    assert body["conditions"]["ref_name"] == {"exclude": [], "include": ["~ALL"]}
+    assert body["bypass_actors"] == []
+    assert sorted(rule["type"] for rule in body["rules"]) == ["deletion", "non_fast_forward", "update"]
 
 
 def test_gate_waits_for_every_other_job_even_when_one_fails():

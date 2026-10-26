@@ -96,18 +96,21 @@ KUBECTL = ["kubectl", "--kubeconfig", CONFIG, r"--request-timeout=[1-9][0-9]?s"]
 # A repository git can list over HTTPS or SSH, never through a transport that runs a command (ext::) or a local path.
 GIT_URL = r"(https://|ssh://)[A-Za-z0-9._~:/@%+=-]+|git@[A-Za-z0-9.-]+:[A-Za-z0-9._~/-]+"
 GIT_REF = r"refs/(heads|tags)/[A-Za-z0-9._/-]+"
+COMMIT = r"[0-9a-f]{40}"
 
 # Every command this module runs, as one regular expression per argument. Nothing here writes, and nothing returns
-# a secret: no other pvesh path (the backup jobs, the backup tasks and their logs, and when a schedule next fires
-# among them), no qm guest command beyond these three reads, apt-get only simulating, kubectl only
-# listing kinds that hold no secret (the Deployments with the times each field was set), one ConfigMap, a node's
-# kubelet statistics and Alertmanager's alerts, talosctl only the etcd service's state (talosctl get could read the
-# machine configuration, every key of the cluster), and git only the commit a branch points at.
+# a secret: no other pvesh path (the backup jobs, the backup tasks and their logs, when a schedule next fires, and the
+# node's own configuration, which holds its Notes, among them), no qm guest command beyond these three reads, apt-get
+# only simulating, kubectl only listing kinds that hold no secret (the Deployments with the times each field was set),
+# one ConfigMap, a node's kubelet statistics and Alertmanager's alerts, talosctl only the etcd service's state
+# (talosctl get could read the machine configuration, every key of the cluster), and git only the commit a branch
+# points at, and whether one commit comes before another in this checkout's history.
 READS = [
     ["hostname", "-s"],
     ["test", "-e", PATH],
     ["pvesh", "get", "/cluster/resources", *JSON],
     ["pvesh", "get", f"/nodes/{NODE}/status", *JSON],
+    ["pvesh", "get", f"/nodes/{NODE}/config", *JSON],
     ["pvesh", "get", f"/nodes/{NODE}/rrddata", *DAY, *JSON],
     ["pvesh", "get", f"/nodes/{NODE}/qemu/{VMID}/rrddata", *DAY, *JSON],
     ["pvesh", "get", f"/nodes/{NODE}/qemu/{VMID}/pending", *JSON],
@@ -141,6 +144,7 @@ READS = [
     ],
     ["talosctl", "--talosconfig", CONFIG, "service", "etcd"],
     ["git", "ls-remote", GIT_URL, GIT_REF],
+    ["git", "-C", CONFIG, "merge-base", "--is-ancestor", COMMIT, COMMIT],
     # This machine's own Tailscale: where the tailnet's split DNS sends the apps' domain.
     ["tailscale", "dns", "status", "--json"],
 ]
@@ -156,9 +160,10 @@ def allowed(argv):
 
 
 def run_one(argv, timeout):
-    """One command's result. C and UTF-8, so that tools whose output is parsed never print it translated, and git
-    never asks for a password, which would wait on a terminal that is not there."""
-    env = {**os.environ, "LC_ALL": "C.UTF-8", "LANG": "C.UTF-8", "GIT_TERMINAL_PROMPT": "0"}
+    """One command's result. C and UTF-8, so that tools whose output is parsed never print it translated; git never
+    asks for a password, which would wait on a terminal that is not there, and never fetches a commit it lacks, as
+    merge-base would in a partial clone, reaching the network and writing objects (GIT_NO_LAZY_FETCH, git 2.44)."""
+    env = {**os.environ, "LC_ALL": "C.UTF-8", "LANG": "C.UTF-8", "GIT_TERMINAL_PROMPT": "0", "GIT_NO_LAZY_FETCH": "1"}
     start = time.monotonic()
     try:
         proc = subprocess.run(

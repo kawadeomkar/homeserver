@@ -141,6 +141,73 @@ def pending_keys(entries):
     return sorted(e["key"] for e in entries or [] if isinstance(e, dict) and ("pending" in e or "delete" in e))
 
 
+# A version stamp's values, as the begin marker of roles/proxmox_notes's block carries them
+# (group_vars/proxmox/notes.yml): the commit, its describe string (git describe's after a 20YY.M.PATCH tag, or the
+# commit alone, its 12 digits or more if git needed them, -dirty for uncommitted changes) and its date. Each is
+# matched whole, as the justfile's _deploy_version checks them.
+STAMP_COMMIT = re.compile(r"[0-9a-f]{40}")
+STAMP_DESCRIBE = re.compile(
+    r"(20[0-9]{2}\.([1-9]|1[0-2])\.(0|[1-9][0-9]*)(-[0-9]+-g[0-9a-f]{12,40})?|[0-9a-f]{12,40})(-dirty)?"
+)
+STAMP_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+# A fenced code block's fence, as roles/proxmox_notes's filter reads one.
+STAMP_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
+
+
+def _stamp_markers(lines, marker):
+    """(begins, ends, open): the block's begin and end markers by roles/proxmox_notes's own rule (its filter's
+    markers()), so that the two never disagree on what a block is: a line of its own from the first column, outside
+    any fenced code block; and whether the Notes end inside a fence."""
+    begin = re.compile(rf"<!-- {re.escape(marker)}:begin( [^\n]*)? -->")
+    end = f"<!-- {marker}:end -->"
+    fence, begins, ends = "", [], []
+    for i, line in enumerate(lines):
+        found_fence = STAMP_FENCE.match(line)
+        if fence:
+            closing = found_fence and found_fence.group(1)[0] == fence[0] and len(found_fence.group(1)) >= len(fence)
+            if closing and not line[found_fence.end() :].strip():
+                fence = ""
+        elif found_fence:
+            fence = found_fence.group(1)
+        elif begin.fullmatch(line.rstrip()):
+            begins.append(i)
+        elif line.rstrip() == end:
+            ends.append(i)
+    return begins, ends, bool(fence)
+
+
+def stamp(notes, marker):
+    """The version a deploy stamped in a machine's Notes: {commit, describe, date} from the begin marker of
+    roles/proxmox_notes's block, or None without one. A value of any other shape is left out, and a stamp without a
+    commit is none. Notes the role would refuse to write, a marker without its partner, two blocks or no block in
+    Notes that end inside a fenced code block, are {broken: why}, since the next deploy refuses them."""
+    if not marker:
+        return None
+    lines = str(notes or "").split("\n")
+    begins, ends, open_fence = _stamp_markers(lines, marker)
+    if not begins and not ends:
+        return {"broken": "they end inside a code block, a fence never closed"} if open_fence else None
+    if len(begins) != 1 or len(ends) != 1 or begins[0] > ends[0]:
+        return {"broken": f"{len(begins)} begin markers and {len(ends)} end markers"}
+    found = re.fullmatch(rf"<!-- {re.escape(marker)}:begin( [^\n]*)? -->", lines[begins[0]].rstrip())
+    pairs = dict(p.split("=", 1) for p in (found.group(1) or "").split() if "=" in p)
+    commit = pairs.get("commit", "")
+    if not STAMP_COMMIT.fullmatch(commit):
+        return None
+    describe, date = pairs.get("describe", ""), pairs.get("date", "")
+    return {
+        "commit": commit,
+        "describe": describe if STAMP_DESCRIBE.fullmatch(describe) else commit[:12],
+        "date": date if STAMP_DATE.fullmatch(date) else "",
+    }
+
+
+def _notes(pending):
+    """A VM's Notes, from the list .../pending gives of its current settings."""
+    entries = (e for e in pending or [] if isinstance(e, dict) and e.get("key") == "description")
+    return next((e.get("value", "") for e in entries), "")
+
+
 INST = re.compile(r"^Inst (\S+) (?:\[(\S+)\] )?\((\S+)")
 
 
@@ -154,17 +221,19 @@ def upgrades(text):
     return out
 
 
-def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file="", backup_jobs=()):
+def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file="", backup_jobs=(), notes_marker=""):
     """What the Proxmox host's reads say, as the report needs it.
 
     `found` is {unread, node, results}: why the host could not be read at all (else ""), the node's name, and
-    status_read's results by name (resources, node, rrd-node, rrd-<vmid>, pending-<vmid>, fsinfo-<vmid>,
+    status_read's results by name (resources, node, node-config, rrd-node, rrd-<vmid>, pending-<vmid>, fsinfo-<vmid>,
     osinfo-<vmid>, network-<vmid>, content-<storage>, updates, reboot, and for the backups backup-jobs,
     backup-tasks, backups-<storage>, schedule-<job> and log-<upid>). `vms` is this repo's VMs, each {vmid, name,
     made_by, start, guest_agent, node, app}: `node` the cluster node it is, `app` {name, url, port} the app it serves
     (its address from its guest agent when `url` is empty); every other VM on the host is only counted. Storages in
     `budget_storages` show their disk budget. `backup_jobs` is the backup jobs this setup has, as roles/proxmox_backup
-    takes them ({id, schedule, storage, vmid, enabled}), checked against the host's.
+    takes them ({id, schedule, storage, vmid, enabled}), checked against the host's. With `notes_marker`, each of
+    this repo's VMs and the host whose Notes were read carry the version stamp found there (stamp), None without one,
+    and why their Notes could not be read when the read failed (stamp_unread).
     """
     found = found or {}
     if found.get("unread"):
@@ -195,6 +264,13 @@ def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file="", back
         },
         "cpu_24h": cpu_buckets(rrd),
     }
+    # Read only for the sections that show the stamps; a read that failed is said as such, never as no stamp.
+    if notes_marker and "node-config" in results:
+        config, why = _json(results, "node-config")
+        host["stamp"] = stamp((config or {}).get("description", ""), notes_marker)
+        if config is None:
+            errors.append(f"the node's Notes: {why}")
+            host["stamp_unread"] = why
 
     guests = {int(r["vmid"]): r for r in resources if r.get("type") == "qemu" and "vmid" in r}
     ours = {int(vm["vmid"]) for vm in vms or []}
@@ -235,6 +311,10 @@ def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file="", back
                 "os": "",
                 "agent": "",
             }
+            if notes_marker and f"pending-{vmid}" in results:
+                item["stamp"] = stamp(_notes(pending), notes_marker)
+                if pending is None:
+                    item["stamp_unread"] = why
             if vm.get("guest_agent"):
                 fsinfo, why = _json(results, f"fsinfo-{vmid}")
                 osinfo, _ = _json(results, f"osinfo-{vmid}")
@@ -1290,6 +1370,102 @@ def _vm_attention(found):
     return out
 
 
+def stamp_reads(found, deploy, checkout):
+    """The reads that place each machine's version stamp against this checkout's commit: for every stamped commit but
+    the checkout's own, whether it comes before it (ancestor-<commit>) and whether it comes after it
+    (descendant-<commit>), each a git merge-base --is-ancestor in `checkout`. None without a version for the
+    checkout, as for a run of just status from a tree that is no git checkout, and none for a stamp nothing places
+    (one from uncommitted files, a VM no command of this repo deploys)."""
+    current = (deploy or {}).get("commit") or ""
+    if not STAMP_COMMIT.fullmatch(current) or not checkout:
+        return {}
+    prox = (found or {}).get("proxmox") or {}
+    stamps = [vm.get("stamp") for vm in prox.get("vms") or [] if vm.get("made_by")]
+    stamps.append((prox.get("host") or {}).get("stamp"))
+    placed = [s for s in stamps if s and s.get("commit") and not s["describe"].endswith("-dirty")]
+    out = {}
+    for commit in sorted({s["commit"] for s in placed if s["commit"] != current}):
+        out[f"ancestor-{commit}"] = ["git", "-C", checkout, "merge-base", "--is-ancestor", commit, current]
+        out[f"descendant-{commit}"] = ["git", "-C", checkout, "merge-base", "--is-ancestor", current, commit]
+    return out
+
+
+def _git_said(result):
+    """What a git read said when it failed: its error, or the last line it wrote to stderr."""
+    said = [line.strip() for line in str(result.get("stderr") or "").splitlines() if line.strip()]
+    return result.get("error") or (said[-1] if said else f"rc {result.get('rc')}")
+
+
+def deployed(found_stamp, deploy, ancestry, command, unread=""):
+    """Where a machine's version stamp lies against this checkout's commit: {commit, describe, date, state, command},
+    the state current, behind (this checkout's commit comes after it), ahead (before it), elsewhere (neither: another
+    branch's), unknown (a commit this checkout does not have, as git says of one it never fetched), unplaced (git
+    could not say: `why` says what it said), dirty (deployed from uncommitted files), broken (Notes the next deploy
+    refuses: `why` says how), never (no stamp yet), unread (its Notes could not be read: `unread` says why), or ""
+    when this checkout has no version to compare with, whatever the stamp says. checkout_dirty marks a stamp at this
+    checkout's commit when the checkout has uncommitted changes, which the machine does not run. `command` is what
+    deploys the machine."""
+    none = {"commit": "", "describe": "", "date": "", "command": command}
+    if unread:
+        return none | {"state": "unread"}
+    if not found_stamp:
+        return none | {"state": "never"}
+    if found_stamp.get("broken"):
+        return none | {"state": "broken", "why": found_stamp["broken"]}
+    current = (deploy or {}).get("commit") or ""
+    commit, why = found_stamp["commit"], ""
+    if not current:
+        state = ""
+    elif found_stamp["describe"].endswith("-dirty"):
+        state = "dirty"
+    elif commit == current:
+        state = "current"
+    else:
+        reads = [(ancestry or {}).get(f"{side}-{commit}") or {} for side in ("ancestor", "descendant")]
+        failed = [r for r in reads if r.get("rc") not in (0, 1)]
+        if any(r.get("rc") == 0 for r in reads):
+            state = "behind" if reads[0].get("rc") == 0 else "ahead"
+        elif not failed:
+            state = "elsewhere"
+        elif all(r.get("rc") == 128 and "Not a valid commit name" in str(r.get("stderr")) for r in failed):
+            state = "unknown"
+        else:
+            state, why = "unplaced", _git_said(failed[0])
+    out = {**found_stamp, "state": state, "command": command}
+    if why:
+        out["why"] = why
+    if state == "current" and str((deploy or {}).get("describe") or "").endswith("-dirty"):
+        out["checkout_dirty"] = True
+    return out
+
+
+def _stamp_attention(prox, checkout):
+    """Machines a deploy would bring to this checkout's commit: those behind it, and those deployed from uncommitted
+    files, which only a deploy from a commit names again, each group of machines that one command brings from one
+    version said once; and Notes the next deploy would refuse. From a checkout with uncommitted changes, which just
+    deploy refuses, each says to commit them first."""
+    machines = [("the host", (prox.get("host") or {}).get("deployed"))]
+    machines += [(f"{vm['vmid']} {vm['name']}".strip(), vm.get("deployed")) for vm in prox.get("vms") or []]
+    first = " (commit this checkout's changes first: just deploy refuses them)"
+    first = first if checkout.get("describe", "").endswith("-dirty") else ""
+    groups, out = {}, []
+    for label, d in machines:
+        if d and d["state"] in ("behind", "dirty"):
+            groups.setdefault((d["state"], d["command"], d["describe"]), []).append(label)
+        elif d and d["state"] == "broken":
+            text = f"{label}'s Notes hold a broken version stamp ({d['why']}): mend or remove it by hand, or the "
+            text += "next deploy refuses them"
+            out.append(_item("todo", "version", text))
+    for (state, command, describe), labels in groups.items():
+        was = "was" if len(labels) == 1 else "were"
+        if state == "behind":
+            text = f"{_and(labels)} {was} deployed from {describe}; this checkout is at {checkout.get('describe', '')}"
+        else:
+            text = f"{_and(labels)} {was} deployed from uncommitted files ({describe})"
+        out.append(_item("todo", "version", text + first, command))
+    return out
+
+
 def _fill_attention(subject, used, total):
     fraction = used / total if total else 0
     text = f"{fraction:.0%} full: {_gib(used)} of {_gib(total)} GiB"
@@ -2072,16 +2248,56 @@ def _volumes(clu):
     return out
 
 
-def report(found, setup=None, types=(), read_at="", probes=None, admin=(), commands=None, now=0, tailnet_dns=None):
+def _with_deployed(prox, deploy, ancestry, commands):
+    """The Proxmox host's findings with each stamp placed against this checkout's commit (deployed): the host's,
+    deployed by commands' deploy_host, and each of this repo's VMs', by what makes it. A VM another project made has
+    no stamp of this repo's to place, and Notes that were not read (a section not shown) none to place either."""
+    if not prox:
+        return prox
+
+    errors = list(prox.get("errors") or [])
+
+    def place(entry, command, label):
+        unread = entry.get("stamp_unread", "")
+        found_deployed = deployed(entry["stamp"], deploy, ancestry, command, unread)
+        if found_deployed["state"] == "unplaced":
+            errors.append(f"where {label}'s version stamp lies against this checkout: {found_deployed['why']}")
+        return entry | {"deployed": found_deployed}
+
+    host = prox.get("host") or {}
+    if "stamp" in host:
+        host = place(host, commands.get("deploy_host", ""), "the host")
+    vms = [
+        place(vm, vm["made_by"], f"VM {vm['vmid']}") if "stamp" in vm and vm.get("made_by") else vm
+        for vm in prox.get("vms") or []
+    ]
+    return prox | {"host": host, "vms": vms, "errors": errors}
+
+
+def report(
+    found,
+    setup=None,
+    types=(),
+    read_at="",
+    probes=None,
+    admin=(),
+    commands=None,
+    now=0,
+    tailnet_dns=None,
+    deploy=None,
+    ancestry=None,
+):
     """The report: every source's findings, the attention list ranked (sources not read, problems, things to do),
     how many problems and things to do each section has, and the exit code. `found` is {source: findings}, as
     status_merge puts the hosts' together; a source without findings was never read. `types` narrows the sections;
     empty means every one. `probes` is what status_probe saw, `found`'s own probes when not given, `admin` the admin
     pages ({name, url, and tailscale_node for the page the Proxmox host serves itself}) to list, `commands` the
     commands to suggest by purpose (upgrade, resume with {names}, talos_upgrade, credentials, allowlist, secrets, nas,
-    nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns), `now`
-    seconds since the epoch, `tailnet_dns` what tailscale dns status --json said on this machine, if it runs
-    Tailscale, `found`'s own when not given."""
+    nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns,
+    deploy_host), `now` seconds since the epoch, `tailnet_dns` what tailscale dns status --json said on this machine,
+    if it runs Tailscale, `found`'s own when not given. `deploy` is this checkout's version, {commit, describe,
+    date}, which each machine's version stamp is placed against, with what the reads stamp_reads names found
+    (`ancestry`), the Proxmox host's own when not given."""
     shown, setup, commands = types_shown(types), dict(setup or {}), dict(commands or {})
     needed = sources(types)
     found = found or {}
@@ -2093,7 +2309,9 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
         unread.append(_item("unread", "proxmox", "the Proxmox host was not read"))
     elif "proxmox" in needed and prox.get("unread"):
         unread.append(_item("unread", "proxmox", f"the Proxmox host could not be read: {prox['unread']}"))
-    prox = prox or {}
+    checkout = {k: str((deploy or {}).get(k) or "") for k in ("commit", "describe", "date")}
+    ancestry = (prox or {}).get("ancestry") if ancestry is None else ancestry
+    prox = _with_deployed(prox or {}, checkout, ancestry, commands) if prox and not prox.get("unread") else prox or {}
     clu = found.get("cluster")
     if setup.get("cluster") and "cluster" in needed:
         stopped = [
@@ -2125,7 +2343,7 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
     if "apps" in shown and readable:
         attention["apps"] += _apps_attention(rows, dns, clu, tls, commands, clu.get("kubeconfig", ""))
     if "vms" in shown and prox_read:
-        attention["vms"] += _host_attention(prox, commands) + _vm_attention(prox)
+        attention["vms"] += _host_attention(prox, commands) + _vm_attention(prox) + _stamp_attention(prox, checkout)
     volumes = _volumes(clu) if readable else []
     if "storage" in shown:
         attention["storage"] += _storage_attention((prox.get("storages") or []) if prox_read else [])
@@ -2159,6 +2377,7 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
     return {
         "read_at": read_at,
         "setup": setup,
+        "checkout": checkout,
         "types": shown,
         "exit": 2 if unread else 1 if problems else 0,
         "attention": ranked,
@@ -2171,7 +2390,10 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
         "dns": dns,
         "tls": tls,
         "admin": _admin_pages(admin, tail),
-        "proxmox": _with_guest_view({k: v for k, v in prox.items() if k != "backups"}, clu if readable else None) or {},
+        "proxmox": _with_guest_view(
+            {k: v for k, v in prox.items() if k not in ("backups", "ancestry")}, clu if readable else None
+        )
+        or {},
         "volumes": volumes,
         "backups": backed_up,
         "cluster": clu,
@@ -2521,6 +2743,44 @@ def _reach_line(model):
     return _phrases("Tailnet", phrases)
 
 
+# How each state of a version stamp is said after where it came from, and in which style.
+DEPLOYED_STATES = {
+    "current": ("this checkout's", "g"),
+    "behind": ("behind this checkout", "y"),
+    "ahead": ("ahead of this checkout", "d"),
+    "elsewhere": ("from another branch", "d"),
+    "unknown": ("not in this checkout: git fetch", "d"),
+    "unplaced": ("not placed against this checkout", "d"),
+    "dirty": ("from uncommitted files", "y"),
+    # The state current, from a checkout with uncommitted changes.
+    "current-dirty": ("this commit, without the edits here", "y"),
+    "": ("", ""),
+}
+# Where a stamp's line starts: under the machine's name.
+DEPLOYED_INDENT = 9
+
+
+def _deployed_lines(found_deployed):
+    """A machine's version stamp, under its name: where its last deploy came from, the commit's date, and how that
+    stands against this checkout."""
+    if not found_deployed:
+        return []
+    line = _Line().add(" " * DEPLOYED_INDENT)
+    if found_deployed["state"] == "never":
+        return [line.add("no version stamp yet (a whole just deploy leaves one)", "d")]
+    if found_deployed["state"] == "unread":
+        return [line.add("version stamp not read", "y")]
+    if found_deployed["state"] == "broken":
+        return [line.add("version stamp broken: mend its Notes by hand", "y")]
+    committed = f" ({found_deployed['date']})" if found_deployed.get("date") else ""
+    line.add(f"deployed from {found_deployed['describe']}{committed}", "d")
+    state = "current-dirty" if found_deployed.get("checkout_dirty") else found_deployed["state"]
+    said, style = DEPLOYED_STATES.get(state, ("", ""))
+    if said:
+        line.add(" · ", "d").add(said, style)
+    return [line]
+
+
 def _vm_lines(found):
     lines = []
     host = found["host"]
@@ -2573,6 +2833,7 @@ def _vm_lines(found):
         f"{_gib(memory['used'], 1):>4} / {_gib(memory['total'], 1)}",
         [f"root {_gib(host['root']['used'])} / {_gib(host['root']['total'])}"] if host["root"]["total"] else [],
     )
+    lines += _deployed_lines(host.get("deployed"))
     host_view = False
     for vm in vms:
         mem = vm.get("memory") or {}
@@ -2593,6 +2854,7 @@ def _vm_lines(found):
         )
         if vm.get("os"):
             lines.append(_Line().add(" " * (7 + name_width + 2)).add(vm["os"], "d"))
+        lines += _deployed_lines(vm.get("deployed"))
     other = found.get("others") or {}
     if other.get("vmids") or other.get("templates"):
         parts = []
@@ -2992,6 +3254,7 @@ class FilterModule:
     def filters(self):
         return {
             "status_proxmox": proxmox,
+            "status_stamp_reads": stamp_reads,
             "status_backup_failed_runs": backup_failed_runs,
             "status_cluster": cluster,
             "status_nas": nas,

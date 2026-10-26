@@ -1,0 +1,51 @@
+---
+argument_specs:
+  main:
+    short_description: Keep a marked block of text in the Notes of a Proxmox VE node and of its VMs, leaving the rest as it is
+    description:
+      - Writes proxmox_notes_text, between the HTML comments <!-- <marker>:begin key=value ... --> and
+        <!-- <marker>:end -->, in the Notes of the node (proxmox_notes_node) and of each VM of proxmox_notes_vmids,
+        with qm set --description and pvenode config set --description. The web UI renders Notes as Markdown and
+        hides the comments, so the metadata the begin marker carries is for tools to read back.
+      - A block already there is replaced from marker to marker, and every other line of the Notes stays as it is,
+        as typed (never expanded). A marker is a line of its own from the first column, outside any fenced code block.
+        A marker without its partner, two blocks, Notes that end inside a fenced code block and Notes longer than
+        Proxmox takes (8192 characters for a VM, 65536 for the node) are refused.
+      - Notes are compared as Proxmox gives them back (trailing whitespace trimmed), so a second run changes nothing.
+        They apply to a running VM at once, never as a pending change. Each write passes the digest of the
+        configuration as read, so Proxmox refuses it if the configuration changed since.
+      - A dry run says what it would write. A VM that does not exist yet is stamped once created in a dry run, and
+        refused in a real one.
+      - The defaults change nothing.
+    options:
+      proxmox_notes_marker:
+        type: str
+        default: ""
+        description: >-
+          The word that marks the role's block, such as the project's name: a lower-case word of letters, digits and
+          hyphens.
+      proxmox_notes_metadata:
+        type: dict
+        default: {}
+        description: >-
+          The key=value pairs the begin marker carries, hidden in the web UI: lower-case keys, one-word values of
+          letters, digits and . _ + -.
+      proxmox_notes_text:
+        type: str
+        default: ""
+        description: The block's text, Markdown as the web UI renders it, holding no HTML comment. Empty, nothing is written.
+      proxmox_notes_node:
+        type: bool
+        default: false
+        description: Whether the block goes in the node's own Notes.
+      proxmox_notes_vmids:
+        type: list
+        elements: int
+        default: []
+        description: The VMs whose Notes hold the block.
+      proxmox_notes_skip_reason:
+        type: str
+        default: ""
+        description: >-
+          What to say when there is no block to write (proxmox_notes_text empty) for Notes the role was given: why,
+          such as "this run was narrowed with --limit". Empty, nothing is said.

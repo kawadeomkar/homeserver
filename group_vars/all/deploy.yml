@@ -1,0 +1,13 @@
+---
+# The version this run comes from, as just worked it out (the justfile's _deploy_version, scripts/runbooks/tags.md):
+# commit, the newest commit that changed a file Ansible may read; describe, git describe's name for it
+# (2026.11.0-3-g<commit>, -dirty with uncommitted changes); date, its commit date. Read from the environment, which
+# just sets for every playbook run and just status, never from -e, whose values Ansible templates: a lookup's result
+# never is. Each is empty for a run started without just, or from a tree that is no git checkout, and then nothing
+# records a version. partial names the flag of a run that leaves tasks out in a way no variable of Ansible's shows
+# (--start-at-task, --step), which just sees in the run's arguments.
+homeserver_deploy:
+  commit: "{{ lookup('ansible.builtin.env', 'HOMESERVER_COMMIT', default='') }}"
+  describe: "{{ lookup('ansible.builtin.env', 'HOMESERVER_DESCRIBE', default='') }}"
+  date: "{{ lookup('ansible.builtin.env', 'HOMESERVER_COMMIT_DATE', default='') }}"
+  partial: "{{ lookup('ansible.builtin.env', 'HOMESERVER_PARTIAL', default='') }}"

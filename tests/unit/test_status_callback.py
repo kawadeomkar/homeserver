@@ -25,7 +25,8 @@ SETTINGS = {
     "read_at": "2026-10-21 14:32 PDT",
     "now": tsf.NOW,
     "admin": tsf.ADMIN_PAGES,
-    "commands": tsf.COMMANDS | tsf.TAILSCALE_COMMANDS,
+    "commands": tsf.COMMANDS | tsf.TAILSCALE_COMMANDS | tsf.DEPLOY_COMMANDS,
+    "deploy": tsf.CHECKOUT,
     "hosts": HOSTS,
 }
 
@@ -61,6 +62,7 @@ def report_text(hosts, settings=SETTINGS):
         admin=settings["admin"],
         commands=settings["commands"],
         now=settings["now"],
+        deploy=settings["deploy"],
     )
     return fs.text(model)
 

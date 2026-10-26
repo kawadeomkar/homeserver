@@ -68,9 +68,9 @@ def free_port():
         return s.getsockname()[1]
 
 
-def run(playbook, extra, check=False, env=None):
+def run(playbook, extra, check=False, env=None, args=()):
     """Run a test playbook; return (return code, {host: stats}, combined output). `env` adds to the environment,
-    such as a HOME of the test's own."""
+    such as a HOME of the test's own, and `args` to ansible-playbook's arguments."""
     # ANSIBLE_FORCE_COLOR overrides ANSIBLE_NOCOLOR, and a coloured PLAY RECAP does not match RECAP.
     environment = {k: v for k, v in os.environ.items() if k != "ANSIBLE_FORCE_COLOR"}
     environment |= {"ANSIBLE_CONFIG": str(HERE / "ansible.cfg"), "ANSIBLE_NOCOLOR": "1", **(env or {})}
@@ -83,6 +83,7 @@ def run(playbook, extra, check=False, env=None):
     ]
     if check:
         cmd.append("--check")
+    cmd += list(args)
     proc = subprocess.run(cmd, env=environment, cwd=HERE, capture_output=True, text=True, stdin=subprocess.DEVNULL)
     out = proc.stdout + proc.stderr
     stats = {
@@ -2974,3 +2975,135 @@ def test_haos_power(tmp_path):
     rc, _, out = run("haos_power.yml", down)
     assert rc != 0 and "VM quit/powerdown failed - got timeout" in out, out[-3000:]
     assert status() == "running"
+
+
+# ---------------------------------------------------------------------------------------- Proxmox Notes ---
+
+
+def deploy_env(seed, describe=None, date="2026-10-24"):
+    """The environment just gives a run: the commit (built here from `seed`), its describe string and its date."""
+    commit = hashlib.sha1(seed.encode()).hexdigest()
+    return {
+        "HOMESERVER_COMMIT": commit,
+        "HOMESERVER_DESCRIBE": describe or commit[:12],
+        "HOMESERVER_COMMIT_DATE": date,
+    }
+
+
+def notes_of(state):
+    """Each VM's Notes, and the node's, as the fake holds them."""
+    s = read(state)
+    return {vmid: vm["config"].get("description") for vmid, vm in s["vms"].items()} | {
+        "node": s["node"].get("description")
+    }
+
+
+@pytest.mark.cluster
+def test_proxmox_notes(tmp_path):
+    """The version stamp (group_vars/proxmox/notes.yml) in the Notes of the node and of two VMs: a dry run says what it
+    would write and writes nothing; a run appends the block after the owner's own text, which it never touches (a
+    $NAME and a leading ~ stay as typed, never expanded, and a line's trailing spaces stay; the node's lines Proxmox
+    trims of their trailing spaces itself, keeping a tab); the next run, and a dry run, change nothing, though Proxmox
+    gives the Notes back trimmed; a new version replaces the block alone; a run without a version (started without
+    just), or narrowed with --limit, --skip-tags, --tags or just's HOMESERVER_PARTIAL, writes nothing and says why; a
+    write after another writer's change is refused by its digest, saying Proxmox's message and never the Notes, and
+    the other's change stays; a VM that does not exist is stamped once created in a dry run and refused in a real one;
+    and a broken block is refused, never guessed at."""
+    state = tmp_path / "pve.json"
+    owner = "~/backups hold $HOME's and ${USER}'s files,  \nas typed.\n\nKept as it is."
+    vm_state(
+        state,
+        vms={
+            "300": {
+                "config": {"name": "cp", "description": owner},
+                "pending": {},
+                "status": "running",
+            },
+            "301": {"config": {"name": "worker"}, "pending": {}, "status": "stopped"},
+        },
+        node={"description": "Rack 2,\t\nbottom shelf.  \n"},
+    )
+    extra = {
+        "fake_pve_state": str(state),
+        "homeserver_deployed_by": "just deploy kubernetes",
+        "proxmox_notes_node": True,
+        "proxmox_notes_vmids": [300, 301],
+    }
+    first = deploy_env("first", describe="2026.11.0-3-g" + hashlib.sha1(b"first").hexdigest()[:12])
+    before = notes_of(state)
+
+    result = run("proxmox_notes.yml", extra, check=True, env=first)
+    expect(result, "homeserver", changed=1, note="dry run")
+    for whose in ("VM 300", "VM 301", "the node"):
+        assert f"Would write the homeserver block in the Notes of {whose}: a new block" in result[2], result[2][-3000:]
+    assert notes_of(state) == before, "a dry run wrote Notes"
+
+    expect(run("proxmox_notes.yml", extra, env=first), "homeserver", changed=2, note="first run")
+    block = (
+        f"<!-- homeserver:begin commit={first['HOMESERVER_COMMIT']} describe={first['HOMESERVER_DESCRIBE']}"
+        " date=2026-10-24 -->\n"
+        f"Deployed from homeserver `{first['HOMESERVER_DESCRIBE']}`, committed 2026-10-24. `just deploy kubernetes`"
+        " deploys it, and `just status` shows what it runs now.\n<!-- homeserver:end -->"
+    )
+    notes = notes_of(state)
+    assert notes["300"] == owner + "\n\n" + block
+    assert notes["301"] == block
+    assert notes["node"] == "Rack 2,\t\nbottom shelf.\n\n" + block
+    for check in (False, True):
+        result = run("proxmox_notes.yml", extra, check=check, env=first)
+        expect(result, "homeserver", changed=0, note=f"{'dry run' if check else 'second run'} after the first")
+
+    second = deploy_env("second")
+    result = run("proxmox_notes.yml", extra, env=second)
+    expect(result, "homeserver", changed=2, note="a new version")
+    assert f"VM 301: commit {first['HOMESERVER_COMMIT']} to {second['HOMESERVER_COMMIT']}" in result[2], result[2]
+    notes = notes_of(state)
+    assert notes["300"].startswith(owner + "\n\n<!-- homeserver:begin")
+    assert notes["300"].count("homeserver:begin") == 1 and second["HOMESERVER_COMMIT"] in notes["300"]
+    assert first["HOMESERVER_COMMIT"] not in notes["node"] and second["HOMESERVER_COMMIT"] in notes["node"]
+
+    unversioned = {name: "" for name in second}
+    for args, env, why in (
+        ([], unversioned, "No version stamp: this run has no version"),
+        (["--limit", "homeserver"], {}, "No version stamp: this run was narrowed with --limit"),
+        (["--skip-tags", "never"], {}, "No version stamp: this run skips tags"),
+        (["--tags", "proxmox_notes"], {}, ""),
+        (
+            [],
+            {"HOMESERVER_PARTIAL": "--start-at-task"},
+            "No version stamp: this run started part way (--start-at-task)",
+        ),
+    ):
+        narrowed = run("proxmox_notes.yml", extra, env=deploy_env("third") | env, args=args)
+        expect(narrowed, "homeserver", changed=0, note=f"a run narrowed with {args or env}")
+        assert notes_of(state) == notes, f"a run narrowed with {args or env} wrote a stamp"
+        assert why in narrowed[2], narrowed[2][-3000:]
+
+    s = read(state)
+    s["concurrent_notes"] = {"300": "Someone else's, saved meanwhile."}
+    write(state, s)
+    rc, _, out = run("proxmox_notes.yml", extra, env=deploy_env("sixth"))
+    said = "Proxmox did not take the homeserver block in the Notes of VM 300: checksum mismatch (file change by other"
+    assert rc != 0 and said in out, out[-3000:]
+    assert "backups hold" not in out, "a refused write printed the Notes"
+    assert notes_of(state)["300"] == "Someone else's, saved meanwhile.", "another writer's change was overwritten"
+    s = read(state)
+    s["concurrent_node_notes"] = "Moved to rack 3."
+    write(state, s)
+    rc, _, out = run("proxmox_notes.yml", extra, env=deploy_env("seventh"))
+    assert rc != 0 and "the Notes of the node: detected modified configuration" in out, out[-3000:]
+    assert notes_of(state)["node"] == "Moved to rack 3."
+
+    missing = extra | {"proxmox_notes_vmids": [300, 302], "proxmox_notes_node": False}
+    result = run("proxmox_notes.yml", missing, check=True, env=deploy_env("fourth"))
+    expect(result, "homeserver", changed=1, note="dry run with a VM yet to be created")
+    assert "Would write the homeserver block in the Notes of VM 302 once created" in result[2], result[2][-3000:]
+    rc, _, out = run("proxmox_notes.yml", missing, env=deploy_env("fourth"))
+    assert rc != 0 and "The node has no VM 302" in out, out[-3000:]
+
+    s = read(state)
+    s["vms"]["301"]["config"]["description"] = "<!-- homeserver:begin commit=0 -->\nhalf a block"
+    write(state, s)
+    rc, _, out = run("proxmox_notes.yml", extra, env=deploy_env("fifth"))
+    assert rc != 0 and "VM 301: its Notes hold a broken homeserver block" in out, out[-3000:]
+    assert read(state)["vms"]["301"]["config"]["description"].endswith("half a block"), "a broken block was touched"

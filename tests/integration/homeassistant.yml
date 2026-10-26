@@ -11,8 +11,10 @@
     - ../../group_vars/all/storage.yml
     - ../../group_vars/all/kubernetes.yml
     - ../../group_vars/all/haos.yml
+    - ../../group_vars/all/deploy.yml
     - ../../group_vars/proxmox/storage.yml
     - ../../group_vars/proxmox/haos.yml
+    - ../../group_vars/proxmox/notes.yml
   vars:
     proxmox_vm_vms: "{{ haos_vms }}"
     proxmox_vm_isos: []
@@ -24,6 +26,8 @@
     haos_onboard_name: "{{ haos_owner.name }}"
     haos_onboard_username: "{{ haos_owner.username }}"
     haos_onboard_password: "{{ haos_owner_password }}"
+    homeserver_deployed_by: just deploy homeassistant
+    proxmox_notes_vmids: "{{ [haos_vm_vmid | int] if haos_present else [] }}"
   environment:
     PATH: "{{ playbook_dir }}/fake_pve_bin:{{ lookup('ansible.builtin.env', 'PATH') }}"
     FAKE_PVE_STATE: "{{ fake_pve_state }}"
@@ -56,3 +60,4 @@
   roles:
     - role: proxmox_vm
     - role: haos_onboard
+    - role: proxmox_notes

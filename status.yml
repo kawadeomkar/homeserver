@@ -30,6 +30,8 @@
           now: "{{ now().timestamp() | int }}"
           admin: "{{ status_admin }}"
           commands: "{{ status_commands }}"
+          # This checkout's version, which each machine's version stamp is placed against.
+          deploy: "{{ status_deploy }}"
           # The reading play's hosts, by the label the report gives each.
           hosts:
             proxmox: "{{ groups['proxmox'] | default([]) }}"

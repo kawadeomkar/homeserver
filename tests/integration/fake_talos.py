@@ -38,6 +38,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -597,6 +598,29 @@ def kubectl(state, args):
     fake_kubectl.run(state, kubeconfig, args, kube_reach, fail)
 
 
+# The git commands just status runs in the checkout itself, which go to git's own: for its version (the justfile's
+# _deploy_version: rev-parse, log, tag --list, describe, status) and to place the machines' version stamps against it
+# (merge-base), each after the global options those pass. Any other fails, as every unexpected command does.
+REAL_GIT = {"rev-parse", "log", "describe", "status", "merge-base"}
+
+
+def real_git(args):
+    """Hands one of REAL_GIT's commands to git's own, found on PATH after this fake's directory, before any state is
+    read, so that it needs none; fails on any other."""
+    i = 0
+    while args[i : i + 1] and args[i] in ("-C", "-c", "--no-optional-locks"):
+        i += 1 if args[i] == "--no-optional-locks" else 2
+    command = args[i : i + 1]
+    if not (command and (command[0] in REAL_GIT or args[i:] == ["tag", "--list"])):
+        fail(f"the fake hands git only just status's own commands to git: {args}")
+    here = (Path(__file__).resolve().parent / "fake_talos_bin").resolve()
+    rest = os.pathsep.join(p for p in os.environ["PATH"].split(os.pathsep) if p and Path(p).resolve() != here)
+    real = shutil.which("git", path=rest)
+    if real is None:
+        fail("git is not on PATH")
+    os.execv(real, [real, *args])
+
+
 def git(state, args):
     """git ls-remote <url> <ref>, as just status asks which commit the branch Flux syncs points at: the state's
     `remote_heads` ({ref: commit}); a ref it does not have prints nothing, as git does."""
@@ -611,6 +635,8 @@ def git(state, args):
 
 def main():
     tool, args = sys.argv[1], sys.argv[2:]
+    if tool == "git" and args[:1] != ["ls-remote"]:
+        real_git(args)
     state = load()
     {"talosctl": talosctl, "kubectl": kubectl, "git": git}[tool](state, args)
     save(state)

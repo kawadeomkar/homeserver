@@ -4,7 +4,8 @@
 # Home Assistant then updates itself; this playbook only ever keeps the VM's settings. Check first:
 #   just check homeassistant           (or: ansible-playbook homeassistant.yml --check --diff)
 # Without haos_mac in group_vars/all/local.yml nothing happens. Run proxmox.yml first, so the storage its disk goes on
-# exists. Independent of the cluster: home automation keeps working while the cluster is down.
+# exists. Independent of the cluster: home automation keeps working while the cluster is down. Last, the version this
+# run came from goes in the VM's Notes (roles/proxmox_notes, group_vars/proxmox/notes.yml).
 - name: Create Home Assistant's VM and give it its owner
   hosts: proxmox
   gather_facts: false
@@ -21,6 +22,8 @@
     haos_onboard_name: "{{ haos_owner.name }}"
     haos_onboard_username: "{{ haos_owner.username }}"
     haos_onboard_password: "{{ haos_owner_password }}"
+    homeserver_deployed_by: just deploy homeassistant
+    proxmox_notes_vmids: "{{ [haos_vm_vmid | int] if haos_present else [] }}"
   pre_tasks:
     - name: Refuse NAS settings that come without a NAS address
       ansible.builtin.assert:
@@ -63,3 +66,4 @@
   roles:
     - role: proxmox_vm
     - role: haos_onboard
+    - role: proxmox_notes

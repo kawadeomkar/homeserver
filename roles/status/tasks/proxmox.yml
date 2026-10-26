@@ -42,13 +42,14 @@
          else status_proxmox_name.results.node.stdout | default('') | trim }}
   when: "'proxmox' in status_reads"
 
-# The day's history and the pending changes of each of this setup's VMs; the guest agent's filesystems and OS of those
-# whose agent reports them (Home Assistant's; Talos's lists no filesystem), and the address of one that serves an app
-# without a URL of its own; the disks on each budgeted storage; the upgrades apt would make, from the lists as last
-# refreshed (a simulation, which is quick, where the API's own list takes four seconds); whether an upgrade asked for
-# a reboot; and the backups: the host's jobs (each with its next run), the latest backup runs, running ones among them,
-# the backups on each of this setup's jobs' storages, and when each job's schedule fires next, twice, which gives its
-# period without reading the calendar format here.
+# The day's history and the pending changes of each of this setup's VMs, a list of every current setting, the Notes
+# and their version stamp among them; the node's own configuration, for its Notes; the guest agent's filesystems and
+# OS of those whose agent reports them (Home Assistant's; Talos's lists no filesystem), and the address of one that
+# serves an app without a URL of its own; the disks on each budgeted storage; the upgrades apt would make, from the
+# lists as last refreshed (a simulation, which is quick, where the API's own list takes four seconds); whether an
+# upgrade asked for a reboot; and the backups: the host's jobs (each with its next run), the latest backup runs,
+# running ones among them, the backups on each of this setup's jobs' storages, and when each job's schedule fires
+# next, twice, which gives its period without reading the calendar format here.
 - name: proxmox | Read the host, its storages and its VMs, at once
   status_read:
     commands: "{{ _commands }}"
@@ -70,6 +71,9 @@
                               'updates': ['apt-get', '-q', '-s', 'dist-upgrade']}) -%}
       {%-   if status_reboot_required_file | length > 0 -%}
       {%-     set _ = c.update({'reboot': ['test', '-e', status_reboot_required_file]}) -%}
+      {%-   endif -%}
+      {%-   if status_notes_marker | length > 0 -%}
+      {%-     set _ = c.update({'node-config': ['pvesh', 'get', _node ~ '/config'] + _json}) -%}
       {%-   endif -%}
       {%-   for vm in status_vms -%}
       {%-     set vmid = vm.vmid | string -%}
@@ -127,7 +131,7 @@
       {{ {'unread': _unread, 'node': status_proxmox_node_name,
           'results': status_proxmox_reads.results | default({}) | combine(status_proxmox_logs.results | default({}))}
          | status_proxmox(status_vms, status_budget_storages, status_storage_headroom_gib,
-                          status_reboot_required_file, status_backup_jobs)
+                          status_reboot_required_file, status_backup_jobs, status_notes_marker)
          if 'proxmox' in status_reads else none }}
   vars:
     _missed: >-
@@ -136,6 +140,20 @@
     _unread: >-
       {{ (_missed | first).msg | default('it did not answer') if _missed
          else ('' if status_proxmox_node_name | length > 0 else 'hostname -s named no node') }}
+
+# Where each machine's version stamp lies against this checkout's commit: whether git's history here has it before or
+# after, for each stamped commit but the checkout's own, asked on this machine, whose checkout it is. Nothing to read
+# when the stamps all match, or when this run has no version of its own (a tree that is no git checkout).
+- name: proxmox | Place the version stamps against this checkout
+  status_read:
+    commands: "{{ _commands }}"
+    parallel: "{{ status_parallel }}"
+    timeout: "{{ status_timeout }}"
+  delegate_to: localhost
+  register: status_stamp_ancestry
+  when: _commands | length > 0
+  vars:
+    _commands: "{{ {'proxmox': status_proxmox_found} | status_stamp_reads(status_deploy, status_checkout) }}"
 
 # The address of an app on a VM of its own (Home Assistant's), asked from this machine as the cluster's apps are.
 - name: proxmox | Ask Home Assistant's address
@@ -151,7 +169,9 @@
 - name: proxmox | Say what the host says
   ansible.builtin.set_fact:
     status_found:
-      proxmox: "{{ status_proxmox_found }}"
+      proxmox: >-
+        {{ status_proxmox_found | combine({'ancestry': status_stamp_ancestry.results})
+           if status_stamp_ancestry.results is defined else status_proxmox_found }}
       # What roles/proxmox_tailscale's status entry point read, before this role ran: {} when Tailscale is off.
       tailscale: "{{ status_tailscale_state if 'tailscale' in status_reads else none }}"
       tailnet_dns: "{{ status_tailnet_dns.results.dns | default(none) }}"

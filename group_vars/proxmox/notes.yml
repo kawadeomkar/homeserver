@@ -1,0 +1,37 @@
+---
+# The version stamp each deploy leaves in the Proxmox Notes of the machines it deployed (roles/proxmox_notes,
+# scripts/runbooks/tags.md): the host's by proxmox.yml, Home Assistant's VM by homeassistant.yml, and the cluster's VMs
+# by kubernetes.yml, each play naming in homeserver_deployed_by the command that deploys what it stamps. The begin
+# marker carries the commit, its describe string and its date, which just status reads back to compare with the
+# checkout; the text says the same for the web UI. The role checks the values by a charset of its own, knowing no
+# version's shape: the justfile's _deploy_version checks each against its shape before it reaches Ansible. A stamp
+# says where the last deploy came from, not all a machine runs: Flux applies main to the cluster after it, Home
+# Assistant updates itself, and just status shows both.
+proxmox_notes_marker: homeserver
+# Only a whole run from just in a git checkout stamps: one started without just has no version (homeserver_deploy,
+# group_vars/all/deploy.yml), and one narrowed with --limit or --skip-tags, or started part way with --start-at-task
+# or --step, deployed only part of what the stamp would claim (--tags skips the role's tasks itself, which are
+# untagged).
+homeserver_stamped: >-
+  {{ homeserver_deploy.commit | length > 0 and homeserver_deployed_by | default('') | length > 0
+     and ansible_limit is undefined and ansible_skip_tags | default([]) | length == 0
+     and homeserver_deploy.partial | length == 0 }}
+proxmox_notes_metadata: >-
+  {{ {'commit': homeserver_deploy.commit, 'describe': homeserver_deploy.describe, 'date': homeserver_deploy.date}
+     if homeserver_stamped else {} }}
+# The same text whichever command ran (just deploy runs every playbook), so a deploy at the same commit rewrites
+# nothing.
+proxmox_notes_text: >-
+  {{ ('Deployed from homeserver `' ~ homeserver_deploy.describe ~ '`, committed ' ~ homeserver_deploy.date
+      ~ '. `' ~ homeserver_deployed_by ~ '` deploys it, and `just status` shows what it runs now.')
+     if homeserver_stamped else '' }}
+# What the role says when a deploy play stamps nothing: the first reason homeserver_stamped is false.
+proxmox_notes_skip_reason: >-
+  {{ '' if homeserver_stamped or homeserver_deployed_by | default('') | length == 0
+     else 'No version stamp: ' ~ (
+       'this run has no version, since it was started without just or outside a git checkout'
+       if homeserver_deploy.commit | length == 0
+       else 'this run was narrowed with --limit' if ansible_limit is defined
+       else 'this run skips tags (--skip-tags)' if ansible_skip_tags | default([]) | length > 0
+       else 'this run started part way (' ~ homeserver_deploy.partial ~ ')')
+     ~ ', so each machine keeps the stamp of its last whole deploy.' }}

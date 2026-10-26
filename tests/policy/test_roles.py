@@ -218,12 +218,12 @@ NO_BACKUP = "are not backed up, because this setup has no NAS"
 @pytest.mark.parametrize(
     ("local_yml", "extra", "validations", "present", "absent"),
     [
-        pytest.param(None, CLUSTER_ARGS, 11, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas-cluster-haos"),
-        pytest.param(EXAMPLE_LOCAL_YML, (), 7, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas"),
+        pytest.param(None, CLUSTER_ARGS, 14, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas-cluster-haos"),
+        pytest.param(EXAMPLE_LOCAL_YML, (), 9, [*NAS_PLAY_RUNS, TAILSCALE_CHECK], [NO_BACKUP], id="nas"),
         pytest.param(
             EXAMPLE_LOCAL_YML + TAILSCALE_LOCAL_YML,
             (),
-            7,
+            9,
             [NAS_PLAY_RUNS[0], TAILSCALE_CHECK],
             [NO_BACKUP],
             id="nas-tailscale",
@@ -231,18 +231,18 @@ NO_BACKUP = "are not backed up, because this setup has no NAS"
         pytest.param(
             PROXMOX_ONLY_CLUSTER_LOCAL_YML,
             CLUSTER_ARGS,
-            10,
+            13,
             [*NAS_PLAY_ENDS, NO_BACKUP, TAILSCALE_CHECK],
             NAS_ROLE,
             id="proxmox-only-cluster-haos",
         ),
         pytest.param(
-            PROXMOX_ONLY_LOCAL_YML, (), 6, [*NAS_PLAY_ENDS, TAILSCALE_CHECK], [*NAS_ROLE, NO_BACKUP], id="proxmox-only"
+            PROXMOX_ONLY_LOCAL_YML, (), 8, [*NAS_PLAY_ENDS, TAILSCALE_CHECK], [*NAS_ROLE, NO_BACKUP], id="proxmox-only"
         ),
         pytest.param(
             PROXMOX_ONLY_LOCAL_YML + f'haos_mac: "{mac(9)}"\n',
             (),
-            8,
+            11,
             [*NAS_PLAY_ENDS, NO_BACKUP, TAILSCALE_CHECK],
             NAS_ROLE,
             id="proxmox-only-haos",
@@ -250,13 +250,13 @@ NO_BACKUP = "are not backed up, because this setup has no NAS"
         pytest.param(
             PROXMOX_ONLY_LOCAL_YML + TAILSCALE_LOCAL_YML,
             (),
-            6,
+            8,
             [NAS_PLAY_ENDS[0], TAILSCALE_CHECK],
             ["TASK [truenas :", NO_BACKUP],
             id="proxmox-only-tailscale",
         ),
         pytest.param(
-            blank_nas_local_yml(), (), 6, NAS_PLAY_ENDS, [*NAS_ROLE, NO_BACKUP], id="proxmox-only-blank-values"
+            blank_nas_local_yml(), (), 8, NAS_PLAY_ENDS, [*NAS_ROLE, NO_BACKUP], id="proxmox-only-blank-values"
         ),
     ],
 )
@@ -298,7 +298,7 @@ def test_inventory_without_the_nas_host(tmp_path):
     rc, out = argspec_pass(tree)
     assert rc == 0, out[-3000:]
     assert "skipping: no hosts matched" in out, out[-3000:]
-    assert out.count("Validating arguments against arg spec 'main'") == 6, out[-3000:]
+    assert out.count("Validating arguments against arg spec 'main'") == 8, out[-3000:]
 
 
 @pytest.mark.parametrize(
@@ -346,6 +346,70 @@ def test_cluster_playbooks_pass_their_checks(tmp_path, playbook, local_yml, extr
     rc, out = argspec_pass(example_tree(tmp_path, local_yml), playbook, *extra)
     assert rc == 0, out[-3000:]
     assert ("so this setup has no cluster" in out) == skipped, out[-3000:]
+
+
+# The environment just gives a run (the justfile's _playbook), with a version.
+DEPLOY_ENV = {
+    "HOMESERVER_COMMIT": "5de78852f353b2353ba33a8b8dcbc7217928bb1c",
+    "HOMESERVER_DESCRIBE": "2026.11.0-3-g5de78852f353",
+    "HOMESERVER_COMMIT_DATE": "2026-10-24",
+    "HOMESERVER_PARTIAL": "",
+}
+STAMP = "{'text': proxmox_notes_text, 'metadata': proxmox_notes_metadata, 'node': proxmox_notes_node | default(false), "
+STAMP += "'vmids': proxmox_notes_vmids | default([]), 'why': proxmox_notes_skip_reason}"
+
+
+def role_names(play):
+    return [role["role"] if isinstance(role, dict) else role for role in play.get("roles") or []]
+
+
+@pytest.mark.parametrize(
+    ("playbook", "deployed_by", "node", "vmids"),
+    [
+        ("proxmox.yml", "just deploy proxmox", True, []),
+        ("homeassistant.yml", "just deploy homeassistant", False, [310]),
+        ("kubernetes.yml", "just deploy kubernetes", False, [300, 301]),
+    ],
+)
+def test_each_deploy_stamps_what_it_deployed(tmp_path, monkeypatch, playbook, deployed_by, node, vmids):
+    """Each deploy playbook stamps the machines it deployed, last (roles/proxmox_notes, the last role of its last
+    play), with the version just gives it and its own command, and nothing when just names a run started part way
+    (HOMESERVER_PARTIAL). The play's own vars are rendered for the Proxmox host with local.yml.example's setup, where
+    the role's own test (test_idempotence.py's test_proxmox_notes) passes them by hand."""
+    plays = yaml.safe_load((ROOT / playbook).read_text())
+    stamping = [play for play in plays if "proxmox_notes" in role_names(play)]
+    assert stamping == [plays[-1]] and plays[-1]["hosts"] == "proxmox", "the stamp is the last play's"
+    assert role_names(plays[-1])[-1] == "proxmox_notes", "the stamp is the last role"
+    tree = example_tree(tmp_path)
+    play_vars = ("-e", json.dumps(plays[-1]["vars"]))
+    for name, value in DEPLOY_ENV.items():
+        monkeypatch.setenv(name, value)
+    got = resolve_on(tree, "homeserver", STAMP, *CLUSTER_ARGS, *play_vars)
+    assert (got["node"], got["vmids"]) == (node, vmids), got
+    assert got["metadata"] == {
+        "commit": DEPLOY_ENV["HOMESERVER_COMMIT"],
+        "describe": DEPLOY_ENV["HOMESERVER_DESCRIBE"],
+        "date": DEPLOY_ENV["HOMESERVER_COMMIT_DATE"],
+    }
+    assert got["text"] == (
+        f"Deployed from homeserver `{DEPLOY_ENV['HOMESERVER_DESCRIBE']}`, committed 2026-10-24. `{deployed_by}` deploys"
+        " it, and `just status` shows what it runs now."
+    )
+    assert got["why"] == ""
+    monkeypatch.setenv("HOMESERVER_PARTIAL", "--start-at-task")
+    partial = resolve_on(tree, "homeserver", STAMP, *CLUSTER_ARGS, *play_vars)
+    assert (partial["text"], partial["metadata"]) == ("", {}), "a run started part way stamped"
+    assert partial["why"].startswith("No version stamp: this run started part way (--start-at-task)"), partial
+
+
+@pytest.mark.parametrize(
+    "playbook", ["truenas.yml", "talos-upgrade.yml", "etcd-snapshot.yml", "suspend.yml", "resume.yml", "status.yml"]
+)
+def test_what_deploys_nothing_a_stamp_claims_stamps_nothing(playbook):
+    """A stamp says a deploy of every setting the commit has reached the machine: an upgrade to the pins, a snapshot,
+    scaling the apps or reading them claims none of that, and the NAS has no Notes."""
+    plays = yaml.safe_load((ROOT / playbook).read_text())
+    assert not [play for play in plays if "proxmox_notes" in role_names(play)]
 
 
 @pytest.mark.parametrize("playbook", ["site.yml", "proxmox.yml"])
