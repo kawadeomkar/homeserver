@@ -65,8 +65,13 @@ truenas_datasets_vm_classes:
           'reservation': vm_storage_ephemeral_reservation or 0} }}
   - name: "{{ vm_storage.ephemeral.dataset }}"
     # A crash can lose the last seconds of writes, accepted for throwaway VMs. Never give this
-    # dataset a snapshot task: snapshots would keep deleted VMs' data.
-    properties: {sync: DISABLED, recordsize: 64K}
+    # dataset a snapshot task: snapshots would keep deleted VMs' data. The refreservation keeps room
+    # for the cluster's disks here (kubernetes_ephemeral_disks_gib, group_vars/all/kubernetes.yml),
+    # which neither the media nor the project pools can then take; always sent, 0 for none, so it
+    # goes when they do.
+    properties: >-
+      {{ {'sync': 'DISABLED', 'recordsize': '64K',
+          'refreservation': (kubernetes_ephemeral_disks_gib | int) * 1073741824} }}
 # A project's pool holds throwaway VMs like the ephemeral class, so it gets the same sync and record size,
 # and never a snapshot task either. A quota, when the entry sets one, caps that project alone; without one the
 # quota is 0, none, so a quota removed here is removed on the NAS too.

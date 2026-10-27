@@ -22,33 +22,36 @@ kubernetes_bridge: vmbr0
 # files grow, so 16 GiB of it stays out of the budget for the host.
 proxmox_vm_host_headroom_gib: 16
 
-# One VM per node, the same two in both setups. The system disks on the installer's storage; the worker's data
-# disk, which holds the apps' local volumes, on the persistent NAS storage with a NAS (qcow2) and on the installer's
-# storage without one; its media disk without a NAS, never backed up. A built cluster moved to the other setup is
-# refused by proxmox_vm before anything changes: its data disk is on the other storage (README.md, "Switching
-# setups"). Each sits in its slot of kubernetes_disk_slots, whose by-id link Talos's disk
-# selectors match; the serials only name the disks for whoever reads the VM's configuration. The CD-ROM always holds
-# the current ISO, so a node whose system disk is wiped reaches
-# maintenance mode from it; it boots from its system disk first. The control plane starts first, and the worker gets
-# the host's iGPU when local.yml names its PCI mapping (kubernetes_gpu_mapping).
+# One VM per node, the same two in both setups. With a NAS, every disk on it in qcow2: the control plane's system
+# disk and the worker's data disk, which holds the apps' local volumes, on the persistent storage, the worker's
+# system disk on the ephemeral one (kubernetes_system_storage, group_vars/all/kubernetes.yml). Without one, every disk
+# on the installer's storage, the worker's media disk among them, never backed up. The EFI disks stay on the
+# installer's storage in both setups: 4 MiB each. A built cluster moved to the other
+# setup is refused by proxmox_vm before anything changes, its disks being on the other storages, until run with
+# proxmox_vm_move_disks (README.md, "Switching setups"). Each sits in its slot of kubernetes_disk_slots, whose by-id
+# link Talos's disk selectors match; the serials only name the disks for whoever reads the VM's configuration. The
+# CD-ROM always holds the current ISO, so a node whose system disk is wiped reaches maintenance mode from it; it boots
+# from its system disk first. The control plane starts first, and the worker gets the host's iGPU when local.yml
+# names its PCI mapping (kubernetes_gpu_mapping).
 proxmox_vm_vms: >-
   {%- set out = [] -%}
   {%- for n in kubernetes_nodes if kubernetes_present -%}
-  {%-   set disks = [{'slot': kubernetes_disk_slots.system, 'storage': kubernetes_system_storage,
-                      'size_gib': n.system_disk_gib, 'serial': 'talos-system'}] -%}
+  {%-   set disks = [{'slot': kubernetes_disk_slots.system, 'storage': kubernetes_system_storage[n.role],
+                      'size_gib': n.system_disk_gib, 'serial': 'talos-system'}
+                     | combine({'format': 'qcow2'} if nas_present else {})] -%}
   {%-   if n.data_disk_gib | default(0) | int > 0 -%}
   {%-     set _ = disks.append({'slot': kubernetes_disk_slots.data, 'storage': kubernetes_data_storage,
                                 'size_gib': n.data_disk_gib, 'serial': 'talos-data'}
                                | combine({'format': 'qcow2'} if nas_present else {})) -%}
   {%-   endif -%}
   {%-   if n.media_disk_gib | default(0) | int > 0 -%}
-  {%-     set _ = disks.append({'slot': kubernetes_disk_slots.media, 'storage': kubernetes_system_storage,
+  {%-     set _ = disks.append({'slot': kubernetes_disk_slots.media, 'storage': vm_storage_installer,
                                 'size_gib': n.media_disk_gib, 'serial': 'talos-media', 'backup': false}) -%}
   {%-   endif -%}
   {%-   set gpu = kubernetes_gpu_mapping | default('', true) and n.name == kubernetes_data_node -%}
   {%-   set _ = out.append({
           'vmid': n.vmid, 'name': n.name, 'cores': n.cores, 'memory_mib': n.memory_mib,
-          'machine': 'q35', 'bios': 'ovmf', 'efidisk_storage': kubernetes_system_storage, 'cpu': 'host',
+          'machine': 'q35', 'bios': 'ovmf', 'efidisk_storage': vm_storage_installer, 'cpu': 'host',
           'scsihw': 'virtio-scsi-pci', 'disks': disks,
           'net': {'bridge': kubernetes_bridge, 'mac': kubernetes_node_macs[n.name]},
           'iso': kubernetes_iso_storage ~ ':iso/' ~ kubernetes_iso_filename, 'boot': 'order=' ~ kubernetes_disk_slots.system ~ ';ide2',
@@ -67,3 +70,5 @@ proxmox_vm_pending_storages_hint: "just deploy proxmox adds it: run that first"
 # What a VM refused over its VMID's old disks or backups is built new with, on purpose (scripts/runbooks/vm-restore.md
 # restores it instead).
 proxmox_vm_rebuild_command: "just deploy kubernetes -e proxmox_vm_ignore_existing_volumes=true"
+# What moves a disk that is on another storage than configured, as when the cluster changes setup.
+proxmox_vm_move_command: "just deploy kubernetes -e proxmox_vm_move_disks=true"

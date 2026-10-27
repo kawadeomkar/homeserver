@@ -35,12 +35,14 @@ differently, so they have a section each; where the setups differ, the section s
   1. `qm stop 301`
   2. Detach the old system disk: `qm set 301 --delete scsi0`. It becomes `unused0`, and Proxmox drops it from the
      boot order, which is now the ISO alone.
-  3. Give it a fresh one with the same size and serial, on the installer's storage (`local-lvm`, or
-     `proxmox_local_vm_storage` from `local.yml` on a ZFS install; the size is `system_disk_gib` for the worker,
-     64 by default), and put the boot order back, system disk first, or the node would boot the ISO after every
-     install:
+  3. Give it a fresh one with the same size and serial, on the storage it was on (with a NAS `homeserver-ephemeral`,
+     in qcow2; without one the installer's storage, `local-lvm`, or `proxmox_local_vm_storage` from `local.yml` on a
+     ZFS install; the size is `system_disk_gib` for the worker, 64 by default), and put the boot order back, system
+     disk first, or the node would boot the ISO after every install:
 
      ```bash
+     qm set 301 --scsi0 homeserver-ephemeral:64,discard=on,ssd=1,serial=talos-system,format=qcow2 --boot 'order=scsi0;ide2'
+     # without a NAS:
      qm set 301 --scsi0 local-lvm:64,discard=on,ssd=1,serial=talos-system --boot 'order=scsi0;ide2'
      ```
 

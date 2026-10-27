@@ -64,7 +64,7 @@ truenas_pool_disks:
 proxmox_address: 192.0.2.20
 
 # The storage the Proxmox installer created, which holds the VM disks that
-# stay on the host: every VM's without a NAS, and the cluster's system disks
+# stay on the host: every VM's without a NAS, and the cluster's EFI disks
 # with one too. local-lvm unless this names another; a ZFS install calls it
 # local-zfs, and a BTRFS install local-btrfs, and then needs this line in
 # either setup.

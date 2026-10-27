@@ -8,8 +8,10 @@ argument_specs:
         image and grown to its size, and on later runs corrects its cores, memory, CPU type, ballooning,
         start-on-boot, startup order, watchdog, agent, tags, PCI and USB devices and CD-ROM, adds a configured disk
         it lacks and grows a disk configured larger. Starts a stopped VM marked start.
-      - Never moves, shrinks or detaches a disk, never deletes a VM or an ISO, and never restarts a VM; a setting
-        that waits for a restart is reported.
+      - Moves a disk that is on another storage than configured, its EFI disk too, only with proxmox_vm_move_disks,
+        and refuses it otherwise.
+      - Never shrinks or detaches a disk, never deletes a VM or an ISO, and never restarts a VM; a setting that waits
+        for a restart is reported.
       - Refuses a VMID that belongs to another VM, a missing VM whose VMID still has disks or backups, a disk
         storage that does not exist or holds no images, and disks whose provisioned sizes would add up to more
         than a thin LVM, ZFS, directory or BTRFS storage holds, less proxmox_vm_host_headroom_gib on all but thin
@@ -69,6 +71,19 @@ argument_specs:
         description: >-
           How to run the role again with proxmox_vm_ignore_existing_volumes, named when a missing VM is refused over
           its old volumes. Empty means the play again with -e proxmox_vm_ignore_existing_volumes=true.
+      proxmox_vm_move_disks:
+        type: bool
+        default: false
+        description: >-
+          Move a disk that is on another storage than configured there, its EFI disk too, with qm disk move, the VM
+          running or not, in the configured format, deleting the old volume once the VM uses the copy. Without it,
+          such a disk is refused.
+      proxmox_vm_move_command:
+        type: str
+        default: ""
+        description: >-
+          How to run the role again with proxmox_vm_move_disks, named when a disk on another storage is refused.
+          Empty means the play again with -e proxmox_vm_move_disks=true.
       proxmox_vm_node:
         type: str
         default: ""

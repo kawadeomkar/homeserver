@@ -1,8 +1,8 @@
 ---
 # Creates the VMs and corrects the settings it manages, with qm and pvesh over root SSH. The tasks read the node;
 # the proxmox_vm_plan filter (filter_plugins/proxmox_vm.py) works out what to do from what they read, and the
-# tasks run the commands it returns. A disk is never moved, shrunk or detached, a VM is never deleted or
-# restarted, and an ISO or image is never deleted.
+# tasks run the commands it returns. A disk is moved only when proxmox_vm_move_disks asks for it, and never shrunk
+# or detached; a VM is never deleted or restarted, and an ISO or image is never deleted.
 
 # Needs no connection, so it runs under every tag, and a dry run of the configuration alone catches it.
 - name: Check the role's inputs
@@ -253,7 +253,7 @@
       check_mode: false
 
     # --------------------------------------------------------------------------------------- the plan ---
-    - name: Work out what to create, correct, grow and start
+    - name: Work out what to create, correct, move, grow and start
       ansible.builtin.set_fact:
         proxmox_vm_plan: "{{ proxmox_vm_vms | proxmox_vm_plan(_facts) }}"
       vars:
@@ -264,6 +264,8 @@
           allow_overcommit: "{{ proxmox_vm_allow_overcommit | bool }}"
           ignore_existing_volumes: "{{ proxmox_vm_ignore_existing_volumes | bool }}"
           rebuild_command: "{{ proxmox_vm_rebuild_command }}"
+          move_disks: "{{ proxmox_vm_move_disks | bool }}"
+          move_command: "{{ proxmox_vm_move_command }}"
           storage_config: "{{ proxmox_vm_storage_config.stdout | from_json }}"
           qemu: "{{ proxmox_vm_qemu.stdout | from_json }}"
           lxc: "{{ proxmox_vm_lxc.stdout | from_json }}"
@@ -340,6 +342,17 @@
       loop: "{{ proxmox_vm_plan.set }}"
       loop_control:
         label: "{{ item.vmid }} {{ item.name }}"
+      changed_when: true
+
+    # After the settings, whose disk options name the volume as it is, and before a disk is grown, on its new
+    # storage then. A running VM's disk is mirrored while the guest goes on writing, and the old volume deleted once
+    # the VM uses the copy.
+    - name: Move the disks to their storage
+      ansible.builtin.command:
+        argv: "{{ item.argv }}"
+      loop: "{{ proxmox_vm_plan.move }}"
+      loop_control:
+        label: "{{ item.vmid }} {{ item.slot }} to {{ item.storage }}"
       changed_when: true
 
     - name: Grow the disks

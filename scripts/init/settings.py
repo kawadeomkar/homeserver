@@ -363,7 +363,7 @@ SETTINGS: tuple[Setting, ...] = (
         "storage_id",
         f"The installer's VM storage, when it is not {DEFAULTS['proxmox_local_vm_storage']}",
         help="local-zfs on a ZFS install, local-btrfs on a BTRFS one. It holds every VM's disks without a NAS, and the "
-        "cluster's system disks with one too.",
+        "cluster's EFI disks with one too.",
         popular=True,
     ),
     S(

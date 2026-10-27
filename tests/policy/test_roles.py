@@ -374,7 +374,7 @@ def test_nas_present_cannot_be_set(tmp_path, playbook):
 )
 def test_local_yml_names_the_installer_storage(tmp_path, local_yml, setting, storage):
     """The installer's storage is local-lvm, or what local.yml names, a blank value counting as unset. Without a NAS
-    every VM uses it, and with a cluster in either setup the nodes' system disks do, so the Proxmox play checks it
+    every VM uses it, and with a cluster in either setup the nodes' EFI disks do, so the Proxmox play checks it
     then, and only then. A tracked group_vars file that set it too would win over local.yml, which loads first."""
     base = (ROOT / "group_vars" / "all" / "local.yml.example").read_text() if local_yml is None else local_yml
     tree = example_tree(tmp_path, base + setting)
@@ -402,7 +402,7 @@ def test_local_yml_names_the_installer_storage(tmp_path, local_yml, setting, sto
 )
 def test_layout_resolves_per_setup(tmp_path, local_yml, classes, exports, local):
     """With a NAS both VM classes exist and each export names a storage for its owner and class, never its
-    backend; the cluster's system disks go on the installer's storage, which is checked, and the start at boot
+    backend; the cluster's EFI disks go on the installer's storage, which is checked, and the start at boot
     waits for every export that holds VM disks. Without one only the ephemeral class exists, there is nothing to
     export or wait for, and the installer's storage is the one to check."""
     tree = example_tree(tmp_path, local_yml)
@@ -438,9 +438,10 @@ ZFS = "proxmox_local_vm_storage: local-zfs\n"
 def test_vms_resolve_on_the_proxmox_host(tmp_path, local_yml, nodes, system):
     """The cluster's VMs and ISO resolve on the Proxmox host through the real inventory layout, from what that host's
     groups see: the version pins live in group_vars/all, since the Proxmox host never sees group_vars/kubernetes.
-    Both setups have the same two VMs, and their system disks go on the installer's storage, local-zfs on a ZFS
-    install. With a NAS the worker's data disk is on the persistent NAS storage, in qcow2; without one, every disk is on
-    the installer's storage and the worker's media disk is never backed up."""
+    Both setups have the same two VMs, and their EFI disks go on the installer's storage, local-zfs on a ZFS install.
+    With a NAS every other disk is on the NAS, in qcow2: the control plane's system disk and the worker's data disk on
+    the persistent storage, the worker's system disk on the ephemeral one. Without one, every disk is on the installer's
+    storage and the worker's media disk is never backed up."""
     nas = local_yml in (None, "nas-zfs")
     if local_yml == "nas-zfs":
         local_yml = (ROOT / "group_vars" / "all" / "local.yml.example").read_text() + ZFS
@@ -458,7 +459,11 @@ def test_vms_resolve_on_the_proxmox_host(tmp_path, local_yml, nodes, system):
         )
         assert vm["net"]["mac"] == CLUSTER_VARS["kubernetes_node_macs"][vm["name"]]
         assert vm["iso"] == "local:iso/talos-v1.14.2-ce4c9805-metal-amd64.iso" and vm["hostpci"] == []
-        assert disks["scsi0"]["storage"] == system and vm["efidisk_storage"] == system
+        assert vm["efidisk_storage"] == system
+        on_nas = "homeserver-persistent" if vm["name"] == "homeserver-cp-1" else "homeserver-ephemeral"
+        assert (disks["scsi0"]["storage"], disks["scsi0"].get("format")) == (
+            (on_nas, "qcow2") if nas else (system, None)
+        )
         assert vm["tags"] == ["talos", "k8s"]
         if "scsi1" in disks:
             assert (disks["scsi1"]["storage"], disks["scsi1"].get("format")) == (
@@ -664,6 +669,31 @@ def test_vm_reservation_on_the_ephemeral_pool(tmp_path):
     assert resolve_on(tree, "truenas", expression)["reservation"] == 0
     properties = resolve_on(tree, "truenas", expression, "-e", "vm_storage_ephemeral_reservation=200G")
     assert properties["reservation"] == "200G" and "refreservation" not in properties
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "extra", "kept_gib"),
+    [
+        pytest.param(None, CLUSTER_ARGS, 64, id="cluster"),
+        pytest.param(
+            None,
+            (
+                "-e",
+                json.dumps(CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"system_disk_gib": 80}}}),
+            ),
+            80,
+            id="bigger-worker",
+        ),
+        pytest.param(example_without_kubernetes(), (), 0, id="no-cluster"),
+    ],
+)
+def test_the_ephemeral_vm_dataset_keeps_room_for_the_worker(tmp_path, local_yml, extra, kept_gib):
+    """With a NAS and a cluster, the worker's system disk goes on the ephemeral class's dataset, which keeps its size
+    for it (a refreservation): the media and the project pools share its pool and its parent's quota, and a worker
+    whose disk cannot grow pauses. Without a cluster it keeps nothing, sent as 0, so it goes when the cluster does."""
+    expression = "(truenas_datasets | selectattr('name', 'equalto', 'ephemeral/proxmox/vm') | first).properties"
+    properties = resolve_on(example_tree(tmp_path, local_yml), "truenas", expression, *extra)
+    assert properties == {"sync": "DISABLED", "recordsize": "64K", "refreservation": kept_gib * 2**30}
 
 
 def test_pool_names_follow_local_yml(tmp_path):
@@ -986,15 +1016,21 @@ def without(settings, *names):
         ),
         pytest.param(
             None,
-            CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"data_disk_gib": 769}}},
-            ["(vm_storage_persistent_quota_gib in group_vars/all/storage.yml) also holds its snapshots"],
-            id="nas-worker-data-disk-above-the-quota",
+            CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"data_disk_gib": 705}}},
+            [
+                "With a NAS, homeserver-worker-1's data disk, homeserver-cp-1's system disk and Home Assistant's disk "
+                "(769 GiB together) go on the NAS's persistent VM dataset, whose quota of 1024 GiB "
+                "(vm_storage_persistent_quota_gib in group_vars/all/storage.yml) also holds their snapshots and any "
+                "other persistent VM: before the VMs exist, keep their sizes in kubernetes_node_sizes and haos_size to "
+                "at most 768 GiB together; once they do, since a disk is never shrunk, raise the quota instead"
+            ],
+            id="nas-persistent-disks-above-the-quota",
         ),
         pytest.param(
             None,
-            CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"data_disk_gib": 768}}},
+            CLUSTER_VARS | {"kubernetes_node_sizes": {"homeserver-worker-1": {"data_disk_gib": 704}}},
             [],
-            id="nas-worker-data-disk-within-the-quota",
+            id="nas-persistent-disks-within-the-quota",
         ),
         pytest.param(
             PROXMOX_ONLY_CLUSTER_LOCAL_YML.replace(", media_disk_gib: 100", "")
