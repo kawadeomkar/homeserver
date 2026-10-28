@@ -55,6 +55,8 @@ from helpers import (
 ROOT = Path(__file__).resolve().parents[2]
 ROLES = sorted(path.parents[1] for path in ROOT.glob("roles/*/meta/argument_specs.yml"))
 MODULES = sorted(ROOT.glob("roles/*/library/*.py"))
+# The Talos release the pins name, which the ISO's file name and the nodes' version resolve to.
+TALOS_VERSION = yaml.safe_load((ROOT / "group_vars" / "all" / "kubernetes.yml").read_text())["talos_version"]
 
 # ansible-test's no-log-needed pattern: option names that look like secrets.
 SECRET_NAME = re.compile(r"pass(?!ive)|secret|token|key", re.IGNORECASE)
@@ -447,7 +449,7 @@ def test_vms_resolve_on_the_proxmox_host(tmp_path, local_yml, nodes, system):
         local_yml = (ROOT / "group_vars" / "all" / "local.yml.example").read_text() + ZFS
     tree = example_tree(tmp_path, local_yml)
     isos, vms = resolve_on(tree, "homeserver", "[proxmox_vm_isos, proxmox_vm_vms]", *CLUSTER_ARGS)
-    assert [iso["filename"] for iso in isos] == ["talos-v1.14.2-ce4c9805-metal-amd64.iso"]
+    assert [iso["filename"] for iso in isos] == [f"talos-{TALOS_VERSION}-ce4c9805-metal-amd64.iso"]
     found = {}
     for vm in vms:
         disks = {d["slot"]: d for d in vm["disks"]}
@@ -458,7 +460,7 @@ def test_vms_resolve_on_the_proxmox_host(tmp_path, local_yml, nodes, system):
             disks.get("scsi2", {}).get("size_gib"),
         )
         assert vm["net"]["mac"] == CLUSTER_VARS["kubernetes_node_macs"][vm["name"]]
-        assert vm["iso"] == "local:iso/talos-v1.14.2-ce4c9805-metal-amd64.iso" and vm["hostpci"] == []
+        assert vm["iso"] == f"local:iso/talos-{TALOS_VERSION}-ce4c9805-metal-amd64.iso" and vm["hostpci"] == []
         assert vm["efidisk_storage"] == system
         on_nas = "homeserver-persistent" if vm["name"] == "homeserver-cp-1" else "homeserver-ephemeral"
         assert (disks["scsi0"]["storage"], disks["scsi0"].get("format")) == (
@@ -514,7 +516,7 @@ def test_talos_nodes_resolve_on_the_kubernetes_host(tmp_path, local_yml, nodes):
         json.dumps({"talos_pod_subnets": ["198.51.100.0/24"]}),
     )
     assert {n["name"]: (n["role"], len(n["patches"])) for n in found["nodes"]} == nodes
-    assert found["endpoint"] == "https://192.0.2.30:6443" and found["version"] == "v1.14.2"
+    assert found["endpoint"] == "https://192.0.2.30:6443" and found["version"] == TALOS_VERSION
     assert "$patch: delete" not in found["cp"] and "KubeNodeConfig" not in found["cp"]
     # Without its policy agent, Flannel would let every NetworkPolicy through unenforced.
     assert "kind: KubeFlannelCNIConfig\nkubeNetworkPoliciesEnabled: true" in found["cp"]
