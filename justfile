@@ -99,7 +99,7 @@ setups := quote(bin / 'python') + ' scripts/init/setups.py'
 ansible_playbook := bin / 'ansible-playbook'
 log_dir := 'logs'
 
-# Manifests are validated against the Kubernetes version Talos ships (v1.14.2 runs 1.37.1), with the JSON schemas
+# Manifests are validated against the Kubernetes version Talos ships (v1.14.4 runs 1.37.1), with the JSON schemas
 # pinned to one commit of yannh/kubernetes-json-schema instead of its moving master.
 kubernetes_version := '1.37.1'
 kube_schema_ref := '8df8a883b68a24a104b4a9e43c1288090ae60b3b'

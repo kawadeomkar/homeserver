@@ -34,8 +34,8 @@ env:
   KUBE_LINTER_SHA256: "1a6d8419b11971372971fdbc22682b684ebfb7cf1c39591662d1b6ca736c41df"
   # talosctl validates the rendered Talos configurations (just lint talos). Bumped with talos_version in
   # group_vars/all/kubernetes.yml, whose minor release it must share.
-  TALOSCTL_VERSION: "1.14.2"
-  TALOSCTL_SHA256: "c6c9552b0e5f767352c595fa1c0af4f186f697488646872955057d23990a66c4"
+  TALOSCTL_VERSION: "1.14.4"
+  TALOSCTL_SHA256: "0a69e3f9b682c5cd844b78dae305f6056ceb86c5fcc6913dcea78c527ed97cee"
   # kustomize builds each manifest directory as Flux does (just lint manifests); helm renders the HelmReleases'
   # charts (just lint charts).
   KUSTOMIZE_VERSION: "5.8.3"

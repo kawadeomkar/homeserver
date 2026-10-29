@@ -46,6 +46,11 @@ PROXMOX_ADDRESS = "127.0.0.20"
 # The cluster's nodes: the worker alone mounts the NAS's datasets.
 NODE_ADDRESSES = {"homeserver-cp-1": "127.0.0.30", "homeserver-worker-1": "127.0.0.31"}
 WORKER_ADDRESS = NODE_ADDRESSES["homeserver-worker-1"]
+# The Talos release the pins name (group_vars/all/kubernetes.yml), which the fake ISO and nodes carry, and the next
+# one, which the pin-bump tests move the pins to, so a bump of the pins needs no change here.
+TALOS = yaml.safe_load((HERE.parents[1] / "group_vars" / "all" / "kubernetes.yml").read_text())["talos_version"]
+TALOS_MINOR, TALOS_PATCH = TALOS.rsplit(".", 1)
+TALOS_NEXT = f"{TALOS_MINOR}.{int(TALOS_PATCH) + 1}"
 # Both nodes at the least the settings check allows, for a small host without a NAS: 64 GiB of disks between them.
 SMALL_SIZES = {
     "homeserver-cp-1": {"memory_mib": 2048, "system_disk_gib": 10},
@@ -1212,7 +1217,7 @@ EPHEMERAL_NFS = PERSISTENT_NFS | {
     "export": "/mnt/ephemeral/proxmox/vm",
     "path": "/mnt/pve/homeserver-ephemeral",
 }
-ISO = "local:iso/talos-v1.14.2-ce4c9805-metal-amd64.iso"
+ISO = f"local:iso/talos-{TALOS}-ce4c9805-metal-amd64.iso"
 
 
 def vm_state(state, local_lvm_gib=500, **more):
@@ -1277,7 +1282,7 @@ def test_proxmox_vm_with_a_nas(tmp_path):
         r'\s*"homeserver-persistent"',
         out,
     ), out[-3000:]
-    assert re.search(r'homeserver-worker-1"?:\s*"?create', out) and "Would download: talos-v1.14.2" in out, out[-3000:]
+    assert re.search(r'homeserver-worker-1"?:\s*"?create', out) and f"Would download: talos-{TALOS}" in out, out[-3000:]
     assert read(state)["mutations"] == 0, "the dry run changed the host"
 
     rc, _, out = run("kubernetes.yml", extra)
@@ -1679,7 +1684,7 @@ def test_proxmox_vm_recovers_from_a_failed_download_and_start(tmp_path):
     vm_state(state, download_fails=True)
     seed_storage(state, PERSISTENT_NFS, EPHEMERAL_NFS)
     rc, _, out = run("kubernetes.yml", extra)
-    assert rc != 0 and "Downloading talos-v1.14.2-ce4c9805-metal-amd64.iso" in out and "404 Not Found" in out, out[
+    assert rc != 0 and f"Downloading talos-{TALOS}-ce4c9805-metal-amd64.iso" in out and "404 Not Found" in out, out[
         -3000:
     ]
     assert vms_of(state) == {} and read(state).get("content", {}).get("local", []) == []
@@ -1784,7 +1789,7 @@ def talos_vars(tmp_path, factory, nas=True, **more):
         "talos_installer_digests": {
             f"{schematic_id(extensions)}:{version}": INSTALLER_DIGEST
             for extensions in SCHEMATICS.values()
-            for version in ("v1.14.2", "v1.14.3")
+            for version in (TALOS, TALOS_NEXT)
         },
         "truenas_static_address": "127.0.0.10/24" if nas else "",
         "kubernetes_node_addresses": NODE_ADDRESSES,
@@ -1801,9 +1806,9 @@ def talos_env(tmp_path, client="v1.14.9"):
 
 
 def talos_state(path, mode="maintenance", **more):
-    """The fake nodes, the same two in both setups: booted from the v1.14.2 ISO into maintenance mode, unless told
-    otherwise."""
-    nodes = {a: {"mode": mode, "version": "v1.14.2", "schematic": "iso"} for a in NODE_ADDRESSES.values()}
+    """The fake nodes, the same two in both setups: booted from the pinned release's ISO into maintenance mode, unless
+    told otherwise."""
+    nodes = {a: {"mode": mode, "version": TALOS, "schematic": "iso"} for a in NODE_ADDRESSES.values()}
     write(path, {"nodes": nodes, "mutations": 0, **more})
 
 
@@ -1841,13 +1846,13 @@ def test_talos_with_a_nas(tmp_path, factory):
     assert s["bootstrapped"] and s.get("bootstrap_calls") == 1
     assert all(n["mode"] == "configured" for n in s["nodes"].values())
     base = schematic_id(["siderolabs/qemu-guest-agent"])
-    assert all(n["schematic"] == base and n["version"] == "v1.14.2" for n in s["nodes"].values())
+    assert all(n["schematic"] == base and n["version"] == TALOS for n in s["nodes"].values())
     cp, worker = s["nodes"]["127.0.0.30"]["config"], s["nodes"]["127.0.0.31"]["config"]
     assert "# type: controlplane" in cp and "listen-metrics-urls" in cp and "$patch: delete" not in cp
     assert "# type: worker" in worker and "name: local-path-provisioner" in worker and "_drive-scsi1" in worker
     assert "hostname: homeserver-worker-1" in worker and "kind: WatchdogTimerConfig" in worker
     # Each node installs its schematic's installer at the pinned digest.
-    assert f"/metal-installer/{base}:v1.14.2@{INSTALLER_DIGEST}" in worker
+    assert f"/metal-installer/{base}:{TALOS}@{INSTALLER_DIGEST}" in worker
     # The firewall's rules for the pod network name the one talosctl gave, which the role asked it for.
     assert "kind: NetworkDefaultActionConfig\ningress: block" in worker
     assert '{"subnet": "198.51.100.0/24"}' in worker and '{"subnet": "198.51.100.0/24"}' in cp
@@ -1867,7 +1872,7 @@ def test_talos_with_a_nas(tmp_path, factory):
         outputs.append(result[2])
         expect(result, "homeserver-k8s", changed=0, note=f"{'dry run' if check else 'second run'} after the build")
     # The nodes' own version, never the client's (v1.14.9).
-    assert "Talos v1.14.2, schematic " + base[:8] in result[2] and "v1.14.9" not in result[2], result[2][-3000:]
+    assert f"Talos {TALOS}, schematic " + base[:8] in result[2] and "v1.14.9" not in result[2], result[2][-3000:]
 
     # Drift: a node's configuration changed behind the role's back, on the worker, then on the control plane.
     s = read(state)
@@ -1901,13 +1906,15 @@ def test_talos_with_a_nas(tmp_path, factory):
 
     # A pin bump: nothing is applied or upgraded, and the run says what waits for just talos-upgrade.
     before = read(state)
-    bumped = extra | {"talos_version": "v1.14.3", "talos_kubernetes_version": "1.37.2"}
+    bumped = extra | {"talos_version": TALOS_NEXT, "talos_kubernetes_version": "1.37.2"}
     result = run("talos.yml", bumped, env=env)
     outputs.append(result[2])
     expect(result, "homeserver-k8s", changed=0, note="run with bumped pins")
     after = read(state)
     assert after["nodes"] == before["nodes"] and after.get("upgrades") is None and after["k8s_version"] == "1.37.1"
-    assert "just talos-upgrade" in result[2] and "homeserver-worker-1: Talos v1.14.3" in result[2], result[2][-3000:]
+    assert "just talos-upgrade" in result[2] and f"homeserver-worker-1: Talos {TALOS_NEXT}" in result[2], result[2][
+        -3000:
+    ]
     assert "kubernetes: 1.37.2" in result[2]
     no_talos_secret(outputs)
 
@@ -2014,7 +2021,7 @@ def test_talos_waits_for_a_slow_node_and_reports_a_failed_install(tmp_path, fact
     state = Path(extra["fake_talos_state"])
     talos_state(state)
     s = read(state)
-    s["nodes"]["127.0.0.31"] = {"mode": "absent", "answers_after": 3, "version": "v1.14.2"}
+    s["nodes"]["127.0.0.31"] = {"mode": "absent", "answers_after": 3, "version": TALOS}
     write(state, s)
     expect(run("talos.yml", extra, env=env), "homeserver-k8s", changed=True, note="a slow node")
     assert read(state)["nodes"]["127.0.0.31"]["mode"] == "configured"
@@ -2100,7 +2107,7 @@ def test_talos_reinstalls_only_a_named_node(tmp_path, factory):
     s = read(state)
     s["nodes"][NODE_ADDRESSES["homeserver-worker-1"]] = {
         "mode": "maintenance",
-        "version": "v1.14.2",
+        "version": TALOS,
         "schematic": "iso",
     }
     write(state, s)
@@ -2251,10 +2258,10 @@ def test_talos_upgrade_and_etcd_snapshot(tmp_path, factory):
     after["nodes"]["127.0.0.31"] = worker
     write(state, after)
 
-    bumped = extra | {"talos_version": "v1.14.3", "talos_kubernetes_version": "1.37.2"}
+    bumped = extra | {"talos_version": TALOS_NEXT, "talos_kubernetes_version": "1.37.2"}
     result = run("talos_upgrade.yml", bumped, check=True, env=env)
     expect(result, "homeserver-k8s", changed=True, note="talos-upgrade --check")
-    assert "Talos v1.14.2 -> v1.14.3" in result[2] and "1.37.1 -> 1.37.2" in result[2], result[2][-3000:]
+    assert f"Talos {TALOS} -> {TALOS_NEXT}" in result[2] and "1.37.1 -> 1.37.2" in result[2], result[2][-3000:]
     assert "no deprecated APIs found" in result[2] and read(state)["mutations"] == after["mutations"]
     assert not read(state).get("pre_pulls"), "the dry run pulled images onto the nodes"
 
@@ -2263,7 +2270,7 @@ def test_talos_upgrade_and_etcd_snapshot(tmp_path, factory):
     s = read(state)
     assert s["upgrades"] == ["127.0.0.30", "127.0.0.31"], "the control plane was not upgraded first"
     assert len(s["snapshots"]) == 2 and s["k8s_version"] == "1.37.2"
-    assert all(n["version"] == "v1.14.3" for n in s["nodes"].values())
+    assert all(n["version"] == TALOS_NEXT for n in s["nodes"].values())
     result = run("talos_upgrade.yml", bumped, env=env)
     expect(result, "homeserver-k8s", changed=0, note="talos-upgrade again")
     assert len(read(state)["snapshots"]) == 2
