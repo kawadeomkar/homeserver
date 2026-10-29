@@ -1747,9 +1747,8 @@ def factory():
     server.shutdown()
 
 
-# The schematics of group_vars/kubernetes/talos.yml, and the digest the tests pin every installer image to.
+# The schematics of group_vars/kubernetes/talos.yml.
 SCHEMATICS = {"base": ["siderolabs/qemu-guest-agent"], "gpu": ["siderolabs/qemu-guest-agent", "siderolabs/i915"]}
-INSTALLER_DIGEST = "sha256:" + "0" * 63 + "2"
 
 
 def schematic_id(extensions):
@@ -1762,6 +1761,16 @@ def schematic_id(extensions):
         allow_unicode=True,
     )
     return hashlib.sha256(body.encode()).hexdigest()
+
+
+# The digests the tests pin each installer image to ("<schematic id>:<version>"), of no real image and one for each
+# pair, as the Image Factory's are, so the fake can tell from a digest alone which release an upgrade installs.
+INSTALLER_DIGESTS = {
+    pair: "sha256:" + hashlib.sha256(pair.encode()).hexdigest()
+    for pair in (
+        f"{schematic_id(extensions)}:{version}" for extensions in SCHEMATICS.values() for version in (TALOS, TALOS_NEXT)
+    )
+}
 
 
 def bundle_file(path, text=TALOS_SECRETS):
@@ -1786,11 +1795,7 @@ def talos_vars(tmp_path, factory, nas=True, **more):
         "talos_install_retries": 5,
         # The fake factory's ids, pinned, and a digest of no real image for each installer.
         "talos_schematic_pins": {name: schematic_id(extensions) for name, extensions in SCHEMATICS.items()},
-        "talos_installer_digests": {
-            f"{schematic_id(extensions)}:{version}": INSTALLER_DIGEST
-            for extensions in SCHEMATICS.values()
-            for version in (TALOS, TALOS_NEXT)
-        },
+        "talos_installer_digests": dict(INSTALLER_DIGESTS),
         "truenas_static_address": "127.0.0.10/24" if nas else "",
         "kubernetes_node_addresses": NODE_ADDRESSES,
     }
@@ -1807,9 +1812,10 @@ def talos_env(tmp_path, client="v1.14.9"):
 
 def talos_state(path, mode="maintenance", **more):
     """The fake nodes, the same two in both setups: booted from the pinned release's ISO into maintenance mode, unless
-    told otherwise."""
+    told otherwise. The registry holds the pinned installers, by digest."""
     nodes = {a: {"mode": mode, "version": TALOS, "schematic": "iso"} for a in NODE_ADDRESSES.values()}
-    write(path, {"nodes": nodes, "mutations": 0, **more})
+    registry = {digest: pair.split(":", 1) for pair, digest in INSTALLER_DIGESTS.items()}
+    write(path, {"nodes": nodes, "mutations": 0, "registry": registry, **more})
 
 
 def talos_files(tmp_path):
@@ -1852,7 +1858,7 @@ def test_talos_with_a_nas(tmp_path, factory):
     assert "# type: worker" in worker and "name: local-path-provisioner" in worker and "_drive-scsi1" in worker
     assert "hostname: homeserver-worker-1" in worker and "kind: WatchdogTimerConfig" in worker
     # Each node installs its schematic's installer at the pinned digest.
-    assert f"/metal-installer/{base}:{TALOS}@{INSTALLER_DIGEST}" in worker
+    assert f"/metal-installer/{base}:{TALOS}@{INSTALLER_DIGESTS[f'{base}:{TALOS}']}" in worker
     # The firewall's rules for the pod network name the one talosctl gave, which the role asked it for.
     assert "kind: NetworkDefaultActionConfig\ningress: block" in worker
     assert '{"subnet": "198.51.100.0/24"}' in worker and '{"subnet": "198.51.100.0/24"}' in cp
@@ -2232,8 +2238,9 @@ def test_talos_renews_expiring_credentials(tmp_path, factory):
 @pytest.mark.cluster
 def test_talos_upgrade_and_etcd_snapshot(tmp_path, factory):
     """just talos-upgrade --check changes nothing and shows the plan; just talos-upgrade snapshots etcd first,
-    upgrades the control plane before the worker, then Kubernetes, and has nothing left to do the second time.
-    just etcd-snapshot writes a snapshot and nothing else."""
+    upgrades the control plane before the worker, then Kubernetes, and has nothing left to do the second time. It
+    names each installer by its digest alone, all a Talos 1.14 node finds an image it pulled by (the fake refuses a
+    tag beside the digest, as the node does). just etcd-snapshot writes a snapshot and nothing else."""
     extra, env = talos_vars(tmp_path, factory), talos_env(tmp_path)
     state = Path(extra["fake_talos_state"])
     talos_state(state)
@@ -2275,8 +2282,16 @@ def test_talos_upgrade_and_etcd_snapshot(tmp_path, factory):
     expect(result, "homeserver-k8s", changed=0, note="talos-upgrade again")
     assert len(read(state)["snapshots"]) == 2
 
-    # After the upgrade, a normal run renders with the versions now running: no drift.
-    expect(run("talos.yml", bumped, check=True, env=env), "homeserver-k8s", changed=0, note="dry run after upgrading")
+    # After the upgrade, a normal run renders with the versions now running. Talos's upgrade leaves each node's
+    # configuration naming the installer it was installed from, so that run applies the new one, without a reboot,
+    # and the next has nothing to do.
+    result = run("talos.yml", bumped, check=True, env=env)
+    expect(result, "homeserver-k8s", changed=True, note="dry run after upgrading")
+    assert "Configuration differs on homeserver-cp-1, homeserver-worker-1" in result[2], result[2][-3000:]
+    expect(run("talos.yml", bumped, env=env), "homeserver-k8s", changed=True, note="run after upgrading")
+    s = read(state)
+    assert all(f":{TALOS_NEXT}@" in n["config"] and n["version"] == TALOS_NEXT for n in s["nodes"].values())
+    expect(run("talos.yml", bumped, check=True, env=env), "homeserver-k8s", changed=0, note="dry run after applying")
 
 
 # ------------------------------------------------------------------------------------------------- Flux ---

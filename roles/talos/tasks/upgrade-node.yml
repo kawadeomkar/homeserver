@@ -2,6 +2,10 @@
 # One node's Talos upgrade, then the cluster's health, before upgrade.yml moves on to the next node: a node that
 # comes back broken stops the run with the rest of the cluster still up. Takes item, an entry of talos_upgrades.
 
+# The installer by its digest alone: talosctl pulls the image onto the node, where containerd keeps a
+# <name>:<tag>@<digest> as <name>@<digest>, then asks for it by the reference it was given, and a tagged one is
+# "not found in containerd store" (seen on the home cluster, Talos 1.14.2 nodes and talosctl 1.14.4). The digest
+# is the pin either way; neither path writes the image into the node's configuration.
 - name: upgrade-node | Upgrade Talos on the node
   ansible.builtin.command:
     argv:
@@ -14,7 +18,7 @@
       - "{{ item.address }}"
       - upgrade
       - --image
-      - "{{ item.image }}"
+      - "{{ item.image | talos_image_by_digest }}"
       - --progress
       - plain
   changed_when: true

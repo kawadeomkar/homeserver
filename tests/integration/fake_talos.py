@@ -15,6 +15,8 @@ State is a JSON file named by $FAKE_TALOS_STATE:
   except those named in `volumes_missing`, which wait, as a volume whose disk selector matches nothing does.
   Applying a configuration (no-reboot, or auto, which Talos 1.14 makes no-reboot) always succeeds, as it does in
   Talos 1.14, unless the state's `apply_fails` holds an error to answer with.
+- `registry`: {digest: [schematic id, version]}, the installer images an upgrade can name by digest alone. An
+  upgrade's image named by tag and digest fails as a Talos 1.14 node fails it; `upgrades` lists the nodes upgraded.
 - `bootstrapped` (etcd running), `k8s_version`, `snapshots`, `pre_pulls`, `mutations`, and the failure switches
   `bootstrap_precondition_count` (bootstrap answers FailedPrecondition that many times first) and
   `operator_never_available` (for kubectl wait).
@@ -515,16 +517,33 @@ def cmd_upgrade(state, globals_, args):
     address, node = target(state, flags)
     reach(state, address, node, flags, False)
     image = one(flags, "--image", "-i")
-    tagged = image.split("@")[0]  # a pinned digest says nothing of the version
-    node.update(version=tagged.rsplit(":", 1)[1], schematic=tagged.rsplit("/", 1)[1].split(":")[0])
-    # Talos records the new installer image in the node's configuration.
-    reconfigure(node, "install-image", image)
+    name, _, digest = image.partition("@")
+    repository, _, last = name.rpartition("/")
+    schematic, _, tag = last.partition(":")
+    if digest and tag:
+        # talosctl pulls the image first, which containerd keeps as <name>@<digest>, then asks the node for the
+        # reference it was given (seen on the home cluster: Talos 1.14.2 nodes, talosctl 1.14.4).
+        fail(
+            f"{address}: pulled image {repository}/{schematic}@{digest}\nerror during upgrade: error from node "
+            f'{address}: rpc error: code = Internal desc = upgrade failed: installer image "{image}" not found in '
+            f'containerd store: image "{image}": not found'
+        )
+    if digest:
+        # The release an image by digest holds is the image's own: the state's `registry` says it, as the Image
+        # Factory's registry would.
+        pinned = state.get("registry", {}).get(digest)
+        if not pinned or pinned[0] != schematic:
+            fail(f"error pulling upgrade image: error from node {address}: {image}: not found")
+        tag = pinned[1]
+    node.update(version=tag, schematic=schematic)
+    # Neither of Talos 1.14's upgrade paths writes the image into the node's configuration: the lifecycle service
+    # runs the installer from it, and the legacy one keeps it in a META tag.
     state.setdefault("upgrades", []).append(address)
     mutated(state)
 
 
 def reconfigure(node, field, value):
-    """A node's stored configuration with one of the rendered inputs changed, as an upgrade changes it."""
+    """A node's stored configuration with one of the rendered inputs changed, as upgrade-k8s changes it."""
     text = re.sub(rf"^# {field}: .*$", f"# {field}: {value}", node.get("config", ""), flags=re.MULTILINE)
     node.update(config=text, config_sha256=hashlib.sha256(text.encode()).hexdigest())
 
