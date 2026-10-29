@@ -96,6 +96,20 @@ Setups (`scripts/init/setups.py`, README's "Setups and the vault"): a checkout e
 
 Infrastructure roles in four playbooks: `truenas.yml` runs `roles/truenas`, `proxmox.yml` runs `roles/proxmox_apt`, `roles/proxmox_tailscale`, `roles/proxmox_storage`, `roles/proxmox_backup` then `roles/proxmox_node_exporter`, `homeassistant.yml` runs `roles/proxmox_vm` and `roles/haos_onboard` on the Proxmox host, `kubernetes.yml` runs `roles/proxmox_vm` on the Proxmox host and then `roles/talos` and `roles/flux_bootstrap` on the controller, and `site.yml` runs all four, NAS first. `talos-upgrade.yml` and `etcd-snapshot.yml` run the talos role's `upgrade` and `etcd-snapshot` entry points, after a play on localhost that refuses a cluster whose inventory lacks the `kubernetes` group, which would otherwise match no host and end without a word; `suspend.yml` and `resume.yml` run `roles/app_scale` on the controller, then the proxmox_vm role's `power` entry point on the Proxmox host for Home Assistant's VM. `status.yml` runs `roles/status` on the Proxmox host and, at the same time (`strategy: free`), for the cluster on the controller and for the NAS, which the truenas role's read-only `status` entry point reads first, then its `report` entry point on the controller. The inventory has three groups: `nas` (host `truenas`), `proxmox` (host `homeserver`) and `kubernetes` (host `homeserver-k8s`, local: the cluster is built from the workstation), and no addresses.
 
+**What a run prints, and NEXT STEPS.** `ansible.cfg` names the stdout callback `callback_plugins/homeserver.py`, with
+`callback_plugins = callback_plugins` so that a playbook in any directory finds it (`just init` runs
+`scripts/init/validate.yml`), since Ansible stops a run whose stdout callback it cannot load. It prints the default
+callback's output, byte for byte, then NEXT STEPS after the recap. It carries the default's documentation fragments:
+without them every hook fails, Ansible only warns, and every result disappears from the screen and the log in a run that
+exits 0. `tests/unit/test_callback.py` compares the two callbacks' output and log line by line. **A report is plain
+text**, a string or a list of lines, its first line the gist, never a structure. **A report that leaves something to do
+records it** straight after itself with `set_stats`, under `homeserver_next`, as `{subject: {matter: {text, command}}}`.
+The record comes from the facts the message is built from, never from its text, and an empty one says nothing is left.
+Subjects and words are `just status`'s (`reboot`, `restart`, `tailscale`, `talos`, `etcd`, `backup`, `home_assistant`),
+and commands come from `status_commands` where it has one. The idempotence tests read the records from the default
+callback's custom stats (`next_steps` in `test_idempotence.py`). `tests/conftest.py` sets the default stdout callback for
+every `ansible-playbook` a test starts, so a scratch tree holding a copy of `ansible.cfg` alone runs.
+
 **The roles are generic; this setup is configuration.** Role defaults change nothing (empty lists and dicts, null for "leave alone"), and task files hold no configuration values, only variables, API namespaces and CLI verbs. Everything that describes these machines lives in tracked group_vars, apart from addresses and serials:
 
 | File | Holds |

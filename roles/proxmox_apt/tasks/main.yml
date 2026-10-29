@@ -156,7 +156,7 @@
 # reported it. Whether it needs a reboot is said below.
 - name: Show what the upgrade changes
   ansible.builtin.debug:
-    msg: "{{ ([_lists ~ ' ' ~ _summary] if ansible_check_mode else [_summary]) }}"
+    msg: "{{ (_lists ~ ' ' ~ _summary) if ansible_check_mode else _summary }}"
   changed_when: ansible_check_mode and _pending
   when: proxmox_apt_upgrade
   vars:
@@ -176,11 +176,22 @@
     get_checksum: false
   register: proxmox_apt_reboot_required
 
-- name: Show whether a reboot is needed
-  ansible.builtin.debug:
-    msg: "{{ ('Reboot the node when it is safe to: ' ~ _why ~ '.') if _why else 'No reboot needed.' }}"
+# What is still to do goes under homeserver_next, which the stdout callback prints as NEXT STEPS after the recap; an
+# empty record says nothing is.
+- name: Say whether a reboot is needed, and record it
   vars:
     _why: >-
       {{ ((['the upgrade changes ' ~ proxmox_apt_reboot_for | join(', ')] if proxmox_apt_reboot_for else [])
          + ([proxmox_apt_reboot_required_file ~ ' asks for one'] if proxmox_apt_reboot_required.stat.exists else []))
          | join('; ') }}
+  block:
+    - name: Show whether a reboot is needed
+      ansible.builtin.debug:
+        msg: "{{ ('Reboot the node when it is safe to: ' ~ _why ~ '.') if _why else 'No reboot needed.' }}"
+
+    - name: Record whether the node waits for a reboot
+      ansible.builtin.set_stats:
+        data:
+          homeserver_next:
+            reboot:
+              host: "{{ {'text': 'the host waits for a reboot: ' ~ _why, 'command': proxmox_apt_reboot_command} if _why else '' }}"

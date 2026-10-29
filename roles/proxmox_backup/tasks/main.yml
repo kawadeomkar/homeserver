@@ -158,9 +158,15 @@
 - name: Show the backup jobs to create or correct
   ansible.builtin.debug:
     msg: >-
-      {{ {'jobs': proxmox_backup_plan}
-         | combine({'storage created by proxmox_storage on a real run': proxmox_backup_storage_pending}
-                   if proxmox_backup_storage_pending else {}) }}
+      {%- set out = [] -%}
+      {%- for id, plan in proxmox_backup_plan.items() -%}
+      {%-   set _ = out.append('backup job ' ~ id ~ ': ' ~ (plan if plan is string else plan | join(', '))) -%}
+      {%- endfor -%}
+      {%- if proxmox_backup_storage_pending -%}
+      {%-   set _ = out.append('storage that proxmox_storage creates on a real run: '
+                               ~ proxmox_backup_storage_pending | join(', ')) -%}
+      {%- endif -%}
+      {{ out }}
   when: proxmox_backup_jobs | length > 0
   changed_when: ansible_check_mode and proxmox_backup_plan.values() | reject('eq', 'ok') | list | length > 0
 

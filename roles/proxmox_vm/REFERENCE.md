@@ -324,7 +324,9 @@ Description: Create Proxmox VE VMs and keep the settings it manages as configure
 | Grow the disks | ansible.builtin.command | False |  |
 | Start the VMs | ansible.builtin.command | False |  |
 | Read the VMs' configuration and pending changes again | ansible.builtin.command | True |  |
+| Say what waits for a restart, with each VM's MAC, and record it | block | False |  |
 | Show each VM's MAC, and what waits for a restart | ansible.builtin.debug | False |  |
+| Record what waits for a restart | ansible.builtin.set_stats | False |  |
 | Show the old ISOs and images no VM uses | ansible.builtin.debug | True |  |
 
 #### File: tasks/power.yml
@@ -396,8 +398,11 @@ classDef rescue stroke:#665352,stroke-width:2px;
   Move_the_disks_to_their_storage31-->|Task| Grow_the_disks32[grow the disks]:::task
   Grow_the_disks32-->|Task| Start_the_VMs33[start the vms]:::task
   Start_the_VMs33-->|Task| Read_the_VMs__configuration_and_pending_changes_again34[read the vms  configuration and pending changes<br>again<br>When: **not ansible check mode**]:::task
-  Read_the_VMs__configuration_and_pending_changes_again34-->|Task| Show_each_VM_s_MAC__and_what_waits_for_a_restart35[show each vm s mac  and what waits for a restart]:::task
-  Show_each_VM_s_MAC__and_what_waits_for_a_restart35-->|Task| Show_the_old_ISOs_and_images_no_VM_uses36[show the old isos and images no vm uses<br>When: **unused   length   0**]:::task
+  Read_the_VMs__configuration_and_pending_changes_again34-->|Block Start| Say_what_waits_for_a_restart__with_each_VM_s_MAC__and_record_it35_block_start_1[[say what waits for a restart  with each vm s mac <br>and record it]]:::block
+  Say_what_waits_for_a_restart__with_each_VM_s_MAC__and_record_it35_block_start_1-->|Task| Show_each_VM_s_MAC__and_what_waits_for_a_restart0[show each vm s mac  and what waits for a restart]:::task
+  Show_each_VM_s_MAC__and_what_waits_for_a_restart0-->|Task| Record_what_waits_for_a_restart1[record what waits for a restart]:::task
+  Record_what_waits_for_a_restart1-.->|End of Block| Say_what_waits_for_a_restart__with_each_VM_s_MAC__and_record_it35_block_start_1
+  Record_what_waits_for_a_restart1-->|Task| Show_the_old_ISOs_and_images_no_VM_uses36[show the old isos and images no vm uses<br>When: **unused   length   0**]:::task
   Show_the_old_ISOs_and_images_no_VM_uses36-.->|End of Block| Create_and_correct_the_VMs1_block_start_0
   Show_the_old_ISOs_and_images_no_VM_uses36-->End
 ```

@@ -29,3 +29,6 @@ proxmox_apt_reboot_packages: []
 # Debian's flag for a pending reboot. It is in /run, which every boot empties, so it lasts until the node boots.
 # The idempotence tests point it at a scratch file.
 proxmox_apt_reboot_required_file: /run/reboot-required
+# What to do about a pending reboot, which a run records as left to do (NEXT STEPS) beside the reason; empty, the
+# reason alone.
+proxmox_apt_reboot_command: ""

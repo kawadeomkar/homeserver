@@ -29,15 +29,21 @@
       back in the UI (Network page) before running this role.
     quiet: true
 
+# The gist first, then the details, one line each.
 - name: connect | Report the NAS's state
   ansible.builtin.debug:
-    msg:
-      address: "{{ truenas_state.api_host }}"
-      version: "{{ truenas_state.version }}"
-      interface: "{{ truenas_state.interfaces | selectattr('name', 'eq', truenas_state.websocket_interface) | first | default({}) }}"
-      pools: "{{ truenas_state.pools | map(attribute='name') }}"
-      importable_pools: "{{ truenas_state.importable_pools | map(attribute='name') }}"
-      system_dataset: "{{ truenas_state.system_dataset }}"
-      datasets: "{{ truenas_state.datasets }}"
-      nfs_shares: "{{ truenas_state.nfs_shares | map(attribute='path') }}"
-      services: "{{ truenas_state.services }}"
+    msg: >-
+      {{ ['TrueNAS ' ~ truenas_state.version ~ ' at ' ~ truenas_state.api_host ~ ': pools '
+          ~ (truenas_state.pools | map(attribute='name') | join(', ') or 'none') ~ '; '
+          ~ truenas_state.datasets | length ~ ' datasets; ' ~ truenas_state.nfs_shares | length ~ ' NFS shares; running '
+          ~ (_running | join(', ') or 'no service')]
+         + (['pools that can be imported: ' ~ truenas_state.importable_pools | map(attribute='name') | join(', ')]
+            if truenas_state.importable_pools else [])
+         + ['system dataset: ' ~ (truenas_state.system_dataset.pool | default('?'))
+            ~ ('' if truenas_state.system_dataset.pool_set | default(true) else ' (unset)'),
+            'interface ' ~ (_interface.name | default('?')) ~ ': ' ~ (_interface.addresses | default([]) | join(', ')),
+            'datasets: ' ~ truenas_state.datasets | join(', '),
+            'NFS shares: ' ~ truenas_state.nfs_shares | map(attribute='path') | join(', ')] }}
+  vars:
+    _interface: "{{ truenas_state.interfaces | selectattr('name', 'eq', truenas_state.websocket_interface) | first | default({}) }}"
+    _running: "{{ truenas_state.services | dict2items | selectattr('value.state', 'eq', 'RUNNING') | map(attribute='key') | list }}"

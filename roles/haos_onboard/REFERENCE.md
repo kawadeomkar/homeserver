@@ -191,6 +191,7 @@ Description: Give a new Home Assistant its owner account before anyone else on t
 | Check that onboarding is closed | ansible.builtin.uri | True |  |
 | Refuse an onboarding still open | ansible.builtin.assert | True |  |
 | Say where to log in | ansible.builtin.debug | True |  |
+| Record the first login as left to do | ansible.builtin.set_stats | True |  |
 
 
 ## Task Flow Graphs
@@ -226,8 +227,9 @@ classDef rescue stroke:#665352,stroke-width:2px;
   Refuse_an_account_Home_Assistant_did_not_create9-->|Task| Check_that_onboarding_is_closed10[check that onboarding is closed<br>When: **haos onboard created is not skipped**]:::task
   Check_that_onboarding_is_closed10-->|Task| Refuse_an_onboarding_still_open11[refuse an onboarding still open<br>When: **haos onboard created is not skipped**]:::task
   Refuse_an_onboarding_still_open11-->|Task| Say_where_to_log_in12[say where to log in<br>When: **haos onboard created is not skipped**]:::task
-  Say_where_to_log_in12-.->|End of Block| Give_Home_Assistant_its_owner_account1_block_start_0
-  Say_where_to_log_in12-->End
+  Say_where_to_log_in12-->|Task| Record_the_first_login_as_left_to_do13[record the first login as left to do<br>When: **haos onboard created is not skipped**]:::task
+  Record_the_first_login_as_left_to_do13-.->|End of Block| Give_Home_Assistant_its_owner_account1_block_start_0
+  Record_the_first_login_as_left_to_do13-->End
 ```
 
 

@@ -356,7 +356,9 @@ Description: Join a Proxmox VE node to a tailnet, and with routes make it the LA
 | node ¦ Say which preferences differ | ansible.builtin.debug | True |
 | node ¦ Read the node's state after the changes | ansible.builtin.command | True |
 | node ¦ Read Tailscale Serve's configuration | ansible.builtin.command | True |
-| node ¦ Report what the admin console must fix | ansible.builtin.debug | True |
+| node ¦ Say what the admin console must fix, and record it | block | True |
+| node ¦ Report what the admin console must fix | ansible.builtin.debug | False |
+| node ¦ Record what the admin console must fix | ansible.builtin.set_stats | False |
 
 #### File: tasks/status.yml
 
@@ -510,8 +512,11 @@ classDef rescue stroke:#665352,stroke-width:2px;
   node___Set_the_node_s_routes_and_preferences16-->|Task| node___Say_which_preferences_differ17[node   say which preferences differ<br>When: **proxmox tailscale differ   default       length  <br>0**]:::task
   node___Say_which_preferences_differ17-->|Task| node___Read_the_node_s_state_after_the_changes18[node   read the node s state after the changes<br>When: **proxmox tailscale status rc    0**]:::task
   node___Read_the_node_s_state_after_the_changes18-->|Task| node___Read_Tailscale_Serve_s_configuration19[node   read tailscale serve s configuration<br>When: **proxmox tailscale status rc    0**]:::task
-  node___Read_Tailscale_Serve_s_configuration19-->|Task| node___Report_what_the_admin_console_must_fix20[node   report what the admin console must fix<br>When: **proxmox tailscale status after is not skipped**]:::task
-  node___Report_what_the_admin_console_must_fix20-->End
+  node___Read_Tailscale_Serve_s_configuration19-->|Block Start| node___Say_what_the_admin_console_must_fix__and_record_it20_block_start_0[[node   say what the admin console must fix  and<br>record it<br>When: **proxmox tailscale status after is not skipped**]]:::block
+  node___Say_what_the_admin_console_must_fix__and_record_it20_block_start_0-->|Task| node___Report_what_the_admin_console_must_fix0[node   report what the admin console must fix]:::task
+  node___Report_what_the_admin_console_must_fix0-->|Task| node___Record_what_the_admin_console_must_fix1[node   record what the admin console must fix]:::task
+  node___Record_what_the_admin_console_must_fix1-.->|End of Block| node___Say_what_the_admin_console_must_fix__and_record_it20_block_start_0
+  node___Record_what_the_admin_console_must_fix1-->End
 ```
 
 

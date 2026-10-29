@@ -173,3 +173,16 @@
           {{ haos_onboard_username }} (the password is in the vault). Log in, then restore a backup (Settings, System,
           Backups) or finish setting it up.
       when: haos_onboard_created is not skipped
+
+    # Left to do (NEXT STEPS) on the run that made the owner only: a Home Assistant that has one is left alone.
+    - name: Record the first login as left to do
+      ansible.builtin.set_stats:
+        data:
+          homeserver_next:
+            home_assistant:
+              login:
+                text: >-
+                  log in to Home Assistant as {{ haos_onboard_username }} (the password is in the vault), then restore a
+                  backup or finish setting it up
+                command: "{{ haos_onboard_url }}/"
+      when: haos_onboard_created is not skipped

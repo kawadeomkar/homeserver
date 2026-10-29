@@ -48,3 +48,7 @@ argument_specs:
         type: str
         default: /run/reboot-required
         description: Debian's flag file for a pending reboot. Must be on a filesystem a boot empties.
+      proxmox_apt_reboot_command:
+        type: str
+        default: ""
+        description: What to do about a pending reboot, recorded as left to do (NEXT STEPS) beside the reason; empty, the reason alone.
