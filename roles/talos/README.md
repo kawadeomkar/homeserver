@@ -8,7 +8,10 @@ only its defaults it does nothing. Three entry points:
   It never reboots a node and never moves one to another version.
 - **`upgrade`** (`just talos-upgrade`; `tasks_from: upgrade`): an etcd snapshot, then each node whose Talos version
   or schematic differs from the pins, control planes first, then Kubernetes with `talosctl upgrade-k8s`. In check
-  mode it shows the plan and Kubernetes's own dry run, without pulling images.
+  mode it shows the plan and Kubernetes's own dry run, without pulling images. It names each installer by its
+  digest alone (`<name>@sha256:…`): talosctl pulls the image onto the node first, where containerd keeps a tagged
+  and pinned reference by its digest alone, then asks for it by the reference it was given. The upgrade leaves the
+  node's configuration naming its old installer, which the next `main` run replaces, without a reboot.
 - **`etcd-snapshot`** (`just etcd-snapshot`; `tasks_from: etcd-snapshot`): a snapshot of the control plane's etcd
   into `talos_config_dir/etcd/`. It asks only the control plane, never the Image Factory or the other nodes, so it
   works on a degraded cluster.

@@ -127,8 +127,13 @@ them), then
    `talosctl upgrade-k8s`, which also updates kube-proxy and CoreDNS. With one node of each kind, both upgrades take
    something down for a few minutes: the control plane's, the Kubernetes API (the apps keep running, but nothing
    is scheduled or changed); the worker's, every app, since draining it leaves them nowhere to go. Choose a quiet
-   time.
-5. `just deploy kubernetes`: a dry run after the upgrade shows no change.
+   time. A node that fails to upgrade stops the run before it goes down, the rest of the cluster untouched: run
+   `just status`, fix the cause, and run it again. `talosctl -n <address> rollback` boots a node that came back
+   broken into the release it ran before.
+5. `just deploy kubernetes`: Talos's upgrade leaves each node's configuration naming the installer it was installed
+   from, so this run says the configuration differs on every node and applies the new installer, without a reboot
+   (only the next install reads it). After it, a dry run shows no change. Then remove the old version's
+   `talos_installer_digests` entries.
 
 `just etcd-snapshot` takes a snapshot on its own.
 

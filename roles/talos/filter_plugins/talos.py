@@ -110,10 +110,23 @@ def installer_image(installer, schematic_id, version, digests):
     return f"{image}@{digest}" if digest else image
 
 
+def image_by_digest(image):
+    """An image reference by its digest alone when it has one: <name>@sha256:..., the name a node keeps it under.
+    containerd drops the tag of a <name>:<tag>@<digest> it pulls, and talosctl upgrade (1.14) pulls the image, then
+    asks the node for it by the reference it was given, which the node then cannot find. A reference without a
+    digest is left as it is."""
+    name, at, digest = str(image).partition("@")
+    if not at:
+        return name
+    repository, _, last = name.rpartition("/")
+    return f"{repository}{'/' if repository else ''}{last.split(':', 1)[0]}@{digest}"
+
+
 class FilterModule:
     def filters(self):
         return {
             "talos_installer_image": installer_image,
+            "talos_image_by_digest": image_by_digest,
             "talos_node_tag": node_tag,
             "talos_client_minor": client_minor,
             "talos_minor": minor,

@@ -108,3 +108,18 @@ def test_the_installer_image_carries_its_pinned_digest():
     # A pair without a pin, or no pins at all: the tag alone.
     assert tf.installer_image("f/metal-installer", "abc", "v1.14.3", digests) == "f/metal-installer/abc:v1.14.3"
     assert tf.installer_image("f/metal-installer", "abc", "v1.14.2", {}) == "f/metal-installer/abc:v1.14.2"
+
+
+def test_an_upgrade_names_the_installer_by_its_digest_alone():
+    digest = "sha256:" + "1" * 64
+    assert tf.image_by_digest(f"factory.talos.dev/metal-installer/abc:v1.14.4@{digest}") == (
+        f"factory.talos.dev/metal-installer/abc@{digest}"
+    )
+    # A registry's port is not a tag; a name without a registry, or already without a tag, keeps its name.
+    assert (
+        tf.image_by_digest(f"registry.test:5000/installer:v1.14.4@{digest}") == f"registry.test:5000/installer@{digest}"
+    )
+    assert tf.image_by_digest(f"installer:v1.14.4@{digest}") == f"installer@{digest}"
+    assert tf.image_by_digest(f"f/metal-installer/abc@{digest}") == f"f/metal-installer/abc@{digest}"
+    # Without a digest there is nothing else to name it by.
+    assert tf.image_by_digest("f/metal-installer/abc:v1.14.4") == "f/metal-installer/abc:v1.14.4"
