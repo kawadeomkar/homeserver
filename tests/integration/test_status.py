@@ -42,6 +42,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "tests" / "policy"))
+sys.path.insert(0, str(ROOT / "tests"))
 import fake_pve  # noqa: E402
 import fake_tailscale  # noqa: E402
 import fake_talos  # noqa: E402
@@ -53,6 +54,7 @@ from helpers import (  # noqa: E402
     example_tree,
     example_without_kubernetes,
 )
+from vt import VT  # noqa: E402
 
 GIB = 2**30
 BIN = Path(sys.executable).parent
@@ -520,53 +522,6 @@ def just_status_on_a_terminal(tree, state, *args, rows=20, columns=120, **more):
     return proc.wait(timeout=60), b"".join(chunks).decode()
 
 
-class Terminal:
-    """Enough of a terminal for just status's live lines: text, carriage returns and newlines, CSI n F (to the start
-    of the line n up, never above the screen's top row, where a real terminal stops), CSI J and CSI K (clear to the
-    end of the screen, and of the line), colours ignored. The lines that scrolled off the top stay, as a terminal's
-    scrollback does, so `text` is what scrolling back shows after the run."""
-
-    SEQUENCE = re.compile(r"\x1b\[([0-9;?]*)([A-Za-z])")
-
-    def __init__(self, rows):
-        self.rows, self.lines, self.row, self.column, self.top = rows, [""], 0, 0, 0
-        self.redraws = 0
-
-    def feed(self, data):
-        at = 0
-        for match in self.SEQUENCE.finditer(data):
-            self._print(data[at : match.start()])
-            at = match.end()
-            if match.group(2) == "F":
-                self.redraws += 1
-                self.row, self.column = max(self.row - int(match.group(1) or 1), self.top), 0
-            elif match.group(2) == "J":
-                self.lines[self.row] = self.lines[self.row][: self.column]
-                del self.lines[self.row + 1 :]
-            elif match.group(2) == "K":
-                self.lines[self.row] = self.lines[self.row][: self.column]
-        self._print(data[at:])
-
-    def _print(self, text):
-        for char in text:
-            if char == "\r":
-                self.column = 0
-            elif char == "\n":
-                self.row += 1
-                if self.row == len(self.lines):
-                    self.lines.append("")
-                # A clear leaves the rows on the screen: only what scrolls moves its top.
-                self.top = max(self.top, len(self.lines) - self.rows)
-            else:
-                line = self.lines[self.row].ljust(self.column)
-                self.lines[self.row] = line[: self.column] + char + line[self.column + 1 :]
-                self.column += 1
-
-    @property
-    def text(self):
-        return "\n".join(self.lines).rstrip("\n") + "\n"
-
-
 def without_times(text):
     """A report's text without what differs between two runs: when it was read, and how long each host took."""
     text = re.sub(r"\d\d:\d\d", "HH:MM", text)
@@ -800,10 +755,12 @@ def test_on_a_terminal_each_section_shows_as_it_is_read(tree, tmp_path):
     assert SPINNER.search(stream), stream
     assert re.search(r" [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] APPS +waiting for the Proxmox host", stream), stream
     assert stream.index("homeserver  ") < stream.index("reading  "), stream
-    terminal = Terminal(rows=20)
-    terminal.feed(stream)
-    assert terminal.redraws > 0, stream
-    assert without_times(terminal.text) == without_times(plain), terminal.text
+    terminal = VT(120, 20)
+    terminal.feed(stream.encode())
+    # Redrawn in place, each frame whole on its lines, and nothing written a terminal would not know.
+    assert terminal.ups and terminal.frame_wraps == 0 and not terminal.unknown, (terminal.frame_wraps, terminal.unknown)
+    screen = "\n".join(terminal.transcript()) + "\n"
+    assert without_times(screen) == without_times(plain), screen
     # --json is no terminal's: the report alone, and nothing drawn.
     rc, stream = just_status_on_a_terminal(tree, state, "--json")
     assert rc == 0 and "\x1b[" not in stream and json.loads(stream) == report_of(tree), stream
