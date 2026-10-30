@@ -240,3 +240,28 @@ def test_a_stage_is_absent_only_once_its_absent_task_has_run(tmp_path):
         else:
             assert not drawn_absent and "There is no NAS" not in proc.stdout, proc.stdout
             assert "  NAS            TrueNAS 25.10.7 at the NAS" in lines, proc.stdout
+
+
+def test_a_report_that_changes_something_is_counted_as_a_change(tmp_path):
+    """A report whose changed_when holds, as a dry run's plan is: the default callback's hook strips a debug's
+    result to its message in place, so the engine reads changed before it."""
+    (tmp_path / "play.yml").write_text(
+        "- name: A plan\n  hosts: localhost\n  gather_facts: false\n  tasks:\n"
+        "    - name: Say what would change\n      ansible.builtin.debug:\n        msg: Would add a storage.\n"
+        "      changed_when: true\n"
+    )
+    config = tmp_path / "ansible.cfg"
+    config.write_text(f"[defaults]\nretry_files_enabled = false\ncallback_plugins = {ROOT / 'callback_plugins'}\n")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("ANSIBLE_")} | {
+        "ANSIBLE_CONFIG": str(config),
+        "ANSIBLE_STDOUT_CALLBACK": "homeserver",
+        "ANSIBLE_LOG_PATH": str(tmp_path / "run.log"),
+        "ANSIBLE_NOCOLOR": "1",
+    }
+    command = [PLAYBOOK, "-i", "localhost,", "-c", "local", "play.yml", "--check"]
+    command += ["-e", f"ansible_python_interpreter={sys.executable}"]
+    proc = subprocess.run(command, env=env, cwd=tmp_path, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    lines = proc.stdout.splitlines()
+    assert "  tasks          Would add a storage." in lines, proc.stdout
+    assert lines[-2].startswith("1 task · 1 would change · 0 failed"), proc.stdout

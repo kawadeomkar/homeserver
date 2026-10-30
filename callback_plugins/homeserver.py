@@ -143,8 +143,10 @@ class CallbackModule(DefaultCallback):
         self._engine("include", included_file)
 
     def v2_runner_on_ok(self, result):
+        # Read before the default's hook, which cleans a debug's result in place, its changed with it.
+        changed = bool(result.result.get("changed"))
         super().v2_runner_on_ok(result)
-        self._engine("ok", result)
+        self._engine("ok", result, changed)
 
     def v2_runner_item_on_ok(self, result):
         super().v2_runner_item_on_ok(result)

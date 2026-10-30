@@ -465,8 +465,9 @@ class Engine:
             self.run.result(result.task._uuid, result.host.get_name(), outcome, self._now())
             self._after()
 
-    def ok(self, result):
-        self._result(result, "changed" if result.result.get("changed") else "ok")
+    def ok(self, result, changed=False):
+        """A task's result on a host. changed: as it came, before the default callback's hook cleaned a debug's."""
+        self._result(result, "changed" if changed or result.result.get("changed") else "ok")
         # A stage this setup lacks: its absent task has run, which it does only then. Its start says nothing, since
         # Ansible announces a task before it checks its when.
         with self.display._lock:
