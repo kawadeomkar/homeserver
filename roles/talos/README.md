@@ -79,6 +79,7 @@ in the temporary directory) a day old or older.
 | `talos_schematic_pins` | `{}` | Each schematic's id, by name: the Image Factory's answer is refused otherwise |
 | `talos_installer_digests` | `{}` | Each installer image's digest, by `<schematic id>:<version>`, given beside the tag; once set, each schematic in use at `talos_version` needs one |
 | `talos_keep_rendered` | `false` | Keep each node's rendered configuration in `talos_config_dir/rendered/` (mode 0600), until the next run without it |
+| `talos_upgrade_command` | `""` | What moves the nodes to the pins, recorded under `homeserver_next` as left to do beside what the pins wait for, which the stdout callback prints as NEXT STEPS; empty, what they wait for alone |
 
 A variable for one run follows the playbook:
 `just deploy kubernetes -e talos_allow_bootstrap=true`. `scripts/runbooks/talos.md` covers building,

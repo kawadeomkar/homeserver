@@ -47,3 +47,14 @@
           up as a checked mount point, or a Proxmox Backup Server) and name it there.
       when: vm_backup_vmids | length > 0 and not vm_backup_target
       tags: [always]
+    # Left to do (NEXT STEPS), in just status's words.
+    - name: Record the VMs that have no backup
+      ansible.builtin.set_stats:
+        data:
+          homeserver_next:
+            backup:
+              target:
+                text: "nothing is backed up: no backup job covers VMs {{ vm_backup_vmids | join(', ') }}"
+                command: "{{ status_commands.backup_target }}"
+      when: vm_backup_vmids | length > 0 and not vm_backup_target
+      tags: [always]

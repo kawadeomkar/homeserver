@@ -273,6 +273,16 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
   
   
 
+  - **talos_upgrade_command**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: What moves the nodes to the pins, recorded as left to do (NEXT STEPS) beside what the pins wait for; empty, what they wait for alone.
+  
+  
+  
+
 
 
 #### Key: upgrade
@@ -522,6 +532,16 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
     - **Default**: False
   
     - **Description**: Keep each node's rendered configuration in talos_config_dir/rendered/ (mode 0600; it holds the secrets), to compare by hand with talosctl apply-config --dry-run, until the next run without it, which removes them.
+  
+  
+  
+
+  - **talos_upgrade_command**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: What moves the nodes to the pins, recorded as left to do (NEXT STEPS) beside what the pins wait for; empty, what they wait for alone.
   
   
   
@@ -778,6 +798,16 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
   
   
 
+  - **talos_upgrade_command**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: What moves the nodes to the pins, recorded as left to do (NEXT STEPS) beside what the pins wait for; empty, what they wait for alone.
+  
+  
+  
+
 
 
 </details>
@@ -817,6 +847,7 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
 | [talos_schematic_pins](defaults/main.yml#L48)   | dict | `{}` |    
 | [talos_installer_digests](defaults/main.yml#L49)   | dict | `{}` |    
 | [talos_keep_rendered](defaults/main.yml#L53)   | bool | `False` |    
+| [talos_upgrade_command](defaults/main.yml#L56)   | str |  |    
 
 
 
@@ -880,7 +911,9 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
 | Fetch a kubeconfig, or renew one that expires soon | ansible.builtin.command | True |
 | Say the kubeconfig would be fetched or renewed | ansible.builtin.debug | True |
 | Keep the kubeconfig readable by its owner alone | ansible.builtin.file | True |
+| Report the versions running and what waits, and record it | block | False |
 | Report the versions running, and any upgrade the pins wait for | ansible.builtin.debug | False |
+| Record the upgrade the pins wait for, and what to restart | ansible.builtin.set_stats | False |
 
 #### File: tasks/prepare.yml
 
@@ -1069,9 +1102,12 @@ classDef rescue stroke:#665352,stroke-width:2px;
   Check_the_kubeconfig_s_client_certificate25-->|Task| Fetch_a_kubeconfig__or_renew_one_that_expires_soon26[fetch a kubeconfig  or renew one that expires soon<br>When: **not talos kubeconfig file stat exists or talos<br>kubeconfig cert rc    0**]:::task
   Fetch_a_kubeconfig__or_renew_one_that_expires_soon26-->|Task| Say_the_kubeconfig_would_be_fetched_or_renewed27[say the kubeconfig would be fetched or renewed<br>When: **ansible check mode and  not talos kubeconfig file<br>stat exists or talos kubeconfig cert rc    0**]:::task
   Say_the_kubeconfig_would_be_fetched_or_renewed27-->|Task| Keep_the_kubeconfig_readable_by_its_owner_alone28[keep the kubeconfig readable by its owner alone<br>When: **not ansible check mode**]:::task
-  Keep_the_kubeconfig_readable_by_its_owner_alone28-->|Task| Report_the_versions_running__and_any_upgrade_the_pins_wait_for29[report the versions running  and any upgrade the<br>pins wait for]:::task
-  Report_the_versions_running__and_any_upgrade_the_pins_wait_for29-.->|End of Block| Build_the_cluster1_block_start_0
-  Report_the_versions_running__and_any_upgrade_the_pins_wait_for29-->End
+  Keep_the_kubeconfig_readable_by_its_owner_alone28-->|Block Start| Report_the_versions_running_and_what_waits__and_record_it29_block_start_1[[report the versions running and what waits  and<br>record it]]:::block
+  Report_the_versions_running_and_what_waits__and_record_it29_block_start_1-->|Task| Report_the_versions_running__and_any_upgrade_the_pins_wait_for0[report the versions running  and any upgrade the<br>pins wait for]:::task
+  Report_the_versions_running__and_any_upgrade_the_pins_wait_for0-->|Task| Record_the_upgrade_the_pins_wait_for__and_what_to_restart1[record the upgrade the pins wait for  and what to<br>restart]:::task
+  Record_the_upgrade_the_pins_wait_for__and_what_to_restart1-.->|End of Block| Report_the_versions_running_and_what_waits__and_record_it29_block_start_1
+  Record_the_upgrade_the_pins_wait_for__and_what_to_restart1-.->|End of Block| Build_the_cluster1_block_start_0
+  Record_the_upgrade_the_pins_wait_for__and_what_to_restart1-->End
 ```
 
 

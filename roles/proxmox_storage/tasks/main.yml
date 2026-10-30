@@ -195,12 +195,22 @@
   when: proxmox_storage_nfs | length > 0
 
 # Commands do not run in check mode, so this is what a dry run shows: add, correct or ok per NFS
-# storage, and present for each of the node's own storages that exists, is enabled and holds images.
-# Whether a storage is active on the node is checked only for real, at the end.
+# storage, and present for each of the node's own storages that exists, is enabled and holds images, under a line
+# that counts them. Whether a storage is active on the node is checked only for real, at the end.
 - name: Show what will be added or corrected, and what was checked
   ansible.builtin.debug:
-    msg: "{{ proxmox_storage_plan | default({}) | combine(dict(proxmox_storage_local | product(['present']))) }}"
+    msg: >-
+      {{ [(_states | length) ~ ' storage' ~ ('s' if _states | length != 1 else '') ~ ' checked: '
+          ~ ('each as configured' if not _todo else _todo | map(attribute='key') | join(', ') ~ ' to change')]
+         + _lines }}
   when: proxmox_storage_nfs | length > 0 or proxmox_storage_local | length > 0
+  vars:
+    _states: "{{ proxmox_storage_plan | default({}) | combine(dict(proxmox_storage_local | product(['present']))) }}"
+    _todo: "{{ _states | dict2items | rejectattr('value', 'in', ['ok', 'present']) | list }}"
+    _lines: >-
+      {%- set out = [] -%}
+      {%- for id, state in _states.items() -%}{%- set _ = out.append(id ~ ': ' ~ state) -%}{%- endfor -%}
+      {{ out }}
 
 - name: Add the NFS storages
   ansible.builtin.command:
@@ -256,8 +266,8 @@
 - name: Show the start-on-boot delay, current and wanted
   ansible.builtin.debug:
     msg: >-
-      startall-onboot-delay on {{ proxmox_storage_node_name }}:
-      {{ _current }} -> {{ proxmox_storage_startall_delay }}{{ '' if _current | int != proxmox_storage_startall_delay | int else ' (no change)' }}
+      start-on-boot delay on {{ proxmox_storage_node_name }}: {{ _current }} s{{ ', as configured'
+      if _current | int == proxmox_storage_startall_delay | int else ' -> ' ~ proxmox_storage_startall_delay ~ ' s' }}
   when: proxmox_storage_startall_delay is not none
   vars:
     _current: "{{ (proxmox_storage_node_config.stdout | from_json).get('startall-onboot-delay', 0) }}"

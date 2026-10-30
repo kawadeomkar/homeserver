@@ -227,8 +227,9 @@
 - name: objects | Show what differs
   ansible.builtin.debug:
     msg: >-
-      {{ ((['sops-age (its content is never shown)'] if flux_bootstrap_secret_diff.rc == 1 else [])
-          + (flux_bootstrap_diffs.results | selectattr('rc', 'eq', 1) | map(attribute='item.name') | list)) }}
+      {{ ('would apply, differing from the cluster: ' if ansible_check_mode else 'applying, differing from the cluster: ')
+         ~ ((['sops-age (its content is never shown)'] if flux_bootstrap_secret_diff.rc == 1 else [])
+            + (flux_bootstrap_diffs.results | selectattr('rc', 'eq', 1) | map(attribute='item.name') | list)) | join(', ') }}
   changed_when: ansible_check_mode
   when: flux_bootstrap_secret_diff.rc == 1 or flux_bootstrap_diffs.results | selectattr('rc', 'eq', 1) | list | length > 0
 
@@ -309,9 +310,16 @@
   failed_when: false
   when: not ansible_check_mode
 
+# How many are ready and at which revision, then kubectl's table, which says why one is not.
 - name: objects | Show Flux's Kustomizations
   ansible.builtin.debug:
-    msg: "{{ flux_bootstrap_kustomizations.stdout_lines }}"
+    msg: >-
+      {{ [(_rows | select('search', ' True ') | list | length) ~ ' of ' ~ (_rows | length) ~ ' Kustomizations ready'
+          ~ (' at ' ~ _revision if _revision else '')]
+         + flux_bootstrap_kustomizations.stdout_lines }}
+  vars:
+    _rows: "{{ flux_bootstrap_kustomizations.stdout_lines[1:] }}"
+    _revision: "{{ flux_bootstrap_kustomizations.stdout | regex_search('refs/heads/[^ ]+@sha1:[0-9a-f]{7}') or '' }}"
   when: flux_bootstrap_kustomizations is not skipped
 
 - name: objects | Refuse Kustomizations that are not ready

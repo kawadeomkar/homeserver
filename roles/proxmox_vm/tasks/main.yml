@@ -297,9 +297,16 @@
     - name: Show what each VM needs
       ansible.builtin.debug:
         msg: >-
-          {{ {'vms': proxmox_vm_plan.summary}
-             | combine({'storage pending: ' ~ (proxmox_vm_pending_storages_hint or 'an earlier role adds it on a real run'):
-                        proxmox_vm_plan.pending_storages} if proxmox_vm_plan.pending_storages else {}) }}
+          {%- set out = [] -%}
+          {%- for name, what in proxmox_vm_plan.summary.items() -%}
+          {%-   set _ = out.append(name ~ ': ' ~ (what if what is string else what | join(', '))) -%}
+          {%- endfor -%}
+          {%- if proxmox_vm_plan.pending_storages -%}
+          {%-   set _ = out.append('storage pending: ' ~ (proxmox_vm_pending_storages_hint
+                                   or 'an earlier role adds it on a real run') ~ ': '
+                                   ~ proxmox_vm_plan.pending_storages | join(', ')) -%}
+          {%- endif -%}
+          {{ out }}
       changed_when: ansible_check_mode and proxmox_vm_plan.summary.values() | reject('eq', 'ok') | list | length > 0
 
     - name: Warn about the node's memory and the VMs' MACs
@@ -382,11 +389,12 @@
       loop: "{{ proxmox_vm_vms | map(attribute='vmid') | map('string') | product(['config', 'pending']) | list }}"
       when: not ansible_check_mode
 
-    - name: Show each VM's MAC, and what waits for a restart
-      ansible.builtin.debug:
-        msg: "{{ {'macs': _macs} | combine({'needs a restart (qm shutdown, then qm start)': _restart} if _restart else {}) }}"
+    # What waits for a restart is also recorded as left to do (NEXT STEPS), in just status's words.
+    - name: Say what waits for a restart, with each VM's MAC, and record it
       vars:
         _after: "{{ proxmox_vm_after.results | default([]) | rejectattr('skipped', 'defined') | list }}"
+        _names: "{{ dict(proxmox_vm_vms | map(attribute='vmid') | map('string') | zip(proxmox_vm_vms | map(attribute='name'))) }}"
+        _ids: "{{ dict(proxmox_vm_vms | map(attribute='name') | zip(proxmox_vm_vms | map(attribute='vmid') | map('string'))) }}"
         _macs: >-
           {%- set out = {} -%}
           {%- for r in _after if r.item.1 == 'config' -%}
@@ -394,14 +402,51 @@
           {%-   set _ = out.update({(r.stdout | from_json).name | default(r.item.0): net | regex_search('[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}')}) -%}
           {%- endfor -%}
           {{ out if _after else proxmox_vm_plan.macs }}
+        # Each VM a restart waits for, with the settings it would apply: read from the node after a real run, from
+        # the plan in a dry run.
         _restart: >-
-          {%- set out = {} -%}
-          {%- for r in _after if r.item.1 == 'pending' -%}
-          {%-   set keys = r.stdout | from_json | selectattr('pending', 'defined') | map(attribute='key') | list
-                           + (r.stdout | from_json | selectattr('delete', 'defined') | map(attribute='key') | list) -%}
-          {%-   if keys -%}{%- set _ = out.update({r.item.0: keys | sort}) -%}{%- endif -%}
-          {%- endfor -%}
-          {{ out if _after else proxmox_vm_plan.restart }}
+          {%- set out = [] -%}
+          {%- if _after -%}
+          {%-   for r in _after if r.item.1 == 'pending' -%}
+          {%-     set keys = r.stdout | from_json | selectattr('pending', 'defined') | map(attribute='key') | list
+                             + (r.stdout | from_json | selectattr('delete', 'defined') | map(attribute='key') | list) -%}
+          {%-     if keys -%}
+          {%-       set _ = out.append({'vmid': r.item.0, 'name': _names[r.item.0] | default(r.item.0), 'keys': keys | sort}) -%}
+          {%-     endif -%}
+          {%-   endfor -%}
+          {%- else -%}
+          {%-   for name, keys in proxmox_vm_plan.restart.items() -%}
+          {%-     set _ = out.append({'vmid': _ids[name] | default(''), 'name': name, 'keys': keys | sort}) -%}
+          {%-   endfor -%}
+          {%- endif -%}
+          {{ out }}
+      block:
+        - name: Show each VM's MAC, and what waits for a restart
+          ansible.builtin.debug:
+            msg: >-
+              {%- set out = [] -%}
+              {%- for vm in _restart -%}
+              {%-   set _ = out.append((vm.vmid ~ ' ' ~ vm.name) | trim ~ ' waits for a restart to apply '
+                                       ~ vm['keys'] | join(', ') ~ ': qm reboot ' ~ vm.vmid) -%}
+              {%- endfor -%}
+              {%- set _ = out.append('nothing waits for a restart') if not out else none -%}
+              {%- set macs = [] -%}
+              {%- for name, mac in _macs.items() -%}{%- set _ = macs.append(name ~ ' ' ~ mac) -%}{%- endfor -%}
+              {%- set _ = out.append('MACs, for the DHCP reservations: ' ~ macs | join(', ')) if macs else none -%}
+              {{ out }}
+
+        - name: Record what waits for a restart
+          ansible.builtin.set_stats:
+            data:
+              homeserver_next:
+                restart: >-
+                  {%- set out = {} -%}
+                  {%- for vm in _restart -%}
+                  {%-   set _ = out.update({vm.name: {
+                          'text': (vm.vmid ~ ' ' ~ vm.name) | trim ~ ' waits for a restart to apply ' ~ vm['keys'] | join(', '),
+                          'command': 'qm reboot ' ~ vm.vmid}}) -%}
+                  {%- endfor -%}
+                  {{ out }}
 
     - name: Show the old ISOs and images no VM uses
       ansible.builtin.debug:

@@ -1325,7 +1325,7 @@ def _host_attention(found, commands):
     out = []
     if found.get("reboot"):
         out.append(
-            _item("todo", "reboot", "the host waits for a reboot an upgrade asked for", "reboot it at a quiet time")
+            _item("todo", "reboot", "the host waits for a reboot an upgrade asked for", commands.get("reboot", ""))
         )
     if found.get("upgrades"):
         count = len(found["upgrades"])

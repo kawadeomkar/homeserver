@@ -22,3 +22,5 @@ proxmox_apt_upgrade: true
 # firmware release may bring this hardware nothing; when in doubt, a reboot is asked for. The run never reboots the
 # host: reboot it by hand when it says so, at a time the VMs can go down.
 proxmox_apt_reboot_packages: [dbus, intel-microcode, amd64-microcode, pve-firmware]
+# What NEXT STEPS says to do about a pending reboot: just status's words for it.
+proxmox_apt_reboot_command: "{{ status_commands.reboot }}"

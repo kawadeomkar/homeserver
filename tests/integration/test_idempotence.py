@@ -75,10 +75,16 @@ def free_port():
 
 def run(playbook, extra, check=False, env=None):
     """Run a test playbook; return (return code, {host: stats}, combined output). `env` adds to the environment,
-    such as a HOME of the test's own."""
+    such as a HOME of the test's own. The default callback shows the run's custom stats, where next_steps reads what
+    the roles recorded as left to do."""
     # ANSIBLE_FORCE_COLOR overrides ANSIBLE_NOCOLOR, and a coloured PLAY RECAP does not match RECAP.
     environment = {k: v for k, v in os.environ.items() if k != "ANSIBLE_FORCE_COLOR"}
-    environment |= {"ANSIBLE_CONFIG": str(HERE / "ansible.cfg"), "ANSIBLE_NOCOLOR": "1", **(env or {})}
+    environment |= {
+        "ANSIBLE_CONFIG": str(HERE / "ansible.cfg"),
+        "ANSIBLE_NOCOLOR": "1",
+        "ANSIBLE_SHOW_CUSTOM_STATS": "1",
+        **(env or {}),
+    }
     cmd = [
         PLAYBOOK,
         str(HERE / playbook),
@@ -109,6 +115,15 @@ def expect(result, host, changed=None, note=""):
         assert got > 0, f"{note}: expected changes, got none\n{out[-3000:]}"
     elif changed is not None:
         assert got == changed, f"{note}: expected changed={changed}, got {got}\n{out[-6000:]}"
+
+
+def next_steps(out):
+    """What a run recorded as left to do, homeserver_next, which the stdout callback prints as NEXT STEPS: read from
+    the default callback's custom stats, its RUN line JSON once its newlines are gone."""
+    for line in out.splitlines():
+        if line.startswith("\tRUN: "):
+            return json.loads(line[len("\tRUN: ") :]).get("homeserver_next", {})
+    return {}
 
 
 def changed_tasks(out):
@@ -652,6 +667,7 @@ def test_proxmox_apt_role_is_idempotent(tmp_path):
     )
     assert "before the repository changes above: 0 upgraded, 0 newly installed" in out, out[-3000:]
     assert "No reboot needed." in out, out[-3000:]
+    assert next_steps(out)["reboot"]["host"] == "", "a reboot recorded as left to do when none is needed"
     assert sources_of(extra) == fresh, "the dry run changed the repository files"
     assert read(state)["mutations"] == 0 and read(state)["apt_get_runs"] == 1, "the dry run did more than simulate"
 
@@ -662,6 +678,10 @@ def test_proxmox_apt_role_is_idempotent(tmp_path):
     assert "2 upgraded, 1 newly installed" in result[2], result[2][-3000:]
     kernel = "Reboot the node when it is safe to: the upgrade changes proxmox-kernel-7.0.14-23-pve-signed;"
     assert f"{kernel} {flag} asks for one." in result[2], result[2][-3000:]
+    assert next_steps(result[2])["reboot"]["host"] == {
+        "text": f"the host waits for a reboot: {kernel.split(': ', 1)[1]} {flag} asks for one",
+        "command": "reboot it at a quiet time",
+    }
     assert flag.read_text() == REQUESTED
     settled = {
         **fresh,
@@ -1003,9 +1023,7 @@ def test_proxmox_backup_with_a_nas(tmp_path):
 
     result = run("proxmox_backup.yml", extra, check=True)
     expect(result, "homeserver", changed=1, note="dry run on a fresh host")
-    assert re.search(r'created by proxmox_storage on a real run"?:\s*\[\s*"homeserver-backup"', result[2]), result[2][
-        -3000:
-    ]
+    assert "storage that proxmox_storage creates on a real run: homeserver-backup" in result[2], result[2][-3000:]
     assert re.search(r'vm-nightly"?:\s*"?create', result[2]), result[2][-3000:]
     assert not state.exists() or read(state)["mutations"] == 0, "the dry run changed the host"
 
@@ -1277,10 +1295,9 @@ def test_proxmox_vm_with_a_nas(tmp_path):
     result = run("kubernetes.yml", extra, check=True)
     expect(result, "homeserver", changed=True, note="dry run on a fresh host")
     out = result[2]
-    assert re.search(
-        r'storage pending: just deploy proxmox adds it: run that first"?:\s*\[\s*"homeserver-ephemeral",'
-        r'\s*"homeserver-persistent"',
-        out,
+    assert (
+        "storage pending: just deploy proxmox adds it: run that first: homeserver-ephemeral, homeserver-persistent"
+        in out
     ), out[-3000:]
     assert re.search(r'homeserver-worker-1"?:\s*"?create', out) and f"Would download: talos-{TALOS}" in out, out[-3000:]
     assert read(state)["mutations"] == 0, "the dry run changed the host"
@@ -1296,7 +1313,7 @@ def test_proxmox_vm_with_a_nas(tmp_path):
     result = run("kubernetes.yml", extra)
     expect(result, "homeserver", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")
     expect(run("kubernetes.yml", extra, check=True), "homeserver", changed=0, note="dry run after applying")
-    assert f'"homeserver-worker-1": "{mac(2).upper()}"' in result[2], "the MACs are not reported"
+    assert f"homeserver-worker-1 {mac(2).upper()}" in result[2], "the MACs are not reported"
 
     vms = vms_of(state)
     assert sorted(vms) == ["300", "301"] and all(vm["status"] == "running" for vm in vms.values())
@@ -1327,10 +1344,11 @@ def test_proxmox_vm_with_a_nas(tmp_path):
     write(state, s)
     result = run("kubernetes.yml", extra)
     expect(result, "homeserver", changed=1, note="run after drift")
-    assert re.search(r'needs a restart[^"]*"?:\s*\{\s*"300":\s*\[\s*"cores"', result[2]), result[2][-3000:]
+    assert "300 homeserver-cp-1 waits for a restart to apply cores" in result[2], result[2][-3000:]
+    assert next_steps(result[2])["restart"]["homeserver-cp-1"]["command"] == "qm reboot 300"
     result = run("kubernetes.yml", extra)
     expect(result, "homeserver", changed=0, note=f"second run after drift (changed: {changed_tasks(result[2])})")
-    assert re.search(r'"300":\s*\[\s*"cores"', result[2]), "the pending restart is no longer reported"
+    assert "300 homeserver-cp-1 waits for a restart to apply cores" in result[2], "the pending restart is not reported"
     assert vms_of(state)["300"]["status"] == "running", "the role restarted a VM"
     s = read(state)
     s["vms"]["300"]["config"] |= s["vms"]["300"]["pending"]
@@ -1338,7 +1356,11 @@ def test_proxmox_vm_with_a_nas(tmp_path):
     write(state, s)
     result = run("kubernetes.yml", extra)
     expect(result, "homeserver", changed=0, note="run after the restart")
-    assert "needs a restart" not in result[2]
+    assert (
+        "nothing waits for a restart" in result[2]
+        and "waits for a restart to apply" not in result[2]
+        and not next_steps(result[2]).get("restart")
+    )
 
     # The data disk's serial changed by hand: set again on the same volume, its size and contents untouched.
     s = read(state)
@@ -1360,7 +1382,9 @@ def test_proxmox_vm_with_a_nas(tmp_path):
     worker = vms_of(state)["301"]
     assert worker["pending"]["boot"] == "order=scsi0;ide2"
     assert worker["config"]["scsi0"].startswith("homeserver-ephemeral:"), worker["config"]["scsi0"]
-    assert re.search(r'"301":\s*\[[^\]]*"boot"', result[2]), result[2][-3000:]
+    assert re.search(r"301 homeserver-worker-1 waits for a restart to apply [^\n\"]*\bboot\b", result[2]), result[2][
+        -3000:
+    ]
     expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="a system disk replaced, again")
 
     # The iGPU passed to the running worker: the PCI device waits for a restart, and is reported until then.
@@ -1373,7 +1397,9 @@ def test_proxmox_vm_with_a_nas(tmp_path):
     assert vms_of(state)["301"]["pending"]["hostpci0"] == "mapping=igpu,pcie=1" and "hostpci0" not in str(
         vms_of(state)["300"]
     )
-    assert re.search(r'"301":\s*\[[^\]]*"hostpci0"', result[2]), result[2][-3000:]
+    assert re.search(r"301 homeserver-worker-1 waits for a restart to apply [^\n\"]*\bhostpci0\b", result[2]), result[
+        2
+    ][-3000:]
     expect(run("kubernetes.yml", gpu), "homeserver", changed=0, note="the iGPU, again")
     restart_all(state)
     # Taken away again: removed at the next restart too.
@@ -1457,7 +1483,7 @@ def test_proxmox_vm_without_a_nas(tmp_path):
     write(state, s)
     result = run("kubernetes.yml", extra)
     expect(result, "homeserver", changed=1, note="run after drift")
-    assert re.search(r'needs a restart[^"]*"?:\s*\{\s*"301":\s*\[\s*"memory"', result[2]), result[2][-3000:]
+    assert "301 homeserver-worker-1 waits for a restart to apply memory" in result[2], result[2][-3000:]
     expect(run("kubernetes.yml", extra), "homeserver", changed=0, note="second run after drift")
     restart_all(state)
 
@@ -1511,12 +1537,10 @@ def test_proxmox_vm_moves_disks_only_when_told(tmp_path):
     told = extra | {"proxmox_vm_move_disks": True}
     result = run("kubernetes.yml", told, check=True)
     expect(result, "homeserver", changed=True, note="dry run of the moves")
-    assert re.search(
-        r'"homeserver-cp-1":\s*\[\s*"move scsi0 to homeserver-persistent",\s*"move efidisk0 to local-lvm"', result[2]
-    ), result[2][-3000:]
-    assert re.search(r'"homeserver-worker-1":\s*\[\s*"move scsi0 to homeserver-ephemeral"', result[2]), result[2][
+    assert "homeserver-cp-1: move scsi0 to homeserver-persistent, move efidisk0 to local-lvm" in result[2], result[2][
         -3000:
     ]
+    assert "homeserver-worker-1: move scsi0 to homeserver-ephemeral" in result[2], result[2][-3000:]
     assert read(state)["mutations"] == mutations, "the dry run changed the host"
 
     expect(run("kubernetes.yml", told), "homeserver", changed=1, note="the moves")
@@ -1878,7 +1902,7 @@ def test_talos_with_a_nas(tmp_path, factory):
         outputs.append(result[2])
         expect(result, "homeserver-k8s", changed=0, note=f"{'dry run' if check else 'second run'} after the build")
     # The nodes' own version, never the client's (v1.14.9).
-    assert f"Talos {TALOS}, schematic " + base[:8] in result[2] and "v1.14.9" not in result[2], result[2][-3000:]
+    assert f"Talos {TALOS} (schematic {base[:8]})" in result[2] and "v1.14.9" not in result[2], result[2][-3000:]
 
     # Drift: a node's configuration changed behind the role's back, on the worker, then on the control plane.
     s = read(state)
@@ -1906,6 +1930,7 @@ def test_talos_with_a_nas(tmp_path, factory):
     assert read(state)["nodes"]["127.0.0.30"]["config"] == cp, "applied without a reboot"
     assert "talosctl -n 127.0.0.30 service etcd restart" in result[2], result[2][-3000:]
     assert "talosctl -n 127.0.0.30 upgrade-k8s --to " in result[2], result[2][-3000:]
+    assert next_steps(result[2])["etcd"]["restart"]["command"] == "talosctl -n 127.0.0.30 service etcd restart"
     result = run("talos.yml", extra, env=env)
     expect(result, "homeserver-k8s", changed=0, note="second run after drift on the control plane")
     assert "service etcd restart" not in result[2]
@@ -1922,6 +1947,7 @@ def test_talos_with_a_nas(tmp_path, factory):
         -3000:
     ]
     assert "kubernetes: 1.37.2" in result[2]
+    assert next_steps(result[2])["talos"]["pins"]["command"] == "just talos-upgrade --check, then just talos-upgrade"
     no_talos_secret(outputs)
 
 
@@ -2729,6 +2755,7 @@ def test_haos_with_a_nas(tmp_path, home_assistant):
         }
     ]
     assert f"answers at http://127.0.0.1:{ha['port']}/ha/ with its owner account owner" in result[2], result[2][-3000:]
+    assert next_steps(result[2])["home_assistant"]["login"]["command"] == f"http://127.0.0.1:{ha['port']}/ha/"
 
     result = run("homeassistant.yml", extra)
     expect(result, "homeserver", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")

@@ -133,6 +133,12 @@ argument_specs:
           Keep each node's rendered configuration in talos_config_dir/rendered/ (mode 0600; it holds the secrets),
           to compare by hand with talosctl apply-config --dry-run, until the next run without it, which removes
           them.
+      talos_upgrade_command:
+        type: str
+        default: ""
+        description: >-
+          What moves the nodes to the pins, recorded as left to do (NEXT STEPS) beside what the pins wait for;
+          empty, what they wait for alone.
   upgrade:
     short_description: Move the running nodes to the pinned Talos and Kubernetes versions
     description:
