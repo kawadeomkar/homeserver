@@ -44,6 +44,10 @@ elif recipe == "lint-bad":
 elif recipe == "lint-env":
     print("log", os.environ.get("ANSIBLE_LOG_PATH", "none"), "colour", os.environ.get("NO_COLOR", "on"))
     print("stdin", os.path.realpath("/proc/self/fd/0") if os.path.exists("/proc/self/fd/0") else "unknown")
+elif recipe in ("test-plain", "test-xdist"):
+    import subprocess
+    workers = ["-n", "2"] if recipe == "test-xdist" else []
+    sys.exit(subprocess.call([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *workers, "sample"]))
 elif recipe == "lint-slow":
     def stop(*_):
         print("slow got INT", flush=True)
@@ -59,7 +63,7 @@ def environment(**more):
     env = {
         k: v
         for k, v in os.environ.items()
-        if not k.startswith(("ANSIBLE_", "JUST_", "NO_COLOR")) and k not in ("VENV", "VIRTUAL_ENV", "CI")
+        if not k.startswith(("ANSIBLE_", "JUST_", "NO_COLOR", "HOMESERVER_")) and k not in ("VENV", "VIRTUAL_ENV", "CI")
     }
     return env | {"ANSIBLE_NOCOLOR": "1", "TERM": "xterm-256color", **more}
 
@@ -102,9 +106,9 @@ def tree(tmp_path):
     return root
 
 
-def live(root, *types, interrupt_when=None, terminal=True):
+def live(root, *types, interrupt_when=None, terminal=True, recipe="lint"):
     command = [sys.executable, "scripts/live.py", "--just", str(root / "fake-just")]
-    command += ["--justfile", "justfile", "--title", "lint " + " ".join(types), "lint", *types]
+    command += ["--justfile", "justfile", "--title", f"{recipe} " + " ".join(types), recipe, *types]
     (root / "fake-just").write_text(f'#!/bin/sh\nexec {sys.executable} {root / "just.py"} "$@"\n')
     (root / "fake-just").chmod(0o755)
     if not terminal:
@@ -128,9 +132,57 @@ def drawn(screen):
     assert not left, left
 
 
-def the_log(root):
-    (log,) = (root / "logs").glob("*-lint.log")
+def the_log(root, recipe="lint"):
+    (log,) = (root / "logs").glob(f"*-{recipe}.log")
     return log
+
+
+SAMPLE = """\
+import time
+
+import pytest
+
+
+def test_passes():
+    time.sleep(0.5)
+
+
+def test_fails():
+    time.sleep(0.5)
+    assert 1 + 1 == 3, "arithmetic is broken"
+
+
+@pytest.mark.skip(reason="not today")
+def test_skipped():
+    pass
+"""
+
+
+def test_a_test_run_counts_its_tests_and_says_each_failure_as_it_fails(tmp_path):
+    """The pytest reader, with the repository's own tests/conftest.py, which writes what it reads: a test run's step
+    counts the tests collected, plain and under xdist, each failure is said above by its test's name with what pytest
+    said of it, and the summary names the failed tests."""
+    root = tree(tmp_path)
+    (root / "sample").mkdir()
+    shutil.copy(ROOT / "tests" / "conftest.py", root / "sample" / "conftest.py")
+    (root / "sample" / "test_sample.py").write_text(SAMPLE)
+    rc, screen, stream = live(root, "plain", "xdist", recipe="test")
+    assert rc == 1, stream[-3000:]
+    drawn(screen)
+    lines = screen.transcript()
+    for kind in ("plain", "xdist"):
+        head = next(line for line in lines if line.startswith(f"✗ {kind}: "))
+        assert head.startswith(f"✗ {kind}: test_sample.py::test_fails ("), head
+    assert sum("AssertionError: arithmetic is broken" in line for line in lines) == 2, lines
+    assert re.search(r"[0-3]/3 ", stream), "a step counted its three tests"
+    table = lines.index(next(line for line in lines if line.startswith("TYPES")))
+    assert lines[table].split() == ["TYPES", "TIME", "TESTS", "FAILED"], lines[table]
+    for row, kind in zip(lines[table + 1 : table + 3], ("plain", "xdist"), strict=True):
+        assert row.split()[:2] == ["✗", kind] and row.split()[-4:] == ["3", "1", "exit", "1"], row
+    assert "FAILED        test_sample.py::test_fails · test_sample.py::test_fails" in lines, lines
+    assert lines[-2].startswith("2 types · 0 passed · 2 failed · 6 tests, 2 failed · log logs/"), lines
+    assert not list((root / "logs").glob("*.jsonl")) and not list((root / "logs").glob(".*.jsonl"))
+    assert "1 failed, 1 passed, 1 skipped" in the_log(root, "test").read_text(), "pytest's own lines, in the log"
 
 
 def test_each_type_is_a_step_a_failure_is_whole_above_and_the_summary_names_it(tmp_path):
@@ -221,6 +273,16 @@ def test_the_justfile_draws_lint_and_fix_at_a_terminal_and_streams_them_anywhere
     lines = screen.transcript()
     assert any(line.startswith("FIXES") for line in lines) and any(line.startswith(" ✓ python") for line in lines)
     assert (root / "tool.py").read_text() == 'print("unformatted")\n', "the fix ran"
+
+    # just test, with the repository's tests/conftest.py, which counts the tests in its step.
+    (root / "tests" / "unit").mkdir(parents=True)
+    shutil.copy(ROOT / "tests" / "conftest.py", root / "tests" / "conftest.py")
+    (root / "tests" / "unit" / "test_one.py").write_text("def test_one():\n    assert True\n")
+    rc, screen, stream = just("test", "unit")
+    assert rc == 0, stream[-3000:]
+    lines = screen.transcript()
+    assert any(line.startswith("TYPES") for line in lines) and any(line.startswith(" ✓ unit") for line in lines)
+    assert any(" · 1 test, 0 failed · log logs/" in line for line in lines), lines
 
     (root / "settings.yml").write_text("---\nkey: value\nkey: again\n")
     rc, screen, stream = just("lint", "yaml")

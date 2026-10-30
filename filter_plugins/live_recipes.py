@@ -63,10 +63,22 @@ class Recipe:
     was typed (--only jellyfin for {"only": "jellyfin"}, --all for {"cluster_vms": true}).
 
     commands: a run of commands, not a playbook (scripts/live.py): one stage of the types it was asked for, each a step
-    whose one task is its command, drawn without bars; unit and units name a step on the screen (check, checks)."""
+    whose one task is its command, drawn without bars; unit and units name a step on the screen (check, checks).
+    reader: how a command's output is read: plain, its last line; pytest, each test a task of its step, from what
+    tests/conftest.py writes."""
 
     def __init__(
-        self, name, playbooks=(), stages=(), check_name="", window=5, options=(), commands=False, unit="step", units=""
+        self,
+        name,
+        playbooks=(),
+        stages=(),
+        check_name="",
+        window=5,
+        options=(),
+        commands=False,
+        unit="step",
+        units="",
+        reader="plain",
     ):
         self.name = name
         self.playbooks = tuple(playbooks)
@@ -77,6 +89,7 @@ class Recipe:
         self.commands = commands
         self.unit = unit
         self.units = units or f"{unit}s"
+        self.reader = reader
 
 
 # The NAS's stages, in the order roles/truenas/tasks/main.yml imports them, each named as just check's --tags name it.
@@ -253,8 +266,10 @@ RECIPES = (
 
 # The recipes that run commands, a type at a time, each type a step: the stage is made of the types a run asks for.
 COMMANDS = (
-    Recipe(name="lint", commands=True, unit="check"),
-    Recipe(name="fix", commands=True, unit="fix", units="fixes"),
+    Recipe(name="lint", commands=True, unit="check", window=1),
+    Recipe(name="fix", commands=True, unit="fix", units="fixes", window=1),
+    # Each type's tests, several at once under xdist: the window shows those running.
+    Recipe(name="test", commands=True, unit="type", reader="pytest", window=5),
 )
 
 
@@ -270,7 +285,15 @@ def commands_of(name, types):
         return None
     steps = tuple(Step(kind, tasks=(kind,)) for kind in types)
     stage = Stage(name, plays=(name,), steps=steps)
-    return Recipe(name, stages=(stage,), window=1, commands=True, unit=found.unit, units=found.units)
+    return Recipe(
+        name,
+        stages=(stage,),
+        window=found.window,
+        commands=True,
+        unit=found.unit,
+        units=found.units,
+        reader=found.reader,
+    )
 
 
 class FilterModule:

@@ -1,11 +1,13 @@
-"""A run of commands drawn live: just lint's and just fix's types, one after another, each a step of one stage.
+"""A run of commands drawn live: just lint's, fix's and test's types, one after another, each a step of one stage.
 
 scripts/live.py hands a run here once it has decided to draw it. Each type's command (just lint-python) runs as a
 child: its stdin /dev/null, its stdout and stderr one pipe, colour off and Python unbuffered, without the run's
 ANSIBLE_LOG_PATH, in a session of its own, so that a prompt at /dev/tty fails at once rather than stopping the run.
 Every line it prints goes to the run's log; the region (filter_plugins/live_region.py) shows the type running, with
-the child's last line dim after it. A type that fails prints its last lines above, whole, with where the log has the
-rest, and the run goes on to the next, as the justfile's _each does. The end is the summary: each type's time, a
+the child's last line dim after it. A test run's step counts its tests instead (the pytest reader, below): several
+running at once under xdist, a bar by those collected, each failure above as it fails. A type that fails otherwise
+prints its last lines above, whole, with where the log has the rest, and the run goes on to the next, as the
+justfile's _each does. The end is the summary: each type's time, a
 failed one's exit code, and the exit line naming what failed.
 
 Ctrl-C is sent on to the running child's process group, which the terminal's does not reach: the child says its last
@@ -14,8 +16,8 @@ tree (processes.py), what it still writes unread. SIGTERM or SIGHUP, a kill or t
 tree, the region goes and the echo comes back, and the run dies of the same signal.
 
 Adapted from claude-on-proxmox's filter_plugins/live_commands.py (commit 83c7bf6), without its runs in parts: one
-process here runs every command of a run, so no state is kept between them, and without its pytest and Molecule
-readers. Loaded by path as homeserver_live_commands; it has no filters of its own.
+process here runs every command of a run, so no state is kept between them, and without its Molecule reader. Loaded
+by path as homeserver_live_commands; it has no filters of its own.
 """
 
 from __future__ import annotations
@@ -23,10 +25,13 @@ from __future__ import annotations
 import collections
 import contextlib
 import importlib.util
+import json
 import os
 import signal
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -59,6 +64,103 @@ FAILURE_LINES = 40
 INTERRUPTED = view.INTERRUPTED
 # What ends a run from outside: a kill or a timeout, and the terminal closing.
 OUTSIDE = (signal.SIGTERM, signal.SIGHUP)
+# Where tests/conftest.py writes a test run's events, for the pytest reader.
+PYTEST_ENV = "HOMESERVER_LIVE_PYTEST"
+OUTCOMES = {"passed": "ok", "failed": "failed", "skipped": "skipped"}
+
+
+def named(nodeid):
+    """A test as the screen names it: its file's name and the rest of its ID, whose parameters may hold a "/" of their
+    own (test_x.py::test_path[../etc/passwd])."""
+    path, separator, rest = nodeid.partition("::")
+    return os.path.basename(path) + separator + rest
+
+
+class Pytest:
+    """The pytest reader: each test a task of the type's step, several running at once under xdist, from the events
+    tests/conftest.py writes to a file beside the run's log; the count once collected, and each failure above as it
+    fails. Read ten times a second while pytest runs, and once more when it has ended."""
+
+    def __init__(self, commands, kind, task):
+        self.commands, self.kind, self.task = commands, kind, task
+        self.read = 0
+        self.failed = False
+        self.stop = threading.Event()
+        logs = Path(os.environ.get("ANSIBLE_LOG_PATH") or tempfile.gettempdir()).parent
+        descriptor, self.events = tempfile.mkstemp(dir=logs, prefix=f".{kind}-pytest-", suffix=".jsonl")
+        os.close(descriptor)
+        self.thread = threading.Thread(target=self._polling, daemon=True)
+
+    def env(self):
+        return {PYTEST_ENV: self.events}
+
+    def start(self):
+        self.thread.start()
+
+    def _polling(self):
+        while not self.stop.wait(0.1):
+            self.poll()
+            self.commands.out.redraw()
+
+    def poll(self):
+        """The events pytest has written since the last look: whole lines only."""
+        try:
+            with open(self.events, "rb") as handle:
+                handle.seek(self.read)
+                chunk = handle.read()
+        except OSError:
+            return
+        whole = chunk[: chunk.rfind(b"\n") + 1]
+        self.read += len(whole)
+        for raw in whole.splitlines():
+            try:
+                event = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(event, dict):
+                self._event(event)
+
+    def _event(self, event):
+        commands, run, now = self.commands, self.commands.run, self.commands._now()
+        failure = None
+        with commands.display._lock:
+            if isinstance(event.get("count"), int):
+                # The command's own task stands for it no more: its tests do, each counted, it with them.
+                self.task.hidden = True
+                run.expect(self.task.stage, self.task.step, event["count"] + 1)
+            elif isinstance(event.get("start"), str):
+                nodeid = text.one_line(event["start"], 300)
+                run.task(f"test:{nodeid}", named(nodeid), None, now, parallel=True)
+            elif isinstance(event.get("end"), str):
+                nodeid = text.one_line(event["end"], 300)
+                outcome = OUTCOMES.get(event.get("outcome"), "ok")
+                run.result(f"test:{nodeid}", "localhost", outcome, now)
+                if outcome == "failed":
+                    self.failed = True
+                    found = run.find(f"test:{nodeid}")
+                    failure = (found, text.plain_text(str(event.get("said") or "")).splitlines())
+        if failure is not None:
+            found, said = failure
+            took = f" ({screen.duration(found.seconds(now))})" if found is not None else ""
+            head = f"✗ {self.kind}: {found.name if found is not None else self.kind}{took}"
+            lines = [("", ""), (screen.render([(head, "r")], commands.color), head)]
+            lines += [(f"    {line.rstrip()}", f"    {line.rstrip()}") for line in said[-FAILURE_LINES:]]
+            commands._print([*lines, ("", "")])
+
+    def ended(self, now):
+        """pytest has ended: its last events read, a test still running stopped with it, and the file gone. Whether a
+        test failure was said, so that the command's own last lines need not be."""
+        self.stop.set()
+        if self.thread.is_alive():
+            self.thread.join()
+        self.poll()
+        with contextlib.suppress(OSError):
+            os.unlink(self.events)
+        with self.commands.display._lock:
+            for task in self.commands.run.order:
+                if task.key.startswith("test:") and task.end is None and task.step == self.task.step:
+                    task.result("localhost", "skipped", now)
+        return self.failed
 
 
 class Abandoned(Exception):
@@ -121,6 +223,8 @@ class Commands:
     def _fault(self, error):
         """A frame that cannot be drawn: the region is gone, and the commands' lines go to the screen from here."""
         self.drawn = False
+        with contextlib.suppress(Exception):
+            self.out.release()
         self.display.display(f"[homeserver] the live output stopped ({type(error).__name__}: {error})", stderr=True)
 
     def _print(self, lines):
@@ -199,6 +303,7 @@ class Commands:
         key = f"type:{kind}"
         with self.display._lock:
             task = self.run.task(key, f"{self.recipe.name}-{kind}", None, self._now())
+        reader = Pytest(self, kind, task) if self.recipe.reader == "pytest" else None
         self.out.redraw()
         last = collections.deque(maxlen=FAILURE_LINES)
         try:
@@ -207,7 +312,7 @@ class Commands:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                env=self._child_env(),
+                env=self._child_env() | (reader.env() if reader else {}),
                 # A session of its own, with no terminal: a prompt at /dev/tty fails rather than stopping the child,
                 # and the session is its process group too, which Ctrl-C is sent on to.
                 start_new_session=True,
@@ -217,6 +322,8 @@ class Commands:
             self.display.display(last[-1], log_only=True)
             rc = 127 if isinstance(error, FileNotFoundError) else 126
         else:
+            if reader is not None:
+                reader.start()
             try:
                 self.reading = True
                 for raw in iter(child.stdout.readline, b""):
@@ -240,13 +347,16 @@ class Commands:
             rc = 128 - rc if rc < 0 else rc
         self.child = None
         now = self._now()
+        said = reader.ended(now) if reader is not None else False
         with self.display._lock:
             task.detail = ""
             task.rc = rc
             # One Ctrl-C stopped is no failure: it is drawn as not run to its end.
             outcome = "ok" if rc == 0 else "skipped" if self.interrupted else "failed"
             self.run.result(key, "localhost", outcome, now)
-        if rc and not self.interrupted:
+        # A test run whose failures were said as they failed says no more; one that failed otherwise (an error before
+        # any test ran) says its last lines, as any command does.
+        if rc and not self.interrupted and not said:
             self._failure(task, kind, rc, last, now)
         self.out.redraw()
         return rc

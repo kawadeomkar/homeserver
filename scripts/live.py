@@ -1,13 +1,14 @@
-"""just lint's and just fix's types drawn live: each type's command a step of one run, at a terminal.
+"""just lint's, just fix's and just test's types drawn live: each type's command a step of one run, at a terminal.
 
     scripts/live.py --just <just> --justfile <justfile> [--title <words>] [--extra <arguments>] <recipe> <type>...
 
-The justfile's _each runs it, in place of its own loop, when a run of lint or fix can be drawn: stdout a terminal that
-is not dumb, and no CI, whose logs keep every line. It runs `just <recipe>-<type>` for each type, in order, and exits
-as _each does: 0, 1 when a type failed, 130 after Ctrl-C. filter_plugins/live_commands.py draws them, each type a step
-of the recipe's declaration (filter_plugins/live_recipes.py, COMMANDS), and logs every line they print to logs/, named
-as scripts/run_log.py names every run's log, since the region keeps them off the screen. extra is test's
---pytest-args, which only test-idempotence takes.
+The justfile's _each runs it, in place of its own loop, when a run of lint, fix or test can be drawn: stdout a terminal
+that is not dumb, and no CI, whose logs keep every line. It runs `just <recipe>-<type>` for each type, in order, and
+exits as _each does: 0, 1 when a type failed, 130 after Ctrl-C. filter_plugins/live_commands.py draws them, each type
+a step of the recipe's declaration (filter_plugins/live_recipes.py, COMMANDS), a test run's tests counted in its step
+from what tests/conftest.py writes, and logs every line they print to logs/, named as scripts/run_log.py names every
+run's log, since the region keeps them off the screen. extra is test's --pytest-args, which only test-idempotence
+takes.
 
 Should it not draw after all (no terminal, or what it draws with will not load), it runs the types as _each does, each
 printing as it runs.
