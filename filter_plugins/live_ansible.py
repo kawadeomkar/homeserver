@@ -101,16 +101,21 @@ def _own_log(playbook):
     addresses), set up as Ansible sets up its own; False when it cannot be made."""
     try:
         cli = context.CLIARGS or {}
-        path = _script("run_log", "run_log.py").create(ROOT, *_command(playbook, cli))
-        logging.basicConfig(filename=str(path), level=logging.INFO, format=LOG_FORMAT)
-        for handler in logging.root.handlers:
-            handler.addFilter(ansible_display.FilterDenyList(getattr(C, "DEFAULT_LOG_FILTER", [])))
-            handler.addFilter(ansible_display.FilterUserInjector())
-        ansible_display.logger = logging.getLogger("ansible")
-        os.environ["ANSIBLE_LOG_PATH"] = str(path)
+        start_log(_script("run_log", "run_log.py").create(ROOT, *_command(playbook, cli)))
         return True
     except Exception:  # noqa: BLE001 - without a log, the run is the stream, as before
         return False
+
+
+def start_log(path):
+    """Display's log at path, set up as Ansible sets up its own from ANSIBLE_LOG_PATH: a drawn run of commands
+    (live_commands.py) logs so too."""
+    logging.basicConfig(filename=str(path), level=logging.INFO, format=LOG_FORMAT)
+    for handler in logging.root.handlers:
+        handler.addFilter(ansible_display.FilterDenyList(getattr(C, "DEFAULT_LOG_FILTER", [])))
+        handler.addFilter(ansible_display.FilterUserInjector())
+    ansible_display.logger = logging.getLogger("ansible")
+    os.environ["ANSIBLE_LOG_PATH"] = str(path)
 
 
 def _command(playbook, cli):
