@@ -2283,6 +2283,10 @@ def test_talos_upgrade_and_etcd_snapshot(tmp_path, factory):
     result = run("talos_upgrade.yml", snapshot | {"talos_probe_delay": 60}, env=env)
     expect(result, "homeserver-k8s", changed=True, note="etcd snapshot")
     assert time.monotonic() - started < 50, "the snapshot waited for the worker"
+    # Where it went and how big, which the summary keeps.
+    assert re.search(
+        r"Took an etcd snapshot of homeserver-cp-1: \S+/etcd/etcd-\d{8}T\d{6}Z\.db, \d+\.00 Bytes\.", result[2]
+    ), result[2][-3000:]
     after = read(state)
     assert (
         len(after["snapshots"]) == 1 and Path(after["snapshots"][0]).parent == Path(extra["talos_config_dir"]) / "etcd"

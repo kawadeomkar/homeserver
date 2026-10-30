@@ -66,7 +66,9 @@ ROW_GLYPHS = {
 }
 # The summary names the tasks that changed something, but not a report's: a report says its change itself.
 REPORT_NAME = re.compile(r"^(Show|Say|Report|Record) ")
+# The label column, a space after the longest stage's or step's label in a run: from LABEL, up to LABEL_MAX.
 LABEL = 15
+LABEL_MAX = 24
 # How much of each report's first line the summary keeps.
 NOTE = 72
 NARROW = 90
@@ -80,33 +82,51 @@ def first_sentence(said):
 
 
 # --- what a play compiled to -----------------------------------------------------------------------------------
-def count_tasks(path, depth=0):
+# A task name's file prefix, as an imported file's tasks are named: "node | Report what the admin console must fix".
+FILE_PREFIX = re.compile(r"^[a-z0-9_-]+ \| ")
+
+
+def count_tasks(path):
     """The tasks a task file runs, as Ansible will start them: a block's children, an import's file's tasks, an
     include as one task (its own file is counted when it is included). 0 for a file that cannot be read."""
+    return len(task_list(path))
+
+
+def task_list(path, imports_own=False):
+    """The tasks a task file runs, as count_tasks counts them: each (its name as drawn, without its file's prefix;
+    its file as live_ansible's task_file sees it). The include nearest the play names the file of every task it
+    brings, those of the files it imports included; an include_role's file is none, so with imports_own, a file it
+    imports is that file's own, and any that file imports in turn stays the first's."""
+    return _listed(os.path.normpath(path), 0, None, imports_own)
+
+
+def _listed(path, depth, file, imports_own):
     if depth > 8:
-        return 0
+        return []
     try:
         with open(path, encoding="utf-8") as handle:
             data = yaml.safe_load(handle) or []
     except (OSError, yaml.YAMLError):
-        return 0
-    return _count(data, os.path.dirname(path), depth)
+        return []
+    return _list(data, os.path.dirname(path), depth, file or path, imports_own)
 
 
-def _count(items, base, depth):
-    total = 0
+def _list(items, base, depth, file, imports_own):
+    out = []
     for item in items if isinstance(items, list) else []:
         if not isinstance(item, dict):
             continue
         if "block" in item:
-            total += sum(_count(item.get(key) or [], base, depth) for key in ("block", "rescue", "always"))
+            for key in ("block", "rescue", "always"):
+                out += _list(item.get(key) or [], base, depth, file, imports_own)
             continue
         imported = item.get("ansible.builtin.import_tasks") or item.get("import_tasks")
         if isinstance(imported, str) and "{{" not in imported:
-            total += count_tasks(os.path.join(base, imported), depth + 1)
+            inner = None if imports_own and depth == 0 else file
+            out += _listed(os.path.normpath(os.path.join(base, imported)), depth + 1, inner, imports_own)
             continue
-        total += 1
-    return total
+        out.append((FILE_PREFIX.sub("", str(item.get("name") or "").strip()), file))
+    return out
 
 
 def role_tasks_file(name, tasks_from, search):
@@ -149,6 +169,8 @@ class Task:
         self.part = part
         self.number = number
         self.ends = ends  # a play's own end_host or end_play, which says nothing when it ends its host
+        self.play = ""  # "file:play name"
+        self.role = None
         self.start = start
         self.end = None
         self.hidden = hidden
@@ -227,7 +249,10 @@ class Row:
         if self.failed():
             return "failed"
         if not self.tasks:
-            # A step none of whose tasks this run has, as --tags leaves it, never runs.
+            # A step none of whose tasks this run has, as --tags leaves it, never runs; one whose items are steps is
+            # to come until its include runs, however many items it brings.
+            if self.each and not over and not self.parts:
+                return "todo"
             return "none" if self.expected == 0 else "unrun" if over else "todo"
         if self.ended or over:
             return "done" if self.ran() else "skipped"
@@ -245,7 +270,7 @@ class Stage(Row):
         super().__init__(declared.label)
         self.declared = declared
         self.steps = [Row(step.label, step.each, step.names) for step in declared.steps]
-        self.whole = None  # the declared report's lines, for the summary
+        self.whole = None  # the declared reports' lines, for the summary
         self.said = None  # the place in the run's notes of the last report its running play printed
 
     def rows(self):
@@ -278,13 +303,14 @@ class Run:
         self.play_stage = {}  # play key: stage index, None for a play of a stage not drawn
         self.play_path = {}  # play key: "file:play name"
         self.started_plays = set()
-        self.reserved = {}  # include key: the tasks it was counted with at the start, until it is included
-        self.include_into = {}  # include key: (stage, step) its file's tasks are in
+        self.reserved = {}  # include key: the tasks it was counted with at the start, as (stage, step, count)
+        self.include_into = {}  # include key: (stage, step) its file's first task is in, for its later inclusions
         self.current = None
         self.finished = None
         self.failure = None  # (where, seconds) of the first failure
         self.code = 0
         self.notes = []  # (stage index, first line of a report)
+        self.label = LABEL  # the label column, as the frame or the summary being drawn has it
         self._said = set()  # the rows ended_lines has said
 
     # --- what the plays compiled to -------------------------------------------------------------------------
@@ -322,17 +348,39 @@ class Run:
             stage = self.play_stage[key]
             if stage is None:
                 continue
-            steps = [self._step(stage, self.play_path[key], role, meta.get("file", "")) for _t, role, meta in tasks]
+            play = self.play_path[key]
+            steps = [
+                self._step(stage, play, role, meta.get("file", ""), meta.get("name", "")) for _t, role, meta in tasks
+            ]
+            # An include no step names is in the step its file's first task will be in, and the play's own tasks
+            # beside it with it: talos-upgrade's play, which refuses, then includes the role's whole run.
+            for index, (_task, role, meta) in enumerate(tasks):
+                if steps[index] is None and meta.get("include"):
+                    steps[index] = self._listed_steps(stage, play, meta.get("role") or role, meta)[0]
             steps = _neighbours(steps)
             for (task, role, meta), step in zip(tasks, steps, strict=True):
                 self.plan[task] = (stage, step)
                 self._expect(stage, step, 1)
                 if meta.get("include"):
-                    # Its file's tasks, in the step that file is: an include in one step may bring another's tasks.
-                    into = self._step(stage, self.play_path[key], role, meta.get("included", ""))
-                    self.include_into[task] = (stage, step if into is None else into)
-                    self.reserved[task] = int(meta["include"])
-                    self._expect(*self.include_into[task], int(meta["include"]))
+                    self._reserve(task, stage, step, play, meta.get("role") or role, meta)
+
+    def _reserve(self, key, stage, step, play, role, meta):
+        """An include whose file is literal, counted at the start: each task it lists in its own step, as the
+        include's would be, so an include that brings a role's whole run (talos-upgrade's) counts each step's end."""
+        steps = self._listed_steps(stage, play, role, meta)
+        counts = {}
+        for into in steps:
+            into = step if into is None else into
+            counts[into] = counts.get(into, 0) + 1
+        self.reserved[key] = [(stage, into, count) for into, count in counts.items()]
+        for into, count in counts.items():
+            self._expect(stage, into, count)
+        self.include_into[key] = (stage, step if steps[0] is None else steps[0]) if steps else (stage, step)
+
+    def _listed_steps(self, stage, play, role, meta):
+        """The step each task a literal include lists will be in, None for none: [None] for an include of none."""
+        listed = meta.get("listed") or [("", meta.get("included", ""))] * int(meta["include"])
+        return _neighbours([self._step(stage, play, role, file, name) for name, file in listed]) or [None]
 
     def _expect(self, stage, step, count):
         self.stages[stage].expected += count
@@ -348,11 +396,14 @@ class Run:
                 return index
         return None
 
-    def _step(self, stage, play, role, file):
-        """The step of a stage a task is in: by its play, its role or its task file; None for none."""
+    def _step(self, stage, play, role, file, name=""):
+        """The step of a stage a task is in: by its play, its name, its role or its task file; None for none."""
         steps = self.stages[stage].declared.steps
         for index, step in enumerate(steps):
             if play in step.plays:
+                return index
+        for index, step in enumerate(steps):
+            if name and name in step.tasks:
                 return index
         for index, step in enumerate(steps):
             if role and role in step.roles:
@@ -418,7 +469,7 @@ class Run:
             stage = self.play_stage.get(play, self._running_stage())
             if stage is None:
                 return None
-            step = self._step(stage, self.play_path.get(play, ""), role, file)
+            step = self._step(stage, self.play_path.get(play, ""), role, file, name)
             if step is None:
                 step = self._running_step(stage)
             if not counted:
@@ -428,6 +479,7 @@ class Run:
             part = self._part(stage, step, str(item))
         self._move(stage, step, part)
         task = Task(key, name, stage, step, now, hidden=hidden, path=path, number=len(self.order), part=part, ends=ends)
+        task.play, task.role = self.play_path.get(play, ""), role
         # A task that runs again, a handler or an include's task in a loop, is a task more.
         self.tasks[key] = task
         self.order.append(task)
@@ -439,12 +491,16 @@ class Run:
         self.current = task
         return task
 
-    def include(self, key, count, item=None):
+    def include(self, key, count, item=None, file="", role=None):
         """An include's tasks are coming: counted at the start once, when its file is literal; counted now after
-        that, as each loop item or host includes it again. item: the loop item's label, which is a step of its own in
-        a step whose items are steps."""
+        that, as each loop item or host includes it again, in the step its file is (file, the included file; role,
+        an included role's name). item: the loop item's label, which is a step of its own in a step whose items are
+        steps."""
         task = self.tasks.get(key)
-        into = self.include_into.get(key) or ((task.stage, task.step) if task is not None else None)
+        into = self.include_into.get(key)
+        if into is None and task is not None:
+            found = self._step(task.stage, task.play, role or task.role, file)
+            into = (task.stage, task.step if found is None else found)
         if into is None:
             return
         if self.reserved.pop(key, None) is None:
@@ -459,11 +515,10 @@ class Run:
             task.result(host, outcome, now)
             if outcome in ("failed", "unreachable") and self.failure is None:
                 self.failure = (self.where(task), now - self.started)
-        reserved = self.reserved.get(key) if outcome == "skipped" else None
-        if reserved is not None and key in self.include_into:
+        if outcome == "skipped" and key in self.reserved:
             # A skipped include brings nothing: what it was counted with goes.
-            del self.reserved[key]
-            self._expect(*self.include_into[key], -reserved)
+            for stage, step, count in self.reserved.pop(key):
+                self._expect(stage, step, -count)
 
     def item(self, key):
         task = self.tasks.get(key)
@@ -483,7 +538,7 @@ class Run:
             self.stages[task.stage].absent = ""
 
     def note(self, task, first, lines=()):
-        """A report's first line, for the summary; a stage's absent task's is its reason, and the declared report's
+        """A report's first line, for the summary; a stage's absent task's is its reason, and the declared reports'
         lines are kept whole."""
         if task is None:
             return
@@ -491,8 +546,8 @@ class Run:
         if stage.absent == "":
             stage.absent = first_sentence(first)
             return
-        if stage.declared.report and task.name == stage.declared.report and lines:
-            stage.whole = list(lines)
+        if task.name in stage.declared.reports and lines:
+            stage.whole = [*(stage.whole or []), *lines]
             return
         self.notes.append((task.stage, first))
         stage.said = len(self.notes) - 1
@@ -589,8 +644,14 @@ class Run:
                 break
         return [screen.render(screen.cut(line, cols), color) for line in lines]
 
+    def label_width(self):
+        """The label column: a space after the longest label of a stage or a step, from LABEL to LABEL_MAX."""
+        labels = [row.label for stage in self.stages for row in (stage, *stage.rows())]
+        return min(LABEL_MAX, max([LABEL - 1, *map(len, labels)]) + 1)
+
     def _frame(self, now, cols, glyph, fold, window):
         narrow = cols < NARROW
+        self.label = self.label_width()
         out = [self._header(now), []]
         flat = self.flat()
         for stage in self.stages:
@@ -635,14 +696,17 @@ class Run:
         line = [
             (" " * indent, ""),
             (mark, style),
-            (" " + row.label.ljust(LABEL), "d" if quiet else "b" if stage_row else ""),
+            (" " + row.label.ljust(self.label), "d" if quiet else "b" if stage_row else ""),
         ]
         if state == "absent":
             return [*line, (row.absent or "not in this setup", "d")]
         if state == "none":
             return [*line, (row.reason or "not in this run", "d")]
         if state in ("todo", "unrun"):
-            said = " · ".join(step.label for step in row.rows()) if stage_row else screen.plural(row.expected, "task")
+            if stage_row:
+                said = " · ".join(step.label for step in row.rows())
+            else:
+                said = screen.plural(row.expected, "task") if row.expected or not row.each else "a step each"
             return [*line, (said + (", not reached" if state == "unrun" else ""), "d")]
         cells = (12 if stage_row else 8) if narrow else (20 if stage_row else 12)
         full = min(cells, round(row.fraction() * cells))
@@ -750,9 +814,10 @@ class Run:
         as_steps = flat and self.stages[0].absent is None and not self.stages[0].left
         rows = self.stages[0].rows() if as_steps else self.stages
         changed_head = "WOULD" if self.check else "CHANGED"
+        self.label = self.label_width()
         table = [
             [
-                (("STEPS" if as_steps else "STAGES").ljust(18), "h"),
+                (("STEPS" if as_steps else "STAGES").ljust(self.label + 3), "h"),
                 ("TIME".rjust(7) + "TASKS".rjust(7) + changed_head.rjust(9), "h"),
             ]
         ]
@@ -761,11 +826,11 @@ class Run:
         parts = [[self._summary_head(now)], table]
         reports = []
         for index, stage in enumerate(self.stages):
-            # Each report's first line, cut short: the report itself is above, whole. The declared report, whole: a
-            # line each, wrapped.
+            # The declared reports, whole: a line each, wrapped. Then each other report's first line, cut short: the
+            # report itself is above, whole.
             said = [text.one_line(note, NOTE) for at, note in self.notes if at == index]
-            paragraphs = [" · ".join(said)] if said else []
-            paragraphs += [line.strip() for line in stage.whole or [] if line.strip()]
+            paragraphs = [line.strip() for line in stage.whole or [] if line.strip()]
+            paragraphs += [" · ".join(said)] if said else []
             pieces = [piece for paragraph in paragraphs for piece in screen.fill(paragraph, max(20, cols - 16))]
             for number, piece in enumerate(pieces):
                 head = stage.label.upper().ljust(16) if number == 0 else " " * 16
@@ -830,7 +895,7 @@ class Run:
         state = row.state(True)
         mark, style = ROW_GLYPHS["todo"] if state == "unrun" else ROW_GLYPHS[state]
         quiet = state in ("unrun", "absent", "none")
-        line = [(" ", ""), (mark, style), (" " + row.label.ljust(LABEL), "d" if quiet else "")]
+        line = [(" ", ""), (mark, style), (" " + row.label.ljust(self.label), "d" if quiet else "")]
         if state == "unrun":
             return [[*line, ("not reached", "d")]]
         if state == "none":
@@ -852,9 +917,11 @@ class Run:
                 info.append(said)
         if not info:
             return [line]
-        parts = screen.fill(" · ".join(info), max(20, cols - 45))
+        # Where the steps go: after the label, TIME, TASKS, CHANGED and three spaces.
+        column = 3 + self.label + 7 + 7 + 9 + 3
+        parts = screen.fill(" · ".join(info), max(20, cols - column - 1))
         out = [[*line, ("   " + parts[0], "d")]]
-        out += [[(" " * 44 + part, "d")] for part in parts[1:]]
+        out += [[(" " * column + part, "d")] for part in parts[1:]]
         return out
 
 

@@ -366,3 +366,134 @@ def test_a_report_that_changes_something_is_counted_as_a_change(tmp_path):
     lines = proc.stdout.splitlines()
     assert "  tasks          Would add a storage." in lines, proc.stdout
     assert lines[-2].startswith("1 task · 1 would change · 0 failed"), proc.stdout
+
+
+TALOS = {
+    "validate": "- name: validate | Check the role's inputs\n  ansible.builtin.assert: {that: true, quiet: true}\n",
+    "prepare": "- name: prepare | Make a scratch directory\n  ansible.builtin.set_fact: {talos_workspace: /tmp}\n",
+    "snapshot": (
+        "- name: snapshot | Take an etcd snapshot\n  ansible.builtin.set_fact: {taken: true}\n  changed_when: true\n"
+        "- name: snapshot | Say where the snapshot is\n"
+        "  ansible.builtin.debug: {msg: 'Took an etcd snapshot of cp: ~/.talos/x/etcd/etcd-1.db, 18.00 B.'}\n"
+    ),
+    "upgrade": """\
+- name: upgrade | Check the role's inputs
+  ansible.builtin.import_tasks: validate.yml
+- name: upgrade | Move the cluster to the pins
+  block:
+    - name: upgrade | Prepare
+      ansible.builtin.import_tasks: prepare.yml
+    - name: upgrade | Show the plan
+      ansible.builtin.debug:
+        msg:
+          - "To the pins: 2 nodes, the control plane first, then Kubernetes."
+          - "cp: Talos v1 -> v2"
+          - "Kubernetes: 1 -> 2"
+    - name: upgrade | Snapshot etcd first
+      ansible.builtin.import_tasks: snapshot.yml
+    - name: upgrade | Upgrade Talos, control plane first
+      ansible.builtin.include_tasks: upgrade-node.yml
+      loop: [{name: homeserver-cp-1}, {name: homeserver-worker-1}]
+      loop_control: {label: "{{ item.name }}"}
+    - name: upgrade | Upgrade Kubernetes
+      ansible.builtin.set_fact: {upgraded: true}
+      changed_when: true
+    - name: upgrade | Wait for the cluster to be healthy
+      ansible.builtin.set_fact: {healthy: true}
+  always:
+    - name: upgrade | Remove the scratch directory
+      ansible.builtin.set_fact: {talos_workspace: ""}
+""",
+    "upgrade-node": (
+        "- name: upgrade-node | Upgrade Talos on the node\n  ansible.builtin.set_fact: {node: '{{ item.name }}'}\n"
+        "  changed_when: true\n"
+        "- name: upgrade-node | Wait for the cluster to be healthy before the next node\n"
+        "  ansible.builtin.set_fact: {waited: true}\n"
+    ),
+    "etcd-snapshot": """\
+- name: etcd-snapshot | Check the role's inputs
+  ansible.builtin.import_tasks: validate.yml
+- name: etcd-snapshot | Take a snapshot
+  block:
+    - name: etcd-snapshot | Prepare
+      ansible.builtin.import_tasks: prepare.yml
+    - name: etcd-snapshot | Snapshot
+      ansible.builtin.import_tasks: snapshot.yml
+""",
+}
+CLUSTER_PLAYBOOK = """\
+- name: Refuse a cluster without the kubernetes inventory group
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Refuse a cluster without the kubernetes inventory group
+      ansible.builtin.assert: {{that: true, quiet: true}}
+- name: {play}
+  hosts: localhost
+  gather_facts: false
+  pre_tasks:
+    - name: Refuse an incomplete Kubernetes section
+      ansible.builtin.assert: {{that: true, quiet: true}}
+  tasks:
+    - name: {task}
+      ansible.builtin.include_role: {{name: talos, tasks_from: {entry}}}
+"""
+
+
+def test_talos_upgrade_and_etcd_snapshot_are_drawn_by_their_declarations(tmp_path):
+    """talos-upgrade.yml through one include_role of the talos role: its plan, its snapshot, a step per node by the
+    loop's labels and Kubernetes by its tasks' names, each counted at the start, and the plan whole in the summary;
+    etcd-snapshot.yml, its snapshot's file and size in the summary."""
+    (tmp_path / "roles" / "talos" / "tasks").mkdir(parents=True)
+    for name, body in TALOS.items():
+        (tmp_path / "roles" / "talos" / "tasks" / f"{name}.yml").write_text(body)
+    for playbook, play, task, entry in (
+        (
+            "talos-upgrade.yml",
+            "Upgrade the cluster to the pinned versions",
+            "Upgrade the nodes, then Kubernetes",
+            "upgrade",
+        ),
+        ("etcd-snapshot.yml", "Snapshot etcd", "Take the snapshot", "etcd-snapshot"),
+    ):
+        (tmp_path / playbook).write_text(CLUSTER_PLAYBOOK.format(play=play, task=task, entry=entry))
+    config = tmp_path / "ansible.cfg"
+    config.write_text(f"[defaults]\nretry_files_enabled = false\ncallback_plugins = {ROOT / 'callback_plugins'}\n")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("ANSIBLE_")} | {
+        "ANSIBLE_CONFIG": str(config),
+        "ANSIBLE_STDOUT_CALLBACK": "homeserver",
+        "ANSIBLE_LOG_PATH": str(tmp_path / "run.log"),
+        "ANSIBLE_NOCOLOR": "1",
+    }
+
+    def run(playbook, *args):
+        command = [PLAYBOOK, "-i", "localhost,", "-c", "local", playbook, *args]
+        command += ["-e", f"ansible_python_interpreter={sys.executable}"]
+        proc = subprocess.run(command, env=env, cwd=tmp_path, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        return proc.stdout.splitlines()
+
+    lines = run("talos-upgrade.yml")
+    ended = [line.split("  ")[0] for line in lines if line.startswith("✓ ")]
+    assert ended == ["✓ plan", "✓ etcd snapshot", "✓ homeserver-cp-1", "✓ homeserver-worker-1", "✓ Kubernetes"], lines
+    # Each step's tasks, as counted at the start or as its include brought them.
+    counts = {
+        line.split("  ")[0][2:]: re.search(r"  (\d+) tasks? ", line)[1] for line in lines if line.startswith("✓ ")
+    }
+    assert counts["Kubernetes"] == "2" and counts["homeserver-cp-1"] == "2", lines
+    table = lines.index(next(line for line in lines if line.startswith("STEPS")))
+    assert [line.split()[1] for line in lines[table + 1 : table + 6]] == [
+        "plan",
+        "etcd",
+        "homeserver-cp-1",
+        "homeserver-worker-1",
+        "Kubernetes",
+    ], lines
+    assert "CLUSTER         To the pins: 2 nodes, the control plane first, then Kubernetes." in lines, lines
+    assert "                Kubernetes: 1 -> 2" in lines, lines
+    assert any(line.startswith("homeserver  talos-upgrade · done in ") for line in lines), lines
+
+    lines = run("etcd-snapshot.yml", "--check")
+    assert any(line.startswith("homeserver  etcd-snapshot --check · dry run · done in ") for line in lines), lines
+    assert [line.split("  ")[0] for line in lines if line.startswith("✓ ")] == ["✓ prepare", "✓ snapshot"], lines
+    assert "CLUSTER         Took an etcd snapshot of cp: ~/.talos/x/etcd/etcd-1.db, 18.00 B." in lines, lines
