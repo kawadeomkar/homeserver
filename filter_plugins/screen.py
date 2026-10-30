@@ -85,6 +85,34 @@ class Line:
         return render(self.parts, color)
 
 
+def right(line, tail, cols):
+    """line with tail at the right edge of cols, at least two spaces between them; line alone when they do not fit."""
+    room = cols - width(line) - width(tail)
+    return [*line, (" " * room, ""), *tail] if room >= 2 else list(line)
+
+
+def duration(seconds):
+    """A duration as a report says it: 0.6 s, 33 s, 3:58."""
+    if seconds < 10:
+        return f"{seconds:.1f} s"
+    if seconds < 60:
+        return f"{round(seconds)} s"
+    minutes, rest = divmod(round(seconds), 60)
+    return f"{minutes}:{rest:02d}"
+
+
+def long_duration(seconds):
+    """A duration as a sentence says it: 42 s, 3 min 58 s."""
+    seconds = round(seconds)
+    return f"{seconds} s" if seconds < 60 else f"{seconds // 60} min {seconds % 60} s"
+
+
+def clock(seconds):
+    """A running timer: 0:07, 12:30."""
+    minutes, rest = divmod(int(max(0, seconds)), 60)
+    return f"{minutes}:{rest:02d}"
+
+
 def fill(text, cols):
     """text in lines of cols characters, never breaking a word, such as a path or a URL, in two."""
     return textwrap.wrap(str(text), max(1, cols), break_long_words=False, break_on_hyphens=False) or [""]
@@ -124,10 +152,11 @@ def spark(values):
     return out
 
 
-def attention_items(items, cols=None):
+def attention_items(items, cols=None, whole_commands=False):
     """Lines for what needs attention, each item a mapping with level (problem, unread or todo), subject, text and
     command: a dot, yellow for a thing to do and red for the rest, the subject, the text, and under it the command
-    after an arrow. Wrapped to cols, or each whole on its line without them, so that a command copies from one line."""
+    after an arrow. Wrapped to cols, or each whole on its line without them, so that a command copies from one line;
+    with whole_commands, the text alone is wrapped."""
     lines = []
     for item in items:
         subject = str(item["subject"])
@@ -138,7 +167,8 @@ def attention_items(items, cols=None):
         for i, part in enumerate(fill(text, cols - ITEM_INDENT) if cols else [text]):
             lines.append((first if i == 0 else Line().add(" " * ITEM_INDENT)).add(part))
         command = str(item.get("command") or "")
-        for i, part in enumerate((fill(command, cols - ITEM_INDENT - 2) if cols else [command]) if command else []):
+        wrapped = fill(command, cols - ITEM_INDENT - 2) if cols and not whole_commands else [command]
+        for i, part in enumerate(wrapped if command else []):
             lines.append(Line().add(" " * ITEM_INDENT).add("→ " if i == 0 else "  ", "d").add(part, "c"))
     return lines
 

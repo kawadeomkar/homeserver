@@ -96,6 +96,7 @@ vault := 'group_vars/all/local.vault.yml'
 # argument, never from the environment, so a NAME a shell exports (WSL sets one) reaches nothing; every other recipe
 # runs with the setup the checkout links to.
 setups := quote(bin / 'python') + ' scripts/init/setups.py'
+run_log := quote(bin / 'python') + ' scripts/run_log.py'
 ansible_playbook := bin / 'ansible-playbook'
 log_dir := 'logs'
 
@@ -549,10 +550,8 @@ _playbook recipe playbook *ansible_args:
       args+=("$a") prev=$a
     done
     {{ setups }} check
-    setup=$({{ setups }} name 2>/dev/null || true)
-    name=$recipe; [ "$book" = "$recipe" ] || [ "$book" = site ] || name="$name-$book"
-    case " ${args[*]-} " in *" --check "* | *" -C "*) [ "$recipe" = check ] || name="check-$name" ;; esac
-    log={{ log_dir }}/$(date +%Y%m%d-%H%M%S)${setup:+-$setup}-$name${tags:+-${tags//,/+}}.log
+    check=; case " ${args[*]-} " in *" --check "* | *" -C "*) check=--check ;; esac
+    log={{ log_dir }}/$({{ run_log }} name "$recipe" "$book" "$tags" $check)
     umask 077; mkdir -p {{ log_dir }}; ln -sf "${log##*/}" {{ log_dir }}/latest.log
     echo "Logging to $log (Python environment: {{ VENV }})"
     ANSIBLE_LOG_PATH=$log exec {{ ansible_playbook }} "$book.yml" ${args[@]+"${args[@]}"}

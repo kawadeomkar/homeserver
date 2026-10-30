@@ -142,6 +142,17 @@ is wrong, 1 for a problem, 2 when a source could not be read, 3 when the run fai
 and is the `exit` field of `--json`. Another project's VMs on the host are counted, never named. It reads no Secret and
 checks no certificate, and never uses a kubeconfig of another cluster.
 
+**What a run shows.** Every playbook run is drawn as it goes, whether just starts it or you run `ansible-playbook`
+yourself. At a terminal, the bottom of the screen shows each stage (the NAS, the Proxmox host, Home Assistant, the
+cluster) or, for one playbook, each step, with a bar, the running step's last tasks with their timers and retries, and
+a footer naming the run's log. It is redrawn in place. Above it, for good, go the reports, refusals and failures (each
+with its file and its line in the log), warnings and a dry run's diffs. When the run ends, a summary takes its place:
+how the run ended, each stage, the reports' first lines, what changed, the slowest tasks, NEXT STEPS (what the run left
+to do, such as a reboot or a VM's restart, each with its command) and the exit code. Off a terminal, a line is printed
+as each step ends, then the same summary. The log in `logs/` (`logs/latest.log`) holds everything Ansible printed, every
+task's output and PLAY RECAP, then the summary; a run started by hand gets one there too. Any `-v` after the playbook
+(`just deploy proxmox -v`), or `ANSIBLE_STDOUT_CALLBACK=default`, shows Ansible's own output as it streams instead.
+
 Whatever follows the playbook goes to ansible-playbook as typed, so a variable for one run is
 `just deploy kubernetes -e talos_allow_bootstrap=true`, and one host's play `just deploy proxmox --limit homeserver`.
 `just deploy` alone runs every playbook; to pass anything with it, name `site`: `just check site --tags truenas_nfs`.

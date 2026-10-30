@@ -348,6 +348,12 @@ class Output:
     def bell(self):
         self.region.bell()
 
+    def release(self):
+        """The region gone and nothing routed any more: what prints from now on goes where Display sends it, for a
+        run that stops drawing half way."""
+        self.region.finish()
+        self.region._route = None
+
     # --- the output's own words --------------------------------------------------------------------------------
     @contextlib.contextmanager
     def say(self):
