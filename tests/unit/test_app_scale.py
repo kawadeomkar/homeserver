@@ -202,3 +202,36 @@ def test_only_narrows_to_apps_and_groups(only, expected):
 def test_unknown_names_are_reported():
     result = fs.plan(APPS, "down", ["plex", "sonarr", "homeassistant", "traefik"], [], ANNOTATION)
     assert result["unknown"] == ["homeassistant", "plex", "traefik"]
+
+
+def test_the_report_names_each_app_in_its_wave_with_its_replicas():
+    down = fs.plan(APPS, "down", [], [], ANNOTATION)
+    assert fs.report(down, "down", check=True) == [
+        "Would stop 4 apps, to come back with the replicas in brackets; Flux leaves them alone until just resume.",
+        "media/homepage (2), media/sonarr (1), nextcloud/nextcloud (1)",
+        "then nextcloud/nextcloud-db (1)",
+    ]
+    assert fs.report(down, "down")[0].startswith("Stopped 4 apps, ")
+    # Down again: what was down is said, with what Flux does about it.
+    again = fs.plan(held(APPS, sonarr=1), "down", [], [], ANNOTATION)
+    assert fs.report(again, "down") == [
+        "Stopped 1 app, to come back with the replicas in brackets; Flux leaves them alone until just resume.",
+        "media/sonarr (1)",
+        "Already down: media/homepage, nextcloud/nextcloud, nextcloud/nextcloud-db.",
+    ]
+    nothing = fs.plan(held(APPS), "down", [], [], ANNOTATION)
+    assert fs.report(nothing, "down") == [
+        "No app to stop.",
+        "Already down: media/homepage, media/sonarr, nextcloud/nextcloud, nextcloud/nextcloud-db; Flux leaves them "
+        "alone until just resume.",
+    ]
+
+
+def test_the_report_of_up_says_the_replicas_each_app_starts_with():
+    up = fs.plan(held(APPS), "up", [], [], ANNOTATION)
+    assert fs.report(up, "up") == [
+        "Started 4 apps with the replicas in brackets; Flux takes them back at its next reconciliation.",
+        "nextcloud/nextcloud-db (1)",
+        "then media/homepage (2), media/sonarr (1), nextcloud/nextcloud (1)",
+    ]
+    assert fs.report(fs.plan(APPS, "up", [], [], ANNOTATION), "up", check=True) == ["No app is down."]

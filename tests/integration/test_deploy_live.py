@@ -6,6 +6,10 @@ stdout callback. What it wrote is read back through tests/vt.py's terminal: each
 wrapping, nothing a terminal would not know, and once the run is over the summary where the region was. The log holds
 the stream the default callback prints, PLAY RECAP and the summary. A refusal prints whole, a run of a playbook no
 declaration names is drawn too, Ctrl-C leaves no frame behind, and -v is the stream.
+
+just suspend and just resume run whole, the recipes and the real playbooks, in a scratch tree against the fake
+Proxmox host and the fake cluster, set up as test_status.py sets them up: drawn by their declaration, the apps' waves
+each a step, the report naming each app with its replicas in the summary, and the command as it was typed.
 """
 
 import fcntl
@@ -14,6 +18,7 @@ import os
 import pty
 import re
 import select
+import shutil
 import signal
 import struct
 import subprocess
@@ -22,16 +27,22 @@ import termios
 import time
 from pathlib import Path
 
+import pytest
+
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "tests"))
+sys.path.insert(0, str(ROOT / "tests" / "policy"))
 
 import test_idempotence as idempotence  # noqa: E402
+import test_status as status  # noqa: E402
+from helpers import PROXMOX_ONLY_CLUSTER_LOCAL_YML, example_tree  # noqa: E402
 from vt import VT  # noqa: E402
 
 PLAYBOOK = str(Path(sys.executable).parent / "ansible-playbook")
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+DASH = "\u2013"
 COLUMNS, ROWS = 100, 30
 
 
@@ -194,3 +205,100 @@ def test_at_v_the_run_is_the_stream(tmp_path):
     assert any(line.startswith("TASK [proxmox_apt : ") for line in screen) and any(
         line.startswith("PLAY RECAP") for line in screen
     )
+
+
+def scale_tree(tmp_path):
+    """The repository's playbooks, roles, plugins, justfile and the scripts just's playbook recipes run, with
+    test_status.py's Proxmox-only cluster and Home Assistant: the host's state, the cluster's and its credentials."""
+    root = example_tree(tmp_path / "tree", PROXMOX_ONLY_CLUSTER_LOCAL_YML)
+    shutil.copytree(ROOT / "callback_plugins", root / "callback_plugins")
+    shutil.copy(ROOT / "justfile", root)
+    (root / "scripts" / "init").mkdir(parents=True)
+    shutil.copy(ROOT / "scripts" / "run_log.py", root / "scripts")
+    shutil.copy(ROOT / "scripts" / "init" / "setups.py", root / "scripts" / "init")
+    (tmp_path / "home").mkdir()
+    status.credentials(status.talos_dir(tmp_path))
+    status.seed_cluster(tmp_path / "talos.json")
+    status.seed(tmp_path / "pve.json")
+    return root
+
+
+def just_on_a_terminal(root, *args):
+    """just with args in the tree, on a terminal, with the repository's stdout callback, this test's inventory and
+    variables after --: its code, the terminal it leaves, and what it wrote."""
+    state = root.parent / "pve.json"
+    env = status.environment(root, state) | {
+        "ANSIBLE_STDOUT_CALLBACK": "homeserver",
+        "ANSIBLE_CALLBACK_PLUGINS": str(root / "callback_plugins"),
+        "ANSIBLE_NOCOLOR": "1",
+        "TERM": "xterm-256color",
+        "VENV": sys.prefix,
+    }
+    command = ["just", *args, "--", "-i", "inventory.example", "-e", status.extra_vars(root)]
+    rc, stream = on_a_terminal(command, env, cwd=root)
+    terminal = VT(COLUMNS, ROWS)
+    terminal.feed(stream)
+    return rc, terminal, stream.decode(errors="replace")
+
+
+def replicas(root):
+    """Each app's replicas in the fake cluster, by namespace/name."""
+    objects = json.loads((root.parent / "talos.json").read_text())["objects"]
+    return {
+        k.removeprefix("Deployment/"): o["spec"].get("replicas", 1)
+        for k, o in objects.items()
+        if k.startswith("Deployment/")
+    }
+
+
+@pytest.mark.cluster
+def test_suspend_and_resume_are_drawn_by_their_declaration(tmp_path):
+    root = scale_tree(tmp_path)
+    rc, terminal, stream = just_on_a_terminal(root, "suspend")
+    assert rc == 0, stream[-4000:]
+    drawn(terminal)
+    screen = terminal.transcript()
+    assert not left_behind(screen), screen
+    assert "Setup: this checkout's own files" in screen and any(line.startswith("Logging to logs/") for line in screen)
+    assert replicas(root)["homepage/homepage"] == 0
+    head = next(line for line in screen if line.startswith("homeserver  suspend"))
+    assert " · done in " in head, head
+    # The apps' waves were drawn as steps, the databases after the apps.
+    assert "○ databases" in stream and re.search(f"[{SPINNER}] databases", stream), stream[-4000:]
+    assert re.search(f"[{SPINNER}] plan", stream), stream[-4000:]
+    # The summary names each wave, after the plan when that took long enough to name.
+    said = " ".join(" ".join(screen).split())
+    assert re.search(r"apps [\d.]+ s, 1 changed · databases [\d.]+ s, 1 changed", said), screen
+    # The report whole in the summary: each app with the replicas it comes back with, the database last.
+    at = next(i for i, line in enumerate(screen) if line.startswith("APPS "))
+    report = " ".join(" ".join(screen[at : at + 6]).split())
+    assert "Stopped 4 apps, to come back with the replicas in brackets" in report, screen[at:]
+    assert "homepage/homepage (2)" in report and "then nextcloud/nextcloud-db (1)" in report, screen[at:]
+    assert "Already down: media/sonarr." in report, screen[at:]
+    assert any(line.startswith(" ✓ Home Assistant") for line in screen), screen
+    assert not any("cluster VMs" in line for line in screen), "drawn only with --all"
+    assert screen[-1] == "exit 0 · for the whole picture: just status", screen
+    assert terminal.titles and terminal.titles[-1] == "suspend · done", terminal.titles[-3:]
+    log = next((root / "logs").glob("*-suspend.log")).read_text()
+    assert "TASK [app_scale : " in log and "PLAY RECAP" in log and "\x1b" not in log, log[-3000:]
+
+    rc, terminal, stream = just_on_a_terminal(root, "resume")
+    assert rc == 0, stream[-4000:]
+    drawn(terminal)
+    screen = terminal.transcript()
+    assert replicas(root)["homepage/homepage"] == 2
+    at = next(i for i, line in enumerate(screen) if line.startswith("APPS "))
+    report = " ".join(" ".join(screen[at : at + 6]).split())
+    assert "Started 5 apps with the replicas in brackets" in report and "nextcloud/nextcloud-db (1)" in report
+    assert report.index("nextcloud/nextcloud-db (1)") < report.index("then homepage/homepage (2)"), report
+    assert terminal.titles[-1] == "resume · done", terminal.titles[-3:]
+
+    # A dry run of some apps: the command as typed, and Home Assistant, which --only leaves alone, not in this run.
+    rc, terminal, stream = just_on_a_terminal(root, "suspend", "--check", "--only", "jellyfin")
+    assert rc == 0, stream[-4000:]
+    drawn(terminal)
+    screen = terminal.transcript()
+    head = next(line for line in screen if line.startswith("homeserver  suspend"))
+    assert head.startswith("homeserver  suspend --check --only jellyfin · dry run · done in "), head
+    assert f" {DASH} Home Assistant not in this run" in screen, screen
+    assert replicas(root)["media/jellyfin"] == 1, "a dry run changes nothing"

@@ -224,3 +224,203 @@ def test_a_playbook_no_declaration_names_is_a_stage_per_play_and_its_roles():
     ]
     assert [step.label for step in run.stages[0].steps] == ["tasks"]
     assert [step.label for step in run.stages[1].steps] == ["app_scale"]
+
+
+# suspend.yml's plays, as the engine hands them over: the refusal on localhost and the apps' play, whose role includes
+# its wave file once per wave; Home Assistant's; and the cluster's VMs', which --all alone draws.
+SUSPEND = view.recipes.recipe_for("suspend.yml")
+REFUSE = "Refuse a cluster without the kubernetes inventory group"
+MAIN = {"file": "/r/roles/app_scale/tasks/main.yml"}
+WAVE = "/r/roles/app_scale/tasks/wave.yml"
+SCALE_PLAYS = [
+    ("refuse", "/r/suspend.yml:11", [("r0", None, {"file": "/r/suspend.yml"})], REFUSE),
+    (
+        "apps",
+        "/r/suspend.yml:24",
+        [
+            ("a0", None, {"file": "/r/suspend.yml"}),
+            ("a1", "app_scale", MAIN),
+            ("a2", "app_scale", MAIN | {"include": 3, "included": WAVE}),
+            ("a3", "app_scale", MAIN),
+        ],
+        "Spin the apps down",
+    ),
+    (
+        "haos",
+        "/r/suspend.yml:70",
+        [
+            ("h0", None, {"file": "/r/suspend.yml"}),
+            ("h1", "proxmox_vm", {"file": "/r/roles/proxmox_vm/tasks/power.yml"}),
+        ],
+        "Shut Home Assistant's VM down",
+    ),
+    (
+        "vms",
+        "/r/suspend.yml:130",
+        [
+            ("v0", None, {"file": "/r/suspend.yml"}),
+            ("v1", "proxmox_vm", {"file": "/r/roles/proxmox_vm/tasks/power.yml"}),
+        ],
+        "Shut the cluster's VMs down",
+    ),
+]
+
+
+def suspend(options=None, check=False):
+    run = view.Run("suspend", 0.0, check=check, log="logs/x.log", started_at=START, recipe=SUSPEND, options=options)
+    run.plays(SCALE_PLAYS)
+    return run
+
+
+def waves(run, now):
+    """The apps' play: its refusal, its plan, both waves of three tasks, its report; the time after."""
+    run.play_start("refuse", now)
+    run.task("r0", "Refuse a cluster without the kubernetes inventory group", None, now, play="refuse")
+    run.result("r0", "localhost", "ok", now + 0.1)
+    run.play_start("apps", now + 0.2)
+    for number, key in enumerate(("a0", "a1", "a2")):
+        run.task(key, f"task {key}", None if key == "a0" else "app_scale", now + 1 + number, play="apps")
+        run.result(key, "k8s", "ok", now + 1.5 + number)
+    run.include("a2", 3, "apps")
+    run.include("a2", 3, "late apps")
+    now += 4
+    for wave in ("apps", "late apps"):
+        for number in range(3):
+            key = f"{wave}{number}"
+            run.task(key, f"wave task {number}", "app_scale", now, play="apps", file=WAVE, item=wave)
+            run.result(key, "k8s", "changed" if number == 0 else "ok", now + 1)
+            now += 1
+    run.task("a3", "Say what was done", "app_scale", now, play="apps")
+    lines = ["Stopped 2 apps, to come back with the replicas in brackets.", "media/sonarr (1)", "then media/db (1)"]
+    run.note(run.find("a3"), lines[0], lines)
+    run.result("a3", "k8s", "ok", now + 0.1)
+    return now + 0.2
+
+
+def test_a_stage_only_an_option_draws_is_left_out_without_it():
+    assert [s.label for s in suspend().stages] == ["apps", "Home Assistant"]
+    assert [s.label for s in suspend({"cluster_vms": True}).stages] == ["apps", "Home Assistant", "cluster VMs"]
+    run = suspend({"cluster_vms": "false"})
+    assert [s.label for s in run.stages] == ["apps", "Home Assistant"]
+    # Its play's tasks are the log's alone.
+    run.play_start("vms", 0.0)
+    assert run.task("v0", "Leave the cluster's VMs alone without --all", None, 0.0, play="vms") is None
+
+
+@pytest.mark.parametrize("cols", [100, 80])
+def test_a_looped_includes_items_are_steps_of_their_own(cols):
+    run = suspend()
+    apps = run.stages[0]
+    assert [row.label for row in apps.rows()] == ["plan", "apps"]
+    # The include's file counted at the start, in the step its tasks are: the waves'.
+    assert apps.steps[1].expected == 3 and apps.expected == 8
+    now = waves(run, 0.0)
+    assert [row.label for row in apps.rows()] == ["plan", "apps", "databases"]
+    assert [part.expected for part in apps.steps[1].parts] == [3, 3] and apps.expected == 11
+    assert [len(part.tasks) for part in apps.steps[1].parts] == [3, 3]
+    # The report runs in the plan's step after both waves, which takes no more than its own tasks' time.
+    assert apps.steps[0].seconds(now) == pytest.approx(3.6, abs=0.01)
+    run.end(now)
+    lines = frame(run, now, cols)
+    assert all(len(line) <= cols for line in lines), lines
+    piped = run.ended_lines(now, cols)
+    assert [line.split("  ")[0] for line in piped[:3]] == ["✓ apps · plan", "✓ apps · apps", "✓ apps · databases"]
+    summary = [plainly for _c, plainly in run.summary(now, cols)]
+    said = " ".join(" ".join(summary).split())
+    assert "plan 3.6 s · apps 3.0 s, 1 changed · databases 3.0 s, 1 changed" in said, summary
+    # The declared report, whole, under its stage.
+    at = summary.index(next(line for line in summary if line.startswith("APPS")))
+    assert summary[at : at + 3] == [
+        "APPS            Stopped 2 apps, to come back with the replicas in brackets.",
+        "                media/sonarr (1)",
+        "                then media/db (1)",
+    ]
+
+
+def test_a_running_item_is_drawn_with_its_tasks_and_a_failure_says_which():
+    run = suspend()
+    run.play_start("apps", 0.0)
+    run.task("a2", "Include", "app_scale", 0.0, play="apps")
+    run.result("a2", "k8s", "ok", 0.1)
+    run.include("a2", 3, "apps")
+    run.include("a2", 3, "late apps")
+    run.task("w0", "Patch each app", "app_scale", 1.0, play="apps", file=WAVE, item="apps")
+    lines = frame(run, 2.0, 100)
+    assert any(line.startswith("     ⠋ apps") for line in lines), lines
+    assert any(line.startswith("     ○ databases") for line in lines), lines
+    assert any("⠋ Patch each app" in line for line in lines), lines
+    run.result("w0", "k8s", "failed", 2.0)
+    assert run.where(run.find("w0")) == "apps · apps"
+
+
+def test_a_play_that_ends_its_host_before_its_work_leaves_its_stage_out_of_the_run():
+    run = suspend()
+    now = waves(run, 0.0)
+    run.play_start("haos", now)
+    run.task("h0", "Leave Home Assistant alone when --only names others", None, now, play="haos", ends=True)
+    # Ending its host, the task says nothing: the next event closes it.
+    run.end(now + 1)
+    assert run.stages[1].state(True) == "none"
+    assert f" {view.DASH} Home Assistant not in this run" in frame(run, now + 1, 100)
+    summary = [plainly for _c, plainly in run.summary(now + 1, 100)]
+    assert f" {view.DASH} Home Assistant not in this run" in summary
+    assert any(
+        line.startswith(f"{view.DASH} Home Assistant") and "not in this run" in line
+        for line in run.ended_lines(now + 1)
+    )
+    # A report its play printed just before is the reason, and no report of the summary's.
+    run = suspend()
+    run.play_start("haos", 0.0)
+    run.task("h0", "Say the VM comes back later", None, 0.0, play="haos")
+    run.note(run.find("h0"), "The VM is not up yet; a real run starts it.")
+    run.result("h0", "pve", "ok", 0.1)
+    run.task("h1", "Leave it for the real run", None, 0.2, play="haos", ends=True)
+    run.end(1.0)
+    assert run.stages[1].reason == "The VM is not up yet; a real run starts it." and run.notes == []
+    assert f" {view.DASH} Home Assistant The VM is not up yet; a real run starts it." in frame(run, 1.0, 100)
+    # One that is skipped, or ends its host only after its absent task said why, leaves the stage as it is.
+    run = suspend()
+    run.play_start("haos", 0.0)
+    run.task("h0", "Leave Home Assistant alone when --only names others", None, 0.0, play="haos", ends=True)
+    run.result("h0", "pve", "skipped", 0.1)
+    run.task("h1", "Shut Home Assistant's VM down", "proxmox_vm", 0.2, play="haos")
+    run.end(1.0)
+    assert run.stages[1].state(True) == "done"
+
+
+def test_a_stage_whose_play_comes_later_waits_for_it():
+    resume = view.recipes.recipe_for("resume.yml")
+    plays = [
+        ("refuse", "/r/resume.yml:9", [("r0", None, {})], REFUSE),
+        ("vms", "/r/resume.yml:20", [("v0", "proxmox_vm", {})], "Start the cluster's VMs"),
+        ("apps", "/r/resume.yml:50", [("a0", "app_scale", MAIN)], "Bring the apps back up"),
+    ]
+    run = view.Run("resume", 0.0, started_at=START, recipe=resume, options={"cluster_vms": True})
+    run.plays(plays)
+    assert [s.label for s in run.stages] == ["cluster VMs", "apps"]
+    run.play_start("refuse", 0.0)
+    run.task("r0", "Refuse", None, 0.0, play="refuse")
+    run.result("r0", "localhost", "ok", 0.5)
+    run.play_start("vms", 1.0)
+    run.task("v0", "Start each VM", "proxmox_vm", 1.0, play="vms")
+    vms, apps = run.stages
+    assert apps.state(False) == "todo" and vms.state(False) == "running"
+    assert any(line.startswith(" ○ apps") for line in frame(run, 50.0, 100))
+    run.result("v0", "pve", "changed", 60.0)
+    run.play_start("apps", 60.0)
+    run.task("a0", "Read", "app_scale", 61.0, play="apps")
+    run.result("a0", "k8s", "ok", 62.0)
+    assert vms.state(False) == "done" and apps.state(False) == "running"
+    run.end(62.0)
+    # Its time is its own tasks', never the VMs' minute between them.
+    assert apps.seconds(62.0) == pytest.approx(1.5)
+
+
+def test_a_skipped_include_takes_back_what_it_was_counted_with():
+    run = suspend(check=True)
+    run.play_start("apps", 0.0)
+    run.task("a2", "Stop or start the apps, a wave at a time", "app_scale", 0.0, play="apps")
+    run.result("a2", "k8s", "skipped", 0.1)
+    run.end(0.2)
+    assert run.stages[0].steps[1].state(True) == "none"
+    assert run.stages[0].expected == 5

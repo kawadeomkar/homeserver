@@ -81,3 +81,66 @@ def test_the_nas_steps_are_the_files_the_truenas_role_imports_in_its_order():
 
     declared = [file for step in deploy.stages[0].steps for file in step.files]
     assert declared == list(imports(main))
+
+
+def role_tasks(path):
+    """Every task of a task file and of the files it imports or includes by a literal name, as (file, task)."""
+    out = []
+    for task in yaml.safe_load(path.read_text()) or []:
+        out.append((path, task))
+        for key in ("block", "rescue", "always"):
+            for inner in task.get(key) or []:
+                out.append((path, inner))
+        target = task.get("ansible.builtin.import_tasks") or task.get("ansible.builtin.include_tasks")
+        if isinstance(target, str) and "{{" not in target and (path.parent / target).is_file():
+            out += role_tasks(path.parent / target)
+    return out
+
+
+def test_options_whole_reports_and_steps_by_item_name_what_the_tree_has():
+    for recipe in recipes.RECIPES:
+        variables = {variable for variable, _option in recipe.options}
+        for stage in recipe.stages:
+            assert not stage.when or stage.when in variables, f"{stage.label}: {stage.when} is no option of its"
+            files = [ROOT / "roles" / file for step in stage.steps for file in step.files]
+            files += [ROOT / "roles" / role / "tasks" / "main.yml" for step in stage.steps for role in step.roles]
+            tasks = [task for file in files for _path, task in role_tasks(file)]
+            if stage.report:
+                plays = [play for file, play in plays_of_recipe(recipe) if any(p.startswith(file) for p in stage.plays)]
+                found = {name for play in plays for name in task_names([play])} | {t.get("name") for t in tasks}
+                found |= {str(name).split(" | ", 1)[-1] for name in found if name}
+                assert stage.report in found, f"{stage.label}: no task {stage.report!r} to report whole"
+            for step in stage.steps:
+                if not step.each:
+                    assert not step.names, f"{stage.label} · {step.label}: names without each"
+                    continue
+                # The step's file comes from an include with a loop, whose label gives the names it renames.
+                includes = [
+                    task
+                    for task in tasks
+                    if any(
+                        str(task.get("ansible.builtin.include_tasks", "")).endswith(Path(file).name)
+                        for file in step.files
+                    )
+                ]
+                assert includes and all("loop" in task for task in includes), f"{step.label}: no looped include"
+                labels = " ".join(str((task.get("loop_control") or {}).get("label", "")) for task in includes)
+                for name in step.names:
+                    assert f"'{name}'" in labels, f"{stage.label} · {step.label}: no item is labelled {name!r}"
+
+
+def plays_of_recipe(recipe):
+    return [entry for playbook in recipe.playbooks for entry in plays_of(playbook)]
+
+
+def test_suspend_and_resume_draw_their_plays_in_their_order():
+    for name, order in (
+        ("suspend", ["apps", "Home Assistant", "cluster VMs"]),
+        ("resume", ["cluster VMs", "apps", "Home Assistant"]),
+    ):
+        recipe = recipes.recipe_for(f"{name}.yml")
+        assert [stage.label for stage in recipe.stages] == order
+        # Each play of the playbook is a stage's, so none is drawn as a stage of its own.
+        declared = {play for stage in recipe.stages for play in stage.plays}
+        for file, play in plays_of(f"{name}.yml"):
+            assert f"{file}:{play['name']}" in declared, f"{name}: the play {play['name']!r} is no stage's"

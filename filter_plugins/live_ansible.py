@@ -35,6 +35,7 @@ from pathlib import Path
 from ansible import constants as C
 from ansible import context
 from ansible.utils import display as ansible_display
+from ansible.utils.vars import load_extra_vars
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -71,6 +72,7 @@ INCLUDE_TASKS = frozenset({"include_tasks", "ansible.builtin.include_tasks", "an
 IMPORT_TASKS = frozenset({"import_tasks", "ansible.builtin.import_tasks", "ansible.legacy.import_tasks"})
 INCLUDE_ROLE = frozenset({"include_role", "ansible.builtin.include_role", "ansible.legacy.include_role"})
 ARGUMENT_CHECKS = frozenset({"validate_argument_spec", "ansible.builtin.validate_argument_spec"})
+META = frozenset({"meta", "ansible.builtin.meta", "ansible.legacy.meta"})
 FAILURE_LINES = 20
 # A run this long rings the bell when it ends: the person may have looked away. One that failed always does.
 BELL_SECONDS = 60
@@ -121,15 +123,24 @@ def _command(playbook, cli):
     return name, stem, check, ",".join(t for t in cli.get("tags") or () if t != "all")
 
 
-def title_of(playbook, cli):
-    """The command a run is: deploy proxmox, check under --check, deploy truenas --tags truenas_pools; for a
-    playbook no declaration names, its file's name."""
+def title_of(playbook, cli, given=None):
+    """The command a run is: deploy proxmox, check under --check, deploy truenas --tags truenas_pools, suspend --check
+    --only jellyfin, with the recipe's options given (given: by variable); for a playbook no declaration names, its
+    file's name."""
     file = Path(str(playbook._file_name)).name
     stem = file.rsplit(".", 1)[0]
     recipe = recipes.recipe_for(file)
     check = bool(cli.get("check"))
     if recipe:
-        words = [recipe.check_name if check else recipe.name] + ([] if stem == "site" else [stem])
+        words = [recipe.check_name if check else recipe.name] + ([] if file == recipe.playbooks[0] else [stem])
+        if check and recipe.check_name == recipe.name:
+            words.append("--check")
+        for variable, option in recipe.options:
+            value = (given or {}).get(variable)
+            if isinstance(value, bool) or value in (None, ""):
+                words += [option] if view.truthy(value) else []
+            else:
+                words.append(f"{option} {text.one_line(str(value), 60)}")
     else:
         words = [stem] + (["--check"] if check else [])
     tags = [t for t in cli.get("tags") or () if t != "all"]
@@ -173,14 +184,14 @@ def _include_meta(task, search):
             if not isinstance(target, str) or "{{" in target:
                 return {}
             base = os.path.dirname(str(task.get_path()).split(":", 1)[0])
-            path = target if os.path.isabs(target) else os.path.join(base, target)
-            return {"include": view.count_tasks(path)} if os.path.isfile(path) else {}
+            path = os.path.normpath(target if os.path.isabs(target) else os.path.join(base, target))
+            return {"include": view.count_tasks(path), "included": path} if os.path.isfile(path) else {}
         if task.action in INCLUDE_ROLE:
             name, tasks_from = args.get("name"), args.get("tasks_from")
             if not isinstance(name, str) or "{{" in name or "{{" in str(tasks_from or ""):
                 return {}
             path = view.role_tasks_file(name.split(".")[-1], tasks_from, search)
-            return {"include": view.count_tasks(path)} if path else {}
+            return {"include": view.count_tasks(path), "included": path} if path else {}
     except Exception:  # noqa: BLE001 - a count is a nicety: an include whose file cannot be read is counted as it runs
         return {}
     return {}
@@ -236,12 +247,55 @@ def task_file(task):
 
 def from_include(task):
     """Whether a task came from a dynamic include, whose tasks the include's count covers."""
+    return _include_of(task) is not None
+
+
+def _include_of(task):
+    """The dynamic include nearest a task that brought it, or None."""
     node = getattr(task, "_parent", None)
     while node is not None:
         if getattr(node, "action", None) in INCLUDE_TASKS | INCLUDE_ROLE:
-            return True
+            return node
         node = getattr(node, "_parent", None)
-    return False
+    return None
+
+
+def item_label(variables):
+    """The label of the loop item an include brought its tasks with, from the variables Ansible gives the include for
+    that item: loop_control's label, else the item; censored under no_log, as Ansible's own line says it; None outside
+    a loop."""
+    variables = variables or {}
+    if "_ansible_item_label" in variables:
+        label = variables["_ansible_item_label"]
+    elif variables.get("ansible_loop_var") in variables:
+        label = variables[variables["ansible_loop_var"]]
+    else:
+        return None
+    if variables.get("_ansible_no_log"):
+        label = "(censored due to no_log)"
+    return text.one_line(str(label), 60)
+
+
+def item_of(task):
+    """The label of the loop item the include nearest a task brought it with: Ansible gives the include's copy for
+    that item the item's variables."""
+    return item_label(getattr(_include_of(task), "vars", None))
+
+
+def ends_host(task):
+    """Whether a task is a play's own end_host or end_play: ending its host, it says nothing."""
+    return task.action in META and task._get_meta() in ("end_host", "end_play") and role_of(task) is None
+
+
+def given_options(playbook, recipe):
+    """The recipe's options this run was given, by variable, as -e gave them."""
+    if recipe is None or not recipe.options:
+        return {}
+    try:
+        extra = load_extra_vars(playbook._loader)
+    except Exception:  # noqa: BLE001 - the title says less, rather than no run: ansible-playbook refuses bad -e itself
+        return {}
+    return {variable: extra[variable] for variable, _option in recipe.options if variable in extra}
 
 
 def rescued(task, play=None):
@@ -395,13 +449,16 @@ class Engine:
         self.log_path = os.environ.get("ANSIBLE_LOG_PATH") or C.DEFAULT_LOG_PATH or ""
         self.log = relative(self.log_path) if self.log_path else ""
         file = Path(str(playbook._file_name)).name
+        recipe = recipes.recipe_for(file)
+        given = given_options(playbook, recipe)
         self.run = view.Run(
-            title_of(playbook, cli),
+            title_of(playbook, cli, given),
             self._now(),
             check=bool(cli.get("check")),
             log=self.log,
             setup=setup_name(),
-            recipe=recipes.recipe_for(file),
+            recipe=recipe,
+            options=given,
         )
         self.search = [os.path.join(os.path.dirname(os.path.abspath(str(playbook._file_name))), "roles")]
         self.search += list(C.DEFAULT_ROLES_PATH)
@@ -428,7 +485,7 @@ class Engine:
 
     def play_start(self, play):
         with self.display._lock:
-            self.run.play_start(play._uuid)
+            self.run.play_start(play._uuid, self._now())
             self._after()
 
     def task_start(self, task):
@@ -445,6 +502,8 @@ class Engine:
                 file=task_file(task),
                 path=origin(task),
                 counted=counted,
+                item=item_of(task),
+                ends=ends_host(task),
             )
             self._after()
 
@@ -457,7 +516,7 @@ class Engine:
                 path = view.role_tasks_file(role, tasks_from, self.search)
             else:
                 path = str(included_file._filename)
-            self.run.include(task._uuid, view.count_tasks(path) if path else 0)
+            self.run.include(task._uuid, view.count_tasks(path) if path else 0, item_label(included_file._vars))
 
     # --- results -------------------------------------------------------------------------------------------
     def _result(self, result, outcome):
@@ -504,11 +563,12 @@ class Engine:
             return
         with self.display._lock:
             task = self.run.find(result.task._uuid)
-            self.run.note(task, text.one_line(lines[0], 200))
+            self.run.note(task, text.one_line(lines[0], 200), [text.one_line(line, 400) for line in lines])
+            row = self.run.row_of(task) if task is not None else None
             if task is None:
                 label = ""
-            elif self.run.flat() and task.step is not None:
-                label = self.run.stages[task.stage].steps[task.step].label
+            elif self.run.flat() and row is not None:
+                label = row.label
             else:
                 label = self.run.stages[task.stage].label
         self.print(self._wrapped([("  ", ""), (label.ljust(view.LABEL), "b")], lines))

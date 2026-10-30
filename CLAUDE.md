@@ -132,7 +132,11 @@ at `-v` line by line. **What a run is made of is its declaration** (`filter_plug
 stages are its playbooks, each with steps named as a person names them (packages, not `proxmox_apt`), matched by role,
 task file or play, a play's own tasks (its refusals) going to their neighbour's step, and each stage's `absent` task
 ("Say why … is skipped") marking a stage this setup lacks; a playbook no declaration names is drawn as a stage per play,
-its roles as steps. The model (`filter_plugins/run_view.py`) counts every task the plays compile to at the start (an
+its roles as steps. suspend's and resume's stages are their plays (the apps, Home Assistant, the cluster's VMs, which
+a stage's `when` draws only with `--all`), the apps' waves each a step of its own (a step's `each`: a looped include's
+items as steps, by their loop labels, renamed by `names`), their report whole in the summary (a stage's `report`), and
+the recipe's `options` put `--only` and `--all` in the title. A play that ends its host (`meta: end_host`) before its
+work leaves its stage "not in this run"; a stage whose play comes later waits for it, its time its own tasks'. The model (`filter_plugins/run_view.py`) counts every task the plays compile to at the start (an
 include whose file is literal too), so each bar knows its end and never moves back; a refusal (a failed assert) prints
 its message alone, never the assertion; the exit line follows ansible-playbook's code, 4 for a host not reached before 2
 for a failure. A drawn run needs a log: `scripts/run_log.py` names every log, `_playbook`'s and, 0600 in a 0700 `logs/`,

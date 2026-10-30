@@ -337,7 +337,9 @@ export SOPS_AGE_KEY_FILE=~/.config/sops/age/homeserver.agekey    # in your shell
 
 To stop the apps without losing anything, before maintenance or to free the host for a while, `just suspend` scales
 every app to zero and tells Flux to leave it there, then shuts Home Assistant's VM down, and `just resume` brings back
-what it stopped; `just suspend --check` and `just resume --check` say what each would do. `--only` narrows either to
+what it stopped; `just suspend --check` and `just resume --check` say what each would do. Each is drawn as it goes,
+as a deploy is: the apps, a wave at a time (the databases after their apps, or before them), then Home Assistant, and
+the summary names each app with its replicas. `--only` narrows either to
 apps, groups or `homeassistant`, such as `just suspend --only jellyfin,nextcloud` (a group is a directory under
 `k8s/apps/`). Unlike the other playbook recipes, these two take options of their own, so ansible-playbook's flags
 follow `--`: `just suspend --check -- -v`. Data, Flux and the platform stay, and a stopped app stays down across reboots until `just resume`;
