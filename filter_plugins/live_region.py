@@ -24,7 +24,8 @@ What it does, once started:
 - Sets the terminal's title (OSC 0) when it changes, and rings the bell when asked.
 - Turns the terminal's echo off while it draws, and back on for a prompt and at the end, when standard input is a
   terminal (just status reads /dev/null, and keeps its echo as it is): an Enter typed during the run would move the
-  cursor under the region, and the next redraw would leave a copy of it behind.
+  cursor under the region, and the next redraw would leave a copy of it behind. Never from the background, where
+  changing it would stop the run (SIGTTOU).
 - Erases the region at exit, Ctrl-C included, and holds a Ctrl-C off between a write and its count of the lines it
   drew: a KeyboardInterrupt between the two left the count stale, and the erase that followed missed the region.
 - A frame that cannot be drawn ends the region, never the run: it is erased, draws no more and only routes, and
@@ -57,7 +58,9 @@ MIN_ROWS, MIN_COLS = 4, 20
 
 
 def can_draw(stream=None, environ=None) -> bool:
-    """Whether a stream is a terminal that can take the region: one, not dumb, and UTF-8 for the glyphs."""
+    """Whether a stream is a terminal that can take the region: one, not dumb, UTF-8 for the glyphs, and with a size.
+    A pseudo-terminal nobody gave a size reads 0 by 0, and every line cut to it would be nothing: pre-commit runs its
+    hooks on one, script(1) without a terminal of its own makes one."""
     stream = stream or sys.stdout
     environ = os.environ if environ is None else environ
     try:
@@ -65,7 +68,24 @@ def can_draw(stream=None, environ=None) -> bool:
     except (AttributeError, ValueError):
         tty = False
     encoding = (getattr(stream, "encoding", "") or "").lower().replace("-", "")
-    return tty and environ.get("TERM", "") not in ("", "dumb") and encoding.startswith("utf8")
+    return tty and environ.get("TERM", "") not in ("", "dumb") and encoding.startswith("utf8") and _sized(stream)
+
+
+def _sized(stream):
+    try:
+        return os.get_terminal_size(stream.fileno()).columns > 0
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _background(fd):
+    """Whether this process is in the background of its terminal (just deploy proxmox &): one that changes the
+    terminal's settings from there is stopped (SIGTTOU) until brought back. A terminal that is not the process's own
+    stops nothing, and says so with an error."""
+    try:
+        return os.tcgetpgrp(fd) != os.getpgrp()
+    except OSError:
+        return False
 
 
 class LiveRegion:
@@ -193,17 +213,20 @@ class LiveRegion:
                 self._write("\a")
 
     def _quiet(self, on):
-        """The terminal's echo off (on=True), or back as it was. Nothing for an input that is no terminal."""
+        """The terminal's echo off (on=True), or back as it was. Nothing for an input that is no terminal, or from the
+        background, where the shell holds the terminal and its settings: a run sent there after it started (Ctrl-Z,
+        bg) leaves them to it."""
         try:
             fd = sys.stdin.fileno()
-            if on and self._echo is None and os.isatty(fd):
+            if on and self._echo is None and os.isatty(fd) and not _background(fd):
                 settings = termios.tcgetattr(fd)
                 quiet = [*settings[:3], settings[3] & ~termios.ECHO, *settings[4:]]
                 termios.tcsetattr(fd, termios.TCSADRAIN, quiet)
                 self._echo = settings
             elif not on and self._echo is not None:
-                termios.tcsetattr(fd, termios.TCSADRAIN, self._echo)
-                self._echo = None
+                echo, self._echo = self._echo, None
+                if not _background(fd):
+                    termios.tcsetattr(fd, termios.TCSADRAIN, echo)
         except (OSError, ValueError, AttributeError, termios.error):
             self._echo = None
 

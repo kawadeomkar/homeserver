@@ -11,11 +11,13 @@ tests/integration/test_status.py's for just status.
 
 from __future__ import annotations
 
+import fcntl
 import importlib.util
 import inspect
 import io
 import os
 import signal
+import struct
 import termios
 import threading
 import time
@@ -76,21 +78,38 @@ def _region(frame=None, route=None):
     return region, display, stream
 
 
-def test_a_region_is_drawn_only_at_a_terminal_that_takes_utf8():
+def test_a_region_is_drawn_only_at_a_terminal_that_takes_utf8_and_has_a_size():
+    # Pseudo-terminals of the test's own: one sized, one nobody gave a size, as pre-commit runs its hooks on.
+    sized_master, sized = os.openpty()
+    unsized_master, unsized = os.openpty()
+    fcntl.ioctl(sized, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+
     class Pipe(io.StringIO):
         encoding = "utf-8"
 
     class Terminal(Screen):
         encoding = "UTF-8"
 
-    class Latin(Screen):
+        def __init__(self, fd=sized):
+            super().__init__()
+            self.fd = fd
+
+        def fileno(self):
+            return self.fd
+
+    class Latin(Terminal):
         encoding = "latin-1"
 
-    assert live.can_draw(Terminal(), {"TERM": "xterm-256color"})
-    assert not live.can_draw(Pipe(), {"TERM": "xterm-256color"})
-    assert not live.can_draw(Terminal(), {"TERM": "dumb"})
-    assert not live.can_draw(Terminal(), {})
-    assert not live.can_draw(Latin(), {"TERM": "xterm"})
+    try:
+        assert live.can_draw(Terminal(), {"TERM": "xterm-256color"})
+        assert not live.can_draw(Pipe(), {"TERM": "xterm-256color"})
+        assert not live.can_draw(Terminal(), {"TERM": "dumb"})
+        assert not live.can_draw(Terminal(), {})
+        assert not live.can_draw(Latin(), {"TERM": "xterm"})
+        assert not live.can_draw(Terminal(unsized), {"TERM": "xterm-256color"})
+    finally:
+        for fd in (sized_master, sized, unsized_master, unsized):
+            os.close(fd)
 
 
 def test_what_is_printed_goes_above_the_region_which_is_drawn_again_below_it():
@@ -268,6 +287,39 @@ def test_the_region_turns_the_echo_off_while_it_draws_and_on_for_a_prompt_and_at
         assert during == [True] and not echoes()
         region.finish()
         assert echoes()
+    finally:
+        terminal.close()
+        os.close(master)
+
+
+def test_from_the_background_the_region_leaves_the_terminals_settings_to_the_shell(monkeypatch):
+    """Changing them from the background stops the process (SIGTTOU): just deploy proxmox & would wait for fg. The
+    terminal is the test's own, held by another group as a shell holds it for a job in the background."""
+    master, slave = os.openpty()
+    terminal = os.fdopen(slave, "r")
+    monkeypatch.setattr(live.sys, "stdin", terminal)
+    holder = [os.getpgrp() + 1]
+    monkeypatch.setattr(live.os, "tcgetpgrp", lambda fd: holder[0])
+    settings = lambda: termios.tcgetattr(slave)  # noqa: E731
+    try:
+        before = settings()
+        region, _, _ = _region(frame=lambda cols, rows, glyph: ["region"])
+        region.start()
+        region.redraw()
+        assert settings() == before
+        region.finish()
+        assert settings() == before
+        # Started in the foreground, then sent to the background (Ctrl-Z, bg): the shell has the terminal back, with
+        # settings of its own, which the end of the run leaves alone.
+        holder[0] = os.getpgrp()
+        region, _, _ = _region(frame=lambda cols, rows, glyph: ["region"])
+        region.start()
+        region.redraw()
+        assert not settings()[3] & termios.ECHO
+        holder[0] = os.getpgrp() + 1
+        shells = settings()
+        region.finish()
+        assert settings() == shells
     finally:
         terminal.close()
         os.close(master)
