@@ -141,10 +141,10 @@ def test_next_steps_lists_each_record_left_once_in_the_order_made():
             "backup": {"x": {"text": "\x1b]52;c;ZXZpbA==\x07a job\x1b[31m waits\x9b2J", "command": "a\x07b"}}
         }
     }
-    assert module.next_steps(quoted) == [("backup", "a job waits", "a b")]
+    assert module.next_steps(quoted) == [("backup", "a job waits", "ab")]
     assert module.next_steps({}) == [] and module.next_steps({"homeserver_next": "nothing"}) == []
     lines = module.next_steps_lines(module.next_steps(stats))
-    assert [text for text, _ in lines] == [
+    assert [line.text(False) for line in lines] == [
         "NEXT STEPS  2 to do",
         " ● restart     300 homeserver-cp-1 waits for a restart",
         "               → qm reboot 300",

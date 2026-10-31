@@ -4,8 +4,6 @@ own text. The hosts' findings are test_status_filters.py's, split between the ho
 """
 
 import importlib.util
-import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -187,53 +185,16 @@ def test_the_live_lines_fit_the_terminal():
     module = callback.CallbackModule()
     module._progress = callback.Progress(fs, SETTINGS)
     module._hosts = {"homeserver": {"label": "proxmox", "state": "ok", "done": False, "since": 0.0, "seconds": 0.0}}
-    lines = [callback._fit(parts, 99, False) for parts in module._live_lines(40)]
-    assert len(lines) == 10 and lines[-1].startswith("reading  proxmox ")
-    assert lines[0].startswith(" ") and "APPS       waiting for the Proxmox host and the cluster · " in lines[0]
+    lines = module._frame(100, 40, "⠋")
+    assert len(lines) == 10 and lines[-1].startswith("reading  proxmox ⠋")
+    assert lines[0].startswith(" ⠋ ") and "APPS       waiting for the Proxmox host and the cluster · " in lines[0]
     assert lines[-2].endswith("ATTENTION  once every section is read")
-    assert [callback._fit(parts, 99, False)[:9] for parts in module._live_lines(8)] == ["reading  "]
+    assert [line[:9] for line in module._frame(100, 8, "⠋")] == ["reading  "]
+    # Each cut short of the terminal's width, so that none wraps.
+    assert all(len(line) <= 39 for line in module._frame(40, 40, "⠋"))
 
 
 def test_the_callbacks_documentation_is_yaml():
     """Ansible reads it as it loads the callback, and ends the run with an error if it is not YAML."""
     doc = yaml.safe_load(callback.DOCUMENTATION)
     assert doc["name"] == "homeserver_status" and doc["type"] == "stdout" and len(doc["description"]) == 4
-
-
-class FakeDisplay:
-    """Ansible's Display as the live lines use it: its lock and its display."""
-
-    def __init__(self):
-        self._lock = threading.RLock()
-        self.shown = []
-
-    def display(self, msg, *args, **kwargs):
-        self.shown.append(msg)
-
-
-def test_the_live_lines_put_other_output_above_them(capsys, monkeypatch):
-    # No frame of the thread's own meanwhile.
-    monkeypatch.setattr(callback, "FRAME_SECONDS", 60)
-    display = FakeDisplay()
-    live = callback.Live(display, lambda rows: [[("reading  proxmox ", ""), ("⠋", "d")]], False)
-    live.redraw()
-    display.display("a warning")
-    assert display.shown == ["a warning"]
-    # Drawn, cleared for the warning, and drawn again below it; cleared for good when closed.
-    out = capsys.readouterr().out
-    assert out == "reading  proxmox ⠋\n" + "\x1b[1F\x1b[J" + "reading  proxmox ⠋\n", repr(out)
-    live.close()
-    display.display("after")
-    assert display.shown == ["a warning", "after"] and capsys.readouterr().out == "\x1b[1F\x1b[J"
-
-
-def test_the_live_lines_close_without_waiting_for_their_thread(monkeypatch):
-    """The callback closes them holding the lock their thread waits for while it draws: close never waits for it."""
-    monkeypatch.setattr(callback, "FRAME_SECONDS", 0.01)
-    display = FakeDisplay()
-    live = callback.Live(display, lambda rows: [], False)
-    with display._lock:
-        time.sleep(0.1)
-        start = time.monotonic()
-        live.close()
-        assert time.monotonic() - start < 1

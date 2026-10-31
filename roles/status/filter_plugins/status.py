@@ -21,19 +21,37 @@ each section is worked out from is section_sources, so a host reads only what th
 
 import base64
 import html
+import importlib.util
 import ipaddress
 import json
 import re
-import textwrap
+import sys
 from datetime import UTC, datetime
+from pathlib import Path
 
 try:
     from cryptography import x509
 except ImportError:  # pragma: no cover - ansible-core installs it
     x509 = None
 
+
+def _sibling(stem):
+    """filter_plugins/<stem>.py at the repository's top, loaded by path once as homeserver_<stem>: a filter plugin
+    is no module another can import."""
+    name = f"homeserver_{stem}"
+    if name not in sys.modules:
+        path = Path(__file__).resolve().parents[3] / "filter_plugins" / f"{stem}.py"
+        spec = importlib.util.spec_from_file_location(name, path)
+        sys.modules[name] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sys.modules[name])
+    return sys.modules[name]
+
+
+# Lines, the palette, bars and lists, as every report and live output draws them.
+screen = _sibling("screen")
+Line, and_list = screen.Line, screen.and_list
+
 GIB = 2**30
-SPARK = "▁▂▃▄▅▆▇█"
 DAY = 24 * 3600
 # Storage types proxmox_vm budgets (the disks' provisioned sizes never above the storage's size), and those whose size
 # the host's own files share, which keep proxmox_vm_host_headroom_gib out of the budget: as in roles/proxmox_vm.
@@ -1266,11 +1284,6 @@ def _item(level, subject, text, command=""):
     return {"level": level, "subject": subject, "text": text, "command": command}
 
 
-def _and(names):
-    names = list(names)
-    return " and ".join([", ".join(names[:-1]), names[-1]] if len(names) > 1 else names)
-
-
 def _vm_attention(found):
     """Things to do about this repo's VMs: missing ones, stopped ones, settings waiting for a restart."""
     out, stopped = [], {}
@@ -1286,7 +1299,7 @@ def _vm_attention(found):
                 _item("todo", "restart", f"{label} waits for a restart to apply {keys}", f"qm reboot {vm['vmid']}")
             )
     for start, labels in stopped.items():
-        out.append(_item("todo", "stopped", f"{_and(labels)} {'is' if len(labels) == 1 else 'are'} stopped", start))
+        out.append(_item("todo", "stopped", f"{and_list(labels)} {'is' if len(labels) == 1 else 'are'} stopped", start))
     return out
 
 
@@ -1407,7 +1420,7 @@ def _backups_model(prox, snapshots, now, commands):
 
 
 def _labels(vms):
-    return _and(f"{vm['vmid']} {vm['name']}".strip() for vm in vms)
+    return and_list(f"{vm['vmid']} {vm['name']}".strip() for vm in vms)
 
 
 def _backup_attention(model, commands):
@@ -1689,7 +1702,7 @@ def _apps_attention(rows, dns, clu, tls, commands, kubeconfig):
     if suspended:
         names = [r["name"] for r in suspended]
         dates = sorted(r["since"][:10] for r in suspended if r.get("since"))
-        text = f"{_and(names)} {'is' if len(names) == 1 else 'are'} suspended"
+        text = f"{and_list(names)} {'is' if len(names) == 1 else 'are'} suspended"
         text += f" since {dates[0]}" if dates else ""
         command = commands.get("resume", "").replace("{names}", ",".join(names))
         out.append(_item("todo", "suspended", text, command))
@@ -1704,7 +1717,7 @@ def _apps_attention(rows, dns, clu, tls, commands, kubeconfig):
         names = (
             "the apps' names do not"
             if dns["state"] == "missing"
-            else f"{_and(dns['missing'])} {'does' if count == 1 else 'do'} not"
+            else f"{and_list(dns['missing'])} {'does' if count == 1 else 'do'} not"
             if count <= 2
             else f"{count} of the apps' {total} names do not"
         )
@@ -1943,7 +1956,8 @@ def _tailscale_attention(tail, commands):
             _item(
                 "problem",
                 "tailscale",
-                f"the host forwards no IPv4, so {_and(advertised)} lead{'s' if len(advertised) == 1 else ''} nowhere",
+                f"the host forwards no IPv4, so {and_list(advertised)} "
+                f"lead{'s' if len(advertised) == 1 else ''} nowhere",
                 deploy,
             )
         )
@@ -2028,7 +2042,7 @@ def _cluster_attention(clu, commands):
     for alert in clu.get("alerts") or []:
         alerts.setdefault((alert["name"], alert["severity"]), []).append(alert)
     for (name, severity), group in alerts.items():
-        subjects = _and(sorted({a["subject"] for a in group if a["subject"]})) or "the cluster"
+        subjects = and_list(sorted({a["subject"] for a in group if a["subject"]})) or "the cluster"
         level = "problem" if severity == "critical" else "todo"
         out.append(_item(level, "alert", f"{name} ({severity}) fires for {subjects}"))
     return out
@@ -2182,7 +2196,6 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
 
 # -------------------------------------------------------------------------------------------- the text ---
 
-STYLES = {"b": "1", "d": "90", "k": "37", "h": "1;34", "g": "32", "y": "33", "r": "31", "c": "36", "u": "36"}
 WIDTH = 100
 # How each app state is drawn: its dot, and the style of the dot and the word.
 STATE_STYLES = {
@@ -2195,40 +2208,6 @@ STATE_STYLES = {
     "suspended": ("○", "d"),
     "stopped": ("○", "d"),
 }
-
-
-class _Line:
-    """A line of text in styled segments, padded on the text alone so that columns line up with or without colour.
-    A URL (style u) is also a link a terminal can open, in colour (OSC 8)."""
-
-    def __init__(self):
-        self.parts = []
-
-    def add(self, text, style=""):
-        self.parts.append((str(text), style))
-        return self
-
-    def cell(self, text, width, style="", right=False):
-        text = str(text)
-        pad = " " * max(width - len(text), 0)
-        return self.add(pad).add(text, style) if right else self.add(text, style).add(pad)
-
-    def to(self, column):
-        return self.add(" " * max(column - len(self), 0))
-
-    def __len__(self):
-        return sum(len(t) for t, _ in self.parts)
-
-    def text(self, color):
-        out = []
-        for t, s in self.parts:
-            if not (color and s and t.strip()):
-                out.append(t)
-            elif s == "u":
-                out.append(f"\033]8;;{t}\033\\\033[{STYLES[s]}m{t}\033[0m\033]8;;\033\\")
-            else:
-                out.append(f"\033[{STYLES[s]}m{t}\033[0m")
-        return "".join(out).rstrip()
 
 
 def _setup_text(setup):
@@ -2252,39 +2231,13 @@ def _uptime(seconds):
     return f"{minutes} m"
 
 
-def _spark(values):
-    """A sparkline of fractions from 0 to 1, a blank where there is no data, and the bucket that stands out."""
-    out = []
-    for v in values or []:
-        if v is None:
-            out.append((" ", ""))
-        else:
-            level = min(len(SPARK) - 1, int(max(v, 0) * len(SPARK)))
-            out.append((SPARK[level], "y" if v >= 0.75 else "c"))
-    return out
-
-
-def _bar(fraction, cells=12):
-    full = min(cells, round(max(fraction, 0) * cells))
-    return "█" * full + "░" * (cells - full)
-
-
-def _bar_style(fraction):
-    return "r" if fraction >= STORAGE_PROBLEM else "y" if fraction >= STORAGE_TODO else "c"
-
-
-def _wrap(text, width):
-    """A message in lines that fit, never breaking a word, such as a path, in two."""
-    return textwrap.wrap(str(text), width, break_long_words=False, break_on_hyphens=False) or [""]
-
-
 def _phrases(key, phrases, indent=1, width=11):
     """A key and its phrases (each a list of (text, style)), joined by " · " and wrapped between phrases."""
-    lines = [_Line().add(" " * indent).cell(key, width, "k")]
+    lines = [Line().add(" " * indent).cell(key, width, "k")]
     for i, phrase in enumerate(p for p in phrases if p):
         size = sum(len(t) for t, _ in phrase)
         if i and len(lines[-1]) + 3 + size > WIDTH:
-            lines.append(_Line().add(" " * (indent + width)))
+            lines.append(Line().add(" " * (indent + width)))
         elif i:
             lines[-1].add(" · ", "d")
         for text, style in phrase:
@@ -2296,17 +2249,11 @@ def _attention_lines(model):
     lines = []
     problems = sum(1 for a in model["attention"] if a["level"] in ("problem", "unread"))
     todos = sum(1 for a in model["attention"] if a["level"] == "todo")
-    head = _Line().add("ATTENTION", "h").add("  ")
+    head = Line().add("ATTENTION", "h").add("  ")
     head.add(f"{problems} problem{'s' if problems != 1 else ''}", "r" if problems else "d")
     head.add(" · ", "d").add(f"{todos} to do", "y" if todos else "d")
     lines.append(head)
-    for a in model["attention"]:
-        line = _Line().add(" ").add("●", "y" if a["level"] == "todo" else "r").add(" ").cell(a["subject"], 12, "b")
-        for i, part in enumerate(_wrap(a["text"], WIDTH - 15)):
-            lines.append((line if i == 0 else _Line().add(" " * 15)).add(part))
-        for i, part in enumerate(_wrap(a["command"], WIDTH - 17) if a["command"] else []):
-            lines.append(_Line().add(" " * 15).add("→ " if i == 0 else "  ", "d").add(part, "c"))
-    return lines
+    return lines + screen.attention_items(model["attention"], WIDTH)
 
 
 def _http_style(code):
@@ -2335,7 +2282,7 @@ def _domain(rows):
 
 def _apps_lines(model):
     rows, dns, clu = model["apps"], model.get("dns"), model.get("cluster") or {}
-    head = _Line().add("APPS", "h")
+    head = Line().add("APPS", "h")
     facts = []
     domain, traefik = _domain(rows), model.get("traefik")
     if domain:
@@ -2345,7 +2292,7 @@ def _apps_lines(model):
     if clu.get("allowlist"):
         facts.append([("allowlist ", "d"), (clu["allowlist"], "y" if _closed(clu["allowlist"]) else "d")])
     if clu.get("stopped"):
-        facts = [[(f"not read: {_and(clu['stopped'])} {'is' if len(clu['stopped']) == 1 else 'are'} stopped", "d")]]
+        facts = [[(f"not read: {and_list(clu['stopped'])} {'is' if len(clu['stopped']) == 1 else 'are'} stopped", "d")]]
     elif clu.get("unread"):
         facts = [[("the cluster could not be read", "d")]]
     for i, fact in enumerate(facts):
@@ -2359,7 +2306,7 @@ def _apps_lines(model):
     group_width = max([len(r["group"]) for r in rows] + [6]) + 2
     url_width = max([len(u["url"]) for r in rows for u in r["urls"]] + [20]) + 2
     columns = [("APP", name_width), ("GROUP", group_width), ("STATE", 14), ("VERSION", 10), ("URL", url_width)]
-    header = _Line().add(" ")
+    header = Line().add(" ")
     for title, width in columns:
         header.cell(title, width, "k")
     lines.append(header.add("HTTP", "k"))
@@ -2379,29 +2326,29 @@ def _apps_lines(model):
             line.add("—", "d")
 
     for row in rows:
-        line = _Line().add(" ").cell(row["name"], name_width, "b").cell(row["group"], group_width, "d")
+        line = Line().add(" ").cell(row["name"], name_width, "b").cell(row["group"], group_width, "d")
         state_cells(line, row["state"], row["version"])
         if row["urls"]:
             url_cells(line, row["urls"][0])
         elif row["state"] == "not applied":
-            line.to(url_column).add(_wrap(row["detail"], WIDTH - url_column)[0], "d")
+            line.to(url_column).add(screen.fill(row["detail"], WIDTH - url_column)[0], "d")
         lines.append(line)
         for url in row["urls"][1:]:
-            line = _Line()
+            line = Line()
             url_cells(line, url)
             lines.append(line)
         for db in row["databases"]:
-            line = _Line().add("   ").cell("database", name_width - 2, "d").cell("", group_width)
+            line = Line().add("   ").cell("database", name_width - 2, "d").cell("", group_width)
             state_cells(line, db["state"], db["version"])
             lines.append(line)
     if "tailscale" in model["types"]:
         lines += _reach_line(model)
     if dns and dns["missing"]:
-        lines.append(_Line())
-        lines.append(_Line().add(" Until DNS has them, these lines in /etc/hosts reach the apps from here:", "d"))
+        lines.append(Line())
+        lines.append(Line().add(" Until DNS has them, these lines in /etc/hosts reach the apps from here:", "d"))
         prefix = f"   {dns['address']}  "
-        for part in _wrap(" ".join(dns["missing"]), WIDTH - len(prefix)):
-            lines.append(_Line().add(prefix + part, "c"))
+        for part in screen.fill(" ".join(dns["missing"]), WIDTH - len(prefix)):
+            lines.append(Line().add(prefix + part, "c"))
     return lines
 
 
@@ -2410,12 +2357,12 @@ def _admin_lines(model):
     width = max([len(a.get("name", "")) for a in pages] + [14]) + 3
     tailnet = any("tailnet" in a for a in pages)
     url_width = max([len(a.get("url", "")) for a in pages] + [3]) + 3
-    head = _Line().add("ADMIN", "h")
+    head = Line().add("ADMIN", "h")
     if tailnet:
         head.to(width + 1).cell("LAN", url_width, "k").add("TAILNET", "k")
     lines = [head]
     for page in pages:
-        line = _Line().add(" ").cell(page.get("name", ""), width, "b")
+        line = Line().add(" ").cell(page.get("name", ""), width, "b")
         if not tailnet:
             lines.append(line.add(page.get("url", ""), "u"))
             continue
@@ -2434,7 +2381,7 @@ def _on_off(value):
 
 def _tailscale_lines(model):
     tail = model["tailscale"]
-    head = _Line().add("TAILSCALE", "h").add("  ")
+    head = Line().add("TAILSCALE", "h").add("  ")
     if tail.get("unread"):
         return [head.add("not read: the Proxmox host did not answer", "d")]
     role = (
@@ -2486,9 +2433,9 @@ def _tailscale_lines(model):
         lines += _phrases("Serve", [[("configured: it connects from the host itself, past the guard", "y")]])
     health = tail.get("health") or []
     for i, warning in enumerate(health or ["no warnings"]):
-        for j, part in enumerate(_wrap(warning, WIDTH - 12)):
+        for j, part in enumerate(screen.fill(warning, WIDTH - 12)):
             key = "Health" if i == 0 and j == 0 else ""
-            lines.append(_Line().add(" ").cell(key, 11, "k").add(part, "y" if health else "d"))
+            lines.append(Line().add(" ").cell(key, 11, "k").add(part, "y" if health else "d"))
     return lines
 
 
@@ -2530,11 +2477,11 @@ def _vm_lines(found):
         f"kernel {found['kernel']}" if found["kernel"] else "",
         f"up {_uptime(host['uptime'])}",
     ]
-    lines.append(_Line().add("VMS", "h").add("  ").add(" · ".join(p for p in facts if p), "d"))
+    lines.append(Line().add("VMS", "h").add("  ").add(" · ".join(p for p in facts if p), "d"))
     vms = found.get("vms") or []
     name_width = max([len(vm["name"]) for vm in vms] + [16]) + 2
     columns = [("VMID", 6), ("NAME", name_width + 2), ("UP", 9)]
-    header = _Line().add(" ")
+    header = Line().add(" ")
     for title, width in columns:
         header.cell(title, width, "k")
     header.cell("CPU", 4, "k", right=True).add("  ").cell("LAST 24 H", 14, "k").cell("MEM GiB", 13, "k")
@@ -2542,7 +2489,7 @@ def _vm_lines(found):
     disks_column = 1 + 6 + name_width + 2 + 9 + 4 + 2 + 14 + 13
 
     def row(vmid, name, state, up, cpu, spark, memory, disks):
-        line = _Line().add(" ").cell(vmid, 4, "d", right=True).add("  ")
+        line = Line().add(" ").cell(vmid, 4, "d", right=True).add("  ")
         dot = {"running": ("●", "g"), "missing": ("○", "r")}.get(state, ("○", "d"))
         line.add(*dot).add(" ").cell(name, name_width, "b")
         if state != "running":
@@ -2556,7 +2503,7 @@ def _vm_lines(found):
         # Disks that do not fit go on lines of their own, under the column.
         for disk in disks:
             if len(out[-1]) > disks_column and len(out[-1]) + 3 + len(disk) > WIDTH:
-                out.append(_Line().to(disks_column))
+                out.append(Line().to(disks_column))
             elif len(out[-1]) > disks_column:
                 out[-1].add(" · ", "d")
             out[-1].add(disk)
@@ -2569,7 +2516,7 @@ def _vm_lines(found):
         "running",
         _uptime(host["uptime"]),
         f"{host['cpu']:.0%}",
-        _spark(host["cpu_24h"]),
+        screen.spark(host["cpu_24h"]),
         f"{_gib(memory['used'], 1):>4} / {_gib(memory['total'], 1)}",
         [f"root {_gib(host['root']['used'])} / {_gib(host['root']['total'])}"] if host["root"]["total"] else [],
     )
@@ -2587,12 +2534,12 @@ def _vm_lines(found):
             vm["status"],
             _uptime(vm.get("uptime")),
             f"{vm.get('cpu', 0):.0%}",
-            _spark(vm.get("cpu_24h")),
+            screen.spark(vm.get("cpu_24h")),
             f"{_gib(mem.get('used', 0), 1):>4} / {_gib(mem.get('total', 0), 1)}{'*' if marked else ''}",
             disks,
         )
         if vm.get("os"):
-            lines.append(_Line().add(" " * (7 + name_width + 2)).add(vm["os"], "d"))
+            lines.append(Line().add(" " * (7 + name_width + 2)).add(vm["os"], "d"))
     other = found.get("others") or {}
     if other.get("vmids") or other.get("templates"):
         parts = []
@@ -2605,11 +2552,11 @@ def _vm_lines(found):
         if other.get("templates"):
             count = len(other["templates"])
             parts.append(f"{count} template{'s' if count != 1 else ''} ({', '.join(map(str, other['templates']))})")
-        for i, part in enumerate(_wrap(" and ".join(parts) + ", not this repo's", WIDTH - 9)):
-            lines.append(_Line().add(" " * 7).add("+ " if i == 0 else "  ", "k").add(part, "d"))
+        for i, part in enumerate(screen.fill(" and ".join(parts) + ", not this repo's", WIDTH - 9)):
+            lines.append(Line().add(" " * 7).add("+ " if i == 0 else "  ", "k").add(part, "d"))
     if host_view:
         lines.append(
-            _Line().add(
+            Line().add(
                 " * the host's view: ballooning is off, so Proxmox counts all the memory the VM has touched", "d"
             )
         )
@@ -2617,15 +2564,17 @@ def _vm_lines(found):
 
 
 def _storage_lines(storages):
-    lines = [_Line().add("STORAGE", "h")]
+    lines = [Line().add("STORAGE", "h")]
     width = max([len(s["id"]) for s in storages] + [12]) + 2
     for s in storages:
-        line = _Line().add(" ").cell(s["id"], width, "b").cell(SHORT_TYPES.get(s["type"], s["type"]), 8, "d")
+        line = Line().add(" ").cell(s["id"], width, "b").cell(SHORT_TYPES.get(s["type"], s["type"]), 8, "d")
         if s["status"] != "available":
             lines.append(line.add(s["status"] or "not available", "r"))
             continue
         fraction = s["used"] / s["total"] if s["total"] else 0
-        line.add(_bar(fraction), _bar_style(fraction)).add(" ").cell(f"{fraction:.0%}", 4, right=True).add("  ")
+        line.add(screen.bar(fraction), screen.fullness(fraction, STORAGE_TODO, STORAGE_PROBLEM)).add(" ").cell(
+            f"{fraction:.0%}", 4, right=True
+        ).add("  ")
         line.add(f"{_gib(s['used'])} / {_gib(s['total'])} GiB")
         budget = s.get("budget")
         if budget:
@@ -2663,7 +2612,7 @@ def _backup_lines(model):
     jobs, vms = found.get("jobs") or [], found.get("vms") or []
     lines = []
     for i, job in enumerate(jobs):
-        line = _Line().add("BACKUPS", "h").add("  ") if i == 0 else _Line().add(" " * 9)
+        line = Line().add("BACKUPS", "h").add("  ") if i == 0 else Line().add(" " * 9)
         line.add(job["id"], "b").add(f" → {job['storage'] or job['wanted_storage']}", "d")
         if job["on_host"] is False:
             line.add(" · ", "d").add("not on the host", "y")
@@ -2678,19 +2627,19 @@ def _backup_lines(model):
             line.add("".join(f" · {f}" for f in facts if f), "d")
         lines.append(line)
     if not jobs:
-        names = _and(str(vm["vmid"]) for vm in vms)
-        line = _Line().add("BACKUPS", "h").add("  ").add("no backup job: ", "y")
+        names = and_list(str(vm["vmid"]) for vm in vms)
+        line = Line().add("BACKUPS", "h").add("  ").add("no backup job: ", "y")
         lines.append(line.add(f"{names} {'is' if len(vms) == 1 else 'are'} not backed up", "d"))
     name_width = max([len(vm["name"]) for vm in vms] + [16]) + 2
 
     def row(vmid, name, ago, state, detail, detail_style=""):
-        line = _Line().add(" ").cell(vmid, 4, "d", right=True).add("  ").cell(name, name_width, "b")
+        line = Line().add(" ").cell(vmid, 4, "d", right=True).add("  ").cell(name, name_width, "b")
         line.cell(ago, 9, right=True).add("  ")
         word, style = BACKUP_STATES.get(state, (state, "d"))
         line.cell(word, 10, style)
-        parts = _wrap(detail, WIDTH - len(line)) if detail else [""]
+        parts = screen.fill(detail, WIDTH - len(line)) if detail else [""]
         out = [line.add(parts[0], detail_style)]
-        out += [_Line().to(len(line) - len(parts[0])).add(part, detail_style) for part in parts[1:]]
+        out += [Line().to(len(line) - len(parts[0])).add(part, detail_style) for part in parts[1:]]
         return out
 
     def kept(vm):
@@ -2711,7 +2660,7 @@ def _backup_lines(model):
             lines += row(vm["vmid"], vm["name"], age, state, kept(vm))
     etcd = found.get("etcd")
     if etcd is not None:
-        line = _Line().add(" " * 7).cell("etcd snapshot", name_width, "b")
+        line = Line().add(" " * 7).cell("etcd snapshot", name_width, "b")
         if etcd["count"]:
             line.cell(f"{_ago(etcd['age'])} ago", 9, right=True).add("  ").cell("", 10)
             line.add(f"{etcd['count']} in {etcd['dir']}", "d")
@@ -2730,16 +2679,16 @@ def _days(days):
 def _cluster_lines(model):
     clu = model.get("cluster") or {}
     if clu.get("stopped"):
-        text = f"not read: {_and(clu['stopped'])} {'is' if len(clu['stopped']) == 1 else 'are'} stopped"
-        return [_Line().add("CLUSTER", "h").add("  ").add(text, "d")]
+        text = f"not read: {and_list(clu['stopped'])} {'is' if len(clu['stopped']) == 1 else 'are'} stopped"
+        return [Line().add("CLUSTER", "h").add("  ").add(text, "d")]
     if clu.get("unread"):
-        return [_Line().add("CLUSTER", "h").add("  ").add("not read", "d")]
+        return [Line().add("CLUSTER", "h").add("  ").add("not read", "d")]
     nodes, flux = clu.get("nodes") or [], clu.get("flux")
     talos = sorted({n["talos"] for n in nodes if n["talos"]})
     kubelet = sorted({n["kubelet"] for n in nodes if n["kubelet"]})
     facts = [f"Talos {', '.join(talos)}" if talos else "", f"Kubernetes {', '.join(kubelet)}" if kubelet else ""]
     facts.append(f"Flux {flux['version']}" if flux and flux["version"] else "")
-    lines = [_Line().add("CLUSTER", "h").add("  ").add(" · ".join(f for f in facts if f), "d")]
+    lines = [Line().add("CLUSTER", "h").add("  ").add(" · ".join(f for f in facts if f), "d")]
 
     phrases = [
         [
@@ -2868,20 +2817,22 @@ def _scan_text(pool):
 def _nas_lines(model):
     found = model.get("nas") or {}
     if not found or found.get("unread"):
-        return [_Line().add("NAS", "h").add("  ").add("not read", "d")]
+        return [Line().add("NAS", "h").add("  ").add("not read", "d")]
     facts = [found["name"], f"TrueNAS {found['version']}" if found["version"] else ""]
     facts.append(f"up {_uptime(found['uptime'])}" if found.get("uptime") is not None else "")
-    lines = [_Line().add("NAS", "h").add("  ").add(" · ".join(f for f in facts if f), "d")]
+    lines = [Line().add("NAS", "h").add("  ").add(" · ".join(f for f in facts if f), "d")]
     pools = found.get("pools") or []
     width = max([len(p["name"]) for p in pools] + [10]) + 2
     for i, pool in enumerate(pools):
-        line = _Line().add(" ").cell("Pools" if i == 0 else "", 11, "k").cell(pool["name"], width, "b")
+        line = Line().add(" ").cell("Pools" if i == 0 else "", 11, "k").cell(pool["name"], width, "b")
         line.cell(pool["layout"], 8, "d")
         good = pool["healthy"] and pool["status"] == "ONLINE"
         line.cell((pool["status"] or "unknown").lower(), 9, "g" if good else "r")
         if pool["total"]:
             fraction = pool["used"] / pool["total"]
-            line.add(_bar(fraction), _bar_style(fraction)).add(" ").cell(f"{fraction:.0%}", 4, right=True).add("  ")
+            line.add(screen.bar(fraction), screen.fullness(fraction, STORAGE_TODO, STORAGE_PROBLEM)).add(" ").cell(
+                f"{fraction:.0%}", 4, right=True
+            ).add("  ")
             line.cell(_sizes(pool["used"], pool["total"]), 15)
         line.add(*_scan_text(pool))
         lines.append(line)
@@ -2921,8 +2872,8 @@ def _nas_lines(model):
         text = alert["text"]
         if style == "d" and (first := FIRST_SENTENCE.match(text)):
             text = first.group(1)
-        for j, part in enumerate(_wrap(text, WIDTH - 22)):
-            line = _Line().add(" ").cell("Alerts" if i == 0 and j == 0 else "", 11, "k")
+        for j, part in enumerate(screen.fill(text, WIDTH - 22)):
+            line = Line().add(" ").cell("Alerts" if i == 0 and j == 0 else "", 11, "k")
             lines.append(line.cell(alert["level"].lower() if j == 0 else "", 10, style).add(part))
     return lines
 
@@ -2930,9 +2881,9 @@ def _nas_lines(model):
 def _error_lines(errors):
     lines = []
     for error in errors:
-        for i, part in enumerate(_wrap(f"not read: {error}", WIDTH - 3)):
-            lines.append(_Line().add(" " if i == 0 else "   ").add(part, "d"))
-    return [*lines, _Line()] if lines else []
+        for i, part in enumerate(screen.fill(f"not read: {error}", WIDTH - 3)):
+            lines.append(Line().add(" " if i == 0 else "   ").add(part, "d"))
+    return [*lines, Line()] if lines else []
 
 
 def blocks(model, color=False):
@@ -2941,10 +2892,10 @@ def blocks(model, color=False):
     where a terminal leaves it in view, and the exit line. just status's callback prints them one by one, each section
     as soon as the sources it is worked out from are read (section_sources), and text() joins them."""
     out = []
-    head = _Line().add("homeserver", "b")
+    head = Line().add("homeserver", "b")
     if model.get("read_at"):
         head.add(f"  {model['read_at']}", "d")
-    out.append(("head", [head.add(f" · {_setup_text(model.get('setup') or {})}", "d"), _Line()]))
+    out.append(("head", [head.add(f" · {_setup_text(model.get('setup') or {})}", "d"), Line()]))
     types = model["types"]
     prox = model.get("proxmox") or {}
     clu = model.get("cluster") or {}
@@ -2963,12 +2914,12 @@ def blocks(model, color=False):
     }
     for name in TYPES:
         if name in types and sections[name]:
-            out.append((name, [*sections[name](model), _Line()]))
+            out.append((name, [*sections[name](model), Line()]))
     errors = _error_lines((prox.get("errors") or []) + (clu.get("errors") or []))
     if errors:
         out.append(("errors", errors))
     if model["attention"]:
-        out.append(("attention", [*_attention_lines(model), _Line()]))
+        out.append(("attention", [*_attention_lines(model), Line()]))
     problems = sum(1 for a in model["attention"] if a["level"] == "problem")
     unread = sum(1 for a in model["attention"] if a["level"] == "unread")
     summary = (
@@ -2978,7 +2929,7 @@ def blocks(model, color=False):
         if problems
         else "nothing is wrong"
     )
-    foot = _Line().add(f"exit {model['exit']}", "r" if model["exit"] else "g")
+    foot = Line().add(f"exit {model['exit']}", "r" if model["exit"] else "g")
     out.append(("exit", [foot.add(f" · {summary} · sections: {' '.join(TYPES)} · --json", "d")]))
     return [(name, [line.text(color) for line in lines]) for name, lines in out]
 

@@ -27,29 +27,32 @@ requirements:
   - set as stdout_callback in ansible.cfg
 """
 
-import re
+import importlib.util
+import sys
+from pathlib import Path
 
 from ansible.plugins.callback.default import CallbackModule as DefaultCallback
+from ansible.utils.color import ANSIBLE_COLOR
+
+
+def _sibling(stem):
+    """filter_plugins/<stem>.py, loaded by path once as homeserver_<stem>: a callback cannot ask for a filter
+    module by name."""
+    name = f"homeserver_{stem}"
+    if name not in sys.modules:
+        path = Path(__file__).resolve().parents[1] / "filter_plugins" / f"{stem}.py"
+        spec = importlib.util.spec_from_file_location(name, path)
+        sys.modules[name] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sys.modules[name])
+    return sys.modules[name]
+
+
+# NEXT STEPS is drawn as just status draws what needs attention, its words made safe to print.
+screen = _sibling("screen")
+text = _sibling("text")
 
 # The set_stats name every record goes under.
 NEXT_STAT = "homeserver_next"
-# The colours of the list, as just status draws its list of what needs attention: the heading, then each command.
-HEADING_COLOR = "bright blue"
-COMMAND_COLOR = "cyan"
-# A record can quote what a machine answered, which a terminal must not act on: each escape sequence whole (a string
-# sequence up to its terminator, a CSI with its parameters, any other ESC sequence, the 8-bit forms), then every
-# control character left. An OSC 52 in a record would otherwise write the clipboard at the end of every run.
-SEQUENCES = re.compile(
-    r"(?:\x1b[\]PX^_]|[\x9d\x90\x98\x9e\x9f])[^\x07\x1b\x9c\n]*(?:\x07|\x1b\\|\x9c)?"
-    r"|(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]?"
-    r"|\x1b[ -/]*[0-~]?"
-)
-CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
-
-
-def one_line(said):
-    """said as one line of plain text: no escape sequence, every control character and run of spaces one space."""
-    return " ".join(CONTROL.sub(" ", SEQUENCES.sub("", str(said))).split())
 
 
 def next_steps(run_stats):
@@ -61,21 +64,23 @@ def next_steps(run_stats):
         for record in (matters if isinstance(matters, dict) else {}).values():
             if not isinstance(record, dict) or not str(record.get("text") or "").strip():
                 continue
-            item = (one_line(subject), one_line(record["text"]), one_line(record.get("command") or ""))
+            # One line each, without a sequence a terminal would act on: a record can quote what a machine answered.
+            item = (
+                text.one_line(subject, 40),
+                text.one_line(record["text"], 1000),
+                text.one_line(record.get("command") or "", 1000),
+            )
             if item not in out:
                 out.append(item)
     return out
 
 
 def next_steps_lines(items):
-    """NEXT STEPS as lines of (text, colour): a heading, then each record's subject and text and, under it, its
-    command. Never wrapped: the terminal wraps a long line, and a command stays whole to copy."""
-    lines = [(f"NEXT STEPS  {len(items)} to do", HEADING_COLOR)]
-    for subject, text, command in items:
-        lines.append((f" ● {subject:<12}{text}", None))
-        if command:
-            lines.append((f"{' ' * 15}→ {command}", COMMAND_COLOR))
-    return lines
+    """NEXT STEPS as lines: a heading, then each record as just status lists a thing to do, never wrapped: the
+    terminal wraps a long line, and a command stays whole to copy."""
+    head = screen.Line().add("NEXT STEPS", "h").add("  ").add(f"{len(items)} to do", "y")
+    things = [{"level": "todo", "subject": s, "text": t, "command": c} for s, t, c in items]
+    return [head, *screen.attention_items(things)]
 
 
 class CallbackModule(DefaultCallback):
@@ -88,5 +93,10 @@ class CallbackModule(DefaultCallback):
         items = next_steps(stats.custom.get("_run", {}))
         if items:
             self._display.display("")
-            for line, color in next_steps_lines(items):
-                self._display.display(line, color=color)
+            for line in next_steps_lines(items):
+                # In colour on the screen, as just status's, and plain in the log.
+                if ANSIBLE_COLOR:
+                    self._display.display(line.text(True), screen_only=True)
+                    self._display.display(line.text(False), log_only=True)
+                else:
+                    self._display.display(line.text(False))
