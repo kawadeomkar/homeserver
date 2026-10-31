@@ -208,8 +208,9 @@ class Commands:
 
     @staticmethod
     def _width():
+        # A pseudo-terminal nobody gave a size reads 0 columns, and is printed to as a pipe is.
         try:
-            return os.get_terminal_size(sys.stdout.fileno()).columns
+            return os.get_terminal_size(sys.stdout.fileno()).columns or 100
         except (OSError, ValueError, AttributeError):
             return 100
 

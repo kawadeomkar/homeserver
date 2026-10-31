@@ -1,9 +1,9 @@
 """The stdout callback: every playbook run drawn live, or the default callback's output with NEXT STEPS after it.
 
-At verbosity 0 every run is drawn (filter_plugins/live_ansible.py): live at a terminal, a line per step otherwise,
-the stream going to the run's log alone and a summary replacing PLAY RECAP on the screen, with NEXT STEPS, what the
-roles recorded as left to do. Any -v, or ANSIBLE_STDOUT_CALLBACK=default, is the stream as before; at -v this callback
-prints NEXT STEPS after the recap itself.
+At verbosity 0 every run of one playbook is drawn (filter_plugins/live_ansible.py): live at a terminal, a line per
+step otherwise, the stream going to the run's log alone and a summary replacing PLAY RECAP on the screen, with NEXT
+STEPS, what the roles recorded as left to do. Any -v, a run of several playbooks, or ANSIBLE_STDOUT_CALLBACK=default,
+is the stream as before; there this callback prints NEXT STEPS after the recap itself.
 
 Every hook calls the default callback's own first, which writes the stream to the log, and only then the engine,
 inside a try: Ansible only warns when a callback raises, and the event would be lost from the screen and the log.
@@ -22,8 +22,8 @@ name: homeserver
 type: stdout
 short_description: every run drawn live, or the default output with NEXT STEPS after the play recap
 description:
-  - At verbosity 0, the run drawn live at a terminal, or a line per step otherwise, every task's output in the run's
-    log alone, and a summary after it. At any -v, the default callback.
+  - At verbosity 0, a run of one playbook drawn live at a terminal, or a line per step otherwise, every task's output
+    in the run's log alone, and a summary after it. At any -v, or for several playbooks, the default callback.
   - Either way, after the play recap, what the roles recorded with set_stats as left to do (NEXT STEPS), under
     homeserver_next.
   - A record is homeserver_next.<subject>.<matter>, a mapping with text and, optionally, command; an empty string

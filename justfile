@@ -238,7 +238,8 @@ fix *types: _venv
 # fires once the type running ends, whether its tool died of the signal or caught it and exited (pytest exits 2). extra
 # is test's --pytest-args, which only test-idempotence takes. At a terminal, lint, fix and test are drawn live, each type
 # a step, a test run's tests counted in it, its output in a log of its own (scripts/live.py, which runs them as this
-# loop does); anywhere else, CI and the git hooks among them, each type prints as it runs.
+# loop does); anywhere else, CI and the git hooks among them (pre-commit's terminal has no size, and scripts/live.py
+# runs them as this loop does), each type prints as it runs.
 [no-exit-message]
 [private]
 [script]
