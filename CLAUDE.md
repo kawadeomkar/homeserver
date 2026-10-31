@@ -121,7 +121,8 @@ them, the second against a stand-in Display held to ansible-core's.
 **What a run prints, and NEXT STEPS.** `ansible.cfg` names the stdout callback `callback_plugins/homeserver.py`, with
 `callback_plugins = callback_plugins` so that a playbook in any directory finds it, since Ansible stops a run whose
 stdout callback it cannot load. **At verbosity 0 every run is drawn**, whoever starts it (`filter_plugins/live_ansible.py`,
-the engine): live at a terminal that can draw (the region, below), a line per step otherwise. The default callback still
+the engine): live at a terminal that can draw (the region, below), a line per step otherwise; a run of several playbooks
+(`ansible-playbook a.yml b.yml`, a recap after each) is the stream, NEXT STEPS after each recap. The default callback still
 renders every task, sent to the run's log alone, so the log keeps every line it held; the run's own words (reports,
 failures, warnings, a dry run's diffs; a real run's diffs go to the log alone) go to the screen in colour and the log
 plain, and a summary replaces PLAY RECAP on the screen, NEXT STEPS in it. Any `-v`, or
