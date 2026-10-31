@@ -236,19 +236,29 @@ fix *types: _venv
 # Runs <recipe>-<type> for each type named, or for each of <recipe>'s types in their order, then fails naming every type
 # that failed: one run reports every failure, as CI's jobs do. Ctrl-C stops the whole run, as it stopped make: the trap
 # fires once the type running ends, whether its tool died of the signal or caught it and exited (pytest exits 2). extra
-# is test's --pytest-args, which only test-idempotence takes.
+# is test's --pytest-args, which only test-idempotence takes. At a terminal, lint and fix are drawn live, each type a
+# step, its output in a log of its own (scripts/live.py, which runs them as this loop does); anywhere else, CI and the
+# git hooks among them (pre-commit's terminal has no size, and scripts/live.py runs them as this loop does), each type
+# prints as it runs.
 [no-exit-message]
 [private]
 [script]
 _each recipe all extra *types:
     trap 'exit 130' INT
     recipe=$1 all=$2 extra=$3; shift 3
+    asked="$*"
     [ $# -gt 0 ] || set -- ${all//|/ }
     picked=
     for t in "$@"; do
       [ "$t" != k8s ] || t='{{ k8s_types }}' t=${t//|/ }
       for u in $t; do case " $picked " in *" $u "*) ;; *) picked="$picked $u" ;; esac; done
     done
+    case $recipe in lint | fix)
+      if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ] && [ -z "${CI:-}" ]; then
+        exec {{ bin }}/python scripts/live.py --just {{ quote(just_executable()) }} --justfile {{ quote(justfile()) }} \
+          --title "$recipe${asked:+ $asked}" --extra "$extra" "$recipe" $picked
+      fi ;;
+    esac
     failed=
     for t in $picked; do
       if [ "$recipe-$t" = test-idempotence ] && [ -n "$extra" ]; then set -- "$recipe-$t" "$extra"; else set -- "$recipe-$t"; fi

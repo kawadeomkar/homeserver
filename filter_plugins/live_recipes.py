@@ -60,15 +60,23 @@ class Recipe:
     one, the name followed by --check), the playbooks it covers, the first of which the command runs when it names
     none, its stages in order, and how many of the running step's last tasks are shown. options: the command's own
     options, as (variable, option): the variables just passes for them with -e, so the title says the command as it
-    was typed (--only jellyfin for {"only": "jellyfin"}, --all for {"cluster_vms": true})."""
+    was typed (--only jellyfin for {"only": "jellyfin"}, --all for {"cluster_vms": true}).
 
-    def __init__(self, name, playbooks=(), stages=(), check_name="", window=5, options=()):
+    commands: a run of commands, not a playbook (scripts/live.py): one stage of the types it was asked for, each a step
+    whose one task is its command, drawn without bars; unit and units name a step on the screen (check, checks)."""
+
+    def __init__(
+        self, name, playbooks=(), stages=(), check_name="", window=5, options=(), commands=False, unit="step", units=""
+    ):
         self.name = name
         self.playbooks = tuple(playbooks)
         self.stages = tuple(stages)
         self.check_name = check_name or name
         self.window = window
         self.options = tuple(options)
+        self.commands = commands
+        self.unit = unit
+        self.units = units or f"{unit}s"
 
 
 # The NAS's stages, in the order roles/truenas/tasks/main.yml imports them, each named as just check's --tags name it.
@@ -243,9 +251,26 @@ RECIPES = (
 )
 
 
+# The recipes that run commands, a type at a time, each type a step: the stage is made of the types a run asks for.
+COMMANDS = (
+    Recipe(name="lint", commands=True, unit="check"),
+    Recipe(name="fix", commands=True, unit="fix", units="fixes"),
+)
+
+
 def recipe_for(playbook):
     """The declaration that covers a playbook (a file name), or None."""
     return next((recipe for recipe in RECIPES if playbook in recipe.playbooks), None)
+
+
+def commands_of(name, types):
+    """The declaration of a run of commands, its stage the types asked for, in their order; None for no such recipe."""
+    found = next((recipe for recipe in COMMANDS if recipe.name == name), None)
+    if found is None:
+        return None
+    steps = tuple(Step(kind, tasks=(kind,)) for kind in types)
+    stage = Stage(name, plays=(name,), steps=steps)
+    return Recipe(name, stages=(stage,), window=1, commands=True, unit=found.unit, units=found.units)
 
 
 class FilterModule:

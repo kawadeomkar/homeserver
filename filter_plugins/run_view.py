@@ -43,6 +43,8 @@ recipes = _sibling("live_recipes")
 Line = screen.Line
 # A skipped row's or task's mark, an en dash.
 DASH = "\u2013"
+# A run's code after Ctrl-C, as a shell says it: stopped, not failed.
+INTERRUPTED = 130
 # A task's outcome as the window draws it, and how bad it is: a host's worst outcome is the task's.
 GLYPHS = {
     "ok": ("✓", "g"),
@@ -179,6 +181,8 @@ class Task:
         self.outcome = None
         self.retry = None  # (attempt, total, delay, since)
         self.items = 0
+        self.detail = ""  # a command's last line, while it runs
+        self.rc = None  # a command's exit code
 
     def result(self, host, outcome, now):
         self.hosts[host] = outcome
@@ -319,7 +323,17 @@ class Run:
         step expects. meta: file (the task file it comes from), include (an include's file's count, when literal)."""
         given = recipe or self.recipe or generic(plays)
         # A copy, since a play the declaration does not name adds a stage to this run's alone.
-        declared = recipes.Recipe(given.name, given.playbooks, given.stages, given.check_name, given.window)
+        declared = recipes.Recipe(
+            given.name,
+            given.playbooks,
+            given.stages,
+            given.check_name,
+            given.window,
+            given.options,
+            given.commands,
+            given.unit,
+            given.units,
+        )
         self.recipe = declared
         wanted = []
         for key, path, tasks, name in plays:
@@ -698,6 +712,14 @@ class Run:
             (mark, style),
             (" " + row.label.ljust(self.label), "d" if quiet else "b" if stage_row else ""),
         ]
+        if self.recipe.commands and not stage_row and not quiet:
+            # A command: no bar, since it is one task; how long it ran, and a failed one's exit code.
+            seconds = row.seconds(now)
+            failed = [t.rc for t in row.tasks if t.outcome == "failed" and t.rc is not None]
+            if failed:
+                line.append((f"exit {failed[-1]}", "r"))
+            tail = [(screen.clock(seconds), "c")] if state == "running" else [(screen.duration(seconds), "")]
+            return screen.right(line, tail, cols)
         if state == "absent":
             return [*line, (row.absent or "not in this setup", "d")]
         if state == "none":
@@ -705,6 +727,8 @@ class Run:
         if state in ("todo", "unrun"):
             if stage_row:
                 said = " · ".join(step.label for step in row.rows())
+            elif self.recipe.commands:
+                said = ""
             else:
                 said = screen.plural(row.expected, "task") if row.expected or not row.each else "a step each"
             return [*line, (said + (", not reached" if state == "unrun" else ""), "d")]
@@ -729,6 +753,8 @@ class Run:
                 mark,
                 (" " + task.name, "d" if task.outcome == "skipped" and not running else ""),
             ]
+            if running and task.detail:
+                line.append(("  " + task.detail, "d"))
             tail = []
             if task.items:
                 tail.append((f"{screen.plural(task.items, 'item')}  ", "d"))
@@ -751,7 +777,7 @@ class Run:
             steps = self.stages[0].rows() if self.stages else []
             at = next((i for i, s in enumerate(steps) if s.state(self.over()) == "running"), None)
             if steps:
-                said.append(f"step {(at or 0) + 1} of {len(steps)}")
+                said.append(f"{self.recipe.unit} {(at or 0) + 1} of {len(steps)}")
         else:
             at = self._running_index()
             if self.stages:
@@ -766,7 +792,7 @@ class Run:
     def title_text(self, now):
         """The terminal's title: the run, and where it is."""
         if self.finished is not None:
-            return f"{self.title} · {'failed' if self.code else 'done'}"
+            return f"{self.title} · {'stopped' if self.code == INTERRUPTED else 'failed' if self.code else 'done'}"
         if self.flat() and self.stages:
             return f"{self.title} · {int(100 * self.stages[0].fraction())}%"
         at = self._running_index()
@@ -815,6 +841,8 @@ class Run:
         rows = self.stages[0].rows() if as_steps else self.stages
         changed_head = "WOULD" if self.check else "CHANGED"
         self.label = self.label_width()
+        if self.recipe.commands:
+            return self._commands_summary(now, cols, rows, color)
         table = [
             [
                 (("STEPS" if as_steps else "STAGES").ljust(self.label + 3), "h"),
@@ -867,6 +895,39 @@ class Run:
         out += [(screen.render(line, color), screen.render(line, False)) for line in tail]
         return out
 
+    def _commands_summary(self, now, cols, rows, color):
+        """A run of commands' end: how it ended, each command's time and a failed one's exit code, then how many
+        passed and the exit line."""
+        unit, units = self.recipe.unit, self.recipe.units
+        table = [[(units.upper().ljust(self.label + 3), "h"), ("TIME".rjust(7), "h")]]
+        for row in rows:
+            state = row.state(True)
+            mark, style = ROW_GLYPHS["todo"] if state in ("unrun", "none") else ROW_GLYPHS[state]
+            line = [(" ", ""), (mark, style), (" " + row.label.ljust(self.label), "d" if state == "unrun" else "")]
+            if state in ("unrun", "none"):
+                table.append([*line, ("not reached", "d")])
+                continue
+            line.append((screen.duration(row.seconds(now)).rjust(7), ""))
+            codes = [t.rc for t in row.tasks if t.outcome == "failed" and t.rc is not None]
+            table.append([*line, ("   exit " + str(codes[-1]), "r")] if codes else line)
+        out = []
+        for part in ([self._summary_head(now)], table):
+            out += [
+                (screen.render(screen.cut(line, cols), color), screen.render(screen.cut(line, cols), False))
+                for line in part
+            ]
+            out.append(("", ""))
+        tasks = [t for t in self.order if not t.hidden]
+        failed = [row.label for row in rows if row.state(True) == "failed"]
+        said = f"{screen.plural(len(tasks), unit, units)} · {len(tasks) - len(failed)} passed · {len(failed)} failed"
+        tail = [
+            [(said + (f" · log {self.log}" if self.log else ""), "d")],
+            [(f"exit {self.code}", "r" if self.code else "g")]
+            + ([(" · failed: " + " ".join(failed), "d")] if failed else []),
+        ]
+        out += [(screen.render(line, color), screen.render(line, False)) for line in tail]
+        return out
+
     @staticmethod
     def _labelled(label, said, style, cols):
         """said under a heading of 14 columns, wrapped; nothing when there is nothing to say."""
@@ -882,7 +943,12 @@ class Run:
             said.append("dry run")
         line.append((" · " + " · ".join([*said, ""]), "d"))
         took = screen.long_duration((self.finished or now) - self.started)
-        if self.code:
+        if self.code == INTERRUPTED:
+            line.append((f"stopped after {took}", "y"))
+        elif self.code and self.recipe.commands:
+            # Every command ran, whichever failed: the exit line names them.
+            line.append((f"failed after {took}", "r"))
+        elif self.code:
             where = self.failure[0] if self.failure else ""
             seconds = self.failure[1] if self.failure else (self.finished or now) - self.started
             line.append((f"failed after {screen.long_duration(seconds)}" + (f" at {where}" if where else ""), "r"))

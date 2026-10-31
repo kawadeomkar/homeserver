@@ -554,3 +554,53 @@ def test_task_list_names_each_task_and_its_file_as_task_file_sees_it(tmp_path):
     # An include_tasks's file: every task is its file's.
     assert {file for _name, file in view.task_list(top)} == {top}
     assert view.count_tasks(top) == 4
+
+
+def commands(types=("lock", "yaml", "python")):
+    run = view.Run("lint", 0.0, started_at=START, log="logs/x-lint.log", recipe=view.recipes.commands_of("lint", types))
+    run.plays([("lint", "lint", [(f"type:{kind}", None, {"name": kind}) for kind in types], "lint")])
+    return run
+
+
+def test_a_run_of_commands_is_a_step_a_command_without_bars_and_its_last_line():
+    run = commands()
+    assert [step.label for step in run.stages[0].steps] == ["lock", "yaml", "python"]
+    run.task("type:lock", "lint-lock", None, 0.0)
+    run.result("type:lock", "localhost", "ok", 1.2)
+    task = run.task("type:yaml", "lint-yaml", None, 1.2)
+    task.detail = "./k8s/apps/media/sonarr.yaml"
+    lines = frame(run, 3.0, 100)
+    assert not any("█" in line or "░" in line for line in lines), "no bars for a command"
+    assert lines[2].startswith(" ✓ lock ") and lines[2].endswith("1.2 s"), lines
+    assert any(line.startswith("     ⠋ lint-yaml  ./k8s/apps/media/sonarr.yaml") for line in lines), lines
+    assert lines[-1].startswith("⠋ 0:03 · check 2 of 3 · logs/x-lint.log"), lines
+
+
+def test_a_run_of_commands_ends_in_its_checks_each_time_and_the_failed_ones_exit_code():
+    run = commands()
+    for number, (kind, outcome) in enumerate((("lock", "ok"), ("yaml", "failed"), ("python", "ok"))):
+        task = run.task(f"type:{kind}", f"lint-{kind}", None, float(number * 10))
+        task.rc = 0 if outcome == "ok" else 1
+        run.result(f"type:{kind}", "localhost", outcome, number * 10 + 9.5)
+    run.end(30.0, 1)
+    lines = [plainly for _c, plainly in run.summary(30.0, 100)]
+    assert lines[0].startswith("homeserver  lint · failed after 30 s"), lines[0]
+    assert lines[2] == "CHECKS" + " " * 12 + "   TIME"
+    assert lines[3:6] == [
+        " ✓ lock             9.5 s",
+        " ✗ yaml             9.5 s   exit 1",
+        " ✓ python           9.5 s",
+    ]
+    assert lines[-2] == "3 checks · 2 passed · 1 failed · log logs/x-lint.log"
+    assert lines[-1] == "exit 1 · failed: yaml"
+
+
+def test_a_run_of_commands_ctrl_c_stopped_says_so_and_what_it_never_reached():
+    run = commands()
+    run.task("type:lock", "lint-lock", None, 0.0)
+    run.result("type:lock", "localhost", "skipped", 2.0)
+    run.end(2.0, view.INTERRUPTED)
+    lines = [plainly for _c, plainly in run.summary(2.0, 100)]
+    assert " · stopped after 2 s" in lines[0], lines[0]
+    assert lines[4:6] == [" ○ yaml           not reached", " ○ python         not reached"], lines
+    assert run.title_text(2.0) == "lint · stopped"
