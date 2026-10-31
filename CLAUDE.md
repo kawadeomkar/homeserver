@@ -144,7 +144,8 @@ file); etcd-snapshot's says where its snapshot went. An include whose file is li
 step it will be in, at the start. A play that ends its host (`meta: end_host`) before its work leaves its stage "not in
 this run", or says why with the report its play printed last; a stage whose play comes later waits for it, its time its
 own tasks'; the label column widens to the longest label (up to 24). **`just lint` and `just fix` are drawn too**, at a
-terminal and never in CI or a git hook (the justfile's `_each`): `scripts/live.py` runs each type's `just <recipe>-<type>`
+terminal and never in CI or a git hook (the justfile's `_each`; pre-commit runs a hook on a terminal that reads 0 by 0,
+where nothing is drawn): `scripts/live.py` runs each type's `just <recipe>-<type>`
 in turn, a step each with no bar and its last line dim after it (`filter_plugins/live_commands.py`, a declaration in
 `live_recipes.py`'s `COMMANDS`), every line to a log in `logs/`, a failed type's last 40 lines above, then a CHECKS
 summary and _each's exit codes; a command runs in a session of its own (a prompt at /dev/tty fails), Ctrl-C is sent on

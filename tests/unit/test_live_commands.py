@@ -64,11 +64,12 @@ def environment(**more):
     return env | {"ANSIBLE_NOCOLOR": "1", "TERM": "xterm-256color", **more}
 
 
-def on_a_terminal(command, env, cwd, interrupt_when=None):
+def on_a_terminal(command, env, cwd, interrupt_when=None, sized=True):
     """command on a terminal of its own: its exit code and what it wrote. interrupt_when: the text after which the
-    terminal's Ctrl-C reaches the run."""
+    terminal's Ctrl-C reaches the run; sized, whether the terminal has a size (pre-commit's hooks' has none)."""
     master, terminal = pty.openpty()
-    fcntl.ioctl(terminal, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLUMNS, 0, 0))
+    if sized:
+        fcntl.ioctl(terminal, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLUMNS, 0, 0))
     proc = subprocess.Popen(
         command, cwd=cwd, env=env, stdin=terminal, stdout=terminal, stderr=terminal, start_new_session=True
     )
@@ -102,7 +103,7 @@ def tree(tmp_path):
     return root
 
 
-def live(root, *types, interrupt_when=None, terminal=True):
+def live(root, *types, interrupt_when=None, terminal=True, sized=True):
     command = [sys.executable, "scripts/live.py", "--just", str(root / "fake-just")]
     command += ["--justfile", "justfile", "--title", "lint " + " ".join(types), "lint", *types]
     (root / "fake-just").write_text(f'#!/bin/sh\nexec {sys.executable} {root / "just.py"} "$@"\n')
@@ -110,7 +111,9 @@ def live(root, *types, interrupt_when=None, terminal=True):
     if not terminal:
         proc = subprocess.run(command, cwd=root, env=environment(), capture_output=True, text=True)
         return proc.returncode, proc.stdout, proc.stderr
-    rc, stream = on_a_terminal(command, environment(), root, interrupt_when)
+    rc, stream = on_a_terminal(command, environment(), root, interrupt_when, sized)
+    if not sized:
+        return rc, None, stream.decode(errors="replace")
     screen = VT(COLUMNS, ROWS)
     screen.feed(stream)
     return rc, screen, stream.decode(errors="replace")
@@ -190,6 +193,17 @@ def test_off_a_terminal_each_type_prints_as_it_runs(tmp_path):
     assert not (root / "logs").exists(), "nothing drawn, nothing logged"
 
 
+def test_on_a_terminal_nobody_sized_each_type_prints_as_it_runs(tmp_path):
+    """pre-commit runs a hook on a pseudo-terminal of its own that reads 0 by 0, as the role references' just fix docs
+    runs: nothing can be drawn there, so each type prints as _each prints it, and no run's log is left behind."""
+    root = tree(tmp_path)
+    rc, _, stream = live(root, "good", "bad", sized=False)
+    assert rc == 1 and "good 3" in stream and "bad line 50" in stream, stream
+    assert "just lint failed: bad" in stream and "CHECKS" not in stream, stream
+    assert "\x1b" not in stream, "a region was drawn"
+    assert not (root / "logs").exists(), "nothing drawn, nothing logged"
+
+
 def test_the_justfile_draws_lint_and_fix_at_a_terminal_and_streams_them_anywhere_else(tmp_path):
     root = tmp_path / "tree"
     (root / "scripts").mkdir(parents=True)
@@ -233,3 +247,9 @@ def test_the_justfile_draws_lint_and_fix_at_a_terminal_and_streams_them_anywhere
     proc = subprocess.run(["just", "lint", "yaml"], cwd=root, env=env, capture_output=True, text=True)
     assert proc.returncode == 1 and "duplication of key" in proc.stdout, proc.stdout + proc.stderr
     assert "CHECKS" not in proc.stdout and proc.stderr.strip().endswith("just lint failed: yaml"), proc.stderr
+
+    # On a terminal nobody sized, as pre-commit runs a hook on, the stream too.
+    rc, stream = on_a_terminal(["just", "lint", "yaml"], env, root, sized=False)
+    out = stream.decode(errors="replace")
+    assert rc == 1 and "duplication of key" in out and "CHECKS" not in out, out
+    assert "\x1b]0;" not in out and "\x1b[?2026h" not in out and "just lint failed: yaml" in out, out
