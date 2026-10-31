@@ -383,6 +383,7 @@ def tree(tmp_path: Path) -> Path:
         str(wizard.EXAMPLE),
         str(setups.VAULT_TEMPLATE),
         "vars_plugins/setup_links.py",
+        "scripts/run_log.py",
     ):
         shutil.copy(ROOT / name, checkout / name)
     for script in ("init.py", "settings.py", "setups.py"):

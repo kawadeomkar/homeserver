@@ -1036,7 +1036,8 @@ class Init:
             result = run(
                 [str(playbook), str(VALIDATE), "-e", json.dumps({"init_checks_file": str(out)})],
                 cwd=self.root,
-                env={**os.environ, "ANSIBLE_NOCOLOR": "1"},
+                # Ansible's own output, which a failure quotes, and no run log: nobody watches this run.
+                env={**os.environ, "ANSIBLE_NOCOLOR": "1", "ANSIBLE_STDOUT_CALLBACK": "default"},
                 timeout=300,
             )
             if result.returncode or not out.is_file():

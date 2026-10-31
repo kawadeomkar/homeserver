@@ -4,7 +4,8 @@ A failure's message quotes what a command printed on the Proxmox host, the NAS o
 they answered. ansible-core 2.21 writes a failure's lines to the terminal and the run log raw, so an escape sequence
 quoted in one would retitle the terminal, recolour it, or write the clipboard (OSC 52); removing only the control
 characters would leave a sequence's payload behind as text. NEXT STEPS (callback_plugins/homeserver.py) prints each
-record the roles made through these, since a record can quote what a machine answered.
+record the roles made through these, since a record can quote what a machine answered, and every live run
+(filter_plugins/live_ansible.py) its reports and failures, its summary keeping each report to one line.
 
 Ported from claude-on-proxmox's filter_plugins/text.py (commit 55e53c2), its banner left out; the two projects stay
 independent, so a fix there is compared by hand. Pure, nothing read or written. Loaded by path as homeserver_text; it
