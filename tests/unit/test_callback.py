@@ -291,6 +291,107 @@ def test_a_stage_is_absent_only_once_its_absent_task_has_run(tmp_path):
             assert "  NAS            TrueNAS 25.10.7 at the NAS" in lines, proc.stdout
 
 
+SUSPEND = """\
+- name: Refuse a cluster without the kubernetes inventory group
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Refuse a cluster without the kubernetes inventory group
+      ansible.builtin.assert: {that: true, quiet: true}
+- name: Spin the apps down
+  hosts: localhost
+  gather_facts: false
+  roles: [app_scale]
+- name: Shut Home Assistant's VM down
+  hosts: localhost
+  gather_facts: false
+  pre_tasks:
+    - name: Leave Home Assistant alone when --only names others
+      ansible.builtin.meta: end_host
+      when: only | default('') | length > 0
+  tasks:
+    - name: Shut it down
+      ansible.builtin.import_role: {name: proxmox_vm, tasks_from: power}
+- name: Shut the cluster's VMs down
+  hosts: localhost
+  gather_facts: false
+  pre_tasks:
+    - name: Leave the cluster's VMs alone without --all
+      ansible.builtin.meta: end_host
+      when: not (cluster_vms | default(false) | bool)
+  tasks:
+    - name: Shut them down
+      ansible.builtin.import_role: {name: proxmox_vm, tasks_from: power}
+"""
+APP_SCALE = """\
+- name: Work out what to do
+  ansible.builtin.set_fact:
+    plan: {waves: [[{name: sonarr, late: false}, {name: jellyfin, late: false}], [{name: db, late: true}]]}
+- name: Stop or start the apps, a wave at a time
+  ansible.builtin.include_tasks: wave.yml
+  loop: "{{ plan.waves }}"
+  loop_control:
+    loop_var: wave
+    label: "{{ 'late apps' if wave[0].late else 'apps' }}"
+- name: Say what was done
+  ansible.builtin.debug:
+    msg: ["Stopped 3 apps, to come back with the replicas in brackets.", sonarr (1), jellyfin (1), then db (1)]
+"""
+WAVE = """\
+- name: wave | Patch each app
+  ansible.builtin.set_fact: {patched: "{{ item.name }}"}
+  changed_when: true
+  loop: "{{ wave }}"
+- name: wave | Wait for each app's pods to stop
+  ansible.builtin.set_fact: {waited: "{{ item.name }}"}
+  loop: "{{ wave }}"
+"""
+
+
+def test_suspend_is_drawn_by_its_declaration_its_waves_steps_and_its_options_in_its_title(tmp_path):
+    """suspend.yml by its declaration (filter_plugins/live_recipes.py): the apps' waves, each a step, by their loop
+    labels, databases for the late apps; the report whole in the summary; Home Assistant's play, which --only ends
+    before its work, not in this run; the cluster's VMs not drawn without --all; and the command as typed."""
+    (tmp_path / "suspend.yml").write_text(SUSPEND)
+    for role, files in (("app_scale", {"main": APP_SCALE, "wave": WAVE}), ("proxmox_vm", {"power": "[]\n"})):
+        (tmp_path / "roles" / role / "tasks").mkdir(parents=True)
+        for name, body in files.items():
+            (tmp_path / "roles" / role / "tasks" / f"{name}.yml").write_text(body)
+    (tmp_path / "roles" / "proxmox_vm" / "tasks" / "power.yml").write_text(
+        "- name: power | Say what was done\n  ansible.builtin.debug: {msg: Shut down VM 310.}\n"
+    )
+    config = tmp_path / "ansible.cfg"
+    config.write_text(f"[defaults]\nretry_files_enabled = false\ncallback_plugins = {ROOT / 'callback_plugins'}\n")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("ANSIBLE_")} | {
+        "ANSIBLE_CONFIG": str(config),
+        "ANSIBLE_STDOUT_CALLBACK": "homeserver",
+        "ANSIBLE_LOG_PATH": str(tmp_path / "run.log"),
+        "ANSIBLE_NOCOLOR": "1",
+    }
+    dash = "\u2013"
+    for args, title in (
+        (["-e", '{"only": "sonarr, db"}'], "suspend --only sonarr, db"),
+        (["--check", "-e", '{"cluster_vms": true}'], "suspend --check --all"),
+    ):
+        command = [PLAYBOOK, "-i", "localhost,", "-c", "local", "suspend.yml", *args]
+        command += ["-e", f"ansible_python_interpreter={sys.executable}"]
+        proc = subprocess.run(command, env=env, cwd=tmp_path, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        lines = proc.stdout.splitlines()
+        assert any(line.startswith(f"homeserver  {title} · ") for line in lines), proc.stdout
+        steps = [line.split("  ")[0] for line in lines if line.startswith("✓ apps · ")]
+        assert steps == ["✓ apps · plan", "✓ apps · apps", "✓ apps · databases"], proc.stdout
+        assert "APPS            Stopped 3 apps, to come back with the replicas in brackets." in lines, proc.stdout
+        assert "                then db (1)" in lines, proc.stdout
+        if "--all" in title:
+            assert any(line.startswith(" ✓ cluster VMs") for line in lines), proc.stdout
+            assert any(line.startswith(" ✓ Home Assistant") for line in lines), proc.stdout
+        else:
+            assert not any("cluster VMs" in line for line in lines), proc.stdout
+            assert any(line.startswith(f"{dash} Home Assistant") and "not in this run" in line for line in lines)
+            assert f" {dash} Home Assistant not in this run" in lines, proc.stdout
+
+
 def test_a_report_that_changes_something_is_counted_as_a_change(tmp_path):
     """A report whose changed_when holds, as a dry run's plan is: the default callback's hook strips a debug's
     result to its message in place, so the engine reads changed before it."""

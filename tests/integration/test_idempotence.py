@@ -2961,10 +2961,13 @@ def test_app_scale_down_and_up(tmp_path):
 
     result = run("apps.yml", down, check=True, env=env)
     expect(result, "homeserver-k8s", changed=1, note="dry run of down")
-    assert (
-        "Would stop, in this order: homepage/homepage, media/jellyfin, media/sonarr, nextcloud/nextcloud, "
-        "then nextcloud/nextcloud-db." in result[2]
-    ), result[2][-3000:]
+    # Each app in its wave, with the replicas it comes back with.
+    for line in (
+        "Would stop 5 apps, to come back with the replicas in brackets",
+        '"homepage/homepage (2), media/jellyfin (1), media/sonarr (1), nextcloud/nextcloud (1)"',
+        '"then nextcloud/nextcloud-db (1)"',
+    ):
+        assert line in result[2], result[2][-3000:]
     assert read(state)["mutations"] == 0
 
     expect(run("apps.yml", down, env=env), "homeserver-k8s", changed=True, note="down")
@@ -2987,7 +2990,8 @@ def test_app_scale_down_and_up(tmp_path):
 
     result = run("apps.yml", up, check=True, env=env)
     expect(result, "homeserver-k8s", changed=1, note="dry run of up")
-    assert "Would start, in this order: nextcloud/nextcloud-db, then homepage/homepage" in result[2], result[2][-3000:]
+    for line in ('"nextcloud/nextcloud-db (1)"', '"then homepage/homepage (2), media/jellyfin (1), media/sonarr (1),'):
+        assert line in result[2], result[2][-3000:]
     write(state, read(state) | {"events": []})
     expect(run("apps.yml", up, env=env), "homeserver-k8s", changed=True, note="up")
     assert deployments_of(state) == UP

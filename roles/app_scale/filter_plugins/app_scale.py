@@ -77,10 +77,10 @@ def plan(found, state, only, other_names, annotation):
     Returns {unknown, apps, groups, waves, order, unchanged}: the names that are none of these, every app's and
     group's name, two waves of steps, the steps' apps as text (each wave's joined), and the apps already as asked,
     each as <namespace>/<name>. Down stops the apps first and the late ones (their
-    databases) after; up starts the late ones first. A step is {name, namespace, selector, late, replicas, patch},
-    `patch` the merge patch that sets both annotations and the replicas at once, so Flux never finds an app at zero
-    without its own: down records the replicas to come back to (those an earlier down recorded, or at least one),
-    up restores them and removes both."""
+    databases) after; up starts the late ones first. A step is {name, namespace, selector, late, replicas, back,
+    patch}, `back` the replicas it comes back with (down) or starts with (up), `patch` the merge patch that sets both
+    annotations and the replicas at once, so Flux never finds an app at zero without its own: down records the
+    replicas to come back to (those an earlier down recorded, or at least one), up restores them and removes both."""
     only = [str(n) for n in only or []]
     names = sorted({a["name"] for a in found})
     groups = sorted({a["namespace"] for a in found})
@@ -99,13 +99,14 @@ def plan(found, state, only, other_names, annotation):
             if app["recorded"] is None:
                 unchanged.append(app)
                 continue
-            replicas = app["recorded"]
+            replicas = back = app["recorded"]
             annotations = {RECONCILE: None, annotation: None}
         patch = {"metadata": {"annotations": annotations}, "spec": {"replicas": replicas}}
         steps.append(
             {
                 **{k: app[k] for k in ("name", "namespace", "selector", "late")},
                 "replicas": replicas,
+                "back": back,
                 "patch": json.dumps(patch, sort_keys=True),
             }
         )
@@ -121,9 +122,40 @@ def plan(found, state, only, other_names, annotation):
     }
 
 
+def report(found, state, check=False):
+    """What just suspend (`state` down) or just resume (up) did, or would do under check, as a report's lines, from
+    `found`, a plan: the gist, each wave's apps in the order they went, each with its replicas in brackets (those it
+    comes back with when it goes down), then the apps already down."""
+    waves = found.get("waves") or []
+    count = sum(len(wave) for wave in waves)
+    down = state == "down"
+    noun = f"{count} app{'' if count == 1 else 's'}"
+    if not count:
+        lines = ["No app to stop." if down else "No app is down."]
+    elif down:
+        lines = [
+            f"{'Would stop' if check else 'Stopped'} {noun}, to come back with the replicas in brackets; Flux "
+            "leaves them alone until just resume."
+        ]
+    else:
+        lines = [
+            f"{'Would start' if check else 'Started'} {noun} with the replicas in brackets; Flux takes them back "
+            "at its next reconciliation."
+        ]
+    for number, wave in enumerate(waves):
+        apps = ", ".join(f"{step['namespace']}/{step['name']} ({step['back']})" for step in wave)
+        lines.append(f"then {apps}" if number else apps)
+    unchanged = found.get("unchanged") or []
+    if down and unchanged:
+        tail = "." if count else "; Flux leaves them alone until just resume."
+        lines.append(f"Already down: {', '.join(unchanged)}{tail}")
+    return lines
+
+
 class FilterModule:
     def filters(self):
         return {
             "app_scale_apps": apps,
             "app_scale_plan": plan,
+            "app_scale_report": report,
         }

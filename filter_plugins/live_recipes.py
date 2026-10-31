@@ -19,38 +19,53 @@ class Step:
 
     plays: the plays every task of which is this step's, each "file:play name". roles: the roles every task of which
     is this step's. files: the task files (a path's end, truenas/tasks/pools.yml) every task of which is this step's,
-    a file another imports staying its importer's. A task that matches no step, such as a play's own refusals, is its
-    neighbour's: the next task's step in its play, else the one before."""
+    a file another imports staying its importer's, and an include's tasks its file's. A task that matches no step, such
+    as a play's own refusals, is its neighbour's: the next task's step in its play, else the one before.
 
-    def __init__(self, label, plays=(), roles=(), files=()):
+    each: the step's tasks come from an include with a loop, and each item is a step of its own, labelled with the
+    item's label (loop_control's), or with what names gives for it; until the include runs, this step stands for
+    them."""
+
+    def __init__(self, label, plays=(), roles=(), files=(), each=False, names=None):
         self.label = label
         self.plays = tuple(plays)
         self.roles = tuple(roles)
         self.files = tuple(files)
+        self.each = each
+        self.names = dict(names or {})
 
 
 class Stage:
     """A stage of a run: the playbooks (a file name) or plays ("file:play name") that are its, and its steps, in
     order. absent: the task, by name, that says why this setup has no such stage (the NAS's, without a NAS address):
-    once it runs, the stage is drawn as absent, with what the task said, whatever the stage's other plays read first."""
+    once it runs, the stage is drawn as absent, with what the task said, whatever the stage's other plays read first.
+    report: the task, by name, whose report the summary shows whole, every line, rather than its first. when: one of
+    the recipe's options, by its variable: without it, the stage is not drawn at all, and its plays' tasks are the
+    log's alone."""
 
-    def __init__(self, label, plays=(), steps=(), absent=""):
+    def __init__(self, label, plays=(), steps=(), absent="", report="", when=""):
         self.label = label
         self.plays = tuple(plays)
         self.steps = tuple(steps)
         self.absent = absent
+        self.report = report
+        self.when = when
 
 
 class Recipe:
-    """A command's run: its name (the title's first word: deploy, or check under --check, as check_name says), the
-    playbooks it covers, its stages in order, and how many of the running step's last tasks are shown."""
+    """A command's run: its name (the title's first word: deploy, or check under --check, as check_name says; without
+    one, the name followed by --check), the playbooks it covers, the first of which the command runs when it names
+    none, its stages in order, and how many of the running step's last tasks are shown. options: the command's own
+    options, as (variable, option): the variables just passes for them with -e, so the title says the command as it
+    was typed (--only jellyfin for {"only": "jellyfin"}, --all for {"cluster_vms": true})."""
 
-    def __init__(self, name, playbooks=(), stages=(), check_name="", window=5):
+    def __init__(self, name, playbooks=(), stages=(), check_name="", window=5, options=()):
         self.name = name
         self.playbooks = tuple(playbooks)
         self.stages = tuple(stages)
         self.check_name = check_name or name
         self.window = window
+        self.options = tuple(options)
 
 
 # The NAS's stages, in the order roles/truenas/tasks/main.yml imports them, each named as just check's --tags name it.
@@ -64,6 +79,32 @@ NAS_STEPS = (
     ("alerts", "alerts"),
     ("services", "services"),
 )
+
+# just suspend's and resume's options, as just's _scale passes them.
+SCALE_OPTIONS = (("only", "--only"), ("cluster_vms", "--all"))
+# The apps' waves (roles/app_scale's loop labels): every app, then the late ones, which are the databases here.
+WAVES = {"late apps": "databases"}
+
+
+def scale_apps(playbook, play):
+    """The apps' stage of suspend and resume: the refusal of an inventory without the cluster's group and the role's
+    reading and plan, then each wave of apps, as roles/app_scale's include loops over them; the report names each app
+    and its replicas, whole."""
+    return Stage(
+        "apps",
+        plays=(f"{playbook}:Refuse a cluster without the kubernetes inventory group", f"{playbook}:{play}"),
+        absent="Say why the cluster is skipped",
+        report="Say what was done",
+        steps=(
+            Step(
+                "plan",
+                plays=(f"{playbook}:Refuse a cluster without the kubernetes inventory group",),
+                files=("app_scale/tasks/main.yml",),
+            ),
+            Step("apps", files=("app_scale/tasks/wave.yml",), each=True, names=WAVES),
+        ),
+    )
+
 
 RECIPES = (
     Recipe(
@@ -106,6 +147,47 @@ RECIPES = (
                     Step("Talos", roles=("talos",)),
                     Step("Flux", roles=("flux_bootstrap",)),
                 ),
+            ),
+        ),
+    ),
+    Recipe(
+        name="suspend",
+        playbooks=("suspend.yml",),
+        options=SCALE_OPTIONS,
+        stages=(
+            scale_apps("suspend.yml", "Spin the apps down"),
+            Stage(
+                "Home Assistant",
+                plays=("suspend.yml:Shut Home Assistant's VM down",),
+                absent="Say why Home Assistant is skipped",
+                steps=(Step("shut down", roles=("proxmox_vm",)),),
+            ),
+            Stage(
+                "cluster VMs",
+                plays=("suspend.yml:Shut the cluster's VMs down",),
+                when="cluster_vms",
+                absent="Say why the cluster's VMs are skipped",
+                steps=(Step("shut down", roles=("proxmox_vm",)),),
+            ),
+        ),
+    ),
+    Recipe(
+        name="resume",
+        playbooks=("resume.yml",),
+        options=SCALE_OPTIONS,
+        stages=(
+            Stage(
+                "cluster VMs",
+                plays=("resume.yml:Start the cluster's VMs",),
+                when="cluster_vms",
+                steps=(Step("start", roles=("proxmox_vm",)),),
+            ),
+            scale_apps("resume.yml", "Bring the apps back up"),
+            Stage(
+                "Home Assistant",
+                plays=("resume.yml:Start Home Assistant's VM",),
+                absent="Say why Home Assistant is skipped",
+                steps=(Step("start", roles=("proxmox_vm",)),),
             ),
         ),
     ),
