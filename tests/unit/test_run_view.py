@@ -604,3 +604,40 @@ def test_a_run_of_commands_ctrl_c_stopped_says_so_and_what_it_never_reached():
     assert " · stopped after 2 s" in lines[0], lines[0]
     assert lines[4:6] == [" ○ yaml           not reached", " ○ python         not reached"], lines
     assert run.title_text(2.0) == "lint · stopped"
+
+
+def test_a_test_run_counts_its_tests_several_at_once_and_names_its_failures():
+    types = ("unit", "idempotence")
+    run = view.Run("test", 0.0, started_at=START, log="logs/x-test.log", recipe=view.recipes.commands_of("test", types))
+    run.plays([("test", "test", [(f"type:{kind}", None, {"name": kind}) for kind in types], "test")])
+    unit = run.task("type:unit", "test-unit", None, 0.0)
+    # Collected: the command stands for its tests no more, and its step counts them.
+    unit.hidden = True
+    run.expect(0, 0, 3 + 1)
+    for name in ("test_a.py::test_one", "test_a.py::test_two"):
+        run.task(f"test:{name}", name, None, 1.0, parallel=True)
+    lines = frame(run, 2.0, 100)
+    assert any(line.startswith(" ⠋ unit") and "2/3" in line and "█" in line for line in lines), lines
+    assert sum("⠋ test_a.py::test_" in line for line in lines) == 2, "both running, one beside the other"
+    run.result("test:test_a.py::test_one", "localhost", "ok", 2.5)
+    run.result("test:test_a.py::test_two", "localhost", "failed", 3.0)
+    run.task("test:test_a.py::test_three", "test_a.py::test_three", None, 3.0, parallel=True)
+    run.result("test:test_a.py::test_three", "localhost", "skipped", 3.5)
+    assert any(line.startswith(" ⠋ unit") and "1 failed" in line for line in frame(run, 3.6, 100))
+    unit.rc = 1
+    run.result("type:unit", "localhost", "failed", 4.0)
+    idempotence = run.task("type:idempotence", "test-idempotence", None, 4.0)
+    idempotence.hidden = True
+    run.expect(0, 1, 1 + 1)
+    run.task("test:test_b.py::test_role", "test_b.py::test_role", None, 4.5, parallel=True)
+    run.result("test:test_b.py::test_role", "localhost", "ok", 9.0)
+    idempotence.rc = 0
+    run.result("type:idempotence", "localhost", "ok", 10.0)
+    run.end(10.0, 1)
+    lines = [plainly for _c, plainly in run.summary(10.0, 100)]
+    assert lines[2].split() == ["TYPES", "TIME", "TESTS", "FAILED"], lines
+    assert lines[3].split() == ["✗", "unit", "4.0", "s", "3", "1", "exit", "1"], lines
+    assert lines[4].split() == ["✓", "idempotence", "6.0", "s", "1", "—"], lines
+    assert "FAILED        test_a.py::test_two" in lines, lines
+    assert lines[-2] == "2 types · 1 passed · 1 failed · 4 tests, 1 failed · log logs/x-test.log", lines
+    assert lines[-1] == "exit 1 · failed: unit"

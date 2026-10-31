@@ -152,8 +152,9 @@ to do, such as a reboot or a VM's restart, each with its command) and the exit c
 as each step ends, then the same summary. The log in `logs/` (`logs/latest.log`) holds everything Ansible printed, every
 task's output and PLAY RECAP, then the summary; a run started by hand gets one there too. Any `-v` after the playbook
 (`just deploy proxmox -v`), or `ANSIBLE_STDOUT_CALLBACK=default`, shows Ansible's own output as it streams instead.
-`just lint` and `just fix` are drawn the same way at a terminal, each type a step, every tool's output in their log in
-`logs/` and a failed one's last lines on the screen; in CI and the git hooks they print as they always did.
+`just lint`, `just fix` and `just test` are drawn the same way at a terminal, each type a step (a test type's counting
+its tests, the failed ones named as they fail), every tool's output in their log in `logs/` and a failed one's last
+lines on the screen; in CI and the git hooks they print as they always did.
 
 Whatever follows the playbook goes to ansible-playbook as typed, so a variable for one run is
 `just deploy kubernetes -e talos_allow_bootstrap=true`, and one host's play `just deploy proxmox --limit homeserver`.

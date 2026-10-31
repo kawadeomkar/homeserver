@@ -236,21 +236,25 @@ class Row:
     def seconds(self, now):
         """From its first task's start to its last's end, less the time between when another row's tasks ran: a
         stage whose plays are apart, or a step its stage comes back to."""
-        total, first, last = 0.0, None, None
+        total, first, end, last = 0.0, None, 0.0, None
         for task in self.tasks:
             if first is None or task.number != last.number + 1:
                 if first is not None:
-                    total += _ended(last, now) - first.start
-                first = task
+                    total += end - first.start
+                first, end = task, _ended(task, now)
+            else:
+                # Tasks that run at once (tests under xdist) end in any order: the segment ends with the last.
+                end = max(end, _ended(task, now))
             last = task
-        return total + (_ended(last, now) - first.start if first is not None else 0.0)
+        return total + (end - first.start if first is not None else 0.0)
 
     def state(self, over):
         if self.absent is not None:
             return "absent"
         if self.left:
             return "none"
-        if self.failed():
+        # Failed once nothing of it runs: a test run goes on past a failed test.
+        if self.failed() and (self.ended or over or not any(t.running() for t in self.tasks)):
             return "failed"
         if not self.tasks:
             # A step none of whose tasks this run has, as --tags leaves it, never runs; one whose items are steps is
@@ -333,6 +337,7 @@ class Run:
             given.commands,
             given.unit,
             given.units,
+            given.reader,
         )
         self.recipe = declared
         wanted = []
@@ -472,11 +477,26 @@ class Run:
                 stage.said = None
 
     def task(
-        self, key, name, role, now, play=None, hidden=False, file="", path="", counted=True, item=None, ends=False
+        self,
+        key,
+        name,
+        role,
+        now,
+        play=None,
+        hidden=False,
+        file="",
+        path="",
+        counted=True,
+        item=None,
+        ends=False,
+        parallel=False,
     ):
         """A task starts. counted: whether the start counted it, as a compiled task or an include's; else it is
         expected now. A task the start did not see is put in a step by its role or file, else the running step. item:
-        the label of the loop item its include brought it with. ends: a play's own end_host or end_play."""
+        the label of the loop item its include brought it with. ends: a play's own end_host or end_play. parallel: one
+        of several running at once, a test under xdist, which ends none of the others and is the running step's."""
+        if parallel:
+            return self._parallel(key, name, now)
         self._close(now)
         stage, step = self.plan.get(key, (None, None))
         if stage is None:
@@ -504,6 +524,24 @@ class Run:
             part.tasks.append(task)
         self.current = task
         return task
+
+    def _parallel(self, key, name, now):
+        current = self.current
+        if current is None:
+            return None
+        task = Task(key, name, current.stage, current.step, now, number=len(self.order))
+        self.tasks[key] = task
+        self.order.append(task)
+        self.stages[current.stage].tasks.append(task)
+        if current.step is not None:
+            self.stages[current.stage].steps[current.step].tasks.append(task)
+        return task
+
+    def expect(self, stage, step, count):
+        """A step expects count tasks now, as a command says how many it has: a test run's collected tests."""
+        row = self.stages[stage].steps[step]
+        self.stages[stage].expected += count - row.expected
+        row.expected = count
 
     def include(self, key, count, item=None, file="", role=None):
         """An include's tasks are coming: counted at the start once, when its file is literal; counted now after
@@ -712,7 +750,7 @@ class Run:
             (mark, style),
             (" " + row.label.ljust(self.label), "d" if quiet else "b" if stage_row else ""),
         ]
-        if self.recipe.commands and not stage_row and not quiet:
+        if self.recipe.commands and not stage_row and not quiet and row.expected <= 1:
             # A command: no bar, since it is one task; how long it ran, and a failed one's exit code.
             seconds = row.seconds(now)
             failed = [t.rc for t in row.tasks if t.outcome == "failed" and t.rc is not None]
@@ -735,8 +773,15 @@ class Run:
         cells = (12 if stage_row else 8) if narrow else (20 if stage_row else 12)
         full = min(cells, round(row.fraction() * cells))
         line += [("█" * full, "c" if state == "running" else "g"), ("░" * (cells - full), "d")]
-        line.append(("  " + f"{row.reached}/{max(row.expected, row.reached)}".rjust(7), ""))
-        if not narrow:
+        # A command's own task, which its tests run under, is no test of it.
+        hidden = sum(1 for t in row.tasks if t.hidden) if self.recipe.commands else 0
+        shown = f"{row.reached - hidden}/{max(row.expected, row.reached) - hidden}"
+        line.append(("  " + shown.rjust(7), ""))
+        if not narrow and self.recipe.commands:
+            # A command's tasks, its tests: how many failed.
+            failed = sum(1 for t in row.tasks if t.outcome == "failed" and not t.hidden)
+            line += [("   ", ""), (f"{failed} failed", "r") if failed else ("—", "d")]
+        elif not narrow:
             changed = row.changed()
             line += [("   ", ""), (self._changed_said(changed), "y") if changed else ("—", "d")]
         seconds = row.seconds(now)
@@ -896,10 +941,14 @@ class Run:
         return out
 
     def _commands_summary(self, now, cols, rows, color):
-        """A run of commands' end: how it ended, each command's time and a failed one's exit code, then how many
-        passed and the exit line."""
+        """A run of commands' end: how it ended, each command's time and a failed one's exit code (with a test run,
+        its tests and how many failed, then the failed tests by name), then how many passed and the exit line."""
         unit, units = self.recipe.unit, self.recipe.units
-        table = [[(units.upper().ljust(self.label + 3), "h"), ("TIME".rjust(7), "h")]]
+        tests = self.recipe.reader == "pytest"
+        head = [(units.upper().ljust(self.label + 3), "h"), ("TIME".rjust(7), "h")]
+        if tests:
+            head.append(("TESTS".rjust(8) + "FAILED".rjust(8), "h"))
+        table = [head]
         for row in rows:
             state = row.state(True)
             mark, style = ROW_GLYPHS["todo"] if state in ("unrun", "none") else ROW_GLYPHS[state]
@@ -908,18 +957,31 @@ class Run:
                 table.append([*line, ("not reached", "d")])
                 continue
             line.append((screen.duration(row.seconds(now)).rjust(7), ""))
-            codes = [t.rc for t in row.tasks if t.outcome == "failed" and t.rc is not None]
+            if tests:
+                ran = [t for t in row.tasks if not t.hidden]
+                broke = sum(1 for t in ran if t.outcome == "failed")
+                line.append((str(len(ran)).rjust(8), ""))
+                line.append((str(broke).rjust(8), "r") if broke else ("—".rjust(8), "d"))
+            codes = [t.rc for t in row.tasks if t.rc]
             table.append([*line, ("   exit " + str(codes[-1]), "r")] if codes else line)
+        parts = [[self._summary_head(now)], table]
+        broken = [t.name for t in self.order if not t.hidden and t.outcome == "failed"] if tests else []
+        named = [*broken[:10], f"and {len(broken) - 10} more"] if len(broken) > 11 else broken
+        parts.append(self._labelled("FAILED", " · ".join(named), "", cols))
         out = []
-        for part in ([self._summary_head(now)], table):
-            out += [
-                (screen.render(screen.cut(line, cols), color), screen.render(screen.cut(line, cols), False))
-                for line in part
-            ]
-            out.append(("", ""))
-        tasks = [t for t in self.order if not t.hidden]
+        for part in parts:
+            if part:
+                out += [
+                    (screen.render(screen.cut(line, cols), color), screen.render(screen.cut(line, cols), False))
+                    for line in part
+                ]
+                out.append(("", ""))
+        ran = [row for row in rows if row.tasks]
         failed = [row.label for row in rows if row.state(True) == "failed"]
-        said = f"{screen.plural(len(tasks), unit, units)} · {len(tasks) - len(failed)} passed · {len(failed)} failed"
+        said = f"{screen.plural(len(ran), unit, units)} · {len(ran) - len(failed)} passed · {len(failed)} failed"
+        if tests:
+            count = sum(1 for t in self.order if not t.hidden)
+            said += f" · {screen.plural(count, 'test')}, {len(broken)} failed"
         tail = [
             [(said + (f" · log {self.log}" if self.log else ""), "d")],
             [(f"exit {self.code}", "r" if self.code else "g")]

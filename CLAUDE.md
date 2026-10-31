@@ -143,12 +143,15 @@ its plan, the etcd snapshot, a step per node (`each`) and Kubernetes (a step's `
 file); etcd-snapshot's says where its snapshot went. An include whose file is literal counts each of its tasks in the
 step it will be in, at the start. A play that ends its host (`meta: end_host`) before its work leaves its stage "not in
 this run", or says why with the report its play printed last; a stage whose play comes later waits for it, its time its
-own tasks'; the label column widens to the longest label (up to 24). **`just lint` and `just fix` are drawn too**, at a
-terminal and never in CI or a git hook (the justfile's `_each`; pre-commit runs a hook on a terminal that reads 0 by 0,
-where nothing is drawn): `scripts/live.py` runs each type's `just <recipe>-<type>`
-in turn, a step each with no bar and its last line dim after it (`filter_plugins/live_commands.py`, a declaration in
-`live_recipes.py`'s `COMMANDS`), every line to a log in `logs/`, a failed type's last 40 lines above, then a CHECKS
-summary and _each's exit codes; a command runs in a session of its own (a prompt at /dev/tty fails), Ctrl-C is sent on
+own tasks'; the label column widens to the longest label (up to 24). **`just lint`, `just fix` and `just test` are drawn
+too**, at a terminal and never in CI or a git hook (the justfile's `_each`; pre-commit runs a hook on a terminal that
+reads 0 by 0, where nothing is drawn): `scripts/live.py` runs each type's `just <recipe>-<type>` in turn, a step
+each with no bar and its last line dim after it (`filter_plugins/live_commands.py`, a declaration in
+`live_recipes.py`'s `COMMANDS`), every line to a log in `logs/`, a failed type's last 40 lines above,
+then a CHECKS summary and _each's exit codes. A test type's step counts its tests instead, several running at once
+under xdist, each failure said above by its test's name and the summary naming them: `tests/conftest.py` writes each
+test's start and end as JSON lines to the file `HOMESERVER_LIVE_PYTEST` names, from pytest's controller alone, and
+takes the variable out of the environment, so a pytest a test starts never writes among them; a command runs in a session of its own (a prompt at /dev/tty fails), Ctrl-C is sent on
 to it, and a second, or SIGTERM or SIGHUP, ends its whole tree (`filter_plugins/processes.py`, ported from
 claude-on-proxmox's). The model (`filter_plugins/run_view.py`) counts every task the plays compile to at the start (an
 include whose file is literal too), so each bar knows its end and never moves back; a refusal (a failed assert) prints
