@@ -60,8 +60,10 @@ def pytest_runtest_logstart(nodeid, location):
 
 
 def pytest_runtest_logreport(report):
-    # A test ends with its call, or with a setup that failed or skipped it, or a teardown that failed after it.
+    # A test ends with its call, or with a setup that failed or skipped it, or a teardown that failed after it; or with
+    # xdist's report of a worker that died under it (a segfault, say), which names no stage ("???") and failed.
     ends = report.when == "call" or (report.when == "setup" and not report.passed)
-    if ends or (report.when == "teardown" and report.failed):
+    crashed = report.when not in ("setup", "call", "teardown")
+    if ends or crashed or (report.when == "teardown" and report.failed):
         said = report.longreprtext[-SAID:] if report.failed else ""
         _say({"end": report.nodeid, "outcome": report.outcome, "said": said})

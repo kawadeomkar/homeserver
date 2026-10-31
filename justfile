@@ -256,7 +256,7 @@ _each recipe all extra *types:
     case $recipe in lint | fix | test)
       if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ] && [ -z "${CI:-}" ]; then
         exec {{ bin }}/python scripts/live.py --just {{ quote(just_executable()) }} --justfile {{ quote(justfile()) }} \
-          --title "$recipe${asked:+ $asked}" --extra "$extra" "$recipe" $picked
+          --title "$recipe${asked:+ $asked}" --extra="$extra" "$recipe" $picked
       fi ;;
     esac
     failed=

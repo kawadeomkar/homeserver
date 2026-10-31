@@ -44,10 +44,11 @@ elif recipe == "lint-bad":
 elif recipe == "lint-env":
     print("log", os.environ.get("ANSIBLE_LOG_PATH", "none"), "colour", os.environ.get("NO_COLOR", "on"))
     print("stdin", os.path.realpath("/proc/self/fd/0") if os.path.exists("/proc/self/fd/0") else "unknown")
-elif recipe in ("test-plain", "test-xdist"):
+elif recipe in ("test-plain", "test-xdist", "test-crash"):
     import subprocess
-    workers = ["-n", "2"] if recipe == "test-xdist" else []
-    sys.exit(subprocess.call([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *workers, "sample"]))
+    workers = ["-n", "2"] if recipe != "test-plain" else []
+    tests = "crash" if recipe == "test-crash" else "sample"
+    sys.exit(subprocess.call([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *workers, tests]))
 elif recipe == "lint-slow":
     def stop(*_):
         print("slow got INT", flush=True)
@@ -161,6 +162,19 @@ def test_skipped():
 """
 
 
+CRASH = """\
+import os
+
+
+def test_passes():
+    pass
+
+
+def test_crashes():
+    os._exit(1)
+"""
+
+
 def test_a_test_run_counts_its_tests_and_says_each_failure_as_it_fails(tmp_path):
     """The pytest reader, with the repository's own tests/conftest.py, which writes what it reads: a test run's step
     counts the tests collected, plain and under xdist, each failure is said above by its test's name with what pytest
@@ -186,6 +200,23 @@ def test_a_test_run_counts_its_tests_and_says_each_failure_as_it_fails(tmp_path)
     assert lines[-2].startswith("2 types · 0 passed · 2 failed · 6 tests, 2 failed · log logs/"), lines
     assert not list((root / "logs").glob("*.jsonl")) and not list((root / "logs").glob(".*.jsonl"))
     assert "1 failed, 1 passed, 1 skipped" in the_log(root, "test").read_text(), "pytest's own lines, in the log"
+
+
+def test_a_test_whose_worker_died_under_it_is_a_failure_said_and_named(tmp_path):
+    """xdist reports a test whose worker died under it (a segfault, say) with no stage of its own: it failed, and is
+    said and named as any failure, never drawn as a test that did not run."""
+    root = tree(tmp_path)
+    (root / "crash").mkdir()
+    shutil.copy(ROOT / "tests" / "conftest.py", root / "crash" / "conftest.py")
+    (root / "crash" / "test_crash.py").write_text(CRASH)
+    rc, screen, stream = live(root, "crash", recipe="test")
+    assert rc == 1, stream[-3000:]
+    drawn(screen)
+    lines = screen.transcript()
+    assert any(line.startswith("✗ crash: test_crash.py::test_crashes (") for line in lines), lines
+    assert any("crashed while running" in line for line in lines), lines
+    assert "FAILED        test_crash.py::test_crashes" in lines, lines
+    assert lines[-2].startswith("1 type · 0 passed · 1 failed · 2 tests, 1 failed · log logs/"), lines
 
 
 def test_each_type_is_a_step_a_failure_is_whole_above_and_the_summary_names_it(tmp_path):
@@ -288,11 +319,13 @@ def test_the_justfile_draws_lint_and_fix_at_a_terminal_and_streams_them_anywhere
     assert any(line.startswith("FIXES") for line in lines) and any(line.startswith(" ✓ python") for line in lines)
     assert (root / "tool.py").read_text() == 'print("unformatted")\n', "the fix ran"
 
-    # just test, with the repository's tests/conftest.py, which counts the tests in its step.
+    # just test, with the repository's tests/conftest.py, which counts the tests in its step. --pytest-args reaches
+    # test-idempotence alone, and scripts/live.py reads it whatever the types: a value that starts with - and holds
+    # no space, passed as a word of its own, would be taken for an option.
     (root / "tests" / "unit").mkdir(parents=True)
     shutil.copy(ROOT / "tests" / "conftest.py", root / "tests" / "conftest.py")
     (root / "tests" / "unit" / "test_one.py").write_text("def test_one():\n    assert True\n")
-    rc, screen, stream = just("test", "unit")
+    rc, screen, stream = just("test", "--pytest-args=-x", "unit")
     assert rc == 0, stream[-3000:]
     lines = screen.transcript()
     assert any(line.startswith("TYPES") for line in lines) and any(line.startswith(" ✓ unit") for line in lines)
