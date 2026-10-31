@@ -82,8 +82,11 @@ LOG_FORMAT = "%(asctime)s p=%(process)d u=%(user)s n=%(name)s %(levelname)s| %(m
 
 
 def from_callback(callback, playbook):
-    """The engine for this run, started, or None for the stream: at verbosity 0, with a log to send the stream to."""
-    if callback._display.verbosity != 0:
+    """The engine for this run, started, or None for the stream: at verbosity 0, with a log to send the stream to,
+    for one playbook. ansible-playbook a.yml b.yml runs each in turn, a recap after each: the first's route, which
+    outlives its region so that what prints after it goes to the log, would send the second's words, its failures and
+    its summary among them, to the log alone."""
+    if callback._display.verbosity != 0 or len((context.CLIARGS or {}).get("args") or ()) > 1:
         return None
     if ansible_display.logger is None and not _own_log(playbook):
         return None
@@ -398,8 +401,9 @@ class Engine:
             self._blank = not lines[-1][1].strip()
 
     def _width(self):
+        # A pseudo-terminal nobody gave a size reads 0 columns, and is printed to as a pipe is.
         try:
-            return os.get_terminal_size(sys.stdout.fileno()).columns
+            return os.get_terminal_size(sys.stdout.fileno()).columns or 100
         except (OSError, ValueError, AttributeError):
             return 100
 

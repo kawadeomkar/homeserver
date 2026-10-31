@@ -99,11 +99,13 @@ Infrastructure roles in four playbooks: `truenas.yml` runs `roles/truenas`, `pro
 **Every report and live output draws through one palette and one region.** `filter_plugins/screen.py` builds
 lines as `(text, style)` segments in one palette (`Line`, `cut`, `render`, `fill`, `bar`, `spark`, `and_list`, and
 `attention_items`, the list of what needs attention that `just status` and NEXT STEPS both print).
-`filter_plugins/live_region.py` puts a frame at the bottom of a terminal, as follows:
+`filter_plugins/live_region.py` puts a frame at the bottom of a terminal that has a size (never pre-commit's hooks'
+pseudo-terminal, which reads 0 by 0), as follows:
 - one write per redraw, in synchronized output, the cursor moved up exactly the lines drawn, so no line may wrap;
 - Display's `display` wrapped, so everything else prints above;
 - the region steps aside for a prompt or a timed `pause`;
-- the echo is off while it draws, when stdin is a terminal;
+- the echo is off while it draws, when stdin is a terminal and the run is in its foreground (from the background,
+  changing it would stop the run);
 - a resize redraws from the top;
 - Ctrl-C is held off between a write and its count of the lines drawn.
 - a frame that cannot be drawn ends the region, never the run: it is erased and its owner told.
@@ -119,7 +121,8 @@ them, the second against a stand-in Display held to ansible-core's.
 **What a run prints, and NEXT STEPS.** `ansible.cfg` names the stdout callback `callback_plugins/homeserver.py`, with
 `callback_plugins = callback_plugins` so that a playbook in any directory finds it, since Ansible stops a run whose
 stdout callback it cannot load. **At verbosity 0 every run is drawn**, whoever starts it (`filter_plugins/live_ansible.py`,
-the engine): live at a terminal that can draw (the region, below), a line per step otherwise. The default callback still
+the engine): live at a terminal that can draw (the region, below), a line per step otherwise; a run of several playbooks
+(`ansible-playbook a.yml b.yml`, a recap after each) is the stream, NEXT STEPS after each recap. The default callback still
 renders every task, sent to the run's log alone, so the log keeps every line it held; the run's own words (reports,
 failures, warnings, a dry run's diffs; a real run's diffs go to the log alone) go to the screen in colour and the log
 plain, and a summary replaces PLAY RECAP on the screen, NEXT STEPS in it. Any `-v`, or
