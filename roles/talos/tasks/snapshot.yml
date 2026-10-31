@@ -7,6 +7,10 @@
     state: directory
     mode: "0700"
 
+- name: snapshot | Name the snapshot
+  ansible.builtin.set_fact:
+    talos_snapshot_file: "{{ talos_config_dir }}/etcd/etcd-{{ now(utc=true).strftime('%Y%m%dT%H%M%SZ') }}.db"
+
 - name: snapshot | Take an etcd snapshot
   ansible.builtin.command:
     argv:
@@ -19,11 +23,27 @@
       - "{{ talos_controlplane.address }}"
       - etcd
       - snapshot
-      - "{{ talos_config_dir }}/etcd/etcd-{{ now(utc=true).strftime('%Y%m%dT%H%M%SZ') }}.db"
+      - "{{ talos_snapshot_file }}"
   changed_when: true
 
-- name: snapshot | Say a snapshot would be taken
+- name: snapshot | Look at the snapshot
+  ansible.builtin.stat:
+    path: "{{ talos_snapshot_file }}"
+    get_checksum: false
+  register: talos_snapshot_stat
+  when: not ansible_check_mode
+
+# Where it is, under ~ when it is in the home directory, and how big: a summary keeps the line. A dry run says where
+# it would go.
+- name: snapshot | Say where the snapshot is
   ansible.builtin.debug:
-    msg: Would take an etcd snapshot of {{ talos_controlplane.name }} into {{ talos_config_dir }}/etcd/.
-  changed_when: true
-  when: ansible_check_mode
+    msg: >-
+      {{ ('Would take an etcd snapshot of ' ~ talos_controlplane.name ~ ' into ' ~ _shown | dirname ~ '/.')
+         if ansible_check_mode else ('Took an etcd snapshot of ' ~ talos_controlplane.name ~ ': ' ~ _shown ~ ', '
+                                      ~ talos_snapshot_stat.stat.size | default(0) | human_readable ~ '.') }}
+  changed_when: ansible_check_mode
+  vars:
+    _home: "{{ lookup('ansible.builtin.env', 'HOME') }}"
+    _shown: >-
+      {{ ('~/' ~ talos_snapshot_file[(_home | length) + 1:]) if _home and talos_snapshot_file.startswith(_home ~ '/')
+         else talos_snapshot_file }}

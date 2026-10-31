@@ -972,8 +972,10 @@ Description: Install Talos Linux on nodes in maintenance mode, keep their config
 | Name | Module | Has Conditions |
 | ---- | ------ | -------------- |
 | snapshot ¦ Make the directory the snapshots go in | ansible.builtin.file | False |
+| snapshot ¦ Name the snapshot | ansible.builtin.set_fact | False |
 | snapshot ¦ Take an etcd snapshot | ansible.builtin.command | False |
-| snapshot ¦ Say a snapshot would be taken | ansible.builtin.debug | True |
+| snapshot ¦ Look at the snapshot | ansible.builtin.stat | True |
+| snapshot ¦ Say where the snapshot is | ansible.builtin.debug | False |
 
 #### File: tasks/upgrade-node.yml
 
@@ -1217,9 +1219,11 @@ classDef includeVars stroke:#8e44ad,stroke-width:2px;
 classDef rescue stroke:#665352,stroke-width:2px;
 
   Start-->|Task| snapshot___Make_the_directory_the_snapshots_go_in0[snapshot   make the directory the snapshots go in]:::task
-  snapshot___Make_the_directory_the_snapshots_go_in0-->|Task| snapshot___Take_an_etcd_snapshot1[snapshot   take an etcd snapshot]:::task
-  snapshot___Take_an_etcd_snapshot1-->|Task| snapshot___Say_a_snapshot_would_be_taken2[snapshot   say a snapshot would be taken<br>When: **ansible check mode**]:::task
-  snapshot___Say_a_snapshot_would_be_taken2-->End
+  snapshot___Make_the_directory_the_snapshots_go_in0-->|Task| snapshot___Name_the_snapshot1[snapshot   name the snapshot]:::task
+  snapshot___Name_the_snapshot1-->|Task| snapshot___Take_an_etcd_snapshot2[snapshot   take an etcd snapshot]:::task
+  snapshot___Take_an_etcd_snapshot2-->|Task| snapshot___Look_at_the_snapshot3[snapshot   look at the snapshot<br>When: **not ansible check mode**]:::task
+  snapshot___Look_at_the_snapshot3-->|Task| snapshot___Say_where_the_snapshot_is4[snapshot   say where the snapshot is]:::task
+  snapshot___Say_where_the_snapshot_is4-->End
 ```
 
 

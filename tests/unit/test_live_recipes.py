@@ -53,7 +53,9 @@ def test_each_declaration_names_playbooks_plays_roles_files_and_tasks_the_tree_h
                 assert stage.absent in found, f"{stage.label}: no task {stage.absent!r} in its plays"
             assert stage.steps, f"{stage.label} has no steps"
             for step in stage.steps:
-                assert step.plays or step.roles or step.files, f"{stage.label} · {step.label} matches nothing"
+                assert step.plays or step.roles or step.files or step.tasks, (
+                    f"{stage.label} · {step.label} matches nothing"
+                )
                 for given in step.plays:
                     assert given in named, f"{stage.label} · {step.label}: no play {given}"
                 for role in step.roles:
@@ -97,7 +99,7 @@ def role_tasks(path):
     return out
 
 
-def test_options_whole_reports_and_steps_by_item_name_what_the_tree_has():
+def test_options_whole_reports_steps_by_item_and_tasks_by_name_name_what_the_tree_has():
     for recipe in recipes.RECIPES:
         variables = {variable for variable, _option in recipe.options}
         for stage in recipe.stages:
@@ -105,12 +107,15 @@ def test_options_whole_reports_and_steps_by_item_name_what_the_tree_has():
             files = [ROOT / "roles" / file for step in stage.steps for file in step.files]
             files += [ROOT / "roles" / role / "tasks" / "main.yml" for step in stage.steps for role in step.roles]
             tasks = [task for file in files for _path, task in role_tasks(file)]
-            if stage.report:
-                plays = [play for file, play in plays_of_recipe(recipe) if any(p.startswith(file) for p in stage.plays)]
-                found = {name for play in plays for name in task_names([play])} | {t.get("name") for t in tasks}
-                found |= {str(name).split(" | ", 1)[-1] for name in found if name}
-                assert stage.report in found, f"{stage.label}: no task {stage.report!r} to report whole"
+            plays = [play for file, play in plays_of_recipe(recipe) if any(p.startswith(file) for p in stage.plays)]
+            found = {name for play in plays for name in task_names([play])} | {t.get("name") for t in tasks}
+            found |= {str(name).split(" | ", 1)[-1] for name in found if name}
+            for report in stage.reports:
+                assert report in found, f"{stage.label}: no task {report!r} to report whole"
+            names = {str(task.get("name", "")).split(" | ", 1)[-1] for task in tasks}
             for step in stage.steps:
+                for name in step.tasks:
+                    assert name in names, f"{stage.label} · {step.label}: no task {name!r} in its stage's files"
                 if not step.each:
                     assert not step.names, f"{stage.label} · {step.label}: names without each"
                     continue
@@ -144,3 +149,18 @@ def test_suspend_and_resume_draw_their_plays_in_their_order():
         declared = {play for stage in recipe.stages for play in stage.plays}
         for file, play in plays_of(f"{name}.yml"):
             assert f"{file}:{play['name']}" in declared, f"{name}: the play {play['name']!r} is no stage's"
+
+
+def test_talos_upgrade_and_etcd_snapshot_name_the_talos_roles_entry_points():
+    for playbook, entry in (("talos-upgrade.yml", "upgrade"), ("etcd-snapshot.yml", "etcd-snapshot")):
+        recipe = recipes.recipe_for(playbook)
+        (stage,) = recipe.stages
+        files = {file for step in stage.steps for file in step.files}
+        assert f"talos/tasks/{entry}.yml" in files and "talos/tasks/snapshot.yml" in files, files
+        included = [
+            task["ansible.builtin.include_role"]
+            for _file, play in plays_of(playbook)
+            for task in play.get("tasks") or []
+            if "ansible.builtin.include_role" in task
+        ]
+        assert included == [{"name": "talos", "tasks_from": entry}], f"{playbook} includes {included}"

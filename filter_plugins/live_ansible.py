@@ -76,8 +76,8 @@ META = frozenset({"meta", "ansible.builtin.meta", "ansible.legacy.meta"})
 FAILURE_LINES = 20
 # A run this long rings the bell when it ends: the person may have looked away. One that failed always does.
 BELL_SECONDS = 60
-# A task name's file prefix, as an imported file's tasks are named: "node | Report what the admin console must fix".
-FILE_PREFIX = re.compile(r"^[a-z0-9_]+ \| ")
+# A task name's file prefix, as an imported file's tasks are named: "upgrade-node | Upgrade Talos on the node".
+FILE_PREFIX = view.FILE_PREFIX
 LOG_FORMAT = "%(asctime)s p=%(process)d u=%(user)s n=%(name)s %(levelname)s| %(message)s"
 
 
@@ -174,12 +174,14 @@ def tasks_of(blocks, out, play=None, search=()):
                 if hasattr(item, "block"):
                     tasks_of([item], out, play, search)
                 elif not getattr(item, "implicit", False) and tagged_in(item, play):
-                    out.append((item._uuid, role_of(item), {**_include_meta(item, search), "file": task_file(item)}))
+                    meta = {**_include_meta(item, search), "file": task_file(item), "name": drawn_name(item)}
+                    out.append((item._uuid, role_of(item), meta))
     return out
 
 
 def _include_meta(task, search):
-    """For an include whose file a playbook names literally: the count of the tasks it will announce."""
+    """For an include whose file a playbook names literally: the count of the tasks it will announce, the file, each
+    of its tasks (name and file, as task_file will see them), and an included role's name."""
     args = getattr(task, "args", None) or {}
     try:
         if task.action in INCLUDE_TASKS:
@@ -188,13 +190,19 @@ def _include_meta(task, search):
                 return {}
             base = os.path.dirname(str(task.get_path()).split(":", 1)[0])
             path = os.path.normpath(target if os.path.isabs(target) else os.path.join(base, target))
-            return {"include": view.count_tasks(path), "included": path} if os.path.isfile(path) else {}
+            if not os.path.isfile(path):
+                return {}
+            listed = view.task_list(path)
+            return {"include": len(listed), "included": path, "listed": listed}
         if task.action in INCLUDE_ROLE:
             name, tasks_from = args.get("name"), args.get("tasks_from")
             if not isinstance(name, str) or "{{" in name or "{{" in str(tasks_from or ""):
                 return {}
             path = view.role_tasks_file(name.split(".")[-1], tasks_from, search)
-            return {"include": view.count_tasks(path), "included": path} if path else {}
+            if not path:
+                return {}
+            listed = view.task_list(path, imports_own=True)
+            return {"include": len(listed), "included": path, "listed": listed, "role": name.split(".")[-1]}
     except Exception:  # noqa: BLE001 - a count is a nicety: an include whose file cannot be read is counted as it runs
         return {}
     return {}
@@ -514,13 +522,15 @@ class Engine:
     def include(self, included_file):
         with self.display._lock:
             task = included_file._task
+            role = None
             if getattr(included_file, "_is_role", False):
                 role = getattr(task, "_role_name", None) or str(included_file._filename)
                 tasks_from = (getattr(task, "_from_files", None) or {}).get("tasks", "main")
                 path = view.role_tasks_file(role, tasks_from, self.search)
             else:
                 path = str(included_file._filename)
-            self.run.include(task._uuid, view.count_tasks(path) if path else 0, item_label(included_file._vars))
+            count = view.count_tasks(path) if path else 0
+            self.run.include(task._uuid, count, item_label(included_file._vars), os.path.normpath(path), role)
 
     # --- results -------------------------------------------------------------------------------------------
     def _result(self, result, outcome):

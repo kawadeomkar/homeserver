@@ -137,9 +137,13 @@ task file or play, a play's own tasks (its refusals) going to their neighbour's 
 ("Say why … is skipped") marking a stage this setup lacks; a playbook no declaration names is drawn as a stage per play,
 its roles as steps. suspend's and resume's stages are their plays (the apps, Home Assistant, the cluster's VMs, which
 a stage's `when` draws only with `--all`), the apps' waves each a step of its own (a step's `each`: a looped include's
-items as steps, by their loop labels, renamed by `names`), their report whole in the summary (a stage's `report`), and
-the recipe's `options` put `--only` and `--all` in the title. A play that ends its host (`meta: end_host`) before its
-work leaves its stage "not in this run"; a stage whose play comes later waits for it, its time its own tasks'. The model (`filter_plugins/run_view.py`) counts every task the plays compile to at the start (an
+items as steps, by their loop labels, renamed by `names`), their report whole in the summary (a stage's `reports`), and
+the recipe's `options` put `--only` and `--all` in the title. talos-upgrade's one stage, through one `include_role`, is
+its plan, the etcd snapshot, a step per node (`each`) and Kubernetes (a step's `tasks`, by name: they share the plan's
+file); etcd-snapshot's says where its snapshot went. An include whose file is literal counts each of its tasks in the
+step it will be in, at the start. A play that ends its host (`meta: end_host`) before its work leaves its stage "not in
+this run", or says why with the report its play printed last; a stage whose play comes later waits for it, its time its
+own tasks'; the label column widens to the longest label (up to 24). The model (`filter_plugins/run_view.py`) counts every task the plays compile to at the start (an
 include whose file is literal too), so each bar knows its end and never moves back; a refusal (a failed assert) prints
 its message alone, never the assertion; the exit line follows ansible-playbook's code, 4 for a host not reached before 2
 for a failure. A drawn run needs a log: `scripts/run_log.py` names every log, `_playbook`'s and, 0600 in a 0700 `logs/`,

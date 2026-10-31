@@ -17,18 +17,21 @@ from __future__ import annotations
 class Step:
     """A step of a stage, labelled as a person would name it (packages, not proxmox_apt), and what puts a task in it.
 
-    plays: the plays every task of which is this step's, each "file:play name". roles: the roles every task of which
-    is this step's. files: the task files (a path's end, truenas/tasks/pools.yml) every task of which is this step's,
-    a file another imports staying its importer's, and an include's tasks its file's. A task that matches no step, such
-    as a play's own refusals, is its neighbour's: the next task's step in its play, else the one before.
+    plays: the plays every task of which is this step's, each "file:play name". tasks: the tasks, by name as drawn
+    (without their file's "upgrade | "), that are this step's whatever their file, for a file whose tasks are in more
+    than one step. roles: the roles every task of which is this step's. files: the task files (a path's end,
+    truenas/tasks/pools.yml) every task of which is this step's, a file another imports staying its importer's, and an
+    include's tasks its file's. A task that matches no step, such as a play's own refusals, is its neighbour's: the
+    next task's step in its play, else the one before.
 
     each: the step's tasks come from an include with a loop, and each item is a step of its own, labelled with the
     item's label (loop_control's), or with what names gives for it; until the include runs, this step stands for
     them."""
 
-    def __init__(self, label, plays=(), roles=(), files=(), each=False, names=None):
+    def __init__(self, label, plays=(), roles=(), files=(), each=False, names=None, tasks=()):
         self.label = label
         self.plays = tuple(plays)
+        self.tasks = tuple(tasks)
         self.roles = tuple(roles)
         self.files = tuple(files)
         self.each = each
@@ -39,16 +42,16 @@ class Stage:
     """A stage of a run: the playbooks (a file name) or plays ("file:play name") that are its, and its steps, in
     order. absent: the task, by name, that says why this setup has no such stage (the NAS's, without a NAS address):
     once it runs, the stage is drawn as absent, with what the task said, whatever the stage's other plays read first.
-    report: the task, by name, whose report the summary shows whole, every line, rather than its first. when: one of
-    the recipe's options, by its variable: without it, the stage is not drawn at all, and its plays' tasks are the
+    reports: the tasks, by name, whose reports the summary shows whole, every line, rather than their first. when: one
+    of the recipe's options, by its variable: without it, the stage is not drawn at all, and its plays' tasks are the
     log's alone."""
 
-    def __init__(self, label, plays=(), steps=(), absent="", report="", when=""):
+    def __init__(self, label, plays=(), steps=(), absent="", reports=(), when=""):
         self.label = label
         self.plays = tuple(plays)
         self.steps = tuple(steps)
         self.absent = absent
-        self.report = report
+        self.reports = tuple(reports)
         self.when = when
 
 
@@ -80,6 +83,8 @@ NAS_STEPS = (
     ("services", "services"),
 )
 
+# The play every cluster playbook but kubernetes.yml begins with, on localhost.
+REFUSE = "Refuse a cluster without the kubernetes inventory group"
 # just suspend's and resume's options, as just's _scale passes them.
 SCALE_OPTIONS = (("only", "--only"), ("cluster_vms", "--all"))
 # The apps' waves (roles/app_scale's loop labels): every app, then the late ones, which are the databases here.
@@ -92,13 +97,13 @@ def scale_apps(playbook, play):
     and its replicas, whole."""
     return Stage(
         "apps",
-        plays=(f"{playbook}:Refuse a cluster without the kubernetes inventory group", f"{playbook}:{play}"),
+        plays=(f"{playbook}:{REFUSE}", f"{playbook}:{play}"),
         absent="Say why the cluster is skipped",
-        report="Say what was done",
+        reports=("Say what was done",),
         steps=(
             Step(
                 "plan",
-                plays=(f"{playbook}:Refuse a cluster without the kubernetes inventory group",),
+                plays=(f"{playbook}:{REFUSE}",),
                 files=("app_scale/tasks/main.yml",),
             ),
             Step("apps", files=("app_scale/tasks/wave.yml",), each=True, names=WAVES),
@@ -188,6 +193,50 @@ RECIPES = (
                 plays=("resume.yml:Start Home Assistant's VM",),
                 absent="Say why Home Assistant is skipped",
                 steps=(Step("start", roles=("proxmox_vm",)),),
+            ),
+        ),
+    ),
+    # roles/talos's upgrade entry point, through one include_role: its plan, the snapshot, each node in turn, then
+    # Kubernetes and the cluster's health. The plan and where the snapshot went whole in the summary.
+    Recipe(
+        name="talos-upgrade",
+        playbooks=("talos-upgrade.yml",),
+        stages=(
+            Stage(
+                "cluster",
+                plays=("talos-upgrade.yml",),
+                absent="Say why the cluster is skipped",
+                reports=("Show the plan", "Say where the snapshot is"),
+                steps=(
+                    Step(
+                        "plan",
+                        plays=(f"talos-upgrade.yml:{REFUSE}",),
+                        files=("talos/tasks/validate.yml", "talos/tasks/prepare.yml", "talos/tasks/upgrade.yml"),
+                    ),
+                    Step("etcd snapshot", files=("talos/tasks/snapshot.yml",)),
+                    Step("nodes", files=("talos/tasks/upgrade-node.yml",), each=True),
+                    Step("Kubernetes", tasks=("Upgrade Kubernetes", "Wait for the cluster to be healthy")),
+                ),
+            ),
+        ),
+    ),
+    Recipe(
+        name="etcd-snapshot",
+        playbooks=("etcd-snapshot.yml",),
+        stages=(
+            Stage(
+                "cluster",
+                plays=("etcd-snapshot.yml",),
+                absent="Say why the cluster is skipped",
+                reports=("Say where the snapshot is",),
+                steps=(
+                    Step(
+                        "prepare",
+                        plays=(f"etcd-snapshot.yml:{REFUSE}",),
+                        files=("talos/tasks/validate.yml", "talos/tasks/prepare.yml", "talos/tasks/etcd-snapshot.yml"),
+                    ),
+                    Step("snapshot", files=("talos/tasks/snapshot.yml",)),
+                ),
             ),
         ),
     ),

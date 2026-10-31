@@ -34,22 +34,30 @@
           {{ out }}
         talos_kubernetes_upgrade: "{{ talos_running_kubernetes != talos_kubernetes_version }}"
 
+    # A line for what moves, then one for each node, in the order they go, and one for Kubernetes.
     - name: upgrade | Show the plan
       ansible.builtin.debug:
-        msg: >-
-          {{ {'nodes': _nodes, 'kubernetes': (talos_running_kubernetes ~ ' -> ' ~ talos_kubernetes_version)
-              if talos_kubernetes_upgrade else 'up to date (' ~ talos_running_kubernetes ~ ')'} }}
+        msg: "{{ [_gist] + _nodes + ['Kubernetes: ' ~ _kubernetes] }}"
       changed_when: ansible_check_mode and (talos_upgrades | length > 0 or talos_kubernetes_upgrade)
       vars:
+        _moving: >-
+          {{ ([(talos_upgrades | length) ~ ' node' ~ ('s, the control plane first' if talos_upgrades | length > 1
+               else '')] if talos_upgrades else []) + (['Kubernetes'] if talos_kubernetes_upgrade else []) }}
+        _gist: >-
+          {{ ('To the pins: ' ~ _moving | join(', then ') ~ '.') if _moving
+             else 'Nothing to upgrade: every node and Kubernetes run the pins.' }}
+        _kubernetes: >-
+          {{ (talos_running_kubernetes ~ ' -> ' ~ talos_kubernetes_version) if talos_kubernetes_upgrade
+             else 'up to date (' ~ talos_running_kubernetes ~ ')' }}
         _nodes: >-
-          {%- set out = {} -%}
+          {%- set out = [] -%}
           {%- for n in talos_state.values() -%}
           {%-   set u = talos_upgrades | selectattr('name', 'eq', n.name) | list -%}
           {#-   The image's tag, after its pinned digest is set aside. -#}
           {%-   set tagged = (u[0].image if u else '').split('@')[0] -%}
-          {%-   set _ = out.update({n.name: ('Talos ' ~ n.tag ~ ' -> ' ~ tagged.split(':')[-1] ~ ', schematic '
-                                       ~ (n.running_schematic or '?')[:8] ~ ' -> ' ~ tagged.split('/')[-1][:8])
-                                      if u else 'up to date (Talos ' ~ n.tag ~ ')'}) -%}
+          {%-   set _ = out.append(n.name ~ ': ' ~ (('Talos ' ~ n.tag ~ ' -> ' ~ tagged.split(':')[-1] ~ ', schematic '
+                                                  ~ (n.running_schematic or '?')[:8] ~ ' -> ' ~ tagged.split('/')[-1][:8])
+                                                 if u else 'up to date (Talos ' ~ n.tag ~ ')')) -%}
           {%- endfor -%}
           {{ out }}
 

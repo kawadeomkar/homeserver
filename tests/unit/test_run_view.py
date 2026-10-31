@@ -424,3 +424,133 @@ def test_a_skipped_include_takes_back_what_it_was_counted_with():
     run.end(0.2)
     assert run.stages[0].steps[1].state(True) == "none"
     assert run.stages[0].expected == 5
+
+
+# talos-upgrade.yml's plays: the refusal, then the play whose one task includes the talos role's upgrade entry point,
+# listed as live_ansible lists a literal include_role's file: each task's name and file.
+UPGRADE = view.recipes.recipe_for("talos-upgrade.yml")
+TASKS = "/r/roles/talos/tasks"
+LISTED = [
+    ("Check the role's inputs", f"{TASKS}/validate.yml"),
+    ("Make a scratch directory", f"{TASKS}/prepare.yml"),
+    ("Refuse to upgrade a cluster that is not all up", f"{TASKS}/upgrade.yml"),
+    ("Show the plan", f"{TASKS}/upgrade.yml"),
+    ("Take an etcd snapshot", f"{TASKS}/snapshot.yml"),
+    ("Upgrade Talos, control plane first", f"{TASKS}/upgrade.yml"),
+    ("Upgrade Kubernetes", f"{TASKS}/upgrade.yml"),
+    ("Wait for the cluster to be healthy", f"{TASKS}/upgrade.yml"),
+    ("Remove the scratch directory", f"{TASKS}/upgrade.yml"),
+]
+UPGRADE_PLAYS = [
+    ("refuse", "/r/talos-upgrade.yml:9", [("r0", None, {"file": "/r/talos-upgrade.yml"})], REFUSE),
+    (
+        "up",
+        "/r/talos-upgrade.yml:21",
+        [
+            ("u0", None, {"file": "/r/talos-upgrade.yml", "name": "Refuse an incomplete Kubernetes section"}),
+            (
+                "u1",
+                None,
+                {
+                    "file": "/r/talos-upgrade.yml",
+                    "name": "Upgrade the nodes, then Kubernetes",
+                    "include": len(LISTED),
+                    "included": f"{TASKS}/upgrade.yml",
+                    "listed": LISTED,
+                    "role": "talos",
+                },
+            ),
+        ],
+        "Upgrade the cluster to the pinned versions",
+    ),
+]
+NODES = ("homeserver-cp-1", "homeserver-worker-1")
+
+
+def test_an_upgrade_is_its_plan_its_snapshot_a_step_per_node_and_kubernetes():
+    run = view.Run("talos-upgrade", 0.0, started_at=START, recipe=UPGRADE)
+    run.plays(UPGRADE_PLAYS)
+    steps = run.stages[0].steps
+    assert [step.label for step in steps] == ["plan", "etcd snapshot", "nodes", "Kubernetes"]
+    # The include's tasks counted at the start, each in its own step; the nodes' file comes with its include.
+    assert [step.expected for step in steps] == [3 + 6, 1, 0, 2]
+    assert steps[2].state(False) == "todo"
+    assert any(line.startswith(" ○ nodes ") and line.endswith("a step each") for line in frame(run, 0.0, 100))
+    now = 0.0
+    run.play_start("refuse", now)
+    run.task("r0", REFUSE, None, now, play="refuse")
+    run.result("r0", "localhost", "ok", now + 0.1)
+    run.play_start("up", 0.2)
+    for key in ("u0", "u1"):
+        run.task(key, key, None, now + 0.3, play="up")
+        run.result(key, "k8s", "ok", now + 0.4)
+    run.include("u1", len(LISTED), None, f"{TASKS}/upgrade.yml", "talos")
+    now = 1.0
+
+    def task(key, name, file, item=None, outcome="ok", seconds=1.0):
+        nonlocal now
+        run.task(key, name, "talos", now, play="up", file=file, item=item)
+        run.result(key, "k8s", outcome, now + seconds)
+        now += seconds
+
+    for number, (name, file) in enumerate(LISTED[:6]):
+        task(f"t{number}", name, file)
+        if name == "Show the plan":
+            lines = ["To the pins: 2 nodes, the control plane first, then Kubernetes."]
+            lines += [f"{node}: Talos v1.14.2 -> v1.14.4" for node in NODES] + ["Kubernetes: 1.37.1 -> 1.37.2"]
+            run.note(run.find(f"t{number}"), lines[0], lines)
+    for node in NODES:
+        run.include("t5", 2, node, f"{TASKS}/upgrade-node.yml", "talos")
+    assert [row.label for row in run.stages[0].rows()] == ["plan", "etcd snapshot", *NODES, "Kubernetes"]
+    for node in NODES:
+        task(f"{node}-up", "Upgrade Talos on the node", f"{TASKS}/upgrade-node.yml", node, "changed", 60)
+        task(
+            f"{node}-wait", "Wait for the cluster to be healthy before the next node", f"{TASKS}/upgrade-node.yml", node
+        )
+    lines = frame(run, now, 100)
+    # The label column fits the longest node's name, so every bar starts in one column.
+    bars = {line.index("█") for line in lines if "█" in line}
+    assert len(bars) == 1 and run.label == len("homeserver-worker-1") + 1, lines
+    for number, (name, file) in enumerate(LISTED[6:], 6):
+        task(f"t{number}", name, file, outcome="changed" if name == "Upgrade Kubernetes" else "ok")
+    run.end(now)
+    kubernetes = run.stages[0].steps[3]
+    assert [t.name for t in kubernetes.tasks] == ["Upgrade Kubernetes", "Wait for the cluster to be healthy"]
+    summary = [plainly for _c, plainly in run.summary(now, 100)]
+    assert summary[2].startswith("STEPS" + " " * 21 + "TIME"), summary[2]
+    rows = [line.split()[1] for line in summary[3:8]]
+    assert rows == ["plan", "etcd", *NODES, "Kubernetes"], summary
+    assert all(" 2 " in line for line in summary[5:7]), "each node's two tasks"
+    at = summary.index(next(line for line in summary if line.startswith("CLUSTER")))
+    assert summary[at].endswith("To the pins: 2 nodes, the control plane first, then Kubernetes.")
+    assert summary[at + 3] == " " * 16 + "Kubernetes: 1.37.1 -> 1.37.2", summary[at:]
+
+
+def test_an_include_no_step_names_is_its_first_tasks_and_its_plays_own_tasks_beside_it():
+    run = view.Run("talos-upgrade", 0.0, started_at=START, recipe=UPGRADE)
+    run.plays(UPGRADE_PLAYS)
+    assert run.plan["u0"] == (0, 0) and run.plan["u1"] == (0, 0)
+
+
+def test_task_list_names_each_task_and_its_file_as_task_file_sees_it(tmp_path):
+    (tmp_path / "upgrade.yml").write_text(
+        "- name: upgrade | Check\n  ansible.builtin.import_tasks: validate.yml\n"
+        "- name: upgrade | Move\n  block:\n    - name: upgrade | Plan\n      ansible.builtin.debug: {msg: x}\n"
+        "    - name: upgrade | Each node\n      ansible.builtin.include_tasks: node.yml\n"
+    )
+    (tmp_path / "validate.yml").write_text(
+        "- name: validate | Inputs\n  ansible.builtin.assert: {that: true}\n"
+        "- name: validate | More\n  ansible.builtin.import_tasks: more.yml\n"
+    )
+    (tmp_path / "more.yml").write_text("- name: more | Deeper\n  ansible.builtin.assert: {that: true}\n")
+    top, validate = str(tmp_path / "upgrade.yml"), str(tmp_path / "validate.yml")
+    # An include_role's file: a file it imports is that file's own, and one that file imports stays the first's.
+    assert view.task_list(top, imports_own=True) == [
+        ("Inputs", validate),
+        ("Deeper", validate),
+        ("Plan", top),
+        ("Each node", top),
+    ]
+    # An include_tasks's file: every task is its file's.
+    assert {file for _name, file in view.task_list(top)} == {top}
+    assert view.count_tasks(top) == 4
