@@ -9,6 +9,7 @@ run here is a real ansible-playbook run with each callback, compared line by lin
 
 import importlib.util
 import os
+import pty
 import re
 import subprocess
 import sys
@@ -77,11 +78,13 @@ def callback_module():
     return module
 
 
-def play(tmp_path, callback, *args):
+def play(tmp_path, callback, *args, books=("play.yml",), terminal=False):
     """The playbook with `callback`, from a file in the state it starts in: its output and its log without the
-    prefixes."""
+    prefixes. books, the playbooks run, each the same playbook; terminal, its output on a pseudo-terminal that nobody
+    gave a size, as pre-commit runs its hooks on."""
     (tmp_path / "file").write_text("old\n")
-    (tmp_path / "play.yml").write_text(PLAY)
+    for book in books:
+        (tmp_path / book).write_text(PLAY)
     config = tmp_path / "ansible.cfg"
     config.write_text(
         "[defaults]\nretry_files_enabled = false\ncallback_result_format = yaml\n"
@@ -94,13 +97,39 @@ def play(tmp_path, callback, *args):
         "ANSIBLE_LOG_PATH": str(log),
         "ANSIBLE_NOCOLOR": "1",
     }
-    command = [PLAYBOOK, "-i", "localhost,", "-c", "local", "play.yml", "-e", f"scratch={tmp_path}"]
+    command = [PLAYBOOK, "-i", "localhost,", "-c", "local", *books, "-e", f"scratch={tmp_path}"]
     command += ["-e", f"ansible_python_interpreter={sys.executable}", *args]
-    proc = subprocess.run(command, env=env, cwd=tmp_path, capture_output=True, text=True, stdin=subprocess.DEVNULL)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    return TEMPORARY.sub("ansible-tmp-X", proc.stdout), TEMPORARY.sub(
-        "ansible-tmp-X", LOG_PREFIX.sub("", log.read_text())
-    )
+    if terminal:
+        returncode, stdout = _on_a_terminal(command, env | {"TERM": "xterm-256color"}, tmp_path)
+    else:
+        proc = subprocess.run(command, env=env, cwd=tmp_path, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        returncode, stdout = proc.returncode, proc.stdout
+    assert returncode == 0, stdout
+    return TEMPORARY.sub("ansible-tmp-X", stdout), TEMPORARY.sub("ansible-tmp-X", LOG_PREFIX.sub("", log.read_text()))
+
+
+def _on_a_terminal(command, env, cwd):
+    """The command's exit code and what it wrote, with its output on a pseudo-terminal of the test's own, unsized."""
+    master, terminal = pty.openpty()
+    try:
+        proc = subprocess.Popen(command, env=env, cwd=cwd, stdin=subprocess.DEVNULL, stdout=terminal, stderr=terminal)
+        os.close(terminal)
+        terminal = None
+        written = b""
+        while True:
+            try:
+                chunk = os.read(master, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            written += chunk
+        return proc.wait(timeout=120), written.decode().replace("\r\n", "\n")
+    finally:
+        os.close(master)
+        if terminal is not None:
+            os.close(terminal)
 
 
 NEXT_STEPS = """
@@ -178,6 +207,26 @@ def test_off_a_terminal_a_run_is_lines_its_reports_and_a_summary_and_its_log_kee
     # The log: the default's every line, in order, then the summary.
     assert in_order([line for line in default_log.splitlines() if line], log.splitlines()), log
     assert "exit 0 · for the whole picture: just status" in log and "  tasks          the first line" in log
+
+
+def test_on_a_terminal_nobody_sized_a_run_is_lines_as_off_a_terminal(tmp_path):
+    """Nothing can be drawn at 0 by 0, and a summary cut to no width at all was nothing but "…"."""
+    out, _log = play(tmp_path, "homeserver", terminal=True)
+    lines = out.splitlines()
+    assert "  tasks          the first line" in lines and "…" not in lines, out
+    assert "\x1b[" not in out and "\x1b]" not in out, "a region was drawn"
+    assert lines[-1] == "exit 0 · for the whole picture: just status", out
+
+
+def test_a_run_of_several_playbooks_is_the_stream_with_next_steps_after_each_recap(tmp_path):
+    """ansible-playbook runs each playbook in turn, a recap after each: drawn, the first's engine would route the
+    second's words, its failures among them, to the log alone. The records add up from one playbook to the next, so
+    each recap's NEXT STEPS holds every one made so far."""
+    books = ("play.yml", "again.yml")
+    default_out, _default_log = play(tmp_path, "default", books=books)
+    out, _log = play(tmp_path, "homeserver", books=books)
+    assert default_out.count("PLAY RECAP") == 2, default_out
+    assert out.count(NEXT_STEPS) == 2 and out.replace(NEXT_STEPS, "") == default_out, out
 
 
 def test_a_failure_prints_whole_with_where_it_is_and_its_log_line(tmp_path):
