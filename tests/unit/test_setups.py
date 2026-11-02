@@ -370,6 +370,100 @@ def test_the_store_is_never_inside_the_checkout(root, monkeypatch, capsys):
     assert not (root / "setups").exists() and not links(root)
 
 
+# ---------------------------------------------------------------------------------------------------- layout ---
+TEMPLATE = (ROOT / setups.VAULT_TEMPLATE).read_text()
+TEMPLATE_KEYS = yaml.safe_load(TEMPLATE)
+# A vault from before the template: keys alone, a key no playbook reads from it, a comment of its own and one after a
+# value.
+OLD = """---
+vault_haos_owner_password: owner-password-of-the-test
+vault_discord_token: left-over
+# a note of the vault's own
+vault_truenas_api_key: 'an-api-key'  # rotated in October
+"""
+
+
+def filled(text: str, **values: str) -> str:
+    """The template's text with each key given set in its place, as just init writes it."""
+    for key, value in values.items():
+        text = text.replace(f'{key}: ""', f"{key}: {value}")
+    return text
+
+
+def test_a_vault_from_before_the_template_is_laid_out_as_it_every_value_kept():
+    text, added, own_keys, own_comments = setups.onto_template(OLD, TEMPLATE)
+    tail = "\n".join([*setups.OWN_HEADING, "vault_discord_token: left-over", "# a note of the vault's own"])
+    expected = filled(
+        TEMPLATE, vault_truenas_api_key="an-api-key", vault_haos_owner_password="owner-password-of-the-test"
+    )
+    assert text == expected + "\n" + tail + "\n# rotated in October\n", text
+    assert yaml.safe_load(text) == {**TEMPLATE_KEYS, **yaml.safe_load(OLD)}
+    assert added == ["vault_truenas_mail_password", "vault_tailscale_auth_key"]
+    assert own_keys == ["vault_discord_token"] and own_comments == 2
+    assert setups.onto_template(text, TEMPLATE) is None, "laid out once, then left as it is"
+
+
+def test_a_vault_on_the_template_is_left_as_it_is_with_whatever_it_adds():
+    """Every key and comment line of the template is there: a value quoted by hand, a key and a comment of the vault's
+    own stay where they are."""
+    text = filled(TEMPLATE, vault_haos_owner_password="'quoted by hand'") + "\n# a note\nvault_extra: kept here\n"
+    assert setups.onto_template(text, TEMPLATE) is None
+
+
+@pytest.mark.parametrize("text", ["", "---\n", "{}\n", "---\n{}\n"])
+def test_an_empty_vault_becomes_the_template(text):
+    """As the first just vault new wrote it, {} before there was a template."""
+    laid, added, own_keys, own_comments = setups.onto_template(text, TEMPLATE)
+    assert laid == TEMPLATE and added == list(TEMPLATE_KEYS) and not own_keys and not own_comments
+
+
+def test_a_comment_line_the_template_no_longer_holds_is_kept_at_the_end():
+    """An older template's wording: the person deletes it, once."""
+    older = TEMPLATE.replace("# TrueNAS shows it once.", "# TrueNAS shows it only once.")
+    laid, _added, _own_keys, own_comments = setups.onto_template(older, TEMPLATE)
+    assert own_comments == 1 and laid.endswith("\n".join(setups.OWN_HEADING) + "\n# TrueNAS shows it only once.\n")
+
+
+@pytest.mark.parametrize(
+    "text", ["vault_truenas_api_key: !unsafe '{{ not a template }}'\n", "- a list\n", "key: [unclosed\n"]
+)
+def test_a_vault_that_yaml_alone_cannot_read_as_keys_is_left_as_it_is(text):
+    with pytest.raises(setups.Refused):
+        setups.onto_template(text, TEMPLATE)
+
+
+def test_a_laid_out_vault_keeps_its_password_vault_id_and_mode(root, capsys):
+    vault, password_file = root / VAULT, root / VAULT_PASS
+    password_file.write_text(PASSWORD + "\n")
+    vault.write_bytes(setups.encrypt(OLD, PASSWORD.encode(), "lab"))
+    vault.chmod(0o640)
+    assert setups.main(["template"], root=root) == 0
+    said = capsys.readouterr().out
+    assert said.startswith("The vault is laid out as local.vault.yml.example now: ") and "left-over" not in said, said
+    assert "added, empty: vault_truenas_mail_password, vault_tailscale_auth_key" in said, said
+    assert "kept at its end, not in the template: 1 key (vault_discord_token) and 2 comments" in said, said
+    assert vault.read_bytes().startswith(b"$ANSIBLE_VAULT;1.2;AES256;lab\n")
+    assert stat.S_IMODE(vault.stat().st_mode) == 0o640
+    assert decrypt(vault, password_file) == {**TEMPLATE_KEYS, **yaml.safe_load(OLD)}
+    before = vault.read_bytes()
+    assert setups.main(["template"], root=root) == 0 and capsys.readouterr().out == ""
+    assert vault.read_bytes() == before, "a vault on the template is never written"
+
+
+def test_a_vault_that_does_not_open_or_cannot_be_read_is_left_alone(root, capsys):
+    vault, password_file = root / VAULT, root / VAULT_PASS
+    password_file.write_text("another-password\n")
+    vault.write_bytes(vault_text({"vault_haos_owner_password": "x"}))
+    before = vault.read_bytes()
+    assert setups.main(["template"], root=root) == 0 and vault.read_bytes() == before
+    assert capsys.readouterr() == ("", ""), "ansible-vault edit says it does not open"
+    password_file.write_text(PASSWORD + "\n")
+    vault.write_bytes(setups.encrypt("- a list\n", PASSWORD.encode()))
+    before = vault.read_bytes()
+    assert setups.main(["template"], root=root) == 0 and vault.read_bytes() == before, "it opens all the same"
+    assert "The vault is left as it is" in capsys.readouterr().err
+
+
 # ----------------------------------------------------------------------------------------------------- just ---
 def tree(tmp_path: Path) -> Path:
     """The justfile and what just vault runs, copied into a checkout of their own."""
@@ -443,6 +537,32 @@ def test_just_vault_edits_another_setups_vault_without_switching(tmp_path):
     assert decrypt(lab / "vault.yml", lab / "vault_pass") == {"vault_haos_owner_password": "edited"}
     assert is_template(home / "vault.yml", home / "vault_pass")
     assert setups.target(checkout / VAULT) == home / "vault.yml", "the checkout keeps its setup"
+
+    # The editor left the vault one key alone: the next edit opens it laid out as the template again.
+    shown = tmp_path / "shown.yml"
+    looks = tmp_path / "looks.py"
+    looks.write_text(f"import shutil, sys\nshutil.copy(sys.argv[1], {str(shown)!r})\nsys.exit(1)\n")
+    again = just(checkout, "vault", "edit", "lab", SETUPS=str(store), EDITOR=f"{sys.executable} {looks}")
+    assert "laid out as local.vault.yml.example" in again.stdout, again.stdout + again.stderr
+    assert shown.read_text() == filled(TEMPLATE, vault_haos_owner_password="edited")
+
+
+def test_just_vault_opens_a_vault_from_before_the_template_laid_out_as_it(tmp_path):
+    """The checkout's own vault, as one made before the template holds it. The editor gives up, so the recipe stops
+    before its lint, which this tree could not run."""
+    checkout = tree(tmp_path)
+    (checkout / VAULT_PASS).write_text(PASSWORD + "\n")
+    (checkout / VAULT).write_bytes(setups.encrypt(OLD, PASSWORD.encode()))
+    (checkout / VAULT).chmod(0o600)
+    shown = tmp_path / "shown.yml"
+    looks = tmp_path / "looks.py"
+    looks.write_text(f"import shutil, sys\nshutil.copy(sys.argv[1], {str(shown)!r})\nsys.exit(1)\n")
+    opened = just(checkout, "vault", SETUPS=str(tmp_path / "setups"), EDITOR=f"{sys.executable} {looks}")
+    assert opened.returncode != 0, "the editor gave up"
+    assert opened.stdout.startswith("Setup: this checkout's own files\nThe vault is laid out as "), opened.stdout
+    laid, *_ = setups.onto_template(OLD, TEMPLATE)
+    assert shown.read_text() == laid
+    assert decrypt(checkout / VAULT, checkout / VAULT_PASS) == {**TEMPLATE_KEYS, **yaml.safe_load(OLD)}
 
 
 def test_a_playbook_run_names_its_setup_and_stops_on_a_broken_one(tmp_path):

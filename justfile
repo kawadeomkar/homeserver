@@ -177,7 +177,8 @@ lock *packages:
 # none, both encrypted before either is written; a vault that already opens is left alone, and one that does not is
 # refused, since it may hold your secrets with their password lost. A new vault is local.vault.yml.example as it is:
 # every key the playbooks read, each empty (unset) under a comment saying what it is for (scripts/init/setups.py says
-# the rest).
+# the rest). edit lays a vault from before the template, or from an older one, out as the template first: its every
+# comment and key, each value set kept, and what the template does not hold kept at the end.
 [arg('action', pattern='edit|new|list|switch', help='edit (the default), new, list or switch')]
 [arg('setup', help="switch and edit: the setup; new: its name, or none for the checkout's own vault")]
 [arg('source', long='from', pattern='(current)?', help="new: this checkout's own local.yml, vault and .vault_pass become the setup")]
@@ -202,6 +203,7 @@ vault action='edit' setup='' source='':
         [ -z "$setup" ] || exec {{ setups }} edit "$setup"
         {{ setups }} check
         test -f {{ vault }} || { echo "There is no {{ vault }}: restore it from your password manager, or just vault new" >&2; exit 1; }
+        {{ setups }} template
         {{ bin }}/ansible-vault edit {{ vault }}
         exec {{ self }} lint ansible ;;
     esac
