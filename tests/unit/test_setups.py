@@ -464,6 +464,44 @@ def test_a_vault_that_does_not_open_or_cannot_be_read_is_left_alone(root, capsys
     assert "The vault is left as it is" in capsys.readouterr().err
 
 
+# ------------------------------------------------------------------------------------------------------ read ---
+@pytest.mark.parametrize(
+    ("text", "says"),
+    [
+        ("vault_truenas_api_key: [a-secret-of-the-test\n", "line 2, column 1: "),
+        ("vault_truenas_api_key: a-secret-of-the-test\n\tvault_haos_owner_password: x\n", "line 2, column "),
+        ("- a-secret-of-the-test\n", "it is no mapping of keys"),
+        (
+            'vault_haos_owner_password: a-secret-of-the-test\nvault_haos_owner_password: ""\n',
+            "vault_haos_owner_password is written twice, on lines 1 and 2: Ansible keeps the last",
+        ),
+    ],
+)
+def test_a_vault_that_does_not_read_says_where_never_what(text, says):
+    """A value pasted above its key's empty line, written twice: YAML keeps the empty one, and the secret is lost."""
+    found = setups.vault_problems(text)
+    assert len(found) == 1 and found[0].startswith(says), found
+    assert "a-secret-of-the-test" not in found[0], "a problem never quotes the vault"
+
+
+def test_ansibles_own_tags_read_as_the_values_they_hold(root, capsys):
+    text = "vault_truenas_api_key: !unsafe '{{ never templated }}'\nvault_haos_owner_password: ''\n"
+    assert setups.vault_problems(text) == []
+    (root / VAULT_PASS).write_text(PASSWORD + "\n")
+    (root / VAULT).write_bytes(setups.encrypt(text, PASSWORD.encode()))
+    assert setups.main(["read"], root=root) == 0
+    assert capsys.readouterr().out == "The vault reads as Ansible reads it: 1 key set, 1 empty.\n"
+
+
+def test_reading_a_vault_that_does_not_read_fails_saying_how_to_mend_it(root, capsys):
+    (root / VAULT_PASS).write_text(PASSWORD + "\n")
+    (root / VAULT).write_bytes(setups.encrypt("vault_truenas_api_key: [a-secret-of-the-test\n", PASSWORD.encode()))
+    assert setups.main(["read"], root=root) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("The vault does not read as Ansible reads it: line 2, column 1: "), err
+    assert err.rstrip().endswith("just vault opens it again, to mend it") and "a-secret-of-the-test" not in err
+
+
 # ----------------------------------------------------------------------------------------------------- just ---
 def tree(tmp_path: Path) -> Path:
     """The justfile and what just vault runs, copied into a checkout of their own."""
@@ -533,6 +571,7 @@ def test_just_vault_edits_another_setups_vault_without_switching(tmp_path):
     editor.write_text("import sys\nopen(sys.argv[1], 'w').write('vault_haos_owner_password: edited\\n')\n")
     edited = just(checkout, "vault", "edit", "lab", SETUPS=str(store), EDITOR=f"{sys.executable} {editor}")
     assert edited.returncode == 0, edited.stdout + edited.stderr
+    assert edited.stdout.endswith("The vault reads as Ansible reads it: 1 key set, 0 empty.\n"), edited.stdout
     lab, home = store / "lab", store / "home"
     assert decrypt(lab / "vault.yml", lab / "vault_pass") == {"vault_haos_owner_password": "edited"}
     assert is_template(home / "vault.yml", home / "vault_pass")
@@ -563,6 +602,29 @@ def test_just_vault_opens_a_vault_from_before_the_template_laid_out_as_it(tmp_pa
     laid, *_ = setups.onto_template(OLD, TEMPLATE)
     assert shown.read_text() == laid
     assert decrypt(checkout / VAULT, checkout / VAULT_PASS) == {**TEMPLATE_KEYS, **yaml.safe_load(OLD)}
+
+
+def test_just_vault_reads_the_vault_once_it_is_saved_and_runs_no_linter(tmp_path):
+    """ansible-lint lists its files through git, which ignores the vault: it never read it, and took its time to say
+    so. A key pasted a second time is found, and what the editor left reads."""
+    checkout = tree(tmp_path)
+    (checkout / VAULT_PASS).write_text(PASSWORD + "\n")
+    (checkout / VAULT).write_bytes(setups.encrypt(TEMPLATE, PASSWORD.encode()))
+    pastes = tmp_path / "pastes.py"
+    pastes.write_text("import sys\nopen(sys.argv[1], 'a').write('vault_tailscale_auth_key: pasted-below\\n')\n")
+    pasted = just(checkout, "vault", SETUPS=str(tmp_path / "setups"), EDITOR=f"{sys.executable} {pastes}")
+    assert pasted.returncode != 0, pasted.stdout + pasted.stderr
+    assert "vault_tailscale_auth_key is written twice, on lines 27 and 34" in pasted.stderr, pasted.stderr
+    assert "pasted-below" not in pasted.stdout + pasted.stderr
+    leaves = tmp_path / "leaves.py"
+    leaves.write_text("import sys\nsys.exit(0)\n")
+    (checkout / VAULT).write_bytes(setups.encrypt(filled(TEMPLATE, vault_haos_owner_password="x"), PASSWORD.encode()))
+    opened = just(checkout, "vault", SETUPS=str(tmp_path / "setups"), EDITOR=f"{sys.executable} {leaves}")
+    assert opened.returncode == 0, opened.stdout + opened.stderr
+    assert (
+        opened.stdout == "Setup: this checkout's own files\nThe vault reads as Ansible reads it: 1 key set, 3 empty.\n"
+    )
+    assert "WARNING" not in opened.stderr and "Passed:" not in opened.stdout + opened.stderr, "no ansible-lint"
 
 
 def test_a_playbook_run_names_its_setup_and_stops_on_a_broken_one(tmp_path):
