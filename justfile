@@ -171,18 +171,20 @@ lock *packages:
     @{{ virtualenv_found }}
     {{ poetry_run }} {{ if packages == '' { 'lock' } else { 'update --lock' } }} "$@"
 
-# edit <setup>: another setup's vault, with its own password, and the checkout keeps the setup it uses; the lint reads
-# the checkout's setup alone, so it is left out. new <setup>: a setup of that name, which the checkout then uses:
-# local.yml with every setting commented out, a vault with every key empty and a random password (--from current: this
-# checkout's own three files, moved into it). new alone: the vault in the checkout itself, and a .vault_pass if there is
+# Once the editor saves it, the vault is read as Ansible reads it (scripts/init/setups.py read): YAML, a mapping of
+# keys, none written twice; ansible-lint never reads it, since git ignores it. edit <setup>: another setup's vault,
+# with its own password, and the checkout keeps the setup it uses. new <setup>: a setup of that name, which the
+# checkout then uses: local.yml with every setting commented out, a vault with every key empty and a random password
+# (--from current: this checkout's own three files, moved into it). new alone: the vault in the checkout itself, and a .vault_pass if there is
 # none, both encrypted before either is written; a vault that already opens is left alone, and one that does not is
 # refused, since it may hold your secrets with their password lost. A new vault is local.vault.yml.example as it is:
 # every key the playbooks read, each empty (unset) under a comment saying what it is for (scripts/init/setups.py says
-# the rest).
+# the rest). edit lays a vault from before the template, or from an older one, out as the template first: its every
+# comment and key, each value set kept, and what the template does not hold kept at the end.
 [arg('action', pattern='edit|new|list|switch', help='edit (the default), new, list or switch')]
 [arg('setup', help="switch and edit: the setup; new: its name, or none for the checkout's own vault")]
 [arg('source', long='from', pattern='(current)?', help="new: this checkout's own local.yml, vault and .vault_pass become the setup")]
-[doc("Edit the vault's secrets, then lint them; or the setups: list, switch <setup>, new [<setup>] [--from current], edit <setup>")]
+[doc("Edit the vault's secrets, then check that they read; or the setups: list, switch <setup>, new [<setup>] [--from current], edit <setup>")]
 [group('setup')]
 [script]
 vault action='edit' setup='' source='':
@@ -203,8 +205,9 @@ vault action='edit' setup='' source='':
         [ -z "$setup" ] || exec {{ setups }} edit "$setup"
         {{ setups }} check
         test -f {{ vault }} || { echo "There is no {{ vault }}: restore it from your password manager, or just vault new" >&2; exit 1; }
+        {{ setups }} template
         {{ bin }}/ansible-vault edit {{ vault }}
-        exec {{ self }} lint ansible ;;
+        exec {{ setups }} read ;;
     esac
 
 [arg('types', pattern=lint_types + '|k8s')]
