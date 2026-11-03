@@ -1,12 +1,12 @@
 """A run of commands drawn live: just lint's and just fix's types, one after another, each a step of one stage.
 
 scripts/live.py hands a run here once it has decided to draw it. Each type's command (just lint-python) runs as a
-child: its stdin /dev/null, its stdout and stderr one pipe, colour off and Python unbuffered, without the run's
-ANSIBLE_LOG_PATH, in a session of its own, so that a prompt at /dev/tty fails at once rather than stopping the run.
-Every line it prints goes to the run's log; the region (filter_plugins/live_region.py) shows the type running, with
-the child's last line dim after it. A type that fails prints its last lines above, whole, with where the log has the
-rest, and the run goes on to the next, as the justfile's _each does. The end is the summary: each type's time, a
-failed one's exit code, and the exit line naming what failed.
+child: its stdin /dev/null, its stdout and stderr one pipe, colour off whatever the environment forces and Python
+unbuffered, without the run's ANSIBLE_LOG_PATH, in a session of its own, so that a prompt at /dev/tty fails at once
+rather than stopping the run. Every line it prints goes to the run's log; the region (filter_plugins/live_region.py)
+shows the type running, with the child's last line dim after it. A type that fails prints its last lines above, whole,
+with where the log has the rest, and the run goes on to the next, as the justfile's _each does. The end is the
+summary: each type's time, a failed one's exit code, and the exit line naming what failed.
 
 Ctrl-C is sent on to the running child's process group, which the terminal's does not reach: the child says its last
 and ends, and the run stops there, 130, the types it never reached said so. A second Ctrl-C ends the child's whole
@@ -51,8 +51,10 @@ live = _sibling("live_region")
 processes = _sibling("processes")
 engine = _sibling("live_ansible")
 
-# What a child never inherits: the run's log is written here, by this process alone.
-NOT_PASSED_ON = ("ANSIBLE_LOG_PATH",)
+# What a child never inherits: the run's log is written here, by this process alone, and what turns colour on whatever
+# NO_COLOR says, so that the log stays plain: PY_COLORS for pytest, FORCE_COLOR and CLICOLOR_FORCE for ruff,
+# ANSIBLE_FORCE_COLOR for Ansible. CI sets PY_COLORS and FORCE_COLOR.
+NOT_PASSED_ON = ("ANSIBLE_LOG_PATH", "PY_COLORS", "FORCE_COLOR", "CLICOLOR_FORCE", "ANSIBLE_FORCE_COLOR")
 CHILD_ENV = {"NO_COLOR": "1", "PYTHONUNBUFFERED": "1", "PRE_COMMIT_COLOR": "never"}
 # How much of a failed command's output is printed above: the end, where its error is.
 FAILURE_LINES = 40

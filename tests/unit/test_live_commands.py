@@ -43,6 +43,8 @@ elif recipe == "lint-bad":
     sys.exit(3)
 elif recipe == "lint-env":
     print("log", os.environ.get("ANSIBLE_LOG_PATH", "none"), "colour", os.environ.get("NO_COLOR", "on"))
+    forced = [k for k in ("PY_COLORS", "FORCE_COLOR", "CLICOLOR_FORCE", "ANSIBLE_FORCE_COLOR") if k in os.environ]
+    print("forced", " ".join(forced) or "none")
     print("stdin", os.path.realpath("/proc/self/fd/0") if os.path.exists("/proc/self/fd/0") else "unknown")
 elif recipe == "lint-slow":
     def stop(*_):
@@ -103,15 +105,15 @@ def tree(tmp_path):
     return root
 
 
-def live(root, *types, interrupt_when=None, terminal=True, sized=True):
+def live(root, *types, interrupt_when=None, terminal=True, sized=True, **env):
     command = [sys.executable, "scripts/live.py", "--just", str(root / "fake-just")]
     command += ["--justfile", "justfile", "--title", "lint " + " ".join(types), "lint", *types]
     (root / "fake-just").write_text(f'#!/bin/sh\nexec {sys.executable} {root / "just.py"} "$@"\n')
     (root / "fake-just").chmod(0o755)
     if not terminal:
-        proc = subprocess.run(command, cwd=root, env=environment(), capture_output=True, text=True)
+        proc = subprocess.run(command, cwd=root, env=environment(**env), capture_output=True, text=True)
         return proc.returncode, proc.stdout, proc.stderr
-    rc, stream = on_a_terminal(command, environment(), root, interrupt_when, sized)
+    rc, stream = on_a_terminal(command, environment(**env), root, interrupt_when, sized)
     if not sized:
         return rc, None, stream.decode(errors="replace")
     screen = VT(COLUMNS, ROWS)
@@ -137,8 +139,10 @@ def the_log(root):
 
 
 def test_each_type_is_a_step_a_failure_is_whole_above_and_the_summary_names_it(tmp_path):
+    """With colour forced every way the commands' tools read, as CI forces it: no command is told to colour."""
     root = tree(tmp_path)
-    rc, screen, stream = live(root, "good", "bad", "env")
+    forced = {"PY_COLORS": "1", "FORCE_COLOR": "1", "CLICOLOR_FORCE": "1", "ANSIBLE_FORCE_COLOR": "1"}
+    rc, screen, stream = live(root, "good", "bad", "env", **forced)
     assert rc == 1, stream[-3000:]
     drawn(screen)
     lines = screen.transcript()
@@ -156,12 +160,13 @@ def test_each_type_is_a_step_a_failure_is_whole_above_and_the_summary_names_it(t
     assert lines[-2].startswith("3 checks · 2 passed · 1 failed · log logs/"), lines
     assert lines[-1] == "exit 1 · failed: bad", lines
     assert screen.titles[-1] == "lint good bad env · failed", screen.titles[-3:]
-    # Every line the commands printed is in the log, 0600, and the summary after them; none saw the run's log.
+    # Every line the commands printed is in the log, 0600, and the summary after them; none saw the run's log, nor
+    # anything that forces colour.
     log = the_log(root)
     assert stat.S_IMODE(log.stat().st_mode) == 0o600
     text = log.read_text()
     assert "good 3" in text and "bad line 1\n" in text and "bad line 50" in text and "3 checks · 2 passed" in text
-    assert "log none colour 1" in text, text[-2000:]
+    assert "log none colour 1" in text and "forced none" in text, text[-2000:]
     assert "\x1b" not in text, "the log is plain"
 
 
