@@ -4,7 +4,7 @@
 # truenas_status without an api_host, with why in its msg, for the report to say; the key goes to no other server.
 
 - name: status | Read the NAS's state and health
-  truenas_info:
+  truenas_info:  # noqa: args
     api_hosts: "{{ truenas_api_hosts }}"
     api_port: "{{ truenas_api_port }}"
     api_key: "{{ truenas_api_key }}"
