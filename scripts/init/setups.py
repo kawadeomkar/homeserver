@@ -23,7 +23,13 @@ files, or missing, uses no setup and works as it always did.
                           local.vault.yml.example
   check                   which setup a playbook run uses, or stop when its links are broken
   name                    the setup's name alone, for the run's log; nothing for the checkout's own files
-  edit NAME               ansible-vault edit on NAME's vault, with NAME's password, without switching
+  template                the checkout's vault laid out as local.vault.yml.example, as just vault does before it
+                          opens it: a vault from before the template, or from an older one, gets its every comment and
+                          key, and keeps every value it sets
+  read                    the checkout's vault read as Ansible reads it, as just vault does once it is saved: YAML, a
+                          mapping of keys, none written twice; how many it sets, never a value
+  edit NAME               ansible-vault edit on NAME's vault, with NAME's password, without switching; laid out as
+                          the template first and read after, as template and read do the checkout's
 
 Nothing here deletes a setup or replaces a file of the checkout's own that holds anything: switch and new refuse one,
 which new --from current moves into a setup first. A local.yml that sets nothing, as just init first writes it, gives
@@ -35,6 +41,7 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -65,6 +72,13 @@ VAULT_TEMPLATE = Path("group_vars/all/local.vault.yml.example")
 _KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\s*:", re.M)
 # A key left empty, as the template leaves each: unset for every playbook that reads it.
 _EMPTY_KEY = re.compile(r"""^[A-Za-z_][A-Za-z0-9_]*\s*:[ \t]*(?:""|'')[ \t]*(?:#.*)?$""", re.M)
+# What a vault holds that the template does not, kept at its end when it is laid out as the template.
+OWN_HEADING = [
+    "# ------------------------------------------------------ not in the template ---",
+    "# Kept from this vault as it was, since local.vault.yml.example does not hold",
+    "# them: keys no playbook reads from it, and comments of the vault's own. Delete",
+    "# what is no longer needed.",
+]
 
 
 class Refused(Exception):
@@ -157,6 +171,199 @@ def vault_keys(vault: Path, password_file: Path) -> int | None:
         return None
     text = plain.decode(errors="replace")
     return len(_KEY.findall(text)) - len(_EMPTY_KEY.findall(text))
+
+
+def _comments_after_values(text: str) -> dict[int, str]:
+    """Each comment after a value on its line, by line number: YAML reads past it, and a vault laid out anew writes each
+    value afresh."""
+    lines = text.splitlines()
+    found = {}
+    for token in yaml.scan(text):
+        mark = token.end_mark
+        if mark.column and mark.line < len(lines) and not lines[mark.line].lstrip().startswith("#"):
+            rest = lines[mark.line][mark.column :].strip()
+            if rest.startswith("#"):
+                found[mark.line] = rest
+    return found
+
+
+def onto_template(text: str, template: str) -> tuple[str, list[str], list[str], int] | None:
+    """A vault's text laid out as its template: (text, the template's keys it lacked, its own keys, its own comments),
+    or None when it already is, holding every key and every comment line of the template; whatever else it holds is
+    its own, and stays where it is.
+
+    Laid out, it is the template with each key the vault sets in its place, a key the vault lacks empty (unset, as the
+    template leaves it), and at the end, under OWN_HEADING, what the template does not hold, in the vault's order:
+    its own keys and its own comments, those after a value too, and the lines of an older template's wording, which
+    the person deletes. Nothing it held is lost: Refused, and nothing made, when the text read back would hold anything
+    but the vault's values and the template's empty keys, or when the vault is no mapping YAML reads (a tag that only
+    Ansible knows, !unsafe say), which ansible-vault edit then shows as it is."""
+    import init  # init imports this module
+
+    try:
+        values = yaml.safe_load(text)
+        after_values = _comments_after_values(text)
+    except yaml.YAMLError:
+        raise Refused("it holds a tag only Ansible reads (!unsafe, say), or is no YAML at all") from None
+    values = {} if values is None else values
+    if not isinstance(values, dict):
+        raise Refused("it is no mapping of keys")
+    doc = init.YamlKeys(template)
+    empty = doc.values()
+    order = list(empty)
+    lines = text.splitlines()
+    present = set(lines)
+    if all(key in values for key in order) and all(
+        line in present for line in template.splitlines() if line.startswith("#")
+    ):
+        return None
+    try:
+        for key in order:
+            if key in values and values[key] != empty[key]:
+                doc.set(key, values[key], order)
+    except init.EditError as e:
+        raise Refused(str(e)) from None
+    known = set(template.splitlines()) | set(OWN_HEADING)
+    tail, own_keys, own_comments = [], [], 0
+    for number, line in enumerate(lines):
+        if line.lstrip().startswith("#"):
+            if line not in known:
+                tail.append(line.strip())
+                own_comments += 1
+            continue
+        top = init._TOP.match(line)
+        if top and top.group(1) in values and top.group(1) not in empty and top.group(1) not in own_keys:
+            own_keys.append(top.group(1))
+            tail += init.render(top.group(1), values[top.group(1)])
+        if number in after_values:
+            tail.append(after_values[number])
+            own_comments += 1
+    for key in values:
+        if key not in empty and key not in own_keys:  # a key YAML reads that no line names plainly, "quoted" say
+            own_keys.append(key)
+            tail += init.render(key, values[key])
+    if tail:
+        doc.lines += ["", *OWN_HEADING, *tail]
+    if yaml.safe_load(doc.text) != {**empty, **values}:
+        raise Refused("laid out, it would read as other values than it holds")
+    return doc.text, [key for key in order if key not in values], own_keys, own_comments
+
+
+def lay_out(vault: Path, password_file: Path, root: Path) -> str:
+    """A vault laid out as the template (onto_template), encrypted again with its password and vault id, written in its
+    place (through a setup's link, its mode kept): what was done, or "" when nothing was. A vault that does not open
+    is left alone, for ansible-vault edit to say so."""
+    import init  # init imports this module
+    from ansible.parsing.vault import parse_vaulttext_envelope
+
+    try:
+        raw = vault.read_bytes()
+        password = password_file.read_bytes().strip()
+    except OSError:
+        return ""
+    plain = decrypt(raw, password)
+    if plain is None:
+        return ""
+    try:
+        text = plain.decode()
+    except UnicodeDecodeError:
+        raise Refused("it is not UTF-8 text") from None
+    laid = onto_template(text, vault_template(root))
+    if laid is None:
+        return ""
+    text, added, own_keys, own_comments = laid
+    init.write_file(
+        vault, encrypt(text, password, parse_vaulttext_envelope(raw)[3]), stat.S_IMODE(vault.stat().st_mode)
+    )
+    said = [f"The vault is laid out as {VAULT_TEMPLATE.name} now: its every comment and key, each value you set kept"]
+    if added:
+        said.append(f"added, empty: {', '.join(added)}")
+    own = [f"{len(own_keys)} key{'s' if len(own_keys) != 1 else ''} ({', '.join(own_keys)})"] if own_keys else []
+    own += [f"{own_comments} comment{'s' if own_comments != 1 else ''}"] if own_comments else []
+    if own:
+        said.append(f"kept at its end, not in the template: {' and '.join(own)}")
+    return "; ".join(said) + "."
+
+
+def say_laid_out(vault: Path, password_file: Path, root: Path) -> None:
+    """lay_out, said: a vault it cannot lay out is left as it is, and opens all the same, for the person to mend."""
+    try:
+        said = lay_out(vault, password_file, root)
+    except Refused as e:
+        print(f"The vault is left as it is, not laid out as {VAULT_TEMPLATE.name}: {e}.", file=sys.stderr)
+        return
+    if said:
+        print(said, flush=True)
+
+
+class _AnsibleTags(yaml.SafeLoader):
+    """YAML as Ansible reads a vault, its own tags too: !unsafe (a value never templated) and !vault (one encrypted on
+    its own), each read as the value it holds."""
+
+
+def _tagged(loader: yaml.SafeLoader, node: yaml.Node):
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node, deep=True)
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node, deep=True)
+    return loader.construct_scalar(node)
+
+
+for _tag in ("!unsafe", "!vault"):
+    _AnsibleTags.add_constructor(_tag, _tagged)
+
+
+def vault_problems(text: str) -> list[str]:
+    """What keeps a vault's text from reading as Ansible reads it, by line and column and never a value: YAML that does
+    not parse, anything but a mapping of keys, a key written twice (YAML keeps the last, so a value pasted above a
+    key's empty line would be lost)."""
+    try:
+        node = yaml.compose(text, Loader=_AnsibleTags)
+        yaml.load(text, Loader=_AnsibleTags)  # a SafeLoader, with Ansible's two tags read as plain values
+    except yaml.MarkedYAMLError as e:
+        # Never str(e), which quotes the line.
+        mark = e.problem_mark or e.context_mark
+        where = f"line {mark.line + 1}, column {mark.column + 1}: " if mark else ""
+        return [f"{where}{e.problem or e.context or 'no YAML'}"]
+    except yaml.YAMLError:
+        return ["it is no YAML"]
+    if node is None:
+        return []
+    if not isinstance(node, yaml.MappingNode):
+        return ["it is no mapping of keys: each secret is a key of its own, at the start of its line"]
+    seen, found = {}, []
+    for key, _value in node.value:
+        line = key.start_mark.line + 1
+        if not isinstance(key, yaml.ScalarNode):
+            found.append(f"line {line}: a key that is no name")
+        elif key.value in seen:
+            found.append(f"{key.value} is written twice, on lines {seen[key.value]} and {line}: Ansible keeps the last")
+        else:
+            seen[key.value] = line
+    return found
+
+
+def read_vault(vault: Path, password_file: Path, again: str = "just vault") -> str:
+    """The vault read as Ansible reads it: how many keys it sets, those left empty aside, never a value; Refused, saying
+    what is wrong and that again opens it to mend it, when it does not open or does not read."""
+    try:
+        plain = decrypt(vault.read_bytes(), password_file.read_bytes().strip())
+    except OSError as e:
+        raise Refused(f"The vault cannot be read: {e.strerror}") from None
+    if plain is None:
+        raise Refused("The vault does not open with its password")
+    try:
+        text = plain.decode()
+    except UnicodeDecodeError:
+        raise Refused(f"The vault is not UTF-8 text: {again} opens it again, to mend it") from None
+    found = vault_problems(text)
+    if found:
+        raise Refused(
+            f"The vault does not read as Ansible reads it: {'; '.join(found)}. {again} opens it again, to mend it"
+        )
+    data = yaml.load(text, Loader=_AnsibleTags) or {}
+    keys = sum(1 for value in data.values() if value not in ("", None))
+    return f"The vault reads as Ansible reads it: {keys} key{'' if keys == 1 else 's'} set, {len(data) - keys} empty."
 
 
 def problems(setup: Path) -> list[str]:
@@ -427,8 +634,9 @@ def own_vault(root: Path) -> str:
     )
 
 
-def edit(where: Path, name: str) -> int:
-    """ansible-vault edit on another setup's vault, with that setup's password alone."""
+def edit(where: Path, name: str, root: Path) -> int:
+    """ansible-vault edit on another setup's vault, with that setup's password alone, laid out as the template
+    first."""
     setup = existing(where, name)
     for file in ("vault.yml", "vault_pass"):
         if not (setup / file).is_file():
@@ -436,8 +644,12 @@ def edit(where: Path, name: str) -> int:
     ansible_vault = Path(sys.executable).parent / "ansible-vault"
     if not ansible_vault.is_file():
         raise Refused(f"ansible-vault is not in {sys.prefix}: activate the project's virtualenv, or pass VENV=<path>")
+    say_laid_out(setup / "vault.yml", setup / "vault_pass", root)
     env = {**os.environ, "ANSIBLE_VAULT_PASSWORD_FILE": str(setup / "vault_pass")}
-    return subprocess.call([str(ansible_vault), "edit", str(setup / "vault.yml")], env=env)
+    edited = subprocess.call([str(ansible_vault), "edit", str(setup / "vault.yml")], env=env)
+    if edited == 0:
+        print(read_vault(setup / "vault.yml", setup / "vault_pass", f"just vault edit {name}"))
+    return edited
 
 
 def check(root: Path) -> str:
@@ -503,7 +715,7 @@ def listing(root: Path, where: Path) -> str:
 def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
-    for command in ("list", "check", "name"):
+    for command in ("list", "check", "name", "template", "read"):
         commands.add_parser(command)
     for command in ("switch", "edit", "new"):
         commands.add_parser(command).add_argument("name", nargs="?", default="")
@@ -521,6 +733,12 @@ def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
             if setup and NAME.fullmatch(setup.name):
                 print(setup.name)
             return 0
+        if args.command == "template":
+            say_laid_out(root / FILES["vault.yml"], root / FILES["vault_pass"], root)
+            return 0
+        if args.command == "read":
+            print(read_vault(root / FILES["vault.yml"], root / FILES["vault_pass"]))
+            return 0
         if args.command == "new" and not args.name and not args.source:
             print(own_vault(root))
             return 0
@@ -528,7 +746,7 @@ def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
         if args.command == "list":
             print(listing(root, where))
         elif args.command == "edit":
-            return edit(where, args.name)
+            return edit(where, args.name, root)
         elif args.command == "switch":
             if not args.name:
                 raise Refused("just vault switch needs a setup's name: just vault list lists them")
