@@ -244,15 +244,28 @@
   when: proxmox_tailscale_status.rc == 0
 
 # What only the admin console, or the owner on the node, can fix. Reported on every run, never a failure; just status
-# lists the same, through the same filter (filter_plugins/proxmox_tailscale.py).
-- name: node | Report what the admin console must fix
-  ansible.builtin.debug:
-    msg: "{{ _report if _report else 'Nothing for the admin console to fix.' }}"
+# lists the same, through the same filter (filter_plugins/proxmox_tailscale.py), and so do the records left to do
+# (NEXT STEPS): each but Tailscale's health warnings, which are shown only, as just status shows them.
+- name: node | Say what the admin console must fix, and record it
   when: proxmox_tailscale_status_after is not skipped
   vars:
-    _report: >-
+    _items: >-
       {{ (proxmox_tailscale_status_after.stdout if proxmox_tailscale_status_after.rc == 0 else '')
          | proxmox_tailscale_console(proxmox_tailscale_serve.stdout if proxmox_tailscale_serve.rc == 0 else '',
                                      proxmox_tailscale_advertise_routes, proxmox_tailscale_tags,
-                                     proxmox_tailscale_guard_hosts)
-         | map(attribute='text') | list }}
+                                     proxmox_tailscale_guard_hosts) }}
+  block:
+    - name: node | Report what the admin console must fix
+      ansible.builtin.debug:
+        msg: "{{ _items | map(attribute='text') | list if _items else 'Nothing for the admin console to fix.' }}"
+
+    - name: node | Record what the admin console must fix
+      ansible.builtin.set_stats:
+        data:
+          homeserver_next:
+            tailscale: >-
+              {%- set out = {} -%}
+              {%- for item in _items if item.kind != 'health' -%}
+              {%-   set _ = out.update({item.kind: {'text': item.text}}) -%}
+              {%- endfor -%}
+              {{ out }}

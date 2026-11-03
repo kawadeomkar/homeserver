@@ -11,6 +11,8 @@
     - ../../group_vars/all/kubernetes.yml
     - ../../group_vars/proxmox/storage.yml
     - ../../group_vars/proxmox/apt.yml
+    # The words just status and NEXT STEPS use, which apt.yml's reboot command is.
+    - ../../group_vars/all/status.yml
   environment:
     PATH: "{{ playbook_dir }}/fake_pve_bin:{{ lookup('ansible.builtin.env', 'PATH') }}"
     FAKE_PVE_STATE: "{{ fake_pve_state }}"

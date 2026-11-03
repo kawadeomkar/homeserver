@@ -50,6 +50,7 @@ status_admin: >-
 # What the report suggests for each kind of thing to do; {names} is the apps just suspend stopped.
 status_commands:
   upgrade: just deploy proxmox
+  reboot: reboot it at a quiet time
   resume: just resume --only {names}
   talos_upgrade: just talos-upgrade --check, then just talos-upgrade
   credentials: just deploy kubernetes, which renews them

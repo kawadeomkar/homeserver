@@ -46,6 +46,7 @@ for them with a fake on `PATH`; the `apt` module needs python3-apt on the node.
 | `proxmox_apt_upgrade` | `false` | Refresh the package lists and dist-upgrade; simulate only in check mode |
 | `proxmox_apt_reboot_packages` | `[]` | Packages besides the kernel whose upgrade needs a reboot, such as `dbus` or `intel-microcode`; an upgrade of one is recorded in the flag file |
 | `proxmox_apt_reboot_required_file` | `/run/reboot-required` | Debian's flag file for a pending reboot; must be on a filesystem a boot empties |
+| `proxmox_apt_reboot_command` | `""` | What to do about a pending reboot, recorded under `homeserver_next` as left to do beside the reason, which the stdout callback prints as NEXT STEPS; empty, the reason alone |
 | `proxmox_apt_suite` | `""` | The Debian release for the repositories; empty reads it from the node's `/etc/os-release` |
 | `proxmox_apt_signed_by` | `/usr/share/keyrings/proxmox-archive-keyring.gpg` | Signing key for entries without their own |
 | `proxmox_apt_sources_dir` | `/etc/apt/sources.list.d` | Where apt keeps its deb822 files; the tests point it at a scratch directory |
