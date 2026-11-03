@@ -180,12 +180,13 @@ def test_crashes():
 def test_a_test_run_counts_its_tests_and_says_each_failure_as_it_fails(tmp_path):
     """The pytest reader, with the repository's own tests/conftest.py, which writes what it reads: a test run's step
     counts the tests collected, plain and under xdist, each failure is said above by its test's name with what pytest
-    said of it, and the summary names the failed tests."""
+    said of it, and the summary names the failed tests. PY_COLORS=1, as CI sets it, which pytest reads before NO_COLOR:
+    pytest's lines still reach the log plain."""
     root = tree(tmp_path)
     (root / "sample").mkdir()
     shutil.copy(ROOT / "tests" / "conftest.py", root / "sample" / "conftest.py")
     (root / "sample" / "test_sample.py").write_text(SAMPLE)
-    rc, screen, stream = live(root, "plain", "xdist", recipe="test")
+    rc, screen, stream = live(root, "plain", "xdist", recipe="test", PY_COLORS="1")
     assert rc == 1, stream[-3000:]
     drawn(screen)
     lines = screen.transcript()
