@@ -96,6 +96,7 @@ vault := 'group_vars/all/local.vault.yml'
 # argument, never from the environment, so a NAME a shell exports (WSL sets one) reaches nothing; every other recipe
 # runs with the setup the checkout links to.
 setups := quote(bin / 'python') + ' scripts/init/setups.py'
+run_log := quote(bin / 'python') + ' scripts/run_log.py'
 ansible_playbook := bin / 'ansible-playbook'
 log_dir := 'logs'
 
@@ -170,18 +171,20 @@ lock *packages:
     @{{ virtualenv_found }}
     {{ poetry_run }} {{ if packages == '' { 'lock' } else { 'update --lock' } }} "$@"
 
-# edit <setup>: another setup's vault, with its own password, and the checkout keeps the setup it uses; the lint reads
-# the checkout's setup alone, so it is left out. new <setup>: a setup of that name, which the checkout then uses:
-# local.yml with every setting commented out, a vault with every key empty and a random password (--from current: this
-# checkout's own three files, moved into it). new alone: the vault in the checkout itself, and a .vault_pass if there is
+# Once the editor saves it, the vault is read as Ansible reads it (scripts/init/setups.py read): YAML, a mapping of
+# keys, none written twice; ansible-lint never reads it, since git ignores it. edit <setup>: another setup's vault,
+# with its own password, and the checkout keeps the setup it uses. new <setup>: a setup of that name, which the
+# checkout then uses: local.yml with every setting commented out, a vault with every key empty and a random password
+# (--from current: this checkout's own three files, moved into it). new alone: the vault in the checkout itself, and a .vault_pass if there is
 # none, both encrypted before either is written; a vault that already opens is left alone, and one that does not is
 # refused, since it may hold your secrets with their password lost. A new vault is local.vault.yml.example as it is:
 # every key the playbooks read, each empty (unset) under a comment saying what it is for (scripts/init/setups.py says
-# the rest).
+# the rest). edit lays a vault from before the template, or from an older one, out as the template first: its every
+# comment and key, each value set kept, and what the template does not hold kept at the end.
 [arg('action', pattern='edit|new|list|switch', help='edit (the default), new, list or switch')]
 [arg('setup', help="switch and edit: the setup; new: its name, or none for the checkout's own vault")]
 [arg('source', long='from', pattern='(current)?', help="new: this checkout's own local.yml, vault and .vault_pass become the setup")]
-[doc("Edit the vault's secrets, then lint them; or the setups: list, switch <setup>, new [<setup>] [--from current], edit <setup>")]
+[doc("Edit the vault's secrets, then check that they read; or the setups: list, switch <setup>, new [<setup>] [--from current], edit <setup>")]
 [group('setup')]
 [script]
 vault action='edit' setup='' source='':
@@ -202,8 +205,9 @@ vault action='edit' setup='' source='':
         [ -z "$setup" ] || exec {{ setups }} edit "$setup"
         {{ setups }} check
         test -f {{ vault }} || { echo "There is no {{ vault }}: restore it from your password manager, or just vault new" >&2; exit 1; }
+        {{ setups }} template
         {{ bin }}/ansible-vault edit {{ vault }}
-        exec {{ self }} lint ansible ;;
+        exec {{ setups }} read ;;
     esac
 
 [arg('types', pattern=lint_types + '|k8s')]
@@ -235,19 +239,29 @@ fix *types: _venv
 # Runs <recipe>-<type> for each type named, or for each of <recipe>'s types in their order, then fails naming every type
 # that failed: one run reports every failure, as CI's jobs do. Ctrl-C stops the whole run, as it stopped make: the trap
 # fires once the type running ends, whether its tool died of the signal or caught it and exited (pytest exits 2). extra
-# is test's --pytest-args, which only test-idempotence takes.
+# is test's --pytest-args, which only test-idempotence takes. At a terminal, lint, fix and test are drawn live, each type
+# a step, a test run's tests counted in it, its output in a log of its own (scripts/live.py, which runs them as this
+# loop does); anywhere else, CI and the git hooks among them (pre-commit's terminal has no size, and scripts/live.py
+# runs them as this loop does), each type prints as it runs.
 [no-exit-message]
 [private]
 [script]
 _each recipe all extra *types:
     trap 'exit 130' INT
     recipe=$1 all=$2 extra=$3; shift 3
+    asked="$*"
     [ $# -gt 0 ] || set -- ${all//|/ }
     picked=
     for t in "$@"; do
       [ "$t" != k8s ] || t='{{ k8s_types }}' t=${t//|/ }
       for u in $t; do case " $picked " in *" $u "*) ;; *) picked="$picked $u" ;; esac; done
     done
+    case $recipe in lint | fix | test)
+      if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ] && [ -z "${CI:-}" ]; then
+        exec {{ bin }}/python scripts/live.py --just {{ quote(just_executable()) }} --justfile {{ quote(justfile()) }} \
+          --title "$recipe${asked:+ $asked}" --extra="$extra" "$recipe" $picked
+      fi ;;
+    esac
     failed=
     for t in $picked; do
       if [ "$recipe-$t" = test-idempotence ] && [ -n "$extra" ]; then set -- "$recipe-$t" "$extra"; else set -- "$recipe-$t"; fi
@@ -549,10 +563,8 @@ _playbook recipe playbook *ansible_args:
       args+=("$a") prev=$a
     done
     {{ setups }} check
-    setup=$({{ setups }} name 2>/dev/null || true)
-    name=$recipe; [ "$book" = "$recipe" ] || [ "$book" = site ] || name="$name-$book"
-    case " ${args[*]-} " in *" --check "* | *" -C "*) [ "$recipe" = check ] || name="check-$name" ;; esac
-    log={{ log_dir }}/$(date +%Y%m%d-%H%M%S)${setup:+-$setup}-$name${tags:+-${tags//,/+}}.log
+    check=; case " ${args[*]-} " in *" --check "* | *" -C "*) check=--check ;; esac
+    log={{ log_dir }}/$({{ run_log }} name "$recipe" "$book" "$tags" $check)
     umask 077; mkdir -p {{ log_dir }}; ln -sf "${log##*/}" {{ log_dir }}/latest.log
     echo "Logging to $log (Python environment: {{ VENV }})"
     ANSIBLE_LOG_PATH=$log exec {{ ansible_playbook }} "$book.yml" ${args[@]+"${args[@]}"}

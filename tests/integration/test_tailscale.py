@@ -25,7 +25,7 @@ import yaml
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import fake_tailscale  # noqa: E402
-from test_idempotence import changed_tasks, expect, read, run, write  # noqa: E402
+from test_idempotence import changed_tasks, expect, next_steps, read, run, write  # noqa: E402
 
 PLAYBOOK = "proxmox_tailscale.yml"
 ROUTE = "192.0.2.0/24"
@@ -315,6 +315,9 @@ def test_tailscale_role_reports_what_the_console_must_fix(tmp_path):
         "Tailscale reports: UDP GRO forwarding is suboptimally configured on vmbr0",
     ]:
         assert text in result[2], f"{text!r} missing\n{result[2][-3000:]}"
+    # Left to do, as just status lists it: each but the health warning, which is shown only.
+    left = next_steps(result[2])["tailscale"]
+    assert any(ROUTE in record["text"] for record in left.values()) and "health" not in left, left
 
 
 def test_tailscale_role_upgrades_tailscale(tmp_path):
