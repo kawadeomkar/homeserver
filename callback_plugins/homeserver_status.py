@@ -26,16 +26,30 @@ requirements:
   - Chosen with ANSIBLE_STDOUT_CALLBACK=homeserver_status, as just status does; Ansible finds it beside status.yml.
 """
 
-import atexit
 import importlib.util
 import os
-import shutil
 import sys
 import threading
 import time
 from pathlib import Path
 
 from ansible.plugins.callback import CallbackBase
+
+
+def _sibling(stem):
+    """filter_plugins/<stem>.py, loaded by path once as homeserver_<stem>: a callback cannot ask for a filter
+    module by name."""
+    name = f"homeserver_{stem}"
+    if name not in sys.modules:
+        path = Path(__file__).resolve().parents[1] / "filter_plugins" / f"{stem}.py"
+        spec = importlib.util.spec_from_file_location(name, path)
+        sys.modules[name] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sys.modules[name])
+    return sys.modules[name]
+
+
+screen = _sibling("screen")
+live_region = _sibling("live_region")
 
 # What the report calls each inventory group's host.
 LABELS = {"proxmox": "proxmox", "nas": "nas", "kubernetes": "cluster"}
@@ -45,101 +59,8 @@ SETTINGS_TASK = "Say what the report is of"
 READING_PLAY = "Read the machines"
 # The filter that writes the report, beside the playbook.
 FILTERS = Path("roles") / "status" / "filter_plugins" / "status.py"
-SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-FRAME_SECONDS = 0.1
-# The colours of the live lines, as the report's own: dim, green, yellow, red, and a section's name.
-STYLES = {"d": "90", "g": "32", "y": "33", "r": "31", "h": "1;34"}
 # How the live lines name the hosts a section waits for.
 HOSTS = {"proxmox": "the Proxmox host", "cluster": "the cluster", "nas": "the NAS"}
-
-
-def _fit(parts, width, color):
-    """A line of (text, style) parts, cut to `width` characters, in colour when `color`."""
-    out, left = [], width
-    for text, style in parts:
-        text = text[:left]
-        left -= len(text)
-        out.append(f"\033[{STYLES[style]}m{text}\033[0m" if color and style and text.strip() else text)
-    return "".join(out)
-
-
-def _and(names):
-    names = list(names)
-    return " and ".join([", ".join(names[:-1]), names[-1]] if len(names) > 1 else names)
-
-
-class Live:
-    """Lines kept at the bottom of the terminal and redrawn in place by a thread of their own, from `lines`, a function
-    that returns them as lists of (text, style) parts. Whatever else is printed meanwhile goes above them: Display's
-    display, which every message of Ansible's and of this callback goes through, is wrapped to clear them first and
-    draw them again after. Every write holds Display's own lock, which Ansible already takes for each write from any
-    of its threads and lets go of in the processes it forks, so that a frame never mixes with another write."""
-
-    def __init__(self, display, lines, color):
-        self._display = display
-        self._lines = lines
-        self._color = color
-        self._lock = getattr(display, "_lock", None) or threading.RLock()
-        self._drawn = 0
-        self._open = True
-        self._stop = threading.Event()
-        self._show = display.display
-        display.display = self._above
-        self._thread = threading.Thread(target=self._run, name="homeserver_status", daemon=True)
-        self._thread.start()
-        # A run cut short (Ctrl-C) leaves no half-drawn line behind.
-        atexit.register(self.close)
-
-    def _erase(self):
-        """What takes the cursor back to the first line drawn and clears from there down."""
-        erase, self._drawn = (f"\033[{self._drawn}F\033[J" if self._drawn else ""), 0
-        return erase
-
-    def _frame(self):
-        """The lines as they are now, each cut to the terminal's width so that none wraps onto a second row."""
-        size = shutil.get_terminal_size((100, 24))
-        lines = [_fit(parts, max(size.columns - 1, 20), self._color) for parts in self._lines(size.lines)]
-        self._drawn = len(lines)
-        return "".join(line + "\n" for line in lines)
-
-    def _write(self, text):
-        sys.stdout.write(text)
-        sys.stdout.flush()
-
-    def _run(self):
-        while not self._stop.wait(FRAME_SECONDS):
-            try:
-                self.redraw()
-            except Exception:  # noqa: BLE001 - a frame that cannot be drawn ends the live lines, never the run
-                self._stop.set()
-
-    def redraw(self):
-        with self._lock:
-            if self._open:
-                self._write(self._erase() + self._frame())
-
-    def _above(self, msg, *args, **kwargs):
-        if kwargs.get("log_only"):
-            return self._show(msg, *args, **kwargs)
-        with self._lock:
-            if self._open:
-                self._write(self._erase())
-            self._show(msg, *args, **kwargs)
-            sys.stdout.flush()
-            sys.stderr.flush()
-            if self._open:
-                self._write(self._frame())
-        return None
-
-    def close(self):
-        """Stops the thread and clears the lines, for good. It does not wait for the thread, which may be waiting for
-        the lock the caller holds: once it has the lock it finds the lines closed, draws nothing, and ends."""
-        self._stop.set()
-        with self._lock:
-            if self._open:
-                self._open = False
-                self._write(self._erase())
-                self._display.display = self._show
 
 
 class Progress:
@@ -245,7 +166,9 @@ class Progress:
         for section in self.expected[self.next :]:
             labels = self.waiting(section)
             if labels:
-                out.append(("waiting", section, "waiting for " + _and(HOSTS.get(label, label) for label in labels)))
+                out.append(
+                    ("waiting", section, "waiting for " + screen.and_list(HOSTS.get(label, label) for label in labels))
+                )
                 continue
             if section not in present:
                 continue
@@ -320,12 +243,9 @@ class CallbackModule(CallbackBase):
                 self._progress.update(host, found, facts.get("status_early"), failed=state == "failed")
                 self._advance()
 
-    def _spinner(self):
-        return SPINNER[int(time.monotonic() / FRAME_SECONDS) % len(SPINNER)]
-
-    def _reading_parts(self, live=False):
-        """The line on what was read: each host's state and seconds, or while it is still being read, a spinner and
-        its seconds so far."""
+    def _reading_parts(self, glyph=None):
+        """The line on what was read: each host's state and seconds, or, drawn live (with the spinner's glyph), while
+        it is still being read, the glyph and its seconds so far."""
         now = time.monotonic()
         parts = [("reading  ", "")]
         # A copy: the main thread adds hosts while the live lines' thread draws them.
@@ -333,25 +253,25 @@ class CallbackModule(CallbackBase):
         for i, h in enumerate(shown):
             if i:
                 parts.append((" · ", "d"))
-            if live and not h["done"]:
-                parts += [(f"{h['label']} ", ""), (self._spinner(), "d"), (f" {now - h['since']:.1f} s", "d")]
+            if glyph and not h["done"]:
+                parts += [(f"{h['label']} ", ""), (glyph, "d"), (f" {now - h['since']:.1f} s", "d")]
             else:
                 style = "g" if h["state"] == "ok" else "r"
                 parts += [(f"{h['label']} ", ""), (h["state"], style), (f" {h['seconds']:.1f} s", "")]
         return parts if shown else []
 
     def _line(self):
-        return _fit(self._reading_parts(), 10**6, False)
+        return screen.render(self._reading_parts(), False)
 
-    def _live_lines(self, rows):
+    def _live_lines(self, rows, glyph):
         """The live lines: the sections still to come, when the terminal has the rows for them, then the line on what
         is read."""
-        reading = [p for p in [self._reading_parts(live=True)] if p]
+        reading = [p for p in [self._reading_parts(glyph)] if p]
         progress = self._progress
         sections = progress.lines() if progress is not None else []
         if len(sections) + len(reading) + 2 > rows:
             return reading
-        marks = {"waiting": (self._spinner(), "d"), "read": ("✓", "g"), "todo": ("●", "y"), "problem": ("●", "r")}
+        marks = {"waiting": (glyph, "d"), "read": ("✓", "g"), "todo": ("●", "y"), "problem": ("●", "r")}
         out = []
         seconds = time.monotonic() - self._started
         for state, section, text in sections:
@@ -360,13 +280,21 @@ class CallbackModule(CallbackBase):
             out.append([(" ", ""), mark, (" ", ""), (f"{section.upper():<11}", "h"), (text, "d"), *extra])
         return out + reading
 
+    def _frame(self, cols, rows, glyph):
+        """The live lines as the region draws them, each cut short of the terminal's width so that none wraps."""
+        return [
+            screen.render(screen.cut(parts, max(cols - 1, 20)), self._color) for parts in self._live_lines(rows, glyph)
+        ]
+
     def _start_live(self):
         if self._live_wanted and self._live is None:
-            self._live = Live(self._display, self._live_lines, self._color)
+            self._live = live_region.LiveRegion(self._display, frame=self._frame)
+            self._live.start()
+            self._live.spin()
 
     def _stop_live(self):
         if self._live is not None:
-            self._live.close()
+            self._live.finish()
             self._live = None
 
     def _print(self, lines):

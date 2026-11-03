@@ -746,7 +746,8 @@ def qm(state, args):
         # Proxmox activates every drive's volume before it starts a VM, the CD-ROM's too.
         volumes = {v["volid"] for vols in state.get("content", {}).values() for v in vols}
         for key, value in sorted(applied(vm).items()):
-            volid = value.split(",", 1)[0]
+            # A number's setting (cores, memory) is no drive.
+            volid = str(value).split(",", 1)[0]
             if re.fullmatch(r"(ide|sata|scsi|virtio)\d+|efidisk0", key) and ":" in volid and volid not in volumes:
                 fail(f"volume '{volid}' does not exist")
         vm["config"] = applied(vm)

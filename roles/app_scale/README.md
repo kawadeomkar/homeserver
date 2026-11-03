@@ -17,12 +17,14 @@ of both, unless `app_scale_other_names` holds it, for another play to act on.
   for each to be available (`kubectl rollout status`). Flux takes the app back at its next reconciliation, applying
   whatever changed in Git meanwhile.
 - Apps carrying `app_scale_late_label` (their databases) stop in a second wave, once the others' pods are gone,
-  and start in a first, so an app never loses its database under it.
+  and start in a first, so an app never loses its database under it. Each wave's loop label says what it holds,
+  `apps` or `late apps`, which a live run draws as a step of its own.
 
 Claims, Services, Ingresses and the platform are left alone: data stays, and so does Flux, which is what keeps an
 app down across reboots and upgrades and brings it back. The kubeconfig is read under `no_log`, and refused unless it
 names `app_scale_server`, so a test host's run never stops another cluster's apps. A dry run reads the cluster and
-says what it would stop or start, in order.
+says what it would stop or start, in order. The report names each app in its wave, with the replicas it comes back
+with, or starts with, in brackets (`app_scale_report` in the filter plugin).
 
 ## Variables
 

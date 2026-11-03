@@ -7,6 +7,9 @@
     - ../../group_vars/all/storage.yml
     - ../../group_vars/all/kubernetes.yml
     - ../../group_vars/kubernetes/talos.yml
+    # The words just status and NEXT STEPS use, which talos.yml's upgrade command is: the entry points' argument
+    # specs check it too.
+    - ../../group_vars/all/status.yml
   environment:
     PATH: "{{ playbook_dir }}/fake_talos_bin:{{ lookup('ansible.builtin.env', 'PATH') }}"
     FAKE_TALOS_STATE: "{{ fake_talos_state }}"
