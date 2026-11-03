@@ -82,7 +82,9 @@ These can't be done by Ansible, because they are what it needs in order to conne
 
 ### Running it
 
-Run one stage at a time and read each result. Every run writes a log to `logs/`. TrueNAS allows 20 API logins a
+Run one stage at a time and read each result. Every run writes a log to `logs/` with everything Ansible printed; the
+screen shows each step's progress, the reports and refusals whole, and a summary at the end (add `-v` for Ansible's own
+output as it streams). TrueNAS allows 20 API logins a
 minute and a full dry run uses about 16, so leave a minute between a full dry run and a real run.
 
 | Step | Command | Expect |

@@ -386,26 +386,19 @@
       when: not ansible_check_mode
 
     # ------------------------------------------------------------------------------------------- report ---
-    - name: Report the versions running, and any upgrade the pins wait for
-      ansible.builtin.debug:
-        msg: >-
-          {{ {'running': _running} | combine({'pinned, not yet running (just talos-upgrade moves them)': _pending}
-                                             if _pending else {})
-             | combine({'applied to the control plane: etcd reads its settings only when it starts, so after a change '
-                        ~ 'to cluster.etcd, restart it': 'talosctl -n ' ~ talos_controlplane.address ~ ' service etcd restart',
-                        'applied to the control plane: Talos applies the Flannel, kube-proxy and CoreDNS manifests only '
-                        ~ 'at bootstrap, so after a change to their settings (KubeFlannelCNIConfig, say), sync them':
-                        'talosctl -n ' ~ talos_controlplane.address ~ ' upgrade-k8s --to '
-                        ~ (talos_running_kubernetes or talos_kubernetes_version)}
-                       if _etcd else {}) }}
+    # What waits for just talos-upgrade, and what to restart after a change the control plane applied, are also
+    # recorded as left to do (NEXT STEPS).
+    - name: Report the versions running and what waits, and record it
       vars:
         _running: >-
-          {%- set out = {} -%}
+          {%- set out = [] -%}
           {%- for n in talos_state.values() if n.state == 'configured' -%}
-          {%-   set _ = out.update({n.name: 'Talos ' ~ n.tag ~ ', schematic ' ~ (n.running_schematic | default('?', true))[:8]}) -%}
+          {%-   set _ = out.append(n.name ~ ' Talos ' ~ n.tag ~ ' (schematic ' ~ (n.running_schematic | default('?', true))[:8] ~ ')') -%}
           {%- endfor -%}
-          {%- if talos_running_kubernetes -%}{%- set _ = out.update({'kubernetes': talos_running_kubernetes}) -%}{%- endif -%}
           {{ out }}
+        _etcd_command: "talosctl -n {{ talos_controlplane.address }} service etcd restart"
+        _sync_command: >-
+          talosctl -n {{ talos_controlplane.address }} upgrade-k8s --to {{ talos_running_kubernetes or talos_kubernetes_version }}
         _pending: >-
           {%- set out = [] -%}
           {%- for n in talos_state.values() if n.state == 'configured' -%}
@@ -421,6 +414,34 @@
         _etcd: >-
           {{ talos_controlplane.name in (talos_applied.results | default([]) | rejectattr('skipped', 'defined')
              | selectattr('rc', 'eq', 0) | map(attribute='item.name') | list) }}
+      block:
+        - name: Report the versions running, and any upgrade the pins wait for
+          ansible.builtin.debug:
+            msg: >-
+              {{ [('running: ' ~ _running | join(', ') ~ ('; Kubernetes ' ~ talos_running_kubernetes if talos_running_kubernetes else ''))
+                  if _running else "running: no node answered with this cluster's credentials before this run"]
+                 + (['pinned, not yet running (just talos-upgrade moves them): ' ~ _pending | join(', ')] if _pending else [])
+                 + (['applied to the control plane: etcd reads its settings only when it starts, so after a change to '
+                     ~ 'cluster.etcd, restart it: ' ~ _etcd_command,
+                     'applied to the control plane: Talos applies the Flannel, kube-proxy and CoreDNS manifests only at '
+                     ~ 'bootstrap, so after a change to their settings (KubeFlannelCNIConfig, say), sync them: ' ~ _sync_command]
+                    if _etcd else []) }}
+
+        - name: Record the upgrade the pins wait for, and what to restart
+          ansible.builtin.set_stats:
+            data:
+              homeserver_next:
+                talos:
+                  pins: >-
+                    {{ {'text': 'the pins wait for ' ~ _pending | join(', '),
+                        'command': talos_upgrade_command} if _pending else '' }}
+                  manifests: >-
+                    {{ {'text': 'Talos applies the Flannel, kube-proxy and CoreDNS manifests only at bootstrap: sync them '
+                        ~ 'after a change to their settings', 'command': _sync_command} if _etcd else '' }}
+                etcd:
+                  restart: >-
+                    {{ {'text': 'etcd reads its settings only when it starts: restart it after a change to cluster.etcd',
+                        'command': _etcd_command} if _etcd else '' }}
   always:
     - name: Remove the scratch directory
       ansible.builtin.file:

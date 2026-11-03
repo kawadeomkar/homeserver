@@ -142,6 +142,20 @@ is wrong, 1 for a problem, 2 when a source could not be read, 3 when the run fai
 and is the `exit` field of `--json`. Another project's VMs on the host are counted, never named. It reads no Secret and
 checks no certificate, and never uses a kubeconfig of another cluster.
 
+**What a run shows.** Every playbook run is drawn as it goes, whether just starts it or you run `ansible-playbook`
+yourself. At a terminal, the bottom of the screen shows each stage (the NAS, the Proxmox host, Home Assistant, the
+cluster) or, for one playbook, each step, with a bar, the running step's last tasks with their timers and retries, and
+a footer naming the run's log. It is redrawn in place. Above it, for good, go the reports, refusals and failures (each
+with its file and its line in the log), warnings and a dry run's diffs. When the run ends, a summary takes its place:
+how the run ended, each stage, the reports' first lines, what changed, the slowest tasks, NEXT STEPS (what the run left
+to do, such as a reboot or a VM's restart, each with its command) and the exit code. Off a terminal, a line is printed
+as each step ends, then the same summary. The log in `logs/` (`logs/latest.log`) holds everything Ansible printed, every
+task's output and PLAY RECAP, then the summary; a run started by hand gets one there too. Any `-v` after the playbook
+(`just deploy proxmox -v`), or `ANSIBLE_STDOUT_CALLBACK=default`, shows Ansible's own output as it streams instead.
+`just lint`, `just fix` and `just test` are drawn the same way at a terminal, each type a step (a test type's counting
+its tests, the failed ones named as they fail), every tool's output in their log in `logs/` and a failed one's last
+lines on the screen; in CI and the git hooks they print as they always did.
+
 Whatever follows the playbook goes to ansible-playbook as typed, so a variable for one run is
 `just deploy kubernetes -e talos_allow_bootstrap=true`, and one host's play `just deploy proxmox --limit homeserver`.
 `just deploy` alone runs every playbook; to pass anything with it, name `site`: `just check site --tags truenas_nfs`.
@@ -171,6 +185,10 @@ just vault         # fill in or change a secret
 
 A new vault is `local.vault.yml.example` as it is: every key, each empty and explained by the comment above it. An
 empty key counts as unset, so fill in only those your setup uses (`just init` asks for them) and leave the others.
+`just vault` lays a vault made before the template, or from an older one, out the same way before it opens it: every
+comment and key of the template, each value you set kept, and what the template does not hold (a key no playbook reads
+from it, a comment of your own) kept at the end under a heading that says so. A vault that already holds every key and
+comment of the template is left exactly as it is.
 
 `just vault new` leaves a vault that opens with `.vault_pass` alone, and refuses one that does not, since it may hold
 your secrets with their password lost. The vault and its password exist nowhere else: keep a copy of both in your
@@ -326,7 +344,9 @@ export SOPS_AGE_KEY_FILE=~/.config/sops/age/homeserver.agekey    # in your shell
 
 To stop the apps without losing anything, before maintenance or to free the host for a while, `just suspend` scales
 every app to zero and tells Flux to leave it there, then shuts Home Assistant's VM down, and `just resume` brings back
-what it stopped; `just suspend --check` and `just resume --check` say what each would do. `--only` narrows either to
+what it stopped; `just suspend --check` and `just resume --check` say what each would do. Each is drawn as it goes,
+as a deploy is: the apps, a wave at a time (the databases after their apps, or before them), then Home Assistant, and
+the summary names each app with its replicas. `--only` narrows either to
 apps, groups or `homeassistant`, such as `just suspend --only jellyfin,nextcloud` (a group is a directory under
 `k8s/apps/`). Unlike the other playbook recipes, these two take options of their own, so ansible-playbook's flags
 follow `--`: `just suspend --check -- -v`. Data, Flux and the platform stay, and a stopped app stays down across reboots until `just resume`;

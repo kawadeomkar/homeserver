@@ -51,3 +51,6 @@ talos_installer_digests: {}
 # by hand with talosctl apply-config --dry-run, until the next run without it, which removes them. Otherwise it goes
 # with the run's scratch directory.
 talos_keep_rendered: false
+# What moves the nodes to the pins, which a run records as left to do (NEXT STEPS) beside what the pins wait for;
+# empty, what they wait for alone.
+talos_upgrade_command: ""

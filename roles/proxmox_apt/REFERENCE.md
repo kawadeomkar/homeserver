@@ -110,6 +110,16 @@ Description: Set a Proxmox VE node's package repositories and upgrade its packag
   
   
 
+  - **proxmox_apt_reboot_command**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: What to do about a pending reboot, recorded as left to do (NEXT STEPS) beside the reason; empty, the reason alone.
+  
+  
+  
+
 
 
 </details>
@@ -133,6 +143,7 @@ Description: Set a Proxmox VE node's package repositories and upgrade its packag
 | [proxmox_apt_upgrade](defaults/main.yml#L23)   | bool | `False` |    
 | [proxmox_apt_reboot_packages](defaults/main.yml#L28)   | list | `[]` |    
 | [proxmox_apt_reboot_required_file](defaults/main.yml#L31)   | str | `/run/reboot-required` |    
+| [proxmox_apt_reboot_command](defaults/main.yml#L34)   | str |  |    
 
 
 
@@ -158,7 +169,9 @@ Description: Set a Proxmox VE node's package repositories and upgrade its packag
 | Upgrade the packages | ansible.builtin.command | True |
 | Show what the upgrade changes | ansible.builtin.debug | True |
 | Read whether a reboot was asked for | ansible.builtin.stat | False |
+| Say whether a reboot is needed, and record it | block | False |
 | Show whether a reboot is needed | ansible.builtin.debug | False |
+| Record whether the node waits for a reboot | ansible.builtin.set_stats | False |
 
 
 ## Task Flow Graphs
@@ -193,8 +206,11 @@ classDef rescue stroke:#665352,stroke-width:2px;
   Upgrade_the_packages0-.->|End of Block| Upgrade_the_packages__and_record_what_needs_a_reboot9_block_start_0
   Upgrade_the_packages0-->|Task| Show_what_the_upgrade_changes10[show what the upgrade changes<br>When: **proxmox apt upgrade**]:::task
   Show_what_the_upgrade_changes10-->|Task| Read_whether_a_reboot_was_asked_for11[read whether a reboot was asked for]:::task
-  Read_whether_a_reboot_was_asked_for11-->|Task| Show_whether_a_reboot_is_needed12[show whether a reboot is needed]:::task
-  Show_whether_a_reboot_is_needed12-->End
+  Read_whether_a_reboot_was_asked_for11-->|Block Start| Say_whether_a_reboot_is_needed__and_record_it12_block_start_0[[say whether a reboot is needed  and record it]]:::block
+  Say_whether_a_reboot_is_needed__and_record_it12_block_start_0-->|Task| Show_whether_a_reboot_is_needed0[show whether a reboot is needed]:::task
+  Show_whether_a_reboot_is_needed0-->|Task| Record_whether_the_node_waits_for_a_reboot1[record whether the node waits for a reboot]:::task
+  Record_whether_the_node_waits_for_a_reboot1-.->|End of Block| Say_whether_a_reboot_is_needed__and_record_it12_block_start_0
+  Record_whether_the_node_waits_for_a_reboot1-->End
 ```
 
 

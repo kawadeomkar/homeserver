@@ -91,23 +91,12 @@
       loop: "{{ app_scale_plan.waves }}"
       loop_control:
         loop_var: app_scale_wave
-        label: "{{ app_scale_wave | map(attribute='name') | join(', ') }}"
+        # Each wave by what it holds, as a live run draws it: the apps, or the late apps (here their databases).
+        label: "{{ 'late apps' if app_scale_wave[0].late else 'apps' }}"
       when: not ansible_check_mode
 
-    # A dry run reports here what a real run changes above.
+    # A dry run reports here what a real run changes above: each app in its wave, with its replicas.
     - name: Say what was done
       ansible.builtin.debug:
-        msg: >-
-          {% if app_scale_plan.order %}{{ _verb }}, in this order: {{ app_scale_plan.order | join(', then ') }}.
-          {% endif -%}
-          {% if app_scale_state == 'down' %}{% if app_scale_plan.unchanged %}Already down:
-          {{ app_scale_plan.unchanged | join(', ') }}. {% endif -%}
-          {{ 'Flux leaves them alone until just resume.' if app_scale_plan.order or app_scale_plan.unchanged
-             else 'No app to stop.' }}
-          {%- else %}{{ 'Flux takes them back at its next reconciliation.' if app_scale_plan.order
-                        else 'No app is down.' }}{% endif %}
+        msg: "{{ app_scale_plan | app_scale_report(app_scale_state, ansible_check_mode) }}"
       changed_when: ansible_check_mode and app_scale_plan.order | length > 0
-      vars:
-        _verb: >-
-          {{ ('Would stop' if ansible_check_mode else 'Stopped') if app_scale_state == 'down'
-             else ('Would start' if ansible_check_mode else 'Started') }}

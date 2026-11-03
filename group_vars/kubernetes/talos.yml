@@ -187,3 +187,5 @@ talos_patches_controlplane_metrics:
         extraArgs:
           listen-metrics-urls: http://0.0.0.0:2381
 talos_patches_worker: []
+# What moves the nodes to the pins, in just status's words, which a run records as left to do (NEXT STEPS).
+talos_upgrade_command: "{{ status_commands.talos_upgrade }}"
