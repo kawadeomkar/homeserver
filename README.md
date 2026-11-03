@@ -171,6 +171,10 @@ just vault         # fill in or change a secret
 
 A new vault is `local.vault.yml.example` as it is: every key, each empty and explained by the comment above it. An
 empty key counts as unset, so fill in only those your setup uses (`just init` asks for them) and leave the others.
+`just vault` lays a vault made before the template, or from an older one, out the same way before it opens it: every
+comment and key of the template, each value you set kept, and what the template does not hold (a key no playbook reads
+from it, a comment of your own) kept at the end under a heading that says so. A vault that already holds every key and
+comment of the template is left exactly as it is.
 
 `just vault new` leaves a vault that opens with `.vault_pass` alone, and refuses one that does not, since it may hold
 your secrets with their password lost. The vault and its password exist nowhere else: keep a copy of both in your
