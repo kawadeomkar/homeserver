@@ -3,7 +3,7 @@
 # a task, and never touches one that is not listed. A task's dataset must exist, so this stage follows the
 # datasets.
 - name: snapshots | Create or update the periodic snapshot tasks
-  truenas_resource:
+  truenas_resource:  # noqa: args
     namespace: pool.snapshottask
     key: [dataset, naming_schema]
     entries: "{{ truenas_snapshot_tasks }}"

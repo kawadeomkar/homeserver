@@ -2,7 +2,7 @@
 # The outgoing mail server, which alert e-mails go through. The password is compared like any other setting, so a
 # rotated one reaches the NAS on the next run, but its value never appears in the output (secret_settings).
 - name: alerts | Set the outgoing mail server
-  truenas_config:
+  truenas_config:  # noqa: args
     namespace: mail
     settings: "{{ truenas_mail }}"
     secret_settings: "{{ {'pass': truenas_mail_password} if truenas_mail_password | length > 0 else {} }}"
@@ -11,7 +11,7 @@
 # Keyed by name. Never deletes a service, and never touches one that is not listed. alertservice.update takes the
 # whole service, name and attributes included, so a change sends all of it.
 - name: alerts | Create or update the alert services
-  truenas_resource:
+  truenas_resource:  # noqa: args
     namespace: alertservice
     key: [name]
     entries: "{{ truenas_alert_services }}"
