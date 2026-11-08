@@ -19,6 +19,15 @@ vault_truenas_api_key: ""
 # next run sends it to the NAS.
 vault_truenas_mail_password: ""
 
+# ------------------------------------------------------------------- Router ---
+# With the router (opnsense_address in local.yml): the API key pair of its user
+# for this project, made under System > Access > Users
+# (scripts/runbooks/opnsense.md). OPNsense shows the pair once, in the file it
+# downloads: its key= line here,
+vault_opnsense_api_key: ""
+# and its secret= line here.
+vault_opnsense_api_secret: ""
+
 # ------------------------------------------------------------------ Proxmox ---
 # With remote access (tailscale_enabled or tailscale_advertise_routes in
 # local.yml): a one-off, pre-approved auth key, tagged tag:homeserver, spent at

@@ -1,0 +1,24 @@
+---
+# Allowed values and types are checked by meta/argument_specs.yml before this runs.
+
+- name: validate | Check the connection settings
+  ansible.builtin.assert:
+    that:
+      - opnsense_api_host | length > 0
+      - opnsense_api_key | length > 0
+      - opnsense_api_secret | length > 0
+    fail_msg: >-
+      Set opnsense_api_host, opnsense_api_key and opnsense_api_secret: the router's address in local.yml
+      (opnsense_address), the key pair in the vault (vault_opnsense_api_key, vault_opnsense_api_secret;
+      scripts/runbooks/opnsense.md says how to make it).
+    quiet: true
+
+- name: validate | Refuse to send the API key to an unproven server
+  ansible.builtin.assert:
+    that: opnsense_validate_certs | bool or opnsense_api_cert_sha256 | length > 0
+    fail_msg: >-
+      Certificate validation is off and opnsense_api_cert_sha256 is empty, so nothing would prove that what answers
+      is the router before the API key goes to it. Pin the certificate's SHA-256 in local.yml
+      (scripts/runbooks/opnsense.md says how to read it), or turn opnsense_validate_certs on with a certificate the
+      controller trusts.
+    quiet: true

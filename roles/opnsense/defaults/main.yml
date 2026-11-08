@@ -1,0 +1,22 @@
+---
+# Neutral defaults: with nothing else set, the role connects, reports, and changes nothing. The router's address and
+# credentials are configuration (group_vars/router/connection.yml, from local.yml and the vault). See README.md.
+
+# ------------------------------------------------------------------ connection ---
+# The router's address.
+opnsense_api_host: ""
+# HTTPS port of the router's web server.
+opnsense_api_port: 443
+# The API key pair of the router's user for this role (System > Access > Users). Kept in the vault.
+opnsense_api_key: ""
+opnsense_api_secret: ""
+opnsense_validate_certs: false
+# SHA-256 fingerprint of the router's web certificate (colons optional): the key and secret are sent only to a server
+# presenting that certificate. Required while opnsense_validate_certs is off, since nothing else would prove what
+# answers is the router. Update it if the certificate is replaced.
+opnsense_api_cert_sha256: ""
+# Seconds to wait for the connection and for each answer.
+opnsense_api_timeout: 60
+# The oldest release the role runs against. 26.7.2 is the first with FreeBSD-SA-26:52's WireGuard fix, and 26.7 the
+# series whose API the role was written against. An older router fails the run, in a dry run too.
+opnsense_min_version: "26.7.2"

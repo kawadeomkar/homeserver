@@ -1,0 +1,46 @@
+---
+argument_specs:
+  main:
+    short_description: Configure the OPNsense router through its API
+    description:
+      - Runs on the controller and calls the router's HTTPS API with an API key and secret; nothing goes over SSH.
+      - Today it only reads - it connects, checks the router runs a release it supports, and reports that release and
+        the plugins installed.
+      - The key and secret go only to a server presenting the pinned certificate.
+    options:
+      opnsense_api_host:
+        type: str
+        default: ""
+        description: The router's address.
+      opnsense_api_port:
+        type: int
+        default: 443
+        description: HTTPS port of the router's web server.
+      opnsense_api_key:
+        type: str
+        default: ""
+        no_log: true
+        description: The key of the API key pair. Keep it in an ansible-vault file.
+      opnsense_api_secret:
+        type: str
+        default: ""
+        no_log: true
+        description: The secret of the API key pair. Keep it in an ansible-vault file.
+      opnsense_validate_certs:
+        type: bool
+        default: false
+        description: Verify the router's certificate against the controller's trusted authorities.
+      opnsense_api_cert_sha256:
+        type: str
+        default: ""
+        description: >-
+          SHA-256 fingerprint of the router's certificate; the key and secret go only to that server. Required while
+          opnsense_validate_certs is off.
+      opnsense_api_timeout:
+        type: int
+        default: 60
+        description: Seconds to wait for the connection and for each answer.
+      opnsense_min_version:
+        type: str
+        default: "26.7.2"
+        description: The oldest release the role runs against; an older router fails the run.

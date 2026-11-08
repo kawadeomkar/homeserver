@@ -7,6 +7,11 @@
 [nas]
 truenas
 
+# The LAN's router, configured through its API from this machine (ansible_connection: local). Keep it without
+# one too: whether there is a router to configure is decided by opnsense_address in group_vars/all/local.yml.
+[router]
+opnsense
+
 # Configured over root SSH.
 [proxmox]
 homeserver

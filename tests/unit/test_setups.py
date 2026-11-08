@@ -398,7 +398,12 @@ def test_a_vault_from_before_the_template_is_laid_out_as_it_every_value_kept():
     )
     assert text == expected + "\n" + tail + "\n# rotated in October\n", text
     assert yaml.safe_load(text) == {**TEMPLATE_KEYS, **yaml.safe_load(OLD)}
-    assert added == ["vault_truenas_mail_password", "vault_tailscale_auth_key"]
+    assert added == [
+        "vault_truenas_mail_password",
+        "vault_opnsense_api_key",
+        "vault_opnsense_api_secret",
+        "vault_tailscale_auth_key",
+    ]
     assert own_keys == ["vault_discord_token"] and own_comments == 2
     assert setups.onto_template(text, TEMPLATE) is None, "laid out once, then left as it is"
 
@@ -440,7 +445,8 @@ def test_a_laid_out_vault_keeps_its_password_vault_id_and_mode(root, capsys):
     assert setups.main(["template"], root=root) == 0
     said = capsys.readouterr().out
     assert said.startswith("The vault is laid out as local.vault.yml.example now: ") and "left-over" not in said, said
-    assert "added, empty: vault_truenas_mail_password, vault_tailscale_auth_key" in said, said
+    added = "vault_truenas_mail_password, vault_opnsense_api_key, vault_opnsense_api_secret, vault_tailscale_auth_key"
+    assert f"added, empty: {added}" in said, said
     assert "kept at its end, not in the template: 1 key (vault_discord_token) and 2 comments" in said, said
     assert vault.read_bytes().startswith(b"$ANSIBLE_VAULT;1.2;AES256;lab\n")
     assert stat.S_IMODE(vault.stat().st_mode) == 0o640
@@ -615,15 +621,20 @@ def test_just_vault_reads_the_vault_once_it_is_saved_and_runs_no_linter(tmp_path
     pastes.write_text("import sys\nopen(sys.argv[1], 'a').write('vault_tailscale_auth_key: pasted-below\\n')\n")
     pasted = just(checkout, "vault", SETUPS=str(tmp_path / "setups"), EDITOR=f"{sys.executable} {pastes}")
     assert pasted.returncode != 0, pasted.stdout + pasted.stderr
-    assert "vault_tailscale_auth_key is written twice, on lines 27 and 34" in pasted.stderr, pasted.stderr
+    # The template's own line, and the pasted one below its last.
+    lines = TEMPLATE.splitlines()
+    first = next(n for n, line in enumerate(lines, 1) if line.startswith("vault_tailscale_auth_key:"))
+    twice = f"vault_tailscale_auth_key is written twice, on lines {first} and {len(lines) + 1}"
+    assert twice in pasted.stderr, pasted.stderr
     assert "pasted-below" not in pasted.stdout + pasted.stderr
     leaves = tmp_path / "leaves.py"
     leaves.write_text("import sys\nsys.exit(0)\n")
     (checkout / VAULT).write_bytes(setups.encrypt(filled(TEMPLATE, vault_haos_owner_password="x"), PASSWORD.encode()))
     opened = just(checkout, "vault", SETUPS=str(tmp_path / "setups"), EDITOR=f"{sys.executable} {leaves}")
     assert opened.returncode == 0, opened.stdout + opened.stderr
-    assert (
-        opened.stdout == "Setup: this checkout's own files\nThe vault reads as Ansible reads it: 1 key set, 3 empty.\n"
+    empty = len(TEMPLATE_KEYS) - 1
+    assert opened.stdout == (
+        f"Setup: this checkout's own files\nThe vault reads as Ansible reads it: 1 key set, {empty} empty.\n"
     )
     assert "WARNING" not in opened.stderr and "Passed:" not in opened.stdout + opened.stderr, "no ansible-lint"
 

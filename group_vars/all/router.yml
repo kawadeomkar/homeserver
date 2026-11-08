@@ -1,0 +1,22 @@
+---
+# The LAN's router, OPNsense, configured through its API by roles/opnsense (router.yml), when local.yml gives its
+# address. Without one the router play ends by itself, and the router stays configured by hand.
+
+# Worked out from the address, never set: with no opnsense_address, there is no router to configure. A
+# group_vars/all/ directory is read alphabetically and the last file wins, so this file sets nothing local.yml does.
+router_present: "{{ opnsense_address | default('', true) | string | trim | length > 0 }}"
+
+# Empty when local.yml's router section makes sense. It refuses router_present given on the command line (a string,
+# which counts as true even when it says false), an address that is not an IPv4 address, and the certificate pin
+# without an address, which is what a misspelt address looks like.
+router_settings_error: >-
+  {%- set address = opnsense_address | default('', true) | string | trim -%}
+  {%- set octet = '(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])' -%}
+  {{ 'router_present is worked out from opnsense_address in group_vars/all/local.yml, not set: given with -e it is a '
+     ~ 'string, which counts as true whatever it says. To leave the router alone, delete opnsense_address there.'
+     if router_present is not boolean else
+     "opnsense_address in group_vars/all/local.yml must be the router's IPv4 address, not " ~ address ~ "."
+     if router_present and address is not match('^' ~ octet ~ '([.]' ~ octet ~ '){3}$') else
+     'group_vars/all/local.yml sets opnsense_api_cert_sha256 but no opnsense_address, which usually means it is '
+     ~ 'misspelt. Correct it, or delete the router section to leave the router alone.'
+     if not router_present and opnsense_api_cert_sha256 | default('', true) | string | trim else '' }}

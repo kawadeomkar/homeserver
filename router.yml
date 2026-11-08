@@ -1,0 +1,51 @@
+---
+# Configure the LAN's router, OPNsense, through its API from this machine. Check first:
+#   just check router                 (or, in the project's virtualenv: ansible-playbook router.yml --check --diff)
+# For now the role only reads: it checks the router is the one the certificate pin names, accepts the key pair and
+# runs a release the role supports, and reports that release and its plugins. Without opnsense_address in
+# group_vars/all/local.yml the play says so and ends before the role runs: the router stays configured by hand.
+# An inventory made before the router group has none, and the play below would match no host and end without a
+# word: refused here instead, as kubernetes.yml refuses a cluster without its group.
+- name: Refuse a router without the router inventory group
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    # First, so a router_present given with -e is refused for what it is, before it is read as a switch.
+    - name: Refuse router settings that make no sense
+      ansible.builtin.assert:
+        that: router_settings_error | length == 0
+        fail_msg: "{{ router_settings_error }}"
+        quiet: true
+      tags: [always]
+    - name: Refuse a router without the router inventory group
+      ansible.builtin.assert:
+        that: not router_present or (groups['router'] | default([]) | length == 1)
+        fail_msg: >-
+          The inventory needs the router group with its one host: add [router] and opnsense to inventory, as in
+          inventory.example.
+        quiet: true
+      tags: [always]
+
+- name: Configure the OPNsense router
+  hosts: router
+  gather_facts: false
+  pre_tasks:
+    - name: Refuse router settings that make no sense
+      ansible.builtin.assert:
+        that: router_settings_error | length == 0
+        fail_msg: "{{ router_settings_error }}"
+        quiet: true
+      tags: [always]
+    - name: Say why the router is skipped
+      ansible.builtin.debug:
+        msg: >-
+          opnsense_address is not set in group_vars/all/local.yml, so this setup leaves the router alone: it stays
+          configured by hand.
+      when: not router_present
+      tags: [always]
+    - name: Skip the router when local.yml gives it no address
+      ansible.builtin.meta: end_host
+      when: not router_present
+      tags: [always]
+  roles:
+    - role: opnsense

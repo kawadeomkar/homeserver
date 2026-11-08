@@ -1,0 +1,10 @@
+---
+# How roles/opnsense reaches the router: through its API from the controller, never over SSH.
+ansible_connection: local
+ansible_python_interpreter: "{{ ansible_playbook_python }}"
+
+# The address from group_vars/all/local.yml, the key pair from the vault. local.yml sets opnsense_api_cert_sha256
+# itself, the pin the key pair goes only to.
+opnsense_api_host: "{{ opnsense_address | default('', true) | string | trim }}"
+opnsense_api_key: "{{ vault_opnsense_api_key | default('', true) }}"
+opnsense_api_secret: "{{ vault_opnsense_api_secret | default('', true) }}"

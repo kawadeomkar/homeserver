@@ -1,7 +1,8 @@
 """Every setting just init asks for: group_vars/all/local.yml's, and the secrets that go in the vault.
 
-Each section of local.yml is switched on by a setting of its own (the NAS's addresses, the cluster's node addresses,
-Home Assistant's MAC, tailscale_enabled), as the playbooks work it out; the others are asked only when it is on.
+Each section of local.yml is switched on by a setting of its own (the NAS's addresses, the router's address, the
+cluster's node addresses, Home Assistant's MAC, tailscale_enabled), as the playbooks work it out; the others are asked
+only when it is on.
 tests/policy/test_make_init_settings.py checks this list against local.yml.example and against the vault variables
 the group_vars read, so a setting added to one and not the other fails.
 
@@ -17,15 +18,18 @@ from urllib.parse import urlsplit
 SECTIONS = {
     "proxmox": "Proxmox host",
     "nas": "TrueNAS NAS",
+    "router": "OPNsense router",
     "remote": "Remote access through Tailscale",
     "cluster": "Kubernetes cluster",
     "homeassistant": "Home Assistant",
 }
 
 # The question that switches each optional section on, and the setting whose value decides it (as nas_present,
-# kubernetes_present, haos_present and proxmox_tailscale_enabled do). A yes/no setting takes the answer itself.
+# router_present, kubernetes_present, haos_present and proxmox_tailscale_enabled do). A yes/no setting takes the answer
+# itself.
 SWITCHES = {
     "nas": ("Is there a TrueNAS NAS, for the VMs' disks, the backups and the apps' data?", "truenas_static_address"),
+    "router": ("Is the LAN's router OPNsense, for Ansible to configure through its API?", "opnsense_address"),
     "remote": ("Should the Proxmox host join your tailnet through Tailscale, for remote access?", "tailscale_enabled"),
     "cluster": ("Should the Proxmox host run the Kubernetes cluster (Talos and Flux)?", "kubernetes_node_addresses"),
     "homeassistant": ("Should the Proxmox host run Home Assistant OS in a VM of its own?", "haos_mac"),
@@ -482,6 +486,43 @@ SETTINGS: tuple[Setting, ...] = (
         popular=True,
     ),
     S("truenas_alert_email", "nas", "email", "Where the alerts go", after="truenas_mail_server", need="recommended"),
+    # -------------------------------------------------------------------------------------------------- Router ---
+    S(
+        "opnsense_address",
+        "router",
+        "ipv4",
+        "The router's address, where its web UI and API answer",
+        need="required",
+        help="Ansible calls the router's API from this machine, never over SSH (scripts/runbooks/opnsense.md).",
+    ),
+    S(
+        "vault_opnsense_api_key",
+        "router",
+        "secret",
+        "The key of the router's API key pair",
+        need="required",
+        secret=True,
+        help="Made for a user of its own under System -> Access -> Users (scripts/runbooks/opnsense.md, section 1). "
+        "OPNsense puts the key and the secret in a file it downloads once.",
+    ),
+    S(
+        "vault_opnsense_api_secret",
+        "router",
+        "secret",
+        "The secret of the router's API key pair",
+        need="required",
+        secret=True,
+        help="From the same downloaded file as the key.",
+    ),
+    S(
+        "opnsense_api_cert_sha256",
+        "router",
+        "fingerprint",
+        "The SHA-256 fingerprint of the router's web certificate, so the API key pair goes to no other server",
+        need="required",
+        help="Compare it with System -> Trust -> Certificates in the OPNsense web UI. Replace it whenever the "
+        "certificate is.",
+    ),
     # -------------------------------------------------------------------------------------------------- Remote ---
     S(
         "tailscale_enabled",

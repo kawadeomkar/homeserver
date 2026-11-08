@@ -59,6 +59,22 @@ _TOP = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*:(?:\s|$)")
 _COMMENTED = re.compile(r"#\s?([A-Za-z_][A-Za-z0-9_]*)\s*:(?:\s|$)")
 
 
+# The certificate pins just init can read from the machine itself: the settings holding the addresses it tries, the
+# machine, and where its web UI shows the certificate to compare with.
+PINNED = {
+    "truenas_api_cert_sha256": (
+        ("truenas_static_address", "truenas_bootstrap_address"),
+        "NAS",
+        "System -> Certificates in the TrueNAS web UI",
+    ),
+    "opnsense_api_cert_sha256": (
+        ("opnsense_address",),
+        "router",
+        "System -> Trust -> Certificates in the OPNsense web UI",
+    ),
+}
+
+
 # -------------------------------------------------------------------------------------------------- YAML text ---
 def _flow(value: Any) -> str:
     text = yaml.safe_dump(value, default_flow_style=True, width=1 << 16, allow_unicode=True, sort_keys=False)
@@ -512,7 +528,7 @@ class Init:
             self.ask_parts(s, ("cores", "memory_mib", "disk_gib"), cfg.DEFAULTS["haos_size"])
         elif s.kind == "pool_disks":
             self.ask_pool_disks(s)
-        elif not (s.key == "truenas_api_cert_sha256" and self.offer_certificate(s)):
+        elif not (s.key in PINNED and self.offer_certificate(s)):
             now = self.current(s)
             if s.key == "flux_sync_url" and not has_value(now):
                 self.origin_hint()
@@ -674,16 +690,16 @@ class Init:
             )
 
     def offer_certificate(self, s: cfg.Setting) -> bool:
-        """Read the certificate the NAS presents, and offer its fingerprint; False when it was not read."""
+        """Read the certificate the NAS or the router presents, and offer its fingerprint; False when it was not
+        read."""
         if has_value(self.current(s)):
             return False
         v = self.values
-        hosts = [
-            str(v[k]).split("/")[0]
-            for k in ("truenas_static_address", "truenas_bootstrap_address")
-            if has_value(v.get(k))
-        ]
-        if not hosts or not self.yes_no("  Read the fingerprint the NAS presents now?", True, "read-certificate"):
+        addresses, machine, page = PINNED[s.key]
+        hosts = [str(v[k]).split("/")[0] for k in addresses if has_value(v.get(k))]
+        if not hosts or not self.yes_no(
+            f"  Read the fingerprint the {machine} presents now?", True, "read-certificate"
+        ):
             return False
         for host in hosts:
             try:
@@ -694,7 +710,7 @@ class Init:
             digest = hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).digest()
             fingerprint = ":".join(f"{b:02X}" for b in digest)
             self.console.say(f"  {host} presents {fingerprint}")
-            self.console.say("  Compare it with System -> Certificates in the TrueNAS web UI before taking it.")
+            self.console.say(f"  Compare it with {page} before taking it.")
             self.apply(s, self.ask_value(s, None, fingerprint, lambda t: cfg.parse(s, t)))
             return True
         return False
@@ -1240,6 +1256,8 @@ class Init:
         nexts = []
         if on["nas"]:
             nexts.append("just check truenas && just deploy truenas")
+        if on["router"]:
+            nexts.append("just check router")
         nexts.append("just check proxmox && just deploy proxmox")
         if on["homeassistant"]:
             nexts.append("just check homeassistant && just deploy homeassistant")

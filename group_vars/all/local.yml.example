@@ -90,6 +90,18 @@ proxmox_address: 192.0.2.20
 # tailscale_enabled: true
 # tailscale_advertise_routes: [192.0.2.0/24]
 
+# ------------------------------------------------------------------- Router ---
+# The LAN's router, when it is OPNsense, configured through its API by
+# just deploy router (scripts/runbooks/opnsense.md): its address, and the
+# SHA-256 fingerprint of its web certificate, the only server the API key pair
+# (vault_opnsense_api_key, vault_opnsense_api_secret in the vault) goes to.
+# Read it with:
+#   openssl s_client -connect <router>:443 </dev/null | openssl x509 -noout -fingerprint -sha256
+# Without an address the router play ends by itself, and the router stays
+# configured by hand.
+# opnsense_address: 192.0.2.1
+# opnsense_api_cert_sha256: "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
+
 # --------------------------------------------------------------- Kubernetes ---
 # No cluster? Delete this whole section. With no node addresses the Kubernetes
 # play ends by itself, the Proxmox play creates no VM and the NAS play exports

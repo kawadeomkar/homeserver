@@ -1,0 +1,22 @@
+---
+# Validation and the read-only connection run under every tag, so later stages, each under a tag of its own, always
+# start from a router known to be the right one, on a release the role supports.
+
+- name: Check the role's inputs
+  ansible.builtin.import_tasks: validate.yml
+  tags: [always]
+
+- name: Configure the router through its API
+  module_defaults:
+    opnsense_info:
+      api_host: "{{ opnsense_api_host }}"
+      api_port: "{{ opnsense_api_port }}"
+      api_key: "{{ opnsense_api_key }}"
+      api_secret: "{{ opnsense_api_secret }}"
+      validate_certs: "{{ opnsense_validate_certs }}"
+      api_cert_sha256: "{{ opnsense_api_cert_sha256 }}"
+      api_timeout: "{{ opnsense_api_timeout }}"
+  block:
+    - name: Connect and report the router's state
+      ansible.builtin.import_tasks: connect.yml
+      tags: [always, opnsense_info]

@@ -64,25 +64,44 @@ def test_each_declaration_names_playbooks_plays_roles_files_and_tasks_the_tree_h
                     assert (ROOT / "roles" / file).is_file(), f"{stage.label} · {step.label}: no file roles/{file}"
 
 
+# The playbooks just deploy runs that site.yml does not import yet, each a stage after site's.
+DEPLOY_ALONE = ["router.yml"]
+
+
 def test_every_stage_of_deploy_is_a_playbook_site_imports_in_its_order():
     deploy = recipes.recipe_for("site.yml")
     imported = [entry["ansible.builtin.import_playbook"] for entry in yaml.safe_load((ROOT / "site.yml").read_text())]
-    assert [stage.plays[0] for stage in deploy.stages] == imported
+    assert not set(DEPLOY_ALONE) & set(imported), "site.yml imports it now: take it out of DEPLOY_ALONE"
+    assert [stage.plays[0] for stage in deploy.stages] == imported + DEPLOY_ALONE
 
 
-def test_the_nas_steps_are_the_files_the_truenas_role_imports_in_its_order():
-    deploy = recipes.recipe_for("truenas.yml")
-    main = yaml.safe_load((ROOT / "roles" / "truenas" / "tasks" / "main.yml").read_text())
+def imported_task_files(role):
+    """The task files a role's main.yml imports, blocks included, in its order, as role/tasks/<file>."""
 
     def imports(items):
         for item in items or []:
             target = item.get("ansible.builtin.import_tasks")
             if target:
-                yield f"truenas/tasks/{target}"
+                yield f"{role}/tasks/{target}"
             yield from imports(item.get("block"))
 
+    return list(imports(yaml.safe_load((ROOT / "roles" / role / "tasks" / "main.yml").read_text())))
+
+
+def test_the_nas_steps_are_the_files_the_truenas_role_imports_in_its_order():
+    deploy = recipes.recipe_for("truenas.yml")
     declared = [file for step in deploy.stages[0].steps for file in step.files]
-    assert declared == list(imports(main))
+    assert declared == imported_task_files("truenas")
+
+
+def test_the_router_steps_are_the_files_the_opnsense_role_imports_in_its_order():
+    (stage,) = [stage for stage in recipes.recipe_for("router.yml").stages if stage.plays == ("router.yml",)]
+    declared = [file for step in stage.steps for file in step.files]
+    assert declared == imported_task_files("opnsense")
+    # Each play of the playbook is the stage's, so none is drawn as a stage of its own.
+    plays = {play for step in stage.steps for play in step.plays}
+    for file, play in plays_of("router.yml"):
+        assert play["hosts"] == "router" or f"{file}:{play['name']}" in plays, f"{play['name']!r} is no step's"
 
 
 def role_tasks(path):
