@@ -101,6 +101,15 @@ proxmox_address: 192.0.2.20
 # configured by hand.
 # opnsense_address: 192.0.2.1
 # opnsense_api_cert_sha256: "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
+# Every run backs the router's configuration up when it changed, encrypted
+# with vault_opnsense_backup_password, in ~/.opnsense/homeserver unless this
+# names another directory, outside the repository.
+# router_backup_dir: ~/.opnsense/homeserver
+# Where a freshly installed router answers, for just deploy router
+# -e opnsense_restore=latest to bring it back from the newest backup: its
+# factory LAN address, unless its console gave it another. Unset, the
+# router's own address above.
+# opnsense_bootstrap_address: 192.0.2.2
 
 # --------------------------------------------------------------- Kubernetes ---
 # No cluster? Delete this whole section. With no node addresses the Kubernetes

@@ -1,8 +1,8 @@
 """Documentation of the connection options every module in this role takes.
 
-They are module_utils/opnsense_api.py's api_argument_spec(). A module lists the fragment in
-extends_documentation_fragment: opnsense_api. tests/policy/test_roles.py checks that each module's documentation,
-with these merged in, matches its argument spec.
+They are module_utils/opnsense_api.py's connection_argument_spec() (the fragment opnsense_api) and the API key pair
+api_argument_spec() adds to them (opnsense_api.key), which a module that calls the API lists too.
+tests/policy/test_roles.py checks that each module's documentation, with these merged in, matches its argument spec.
 """
 
 
@@ -20,6 +20,26 @@ options:
     description: HTTPS port of the router's web server.
     type: int
     default: 443
+  validate_certs:
+    description:
+      - Verify the router's TLS certificate. A default install's certificate is self-signed, so
+        O(api_cert_sha256) pins it instead.
+    type: bool
+    default: false
+  api_cert_sha256:
+    description:
+      - SHA-256 fingerprint of the router's web certificate, colons optional. Nothing, neither the key pair nor a
+        password, is sent to a server presenting another. Required while O(validate_certs) is off.
+    type: str
+    default: ""
+  api_timeout:
+    description: Seconds to wait for the connection and for each answer.
+    type: int
+    default: 60
+"""
+
+    KEY = r"""
+options:
   api_key:
     description:
       - The key of an OPNsense API key pair. Keep it in an ansible-vault file.
@@ -34,20 +54,4 @@ options:
         C(module_defaults).
     type: str
     default: ""
-  validate_certs:
-    description:
-      - Verify the router's TLS certificate. A default install's certificate is self-signed, so
-        O(api_cert_sha256) pins it instead.
-    type: bool
-    default: false
-  api_cert_sha256:
-    description:
-      - SHA-256 fingerprint of the router's web certificate, colons optional. The key and secret are sent only to a
-        server presenting it. Required while O(validate_certs) is off.
-    type: str
-    default: ""
-  api_timeout:
-    description: Seconds to wait for the connection and for each answer.
-    type: int
-    default: 60
 """

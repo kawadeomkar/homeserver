@@ -1,0 +1,13 @@
+---
+# The router's configuration is the source of truth for rebuilding it: roles/opnsense backs it up whenever a run finds
+# it changed, encrypted with the vault's vault_opnsense_backup_password, outside the repository, and restores a backup
+# only when asked (scripts/runbooks/opnsense.md, sections 4 to 6). local.yml can put the backups elsewhere with
+# router_backup_dir: an opnsense_backup_dir there would lose to this file, which applies to the router alone.
+opnsense_backup_dir: "{{ router_backup_dir | default('~/.opnsense/homeserver', true) | string | trim }}"
+opnsense_backup_password: "{{ vault_opnsense_backup_password | default('', true) }}"
+# A restore logs in to the web UI as root: on a fresh install with the password set in its installer, which should be
+# the router's own root password, so that the one in the vault serves both.
+opnsense_gui_password: "{{ vault_opnsense_root_password | default('', true) }}"
+# Where a fresh install answers, when the router does not answer as the one known: local.yml's
+# opnsense_bootstrap_address, or else the router's own address.
+opnsense_bootstrap_host: "{{ opnsense_bootstrap_address | default('', true) | string | trim }}"

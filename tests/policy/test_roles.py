@@ -207,6 +207,7 @@ def argspec_pass(tree, playbook="site.yml", *extra):
         *["--skip-tags", "truenas_info,opnsense_info", "-e", "ansible_connection=local"],
         *["-e", "vault_truenas_api_key=stub"],
         *["-e", "vault_opnsense_api_key=stub", "-e", "vault_opnsense_api_secret=stub"],
+        *["-e", "vault_opnsense_backup_password=stub"],
         *["-e", "vault_truenas_mail_password=stub", "-e", "vault_haos_owner_password=stub-password", *extra],
     )
 
@@ -1272,7 +1273,7 @@ def test_router_play_passes_its_checks(tmp_path):
     rc, out = argspec_pass(example_tree(tmp_path, PROXMOX_ONLY_LOCAL_YML + ROUTER_LOCAL_YML), "router.yml")
     assert rc == 0, out[-3000:]
     assert out.count("Validating arguments against arg spec 'main'") == 1, out[-3000:]
-    assert "validate | Refuse to send the API key to an unproven server" in out, out[-3000:]
+    assert "validate | Check the role's inputs" in out, out[-3000:]
 
 
 def test_router_play_ends_without_an_address(tmp_path):
@@ -1301,6 +1302,18 @@ def test_router_play_ends_without_an_address(tmp_path):
             (),
             "sets opnsense_api_cert_sha256 but no opnsense_address",
             id="misspelt-address",
+        ),
+        pytest.param(
+            "",
+            ("-e", "opnsense_restore=latest"),
+            "This run asks for opnsense_restore, but group_vars/all/local.yml gives no opnsense_address",
+            id="restore-without-address",
+        ),
+        pytest.param(
+            "",
+            ("-e", "opnsense_backup_accept=true", "-e", "opnsense_bootstrap_cert_sha256=AA:BB"),
+            "asks for opnsense_backup_accept and opnsense_bootstrap_cert_sha256, but",
+            id="backup-options-without-address",
         ),
     ],
 )

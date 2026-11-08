@@ -1,0 +1,36 @@
+---
+# The router's configuration, backed up when it changed since the newest backup (library/opnsense_backup.py). A
+# router that does not descend from the newest backup is left alone, and the run stops: it was restored or
+# reinstalled by hand, and backing it up as the newest would make a restore bring back its state, not the backup's.
+
+- name: backup | Back up the router's configuration, when it changed
+  opnsense_backup:  # noqa: args
+    backup_dir: "{{ opnsense_backup_dir }}"
+    password: "{{ opnsense_backup_password }}"
+    version: "OPNsense {{ opnsense_state.version | default('') }}"
+    accept: "{{ opnsense_backup_accept | bool or opnsense_restored | default(false) | bool }}"
+  register: opnsense_backup_state
+
+- name: backup | Refuse to back up a router that does not descend from the newest backup
+  ansible.builtin.assert:
+    that: opnsense_backup_state.state != 'diverged'
+    fail_msg: >-
+      The router runs revision {{ opnsense_backup_state.router.id }} ({{ opnsense_backup_state.router.description }},
+      by {{ opnsense_backup_state.router.username }}), whose history lacks the newest backup,
+      {{ opnsense_backup_state.newest }}: it was restored or reinstalled since, or it has made more revisions than it
+      keeps. Nothing was backed up. To put the newest backup back on it: just deploy router -e opnsense_restore=latest.
+      To keep the router's configuration as the newest backup instead: just deploy router -e
+      opnsense_backup_accept=true.
+    quiet: true
+
+- name: backup | Say what was backed up
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'The newest backup is the revision the router runs, ' ~ _revision ~ '.'
+         if opnsense_backup_state.state == 'in_sync' else
+         ('Would back up ' if ansible_check_mode else 'Backed up ') ~ _revision ~ ' to ' ~ opnsense_backup_state.backup_file
+         ~ (', as asked, though it does not descend from ' ~ opnsense_backup_state.newest
+            if opnsense_backup_state.state == 'accepted' else '') ~ '.' }}
+  vars:
+    _router: "{{ opnsense_backup_state.router }}"
+    _revision: "{{ _router.id }} ({{ _router.description }}, by {{ _router.username }})"

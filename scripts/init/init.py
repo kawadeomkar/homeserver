@@ -1238,6 +1238,7 @@ class Init:
             if self.setup
             else ["local.yml", "the vault", ".vault_pass"]
         ) + (["the cluster's credentials directory", "its age key"] if on["cluster"] else [])
+        keep += ["the router's configuration backups"] if on["router"] else []
         listed = keep[0] if len(keep) == 1 else f"{', '.join(keep[:-1])} and {keep[-1]}"
         manual.append(f"Keep copies of {listed} in your password manager, and update them when they change")
         if not self.setup and self.adoptable(self.vault.is_open):

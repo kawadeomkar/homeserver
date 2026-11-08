@@ -54,6 +54,7 @@ DEFAULTS = {
     "haos_vmid": 310,
     "haos_size": {"cores": 2, "memory_mib": 4096, "disk_gib": 32},
     "proxmox_local_vm_storage": "local-lvm",
+    "router_backup_dir": "~/.opnsense/homeserver",
     "kubernetes_iso_storage": "local",
     "haos_import_storage": "local",
 }
@@ -522,6 +523,40 @@ SETTINGS: tuple[Setting, ...] = (
         need="required",
         help="Compare it with System -> Trust -> Certificates in the OPNsense web UI. Replace it whenever the "
         "certificate is.",
+    ),
+    S(
+        "vault_opnsense_backup_password",
+        "router",
+        "secret",
+        "The password the router's configuration backups are encrypted with",
+        need="required",
+        secret=True,
+        help="Long and random, kept in your password manager too: nothing else opens the backups, and the router's own "
+        "Restore page asks for it (scripts/runbooks/opnsense.md, section 4).",
+    ),
+    S(
+        "vault_opnsense_root_password",
+        "router",
+        "secret",
+        "root's web UI password on the router, for a restore",
+        need="recommended",
+        secret=True,
+        help="The API cannot upload a configuration, so a restore logs in to the web UI as root. Give a fresh install "
+        "the same password in its installer (scripts/runbooks/opnsense.md, section 6).",
+    ),
+    S(
+        "router_backup_dir",
+        "router",
+        "path",
+        "Where the router's configuration backups go, when not ~/.opnsense/homeserver",
+        help="Outside the repository; keep a copy of it in your password manager or another backup.",
+    ),
+    S(
+        "opnsense_bootstrap_address",
+        "router",
+        "ipv4",
+        "Where a freshly installed router answers, for a restore onto it",
+        help="Its factory LAN address, unless its console gave it another. Unset, the router's own address.",
     ),
     # -------------------------------------------------------------------------------------------------- Remote ---
     S(

@@ -8,6 +8,7 @@
   vars_files:
     - ../../group_vars/all/router.yml
     - ../../group_vars/router/connection.yml
+    - ../../group_vars/router/backup.yml
   pre_tasks:
     - name: Refuse router settings that make no sense
       ansible.builtin.assert:

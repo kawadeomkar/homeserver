@@ -21,6 +21,7 @@ attributes:
 extends_documentation_fragment:
   - ansible.builtin.action_common_attributes
   - opnsense_api
+  - opnsense_api.key
 """
 
 RETURN = r"""

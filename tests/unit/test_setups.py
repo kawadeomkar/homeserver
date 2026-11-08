@@ -402,6 +402,8 @@ def test_a_vault_from_before_the_template_is_laid_out_as_it_every_value_kept():
         "vault_truenas_mail_password",
         "vault_opnsense_api_key",
         "vault_opnsense_api_secret",
+        "vault_opnsense_backup_password",
+        "vault_opnsense_root_password",
         "vault_tailscale_auth_key",
     ]
     assert own_keys == ["vault_discord_token"] and own_comments == 2
@@ -445,7 +447,16 @@ def test_a_laid_out_vault_keeps_its_password_vault_id_and_mode(root, capsys):
     assert setups.main(["template"], root=root) == 0
     said = capsys.readouterr().out
     assert said.startswith("The vault is laid out as local.vault.yml.example now: ") and "left-over" not in said, said
-    added = "vault_truenas_mail_password, vault_opnsense_api_key, vault_opnsense_api_secret, vault_tailscale_auth_key"
+    added = ", ".join(
+        [
+            "vault_truenas_mail_password",
+            "vault_opnsense_api_key",
+            "vault_opnsense_api_secret",
+            "vault_opnsense_backup_password",
+            "vault_opnsense_root_password",
+            "vault_tailscale_auth_key",
+        ]
+    )
     assert f"added, empty: {added}" in said, said
     assert "kept at its end, not in the template: 1 key (vault_discord_token) and 2 comments" in said, said
     assert vault.read_bytes().startswith(b"$ANSIBLE_VAULT;1.2;AES256;lab\n")

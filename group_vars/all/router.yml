@@ -7,16 +7,32 @@
 router_present: "{{ opnsense_address | default('', true) | string | trim | length > 0 }}"
 
 # Empty when local.yml's router section makes sense. It refuses router_present given on the command line (a string,
-# which counts as true even when it says false), an address that is not an IPv4 address, and the certificate pin
-# without an address, which is what a misspelt address looks like.
+# which counts as true even when it says false), an address or a fresh install's address that is not an IPv4
+# address, a run that asks for a restore or a backup without an address, which would otherwise end without a word
+# about it, and the section's other settings without an address, which is what a misspelt address looks like.
 router_settings_error: >-
   {%- set address = opnsense_address | default('', true) | string | trim -%}
+  {%- set bootstrap = opnsense_bootstrap_address | default('', true) | string | trim -%}
   {%- set octet = '(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])' -%}
+  {%- set ipv4 = '^' ~ octet ~ '([.]' ~ octet ~ '){3}$' -%}
+  {%- set given = {'opnsense_api_cert_sha256': opnsense_api_cert_sha256 | default(''),
+                   'opnsense_bootstrap_address': bootstrap,
+                   'router_backup_dir': router_backup_dir | default('')}
+                  | dict2items | selectattr('value') | map(attribute='key') | list -%}
+  {%- set asked = {'opnsense_restore': opnsense_restore | default('', true) | string | trim,
+                   'opnsense_backup_accept': opnsense_backup_accept | default(false) | bool,
+                   'opnsense_bootstrap_cert_sha256': opnsense_bootstrap_cert_sha256 | default('', true) | string | trim}
+                  | dict2items | selectattr('value') | map(attribute='key') | list -%}
   {{ 'router_present is worked out from opnsense_address in group_vars/all/local.yml, not set: given with -e it is a '
      ~ 'string, which counts as true whatever it says. To leave the router alone, delete opnsense_address there.'
      if router_present is not boolean else
      "opnsense_address in group_vars/all/local.yml must be the router's IPv4 address, not " ~ address ~ "."
-     if router_present and address is not match('^' ~ octet ~ '([.]' ~ octet ~ '){3}$') else
-     'group_vars/all/local.yml sets opnsense_api_cert_sha256 but no opnsense_address, which usually means it is '
+     if router_present and address is not match(ipv4) else
+     "opnsense_bootstrap_address in group_vars/all/local.yml must be the IPv4 address a fresh install answers on, "
+     ~ "not " ~ bootstrap ~ "." if router_present and bootstrap and bootstrap is not match(ipv4) else
+     'This run asks for ' ~ asked | join(' and ') ~ ', but group_vars/all/local.yml gives no opnsense_address, so '
+     ~ "it would leave the router alone. Set the router's address there, as opnsense_address, and run it again."
+     if not router_present and asked else
+     'group_vars/all/local.yml sets ' ~ given | join(', ') ~ ' but no opnsense_address, which usually means it is '
      ~ 'misspelt. Correct it, or delete the router section to leave the router alone.'
-     if not router_present and opnsense_api_cert_sha256 | default('', true) | string | trim else '' }}
+     if not router_present and given else '' }}

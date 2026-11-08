@@ -1,6 +1,8 @@
 ---
-# Validation and the read-only connection run under every tag, so later stages, each under a tag of its own, always
-# start from a router known to be the right one, on a release the role supports.
+# Validation and the read-only connection run under every tag, so every stage starts from a router known to be the
+# right one, on a release the role supports. A restore runs first, and only when asked (-e opnsense_restore=latest):
+# it brings a fresh install back to the backup before anything reads it. The backup comes last, so it holds what the
+# stages before it left.
 
 - name: Check the role's inputs
   ansible.builtin.import_tasks: validate.yml
@@ -8,7 +10,7 @@
 
 - name: Configure the router through its API
   module_defaults:
-    opnsense_info:
+    opnsense_info: &opnsense_api
       api_host: "{{ opnsense_api_host }}"
       api_port: "{{ opnsense_api_port }}"
       api_key: "{{ opnsense_api_key }}"
@@ -16,7 +18,18 @@
       validate_certs: "{{ opnsense_validate_certs }}"
       api_cert_sha256: "{{ opnsense_api_cert_sha256 }}"
       api_timeout: "{{ opnsense_api_timeout }}"
+    opnsense_backup: *opnsense_api
   block:
+    - name: Restore a backup, when asked
+      ansible.builtin.import_tasks: restore.yml
+      when: opnsense_restore | length > 0
+      tags: [always, opnsense_restore]
+
     - name: Connect and report the router's state
       ansible.builtin.import_tasks: connect.yml
       tags: [always, opnsense_info]
+
+    - name: Back up the router's configuration
+      ansible.builtin.import_tasks: backup.yml
+      when: opnsense_backup_dir | length > 0
+      tags: [opnsense_backup]

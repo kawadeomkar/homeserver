@@ -176,17 +176,18 @@ RECIPES = (
                     Step("Flux", roles=("flux_bootstrap",)),
                 ),
             ),
-            # site.yml leaves the router out for now: only just deploy router draws it.
+            # site.yml leaves the router out for now: only just deploy router draws it. Its steps in the order the
+            # role runs them: a restore comes between the inputs' check and the connection, and is drawn as skipped
+            # unless asked for.
             Stage(
                 "router",
                 plays=("router.yml",),
                 absent="Say why the router is skipped",
                 steps=(
-                    Step(
-                        "connect",
-                        plays=(f"router.yml:{REFUSE_ROUTER}",),
-                        files=("opnsense/tasks/validate.yml", "opnsense/tasks/connect.yml"),
-                    ),
+                    Step("settings", plays=(f"router.yml:{REFUSE_ROUTER}",), files=("opnsense/tasks/validate.yml",)),
+                    Step("restore", files=("opnsense/tasks/restore.yml",)),
+                    Step("connect", files=("opnsense/tasks/connect.yml",)),
+                    Step("backup", files=("opnsense/tasks/backup.yml",)),
                 ),
             ),
         ),
