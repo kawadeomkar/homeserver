@@ -1,35 +1,26 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository. It holds what
+every session needs; the rest is where the work is (see "Where the rest is written").
 
 ## Overview
 
 Infrastructure repo for a homelab: the Ansible that configures the machines and builds a Kubernetes cluster on them,
 and the manifests Flux applies to that cluster (`k8s/`). There is no application code.
 
-- **Ansible**, run from this machine: `roles/truenas` (the NAS, through its API), `roles/opnsense` (the router,
-  through its API: its configuration backed up and, on request, restored), `roles/proxmox_apt` (the
-  hypervisor's package repositories and upgrades), `roles/proxmox_tailscale` (remote access: the hypervisor on the
-  tailnet, and with routes the LAN's Tailscale subnet router, behind a forwarding guard), `roles/proxmox_storage` (its
-  VM-disk storage on the NAS), `roles/proxmox_backup` (the nightly backup of its VMs), `roles/proxmox_node_exporter` (the host's own metrics,
-  for the cluster's Prometheus), `roles/proxmox_vm` (the
-  cluster's VMs and Home Assistant's), `roles/haos_onboard` (a new Home Assistant's owner account), `roles/talos`
-  (Talos Linux on the cluster's VMs), `roles/flux_bootstrap` (the Flux Operator, which hands the cluster to Flux),
-  `roles/app_scale` (`just suspend` and `just resume`: the apps scaled to zero and back) and `roles/status` (`just
-  status`: what runs and what needs doing, read without changing anything).
+- **Ansible**, run from this machine, through one role per job (the table under Architecture): the NAS and the router
+  through their APIs, the Proxmox host over root SSH, the cluster's VMs and Home Assistant's, Talos Linux on the
+  cluster's VMs, and the Flux Operator, which hands the cluster to Flux.
 - **Flux** syncs `k8s/clusters/<setup>` from this repository: the platform in `k8s/infrastructure/` (MetalLB,
   Traefik, cert-manager, local-path-provisioner, csi-driver-nfs with a NAS, kube-prometheus-stack, Intel's GPU
   plugin) and the apps in `k8s/apps/` (the media apps, Nextcloud, PhotoPrism, Frigate, Homepage). Home Assistant is
   a VM of its own, Home Assistant OS, which `homeassistant.yml` creates.
 
-**Built, and run as test deployments.** On 2026-10-17 the whole chain ran on the home machines (the NAS, Proxmox, the
-cluster's VMs, Talos, Flux and every app), before its merge, and was rebuilt with a new secrets bundle after a security
-review (`docs/SECURITY-REVIEW.md`, gitignored; `scripts/runbooks/teardown.md` takes it down). The run found two things
-no fake had modelled, both fixed: Talos finds a Proxmox disk by its slot, never its serial (`kubernetes_disk_slots`),
-and Talos 1.14.2 leaves a pending install's phase out of its status. On 2026-10-20 the setup without a NAS ran the whole
-chain too, on a second Proxmox host, the apps a few at a time; it found that a 10 GiB data disk never mounts and that
-the apps' images outgrow a small worker system disk, both refused now (`kubernetes_settings_error`). Treat the cluster
-as disposable until it holds data worth keeping.
+**Built, and run as test deployments.** On 2026-10-17 the whole chain ran on the home machines with a NAS, and on
+2026-10-20 the setup without a NAS ran it on a second Proxmox host; what each run found no fake had modelled is fixed
+and written down, in the roles' READMEs and the refusals of `kubernetes_settings_error`. The first was rebuilt with a
+new secrets bundle after a security review (`docs/SECURITY-REVIEW.md`, gitignored), and `scripts/runbooks/teardown.md`
+takes a deployment down. Treat the cluster as disposable until it holds data worth keeping.
 
 ## Direction of travel
 
@@ -38,7 +29,7 @@ The repo targets exactly two setups, one host of each kind (hardware in `docs/MA
 | Machine | Role |
 |---|---|
 | `homeserver` | **Proxmox** hypervisor; the cluster runs in **Talos Linux** VMs on it, a control plane and a worker in both setups. Also on the tailnet, the one way in from outside, when `local.yml` sets `tailscale_enabled`, and the LAN's Tailscale subnet router when it gives `tailscale_advertise_routes` |
-| `truenas` | TrueNAS Community Edition; external storage for Proxmox's VM disks and backups and for the cluster's shared data. **Optional**: with no NAS address in `local.yml`, the NAS play ends by itself and everything stays on the Proxmox host (below) |
+| `truenas` | TrueNAS Community Edition; external storage for Proxmox's VM disks and backups and for the cluster's shared data. **Optional**: with no NAS address in `local.yml`, the NAS play ends by itself and everything stays on the Proxmox host |
 | `opnsense` | router and firewall; the LAN's DHCP reservations and the cluster's wildcard DNS record, by hand. **Optional**: with `opnsense_address` in `local.yml`, `roles/opnsense` reads it through its API, backs its configuration up and restores it on request |
 
 Two switches pick the setup, both worked out from `local.yml`, never set: `nas_present` (a NAS address) and
@@ -47,80 +38,100 @@ packages and their status `docs/KUBERNETES-IMPLEMENTATION.md` (both gitignored).
 (`TODO.md`): DHCP reservations, a servers VLAN, the CA on each device.
 
 **History.** The repo began as manifests for a single Ubuntu host running k3s (after minikube and microk8s), mostly
-generated by `kompose`, with the Ansible that configured that host. Both are gone: the host's roles, playbooks and
-Vagrant setup were deleted (Talos has no SSH, apt or user accounts), and the old `k8s/<service>/` directories were
-rewritten as `k8s/apps/` and `k8s/infrastructure/` under Flux. They are in the git history. Nothing in the tree
-carries their assumptions any more (hostPaths under `/opt`, NodePorts, k3s's bundled Traefik and ServiceLB,
-privileged media pods); an old branch that does is dead weight. `docs/ISSUES.md` and `docs/MIGRATION-TRIAGE.md`
-(gitignored) audited that tree, and most of their findings are moot since.
+generated by `kompose`, with the Ansible that configured that host. Both are gone (in the git history): Talos has no
+SSH, apt or user accounts, and the old `k8s/<service>/` directories were rewritten under Flux. Nothing in the tree
+carries their assumptions any more (hostPaths under `/opt`, NodePorts, k3s's bundled Traefik and ServiceLB, privileged
+media pods); an old branch that does is dead weight. `docs/ISSUES.md` and `docs/MIGRATION-TRIAGE.md` (gitignored)
+audited that tree, and most of their findings are moot since.
 
 ## Commands
 
 ```bash
-just                              # every recipe, by group; just help <recipe> shows one's arguments, options, defaults and allowed values. A recipe takes what it acts on as arguments (types space-separated, check and deploy one playbook), reads nothing from the environment but VENV, VIRTUAL_ENV and POETRY, and refuses a make-style NAME=value; just's own flags (--dry-run) go before the recipe, and ansible-playbook's after the playbook (check, deploy) or after -- (status, suspend, resume: before it, just reads a word that begins with - as one of their own options). The listing writes an optional argument as playbook='site', which is never typed: just deploy proxmox
-just install                      # the project's virtualenv synced to poetry.lock, with the Poetry on PATH (pipx install poetry); refuses a Python that is not a virtualenv
-just init                         # just install first when the virtualenv lacks the tooling (so Poetry only for a new one); installs the git hooks, copies inventory from its example and writes local.yml from its example with every setting commented out, then asks for each setting and secret (scripts/init/; --full: the less used ones too) and says what is still missing
+just                              # every recipe, by group; just help <recipe> shows one's arguments, options, defaults and allowed values
+just install                      # the project's virtualenv synced to poetry.lock (Poetry from PATH: pipx install poetry); refuses a Python that is not a virtualenv
+just init                         # hooks, inventory and local.yml from their examples, then each setting and secret asked for (--full: the less used ones too)
 just lock                         # update poetry.lock after editing pyproject.toml; packages named after it (just lock ruff) move on too
-just vault                        # edit the secrets (group_vars/all/local.vault.yml, git-ignored), laid out as local.vault.yml.example first, then read as Ansible reads it (YAML, a mapping, no key twice; ansible-lint never reads the git-ignored vault); just vault new: what is missing, a vault of your own (every key empty, from its example) and a .vault_pass; just vault edit <setup>: another setup's vault, without switching
-just vault list                   # the named setups (each machine's local.yml, vault and .vault_pass, in ~/.config/homeserver/setups, the one in use linked in); just vault switch <setup> links another in; just vault new <setup> makes one and uses it, --from current of the checkout's own three files
-just lint                         # every linter, each a type, every failure named at the end (Ctrl-C stops the run); or some, space-separated:
-                                  #   lock (poetry check --lock --strict), yaml (yamllint --strict), ansible (ansible-lint, production profile, strict), python (ruff check and format --check),
-                                  #   docs (every module's DOCUMENTATION parses, every role's REFERENCE.md is what docsible generates), github (dependabot.yml, renovate.json and the workflows against their schemas),
-                                  #   manifests (kubeconform -strict on every file and every kustomize build, against Kubernetes 1.37.1 (Talos's) and the pinned CRD catalog; then kube-linter on each setup's manifests, built and substituted by scripts/ci/render_manifests.py),
-                                  #   charts (every HelmRelease's chart rendered by scripts/ci/render_helm.py, then kubeconform, kube-linter, test_k8s.py; helm from PATH), talos (every node's Talos configuration rendered by roles/talos and validated by talosctl, skipped without it);
-                                  #   k8s: manifests, charts and talos
-just test                         # every test, each a type: unit (with the modules' coverage), policy, gitleaks (.gitleaks.toml against generated fixtures, gitleaks from PATH), idempotence (each role run repeatedly against local fakes, one pytest worker per CPU); --pytest-args='-m cluster --shard 1/2' for more to the idempotence tests' pytest
-just fix                          # write what lint can fix: python (ruff check --fix, ruff format), docs (every role's REFERENCE.md, written by docsible from the role)
-just check truenas                # dry run of roles/truenas against the NAS, with --diff; just deploy truenas applies it; --tags truenas_network (or _pools, _system, _datasets, _snapshots, _nfs, _alerts) for one stage: whatever follows the playbook goes to ansible-playbook (-e var=value for one run)
-just check proxmox                # the same for roles/proxmox_apt, roles/proxmox_tailscale, then roles/proxmox_storage, roles/proxmox_backup and roles/proxmox_node_exporter, on the Proxmox host; just deploy proxmox applies them
-just check router                 # the OPNsense router through its API (roles/opnsense): its release against opnsense_min_version, its plugins, and its configuration against the newest backup; just deploy router backs it up; -e opnsense_restore=latest restores it; site.yml leaves it out
-just check homeassistant          # Home Assistant OS's VM (roles/proxmox_vm), and a new one's owner account (roles/haos_onboard); just deploy homeassistant
-just check kubernetes             # the cluster: its VMs (roles/proxmox_vm), Talos (roles/talos), Flux (roles/flux_bootstrap); never upgrades; just deploy kubernetes
+just vault                        # edit the secrets (laid out as local.vault.yml.example first, read as Ansible reads it after); just vault new: what is missing
+just vault list                   # the named setups; just vault switch <setup>; just vault new <setup> [--from current]; just vault edit <setup>
+just lint                         # every linter, each a type: lock yaml ansible python docs github manifests charts talos (k8s: the last three)
+just test                         # every test, each a type: unit policy gitleaks idempotence; --pytest-args='-m cluster --shard 1/2' for more
+just fix                          # write what lint can fix: python (ruff), docs (every role's REFERENCE.md, written by docsible)
+just check truenas                # dry run with --diff of one playbook (truenas proxmox router homeassistant kubernetes); just deploy <playbook> applies it
 just check / just deploy          # every playbook in order, the NAS first (site.yml); name site to pass anything with it (just check site --tags truenas_nfs)
-just talos-upgrade                # move the running cluster to the pins: etcd snapshot, nodes, Kubernetes; just talos-upgrade --check shows the plan
+just talos-upgrade                # move the running cluster to the pins: etcd snapshot, nodes, Kubernetes; --check shows the plan
 just etcd-snapshot                # an etcd snapshot into ~/.talos/homeserver/etcd/
-just suspend                      # every app scaled to zero, Flux told to leave it there, data kept, then Home Assistant's VM shut down; --only jellyfin,media,homeassistant for some; --all then the cluster's VMs, the worker first; --check says what it would do; ansible-playbook's own flags after --
-just resume                       # bring back what just suspend stopped, and start Home Assistant's VM (--only narrows it too; --all starts the cluster's VMs first); --check
-just status                       # what runs, where to reach it and what needs doing, read without changing anything: the apps (state, version, each URL with what it answered from here), the admin pages (on the tailnet too), the Proxmox host's Tailscale, the VMs, the storage, the backups, the cluster, the NAS; sections named after it for some (just status vms storage: apps admin tailscale vms storage backups cluster nas); --json prints JSON; exits with the report's own code (0 nothing wrong, 1 a problem, 2 a source unread, 3 the run failed or was refused), which also ends its last line
+just suspend                      # every app to zero, Flux told to leave it, then Home Assistant's VM shut down; --only, --all (the cluster's VMs too), --check
+just resume                       # bring back what just suspend stopped; --only, --all, --check
+just status                       # what runs, where to reach it and what needs doing, read-only; sections named after it; --json; exit 0 ok, 1 problem, 2 unread, 3 failed
 ```
 
-Always run tools from the project's virtualenv, never from `PATH`. On this machine that is the pyenv virtualenv `homeserver` (Python 3.14.6, under pyenv's `versions/3.14.6/envs/`); just uses the active virtualenv (`VIRTUAL_ENV`) and otherwise the virtualenv `python3` runs from, only when the checkout chose it: `pyenv local homeserver` (a git-ignored `.python-version` at the checkout's top, or the main checkout's for a worktree) or `pyenv shell` (its `PYENV_VERSION` counts only when it differs from what the version files say: pyenv's shims export one too, set from those files, and just runs through a shim when pip installed it into a pyenv version, as `rust-just` in another project's env does on this machine), never pyenv's global version or a `.python-version` above the checkout, which `just install`'s `poetry sync` would empty; `VENV=<path>` overrides both (in the environment, or `just VENV=<path> <recipe>`, absolute there; one exported variable, so every just a recipe starts again sees the same). just never creates an environment: the user makes and keeps it wherever they like, and `just install` fills it, refusing a Python that is not a virtualenv, since `poetry sync` removes every package the lock does not list. Without any, every recipe that needs one stops before any of its lines runs, saying how to choose one; `just` and `just --list` never need it. Poetry is the exception: it comes from `PATH` (`POETRY=<path>` overrides), installed outside the project's environment, e.g. with `pipx install poetry`. Never install it into the `homeserver` env: `poetry sync` would remove its dependencies. just itself comes from `PATH` too, for the same reason (`just install` fills the virtualenv): Homebrew here, 1.55 or later, which the justfile's `set minimum-version` names (Debian's and Ubuntu's packages are older); CI and the testing VM download the release archive by version and checksum (`scripts/ci/install-just.sh`). just runs it with `VIRTUAL_ENV` set to the project's environment; without one, Poetry would make an environment of its own in its cache. Outside the checkout, where no `.python-version` applies, `python3` resolves to a broken pyenv build (3.13.1, `libintl` dyld error), and `~/.local/bin/ansible-playbook` and `~/.local/bin/yamllint` have a dead shebang. ansible-core 2.21 treats a non-boolean conditional as a fatal error. When the shell's standard handles are non-blocking, ansible commands exit with "Ansible requires blocking IO"; redirect stdin from `/dev/null` and stdout/stderr to a file.
+A recipe takes what it acts on as arguments and reads nothing from the environment but `VENV`, `VIRTUAL_ENV` and
+`POETRY`; it refuses a make-style `NAME=value`. just's own flags (`--dry-run`) go before the recipe, and
+ansible-playbook's after the playbook (`just check truenas --tags truenas_nfs`, `-e var=value` for one run) or, for
+`status`, `suspend` and `resume`, after `--`. The listing writes an optional argument as `playbook='site'`, which is
+never typed: `just deploy proxmox`. `just check router` checks the router's release, plugins and configuration against
+the newest backup, `just deploy router` backs it up, and `-e opnsense_restore=latest` restores it; `site.yml` leaves
+it out.
 
-`kubeconform` is the usable gate for manifests, not `kubectl --dry-run=client`, which needs a live API server: `just lint k8s` runs it, kube-linter, the charts' checks and the Talos configurations (`k8s/CLAUDE.md` says how). kubeconform, kube-linter, helm, talosctl and gitleaks come from `PATH` (Homebrew here, pinned by version and checksum in CI); the idempotence tests also take `openssl` from `PATH`, for the fake NAS's certificate.
+Always run tools from the project's virtualenv, never from `PATH`. On this machine that is the pyenv virtualenv
+`homeserver` (Python 3.14.6). just uses the active virtualenv (`VIRTUAL_ENV`), and otherwise the one `python3` runs
+from, only when the checkout chose it: `pyenv local homeserver` (a git-ignored `.python-version` at the checkout's
+top, or the main checkout's for a worktree) or `pyenv shell` (its `PYENV_VERSION` counts only when it differs from
+what the version files say, since pyenv's shims export one too); `VENV=<path>` overrides both. Never pyenv's global
+version or a `.python-version` above the checkout, which `just install`'s `poetry sync` would empty. just never
+creates an environment: every recipe that needs one stops before it runs, saying how to choose one. Poetry and just
+come from `PATH`, never from the env, which `poetry sync` would strip: Poetry from pipx (`POETRY=<path>` overrides),
+just from Homebrew, 1.55 or later (the justfile's `set minimum-version`). Outside the checkout `python3` resolves to a
+broken pyenv build (3.13.1, `libintl` dyld error), and `~/.local/bin/ansible-playbook` and `~/.local/bin/yamllint`
+have a dead shebang. ansible-core 2.21 treats a non-boolean conditional as a fatal error. When the shell's standard
+handles are non-blocking, ansible commands exit with "Ansible requires blocking IO"; redirect stdin from `/dev/null`
+and stdout/stderr to a file.
 
-Vault: `group_vars/all/local.vault.yml`, git-ignored like `local.yml` and committed nowhere: nothing reads it from the repository, and this public repo would publish even its ciphertext (until 2026-10-20 it was committed as `group_vars/all/vault.yml`, which the commits from then keep; README's "Setups and the vault" has the one-time move, and the new path is one no commit ever held, since a checkout of an older branch overwrites an ignored file without asking). `local.vault.yml.example` is the template a new vault is made from: every key, each empty under a comment saying what it is for, and `tests/policy/test_vault.py` checks that it names every vault variable the group_vars read, each `""`, which every reader takes for unset (a placeholder would pass for a real secret). `just init` fills a key in on its own line and, cleared, empties it again, so the comments stay. `just vault` (and `just vault edit <setup>`) first lays a vault made before the template, or from an older one, out as it (`scripts/init/setups.py`'s `onto_template`): the template's every comment and key, each value the vault sets in its place, and what the template does not hold, the vault's own keys and comments, after a heading at the end; it leaves alone a vault holding every key and comment line of the template, and leaves as it is, saying why, one that would read back as other values or that YAML alone cannot read (`!unsafe`). `ansible.cfg` sets `vault_password_file = ./.vault_pass`, so `--ask-vault-pass` is unnecessary locally. It holds `vault_truenas_api_key` (read by `group_vars/nas/connection.yml`), with the router `vault_opnsense_api_key` and `vault_opnsense_api_secret` (read by `group_vars/router/connection.yml`), `vault_opnsense_backup_password` (the backups' password) and `vault_opnsense_root_password` (a restore's web UI login, read by `group_vars/router/backup.yml`), with remote access `vault_tailscale_auth_key` (a one-off Tailscale auth key, read by `group_vars/proxmox/tailscale.yml` and spent at the host's first login; a spent one does nothing), with Home Assistant `vault_haos_owner_password` (its owner account's, read by `group_vars/proxmox/haos.yml`), optionally `vault_truenas_mail_password` (the alert mail's server, read by `group_vars/nas/truenas.yml`), and `vault_discord_token`, left over from the deleted roles. Never the Talos secrets bundle: it is every key of the cluster, and lives in `talos_config_dir` alone (`kubernetes_settings_error` refuses `vault_talos_secrets`). Never print its contents; check it by listing variable names only.
+`kubeconform` is the usable gate for manifests, not `kubectl --dry-run=client`, which needs a live API server: `just
+lint k8s` runs it, kube-linter, the charts' checks and the Talos configurations (`k8s/CLAUDE.md` says how).
+kubeconform, kube-linter, kustomize, helm, talosctl and gitleaks come from `PATH` (Homebrew here, pinned by version
+and checksum in CI); the idempotence tests also take `openssl` from `PATH`, for the fake NAS's certificate.
 
-Setups (`scripts/init/setups.py`, README's "Setups and the vault"): a checkout either keeps its own `local.yml`, vault and `.vault_pass`, or links them from one named setup, `~/.config/homeserver/setups/<name>/{local.yml,vault.yml,vault_pass}` (`$XDG_CONFIG_HOME` when set; `SETUPS` in the environment elsewhere, as the tests do), so one checkout serves several machines; the store is refused inside the checkout. A setup is known by its own file names: the vault's or `.vault_pass`'s link leads, followed to the end (`realpath`, so relative links and a worktree's links to its main checkout's links compare equal), to a `vault.yml` or `vault_pass`; any other link, such as `.vault_pass` to a password file kept elsewhere, is one of the checkout's own files. The setups cannot sit side by side in `group_vars/all/`, which Ansible reads whole, and Ansible skips a link to a missing file without a word (`DataLoader._get_dir_vars_files` keeps only paths that are files), so the justfile's `_playbook` runs `setups.py check` before every playbook: it prints `Setup: <name> (<dir>)`, or stops when the three links are not one whole setup, when any link leads to a missing file, or when the old committed vault is back beside the vault (an old branch), whose keys would win; the log's name carries the setup (`scripts/run_log.py`, which asks `setups.py` too). `vars_plugins/setup_links.py`, which Ansible loads beside the playbooks by itself, runs the same check for `ansible-playbook` started any other way. `just vault` takes the setup as an argument (`just vault switch <setup>`, `just vault new <name> --from current`), never from the environment, where WSL puts a `NAME`; a playbook recipe refuses a make-style `NAME=…` (or `TYPE=`, `TAGS=`, `ONLY=`, `ALL=`, `ANSIBLE_ARGS=`, `FROM=`, `VENV=`), never after `-e`, rather than hand it to ansible-playbook as a second playbook. `just init`'s first question is the setup, and its `write_file` follows a link (`os.replace` over the link would replace the link itself); `ansible-vault edit` follows links on its own. Nothing deletes a setup or replaces a file of the checkout's own that holds anything: `switch` and `new` refuse one until `--from current` moves it into a setup, while a `local.yml` that sets nothing (the first `just init`'s) and a file the same as the setup's (a switch cut short) give way; `switch` refuses a setup with a file missing or a vault its password does not open, and none touches the git branch. `just vault new` without a name is `setups.py new` too, the checkout's own vault; `just init` makes the same vault by calling `setups.own_vault` in its own process, never through the task runner, and reads and writes a vault through `setups.decrypt` and `setups.encrypt`, so both follow one set of rules. `tests/unit/test_setups.py` covers each action, each refusal and the justfile's wiring, running just in a copy of the tree with `VENV` in the environment (after a recipe's name, `VENV=…` would be one of its arguments).
+**The vault** is `group_vars/all/local.vault.yml`, git-ignored like `local.yml` and committed nowhere: this public repo
+would publish even its ciphertext (until 2026-10-20 it was committed as `group_vars/all/vault.yml`, which the commits
+from then keep; README's "Setups and the vault" has the one-time move). `ansible.cfg` sets `vault_password_file =
+./.vault_pass`. The vault is decrypted on every run, so it and `.vault_pass` must exist in every setup (`just vault
+new` makes what is missing). `local.vault.yml.example` is the template a new vault is made from: every key, each `""`
+under a comment saying what it is for, which every reader takes for unset; `tests/policy/test_vault.py` checks that it
+names every vault variable the group_vars read. Each secret is a `vault_` key, exposed through a plain variable by one
+group_vars file: the TrueNAS API key (`group_vars/nas/connection.yml`), the OPNsense key pair and its two passwords
+(`group_vars/router/`), the Tailscale auth key (`group_vars/proxmox/tailscale.yml`), Home Assistant's owner password
+(`group_vars/proxmox/haos.yml`) and the alert mail's password (`group_vars/nas/truenas.yml`); `vault_discord_token` is
+left over from the deleted roles. Never the Talos secrets bundle, which is every key of the cluster and lives in
+`talos_config_dir` alone, and never a Kubernetes Secret.
+**Never print the vault's contents; check it by listing variable names only.**
+
+**Setups** (`scripts/init/setups.py`, whose docstring is the reference, and README's "Setups and the vault"): a
+checkout keeps its own `local.yml`, vault and `.vault_pass`, or links all three from one named setup in
+`~/.config/homeserver/setups/<name>/`, so one checkout serves several machines. Ansible skips a link to a missing file
+without a word, so `setups.py check` runs before every playbook (the justfile's `_playbook`, and
+`vars_plugins/setup_links.py` for `ansible-playbook` started any other way) and stops when the links are not one whole
+setup or the old committed vault is back beside the vault. `just vault` takes the setup as an argument, never from the
+environment, where WSL puts a `NAME`. Nothing deletes a setup or replaces a file of the checkout's own that holds
+anything. `just init` reads and writes a vault through `setups.decrypt` and `setups.encrypt`, in its own process, so
+both follow one set of rules; `tests/unit/test_setups.py` covers each action, each refusal and the justfile's wiring.
 
 ## Architecture
 
-### Infrastructure Ansible
+### The playbooks and their roles
 
-Infrastructure roles in five playbooks: `truenas.yml` runs `roles/truenas`, `router.yml` runs `roles/opnsense` (after a play on localhost that refuses its settings and an inventory without the `router` group; `site.yml` does not run it yet), `proxmox.yml` runs `roles/proxmox_apt`, `roles/proxmox_tailscale`, `roles/proxmox_storage`, `roles/proxmox_backup` then `roles/proxmox_node_exporter`, `homeassistant.yml` runs `roles/proxmox_vm` and `roles/haos_onboard` on the Proxmox host, `kubernetes.yml` runs `roles/proxmox_vm` on the Proxmox host and then `roles/talos` and `roles/flux_bootstrap` on the controller, and `site.yml` runs all four, NAS first. `talos-upgrade.yml` and `etcd-snapshot.yml` run the talos role's `upgrade` and `etcd-snapshot` entry points, after a play on localhost that refuses a cluster whose inventory lacks the `kubernetes` group, which would otherwise match no host and end without a word; `suspend.yml` and `resume.yml` run `roles/app_scale` on the controller, then the proxmox_vm role's `power` entry point on the Proxmox host for Home Assistant's VM. `status.yml` runs `roles/status` on the Proxmox host and, at the same time (`strategy: free`), for the cluster on the controller and for the NAS, which the truenas role's read-only `status` entry point reads first, then its `report` entry point on the controller. The inventory has four groups: `nas` (host `truenas`), `router` (host `opnsense`, local), `proxmox` (host `homeserver`) and `kubernetes` (host `homeserver-k8s`, local: the cluster is built from the workstation), and no addresses.
-
-**One engine draws every run, report and live output** (`filter_plugins/`, `callback_plugins/homeserver.py`, named in `ansible.cfg`): what a run prints at a terminal and in its log, NEXT STEPS, the live region and its rules are in `filter_plugins/CLAUDE.md`. A playbook a declaration in `filter_plugins/live_recipes.py` names is drawn by its steps, so a new playbook, or a renamed role or task file, may need its declaration changed (`tests/unit/test_live_recipes.py` holds them to the tree).
-
-**The roles are generic; this setup is configuration.** Role defaults change nothing (empty lists and dicts, null for "leave alone"), and task files hold no configuration values, only variables, API namespaces and CLI verbs. Everything that describes these machines lives in tracked group_vars, apart from addresses and serials:
-
-| File | Holds |
-|---|---|
-| `group_vars/all/local.yml` (git-ignored) | addresses, disk serials, the NAS's pool names when they are not `persistent` and `ephemeral`, the installer's storage when it is not `local-lvm` (`proxmox_local_vm_storage`: every VM's without a NAS, the cluster's EFI disks with one too), the cluster's Kubernetes section: node addresses and MACs, MetalLB's addresses, the repository Flux syncs, without a NAS the worker's size, for a test host's cluster its own credentials directory (`kubernetes_talos_config_dir`), and for remote access the switch (`tailscale_enabled`) and the LAN's prefix (`tailscale_advertise_routes`) |
-| `group_vars/all/local.vault.yml` (git-ignored, encrypted) | the TrueNAS API key, the Tailscale auth key, and Home Assistant's owner password |
-| `group_vars/all/storage.yml` | the VM storage layout, read by both plays so a share and the storage that mounts it cannot drift apart: the NAS's pool names by class (`nas_pools`: `persistent` and `ephemeral`, overridable in `local.yml`), every VM class (`vm_storage_classes`, ids `homeserver-persistent` and `homeserver-ephemeral`), the classes the setup has (`vm_storage`: both with a NAS, the ephemeral class alone without, on the installer's storage), one pool per project that creates VMs (`vm_storage_consumers`, first `claude-on-proxmox-ephemeral`), and the NFS exports derived from them; the NAS's address for whatever mounts it (`nas_address`); the space kept for the VMs on the ephemeral pool (`vm_storage_ephemeral_reservation`) and the cap on the persistent VMs' dataset (`vm_storage_persistent_quota_gib`); the installer's storage (`vm_storage_installer`: `local-lvm`, unless `local.yml` sets `proxmox_local_vm_storage`, a blank value counting as unset); and `nas_present`, worked out from the NAS addresses, which switches to a setup without a NAS, where the installer's storage is the only VM storage |
-| `group_vars/all/kubernetes.yml` | the Kubernetes cluster's shape and what more than one play reads about it: `kubernetes_present`, worked out from `local.yml`'s node addresses, the cluster's two nodes, the same in both setups (`kubernetes_nodes`), the NAS datasets the cluster mounts (`kubernetes_nas_datasets`), and `kubernetes_settings_error`, which every playbook asserts first |
-| `group_vars/nas/connection.yml`, `group_vars/proxmox/connection.yml` | how each host is reached |
-| `group_vars/nas/truenas.yml` | the NAS: network, pools, settings, datasets, shares, services |
-| `group_vars/proxmox/apt.yml` | the Proxmox host's repositories (no-subscription on, enterprise off), the upgrade on every run, and what needs a reboot |
-| `group_vars/proxmox/storage.yml` | the Proxmox storages and boot delay |
-| `group_vars/all/router.yml`, `group_vars/router/connection.yml`, `group_vars/router/backup.yml` | the router: `router_present`, worked out from `local.yml`'s `opnsense_address`, `router_settings_error`, which `router.yml` asserts first, how `roles/opnsense` reaches it (the address, the vault's key pair; `local.yml` sets the pin `opnsense_api_cert_sha256` itself), and its backups (`~/.opnsense/homeserver` or `local.yml`'s `router_backup_dir`, the vault's two passwords, a fresh install's `opnsense_bootstrap_address`) |
-| `group_vars/all/haos.yml` | Home Assistant's switch (`haos_present`, worked out from `local.yml`'s `haos_mac`), VMID (310), size, owner, and `haos_settings_error`, which `proxmox.yml` and `homeassistant.yml` assert first |
-| `group_vars/proxmox/haos.yml` | Home Assistant OS's VM: the pinned OVA and its sha256 (`haos_version`, `haos_ova_sha256`), the VM's layout (`haos_vms`), which `homeassistant.yml` hands to `roles/proxmox_vm` as play vars, and the owner's password from the vault |
-| `group_vars/proxmox/backup.yml` | the nightly backup job: the VMs it covers (`vm_backup_vmids`: the cluster's nodes, Home Assistant's, plus `local.yml`'s `vm_backup_extra_vmids`) and where it writes (`vm_backup_target`: the NAS's `homeserver-backup`, or `local.yml`'s `vm_backup_storage` without a NAS) |
-| `group_vars/all/status.yml`, `group_vars/proxmox/status.yml`, `group_vars/kubernetes/status.yml`, `group_vars/nas/status.yml` | `just status`: what the setup has, the VMs it reports on (this repo's own, the ones the nightly backup covers; Home Assistant's as an app too), the admin pages, the commands it suggests; on the Proxmox host the storage it shows against the disk budget, Debian's reboot flag, the backup job it checks (`proxmox_backup_jobs`) and what the proxmox_tailscale role's `status` entry point read; for the cluster the credentials, apps path, user volumes, settings ConfigMap, Alertmanager's pod, pins and etcd snapshots' directory it reads; for the NAS what the truenas role's `status` entry point read |
-| `group_vars/proxmox/tailscale.yml` | remote access: whether it is on and the routes, from `local.yml`, the tag, the preferences kept with `tailscale set` (Tailscale's updater off), upgrades left to `proxmox_apt`, and what the guard protects (every address `local.yml` gives the NAS and any NFS server the host mounts, tcp/443 only) |
-| `group_vars/proxmox/node_exporter.yml` | the host's own metrics: with a cluster, the node exporter for its Prometheus, which the cluster's nodes alone may scrape |
-
-A new setting goes in one of these files, with a neutral default in the role and a line in the role's `meta/argument_specs.yml` and `README.md`, never as a literal in a task; then `just fix docs` brings the role's `REFERENCE.md` up to date.
+`truenas.yml` runs `roles/truenas`; `router.yml` runs `roles/opnsense`, after a play on localhost that refuses its
+settings and an inventory without the `router` group; `proxmox.yml` runs `roles/proxmox_apt`,
+`roles/proxmox_tailscale`, `roles/proxmox_storage`, `roles/proxmox_backup` then `roles/proxmox_node_exporter`;
+`homeassistant.yml` runs `roles/proxmox_vm` and `roles/haos_onboard` on the Proxmox host; `kubernetes.yml` runs
+`roles/proxmox_vm` on the Proxmox host and then `roles/talos` and `roles/flux_bootstrap` on the controller; `site.yml`
+runs all of them but the router, NAS first. `talos-upgrade.yml` and `etcd-snapshot.yml` run the talos role's `upgrade`
+and `etcd-snapshot` entry points, and `suspend.yml` and `resume.yml` run `roles/app_scale`, then the proxmox_vm role's
+`power` entry point for Home Assistant's VM; each first refuses an inventory without the `kubernetes` group, which
+would otherwise match no host and end without a word. `status.yml` runs `roles/status` on every host at once
+(`strategy: free`), then its report on the controller. The inventory has four groups, `nas` (host `truenas`), `router`
+(host `opnsense`, local), `proxmox` (host `homeserver`) and `kubernetes` (host `homeserver-k8s`, local: the cluster is
+built from the workstation), and no addresses.
 
 | Role | What it does | What it never does |
 |---|---|---|
@@ -142,50 +153,202 @@ A new setting goes in one of these files, with a neutral default in the role and
 tests and fakes that cover it. Read it before changing the role; `roles/CLAUDE.md` holds the conventions every role
 keeps.
 
-**Without a NAS.** `nas_present` (`group_vars/all/storage.yml`) is true when `local.yml` gives the NAS either address, `truenas_static_address` or `truenas_bootstrap_address`. The addresses are the only switch: `nas_present` is never set, and the guard below refuses one given with `-e`, which would be a string that counts as true even when it says `false`. The `truenas` host stays in the inventory, and `truenas.yml` carries two `always`-tagged pre-tasks that, when it is false, say why and `end_host` before the role runs (the `always` tag is required, since `meta` tasks honour tags, and the `debug` is what gives the host a recap line). A misspelt address would look exactly like no NAS, so both `truenas.yml` and `proxmox.yml` first assert that `nas_section_error` (`storage.yml`) is empty: it names the TrueNAS settings `local.yml` still sets (certificate pin, gateway, name servers, pool disks, pool names, the alert mail's settings) when neither address is given, and with a NAS it refuses alert mail TrueNAS would refuse (a mail server without a sender address, an alert address without a mail server) and `vm_backup_storage`, which only a setup without a NAS reads, while a section deleted or left entirely blank stays Proxmox-only. `group_vars/proxmox/storage.yml` then derives an empty NFS list, `proxmox_storage_local` set to the installer's storage (with a NAS too when there is a cluster, whose EFI disks go there), a null boot delay and no wait at boot; `vm_storage` holds the ephemeral class alone, on the installer's storage, `local-lvm` unless `local.yml` sets `proxmox_local_vm_storage` (`local-zfs` on a ZFS install). There is no persistent class without a NAS, and no project pools. `storage.yml` only reads that variable: a `group_vars/all/` directory is read alphabetically and the last file wins, so a value set in `storage.yml` would override `local.yml`'s. The vault is still decrypted on every run, so it and `.vault_pass` must exist, as in every setup: `just vault new` makes what is missing, `.vault_pass` with mode 0600 and the template encrypted with it (`scripts/init/setups.py`, which encrypts before it writes either file, so nothing is written unless encryption works). A vault that already opens with `.vault_pass` is left alone, one that does not open is refused, since it may be the user's with its password lost, and so is a checkout that still has `group_vars/all/vault.yml`, whose vault is moved rather than replaced. The vault exists nowhere else, so README and REBUILD tell the user to keep it in a password manager; a cluster's secrets bundle is never in it (`roles/talos` above). `tests/policy/test_roles.py` runs the argument-spec pass in both modes and `tests/integration` runs the Proxmox role without a NAS; the mode was also run against a fresh Proxmox VE 9.2.2 install, which is where the fake's `digest`, `shared` and varying `content` order come from. Storage ids say who owns a storage and what it is for, never the backend; they were `truenas-*` until 2026-10-08. The role never removes a storage and refuses an export that another id already mounts, so renaming an id means removing the old one by hand first (`pvesm remove`, which leaves an NFS storage mounted at its old path until the next reboot); until then every run, dry or real, refuses and names both ids.
+**One engine draws every run, report and live output** (`filter_plugins/`, `callback_plugins/homeserver.py`, named in
+`ansible.cfg`): what a run prints at a terminal and in its log, NEXT STEPS, the live region and its rules are in
+`filter_plugins/CLAUDE.md`. A playbook a declaration in `filter_plugins/live_recipes.py` names is drawn by its steps,
+so a new playbook, or a renamed role or task file, may need its declaration changed
+(`tests/unit/test_live_recipes.py` holds them to the tree).
 
-**The cluster switch.** `kubernetes_present` (`group_vars/all/kubernetes.yml`) is true when `local.yml` gives `kubernetes_node_addresses`; like `nas_present` it is worked out, never set. In both setups the cluster is a control plane, which runs Talos, etcd and the API alone, and a worker that runs the apps; only where their disks live depends on the NAS, and without one `local.yml` must give the worker's size (`kubernetes_node_sizes`), since the defaults fit the home host. Until 2026-10-19 a setup without a NAS had a single schedulable control plane instead; one shape keeps the two setups from drifting apart. Every playbook first asserts that `kubernetes_settings_error` is empty, right after `nas_section_error`, because the Proxmox play reads the switch too: it refuses `kubernetes_present` given with `-e`, the section's other settings without node addresses (a misspelt address), node addresses other than the two nodes', a node without a locally administered lower-case MAC (`kubernetes_node_macs`, chosen by the owner and reserved in DHCP before the first run; the example's `<mac>` is refused on purpose), no `flux_sync_url` (it has no default: Flux applies that repository with cluster-admin rights), with a NAS no `truenas_static_address` (the bootstrap address alone is a DHCP lease the NAS play replaces, and the cluster's volumes and the apps' NetworkPolicies need `nas_address`), a `flux_sync_ref` other than `refs/heads/main` without `flux_sync_ref_unprotected: true` (whoever can push to the synced branch owns the cluster, and only `main` is protected; `scripts/runbooks/talos.md`), MetalLB's addresses missing, not IPv4 or outside their range (and a node address inside it), `kubernetes_apps` other than a list of groups, a `kubernetes_ingress_allowed_range` that is not one IPv4 CIDR, `vault_talos_secrets` in the vault in any setup, a worker without a data disk (or a data or media disk under 11 GiB: Talos's volume takes 10 GiB, and the partition table a little more), a `proxmox_address` that is not an IPv4 address (the apps' NetworkPolicies deny it as a /32, in both setups), a worker system disk under 32 GiB (every app's image and Jellyfin's transcoding scratch), a control plane with a data or media disk or under 2 GiB of memory, a node without cores or memory, a system disk under 10 GiB, with a NAS a worker data disk, a control plane system disk and Home Assistant's disk above three quarters of `vm_storage_persistent_quota_gib` together, a worker media disk or `kubernetes_media_on_data_volume` (the media live on the NAS), and without a NAS a worker without every size, or without a media disk unless `kubernetes_media_on_data_volume` is set, or with both. `kubernetes_iso_storage` lives in `group_vars/all/kubernetes.yml`, not with the VMs, so `local.yml` can name `local-btrfs` on a BTRFS install. A host sees only its own groups' files, so whatever two plays read lives in `group_vars/all/`. With a NAS and a cluster, the NAS play creates `persistent/nextcloud`, `persistent/photoprism` and `ephemeral/frigate` (1M records, the last with a quota and no snapshots), and exports those and the existing media dataset `ephemeral/jellyfin` (its properties and NFSv4 ACLs left alone; created, through `truenas_dataset`'s `create_only`, only when missing, as after the ephemeral pool's disk is lost, since its share cannot be made without it) to the worker alone, with root mapped to root: each app's pod makes its own mount point uid 1000. gitleaks flags a MAC written out in any tracked file, so the tests build theirs at run time. `tests/policy/test_roles.py` runs the argument-spec pass in the four setups the two switches make, and checks each refusal's message.
+### Configuration
 
-Storage design: the NAS's two pools are named by class, never by hardware (`nas_pools` in `group_vars/all/storage.yml`; `local.yml` can name them otherwise with `truenas_pool_persistent` and `truenas_pool_ephemeral`): `persistent` is redundant, for data that cannot be re-created, and `ephemeral` has no redundancy, for data that can. Persistent VMs on `persistent/proxmox/vm` (RAIDZ1, `sync=standard`, a quota of `vm_storage_persistent_quota_gib`, 1 TiB, which counts its snapshots, so a disk that fills never fills the pool under the backups), ephemeral VMs on `ephemeral/proxmox/vm` (single disk, `sync=disabled`, 1 TiB quota on `ephemeral/proxmox` because the pool also holds the media dataset, and never a snapshot task). `vm_storage_ephemeral_reservation` puts a ZFS `reservation` on `ephemeral/proxmox`, which counts its descendants, so the media apps can never fill the pool under the VMs; a `refreservation` would not, since it excludes descendants. With a NAS and a cluster, `ephemeral/proxmox/vm` itself carries a `refreservation` of the cluster's disks on it (`kubernetes_ephemeral_disks_gib`, `group_vars/all/kubernetes.yml`: the worker's system disk), which neither the media nor the project pools can take, since a worker whose disk cannot grow pauses with every app; always sent, 0 for none. Both use 64K records and POSIX ACLs. A project that creates VMs on the host gets a pool of its own: an entry in `vm_storage_consumers` makes a dataset under `ephemeral/proxmox` with the ephemeral class's properties and an optional quota, exported and mounted under the project's id. The project is told that id and nothing else, and its token is granted `/storage/<id>` by hand with its own README's line; this repo manages no Proxmox users or ACLs, and never grants `Datastore.Allocate`, which Proxmox checks on `/storage` for creating, changing and removing any storage alike. Proxmox has no host-wide default storage, so a project always names its storage; its default, `local-lvm`, is right without a NAS. These two projects stay independent: nothing here reads the other's configuration, and nothing there reads this repo's.
+Role defaults change nothing; everything that describes these machines lives in tracked group_vars, apart from
+addresses and serials (`roles/CLAUDE.md`):
+
+| File | Holds |
+|---|---|
+| `group_vars/all/local.yml` (git-ignored) | addresses, MACs, disk serials, and every per-host choice: pool names, the installer's storage, the cluster's section, remote access |
+| `group_vars/all/local.vault.yml` (git-ignored, encrypted) | the secrets (above) |
+| `group_vars/all/storage.yml` | the VM storage layout both plays read, so a share and the storage that mounts it cannot drift apart; `nas_present`, `nas_address`, `nas_section_error` |
+| `group_vars/all/kubernetes.yml` | the cluster's shape, its pins, and what more than one play reads; `kubernetes_present`, `kubernetes_settings_error` |
+| `group_vars/all/router.yml`, `group_vars/router/` | the router: `router_present`, `router_settings_error`, how it is reached, its backups |
+| `group_vars/all/haos.yml`, `group_vars/proxmox/haos.yml` | Home Assistant: `haos_present`, `haos_settings_error`, its VMID, size and owner; the pinned OVA and the VM's layout |
+| `group_vars/all/status.yml`, `group_vars/*/status.yml` | `just status`: what the setup has, the VMs and pages it reports on, the commands it suggests (`status_commands`) |
+| `group_vars/nas/` | how the NAS is reached; its network, pools, settings, datasets, shares, services |
+| `group_vars/proxmox/` | how the host is reached; its repositories (`apt.yml`), storages (`storage.yml`), backup job (`backup.yml`), Tailscale (`tailscale.yml`), node exporter (`node_exporter.yml`), and the cluster's VMs (`vms.yml`) |
+| `group_vars/kubernetes/` | the cluster from the controller: Talos's patches (`talos.yml`), Flux's settings (`flux.yml`), the apps `just suspend` stops (`apps.yml`) |
+
+A `group_vars/all/` directory is read alphabetically and the last file wins, so a value set in `storage.yml` would
+override `local.yml`'s: the tracked files only read `local.yml`'s settings. A host sees only its own groups' files, so
+whatever two plays read lives in `group_vars/all/`.
+
+**The switches.** `nas_present` is true when `local.yml` gives the NAS either address (`truenas_static_address` or
+`truenas_bootstrap_address`), `kubernetes_present` when it gives `kubernetes_node_addresses`, and `router_present` and
+`haos_present` follow `opnsense_address` and `haos_mac` the same way. They are worked out, never set: each guard
+refuses one given with `-e`, which would be a string that counts as true even when it says `false`. A misspelt address
+would look exactly like no NAS or no cluster, so every playbook but `router.yml` first asserts that
+`nas_section_error`, then `kubernetes_settings_error`, is empty; `router.yml` asserts `router_settings_error`, and
+every playbook that reads Home Assistant's settings (`proxmox.yml`, `homeassistant.yml`, `suspend.yml`, `resume.yml`,
+`status.yml`) `haos_settings_error`. Each names the settings `local.yml` still sets without their switch and refuses
+values the machines would refuse, and its messages are the list. Without a NAS the `truenas` host stays in the
+inventory, and `truenas.yml`'s pre-tasks say why (a `debug`, which is what gives the host a recap line) and `end_host`
+before the role runs, both tagged `always`, since `meta` tasks honour tags; every VM disk is then on the installer's
+storage (`local-lvm`, or `local.yml`'s `proxmox_local_vm_storage`). In both setups the cluster is a control plane,
+which runs Talos, etcd and the API alone and keeps Talos's taint, and a worker that runs the apps; only where their
+disks live depends on the NAS. Until 2026-10-19 a setup without a NAS had a single schedulable control plane instead;
+one shape keeps the two setups from drifting apart. `tests/policy/test_roles.py` runs the argument-spec pass in the
+four setups the two switches make and checks each refusal's message.
+
+**Storage design.** The NAS's two pools are named by class, never by hardware (`nas_pools`, overridable in
+`local.yml`): `persistent` is redundant, for data that cannot be re-created, and `ephemeral` has no redundancy, for
+data that can. Persistent VMs live on `persistent/proxmox/vm`, ephemeral ones on `ephemeral/proxmox/vm`. Storage ids
+say who owns a storage and what it is for, never the backend. A project that creates VMs on the host gets a pool of
+its own (`vm_storage_consumers`), is told its storage id and nothing else, and has its token granted `/storage/<id>` by
+hand; this repo manages no Proxmox users or ACLs and never grants `Datastore.Allocate`. That project
+(claude-on-proxmox) and this one stay independent: nothing here reads the other's configuration.
+`roles/truenas/README.md` has the datasets' properties, quotas and reservations, `roles/proxmox_storage/README.md` the
+storages.
 
 ### Workloads (`k8s/`)
 
-Flux applies `k8s/clusters/<setup>/` (`nas` with a NAS, `local` without): the platform in `k8s/infrastructure/`, and the apps in `k8s/apps/<group>/`, one Flux Kustomization each. Home Assistant is a VM of its own, not a manifest. The manifests' layout, the storage model, networking, monitoring, the GPU, image pinning, Renovate and the cluster's landmines are in `k8s/CLAUDE.md`, which Claude Code loads when it works on a file under `k8s/`.
+Flux applies `k8s/clusters/<setup>/` (`nas` with a NAS, `local` without): the platform in `k8s/infrastructure/`, and
+the apps in `k8s/apps/<group>/`, one Flux Kustomization each; a host runs the groups `local.yml`'s `kubernetes_apps`
+names. The manifests' layout, the storage model, networking, monitoring, the GPU, image pinning, Renovate and the
+cluster's own landmines are in `k8s/CLAUDE.md`, which Claude Code loads when it works on a file under `k8s/`.
 
 ## Landmines
 
-What is easy to break, or easy to get wrong when reading the tree. `docs/` (gitignored, so absent from a fresh
-clone) holds the audits and reviews behind the older entries.
+What is easy to break, or easy to get wrong, wherever the change is. `docs/` (gitignored, so absent from a fresh
+clone) holds the audits and reviews behind them.
 
-- **Flux holds cluster-admin, so merge rights on `main` are the cluster's admin boundary.** kustomize-controller and helm-controller apply whatever the synced branch holds, with cluster-admin. Whoever can merge to `main` (the "Protect main" ruleset: a pull request and `ci-success` required, nobody bypassing) controls the cluster, which is why `flux_sync_url` has no default and a fork syncs its own repository; another branch is unprotected, so syncing one takes `flux_sync_ref_unprotected: true` and its source suspended while it is not being tested (`scripts/runbooks/talos.md`). Read the live ruleset (`gh api repos/kawadeomkar/homeserver/rulesets/24555579`) before relying on it. No other cluster-admin principal runs in the cluster: `portainer` used to bind `cluster-admin` to its pod's ServiceAccount on three NodePorts plus an Ingress, and was deleted rather than scoped; use `k9s` or Headlamp from a workstation instead.
-- **No plaintext `Secret` manifest may be committed.** Every Kubernetes Secret is a `k8s/**/*.sops.yaml`, encrypted with SOPS for the cluster's age key (`k8s/README-secrets.md`; `k8s/CLAUDE.md` lists the checks that refuse a plaintext one). **This repo is public** — that is also why `.claude/` and `inventory` are ignored.
-- **The Tailscale subnet router masquerades every tailnet client to the Proxmox host's address**, which is exactly the address the NAS exports VM disks and backups to, with root kept as root. Two controls keep tailnet clients to the NAS's web UI, each enough alone:
-  - the tailnet policy's grants, kept by hand in the admin console (`scripts/runbooks/tailscale.md`);
-  - the role's fail-closed nftables guard.
-
-  Both are allow-lists, because the NAS's mountd, statd and lock manager use random ports. Any proxy on the host itself (Tailscale Serve with a non-local target, `ssh -L`, SDN Simple-zone SNAT) connects from the trusted address unseen by the guard, and so does tailscaled itself with the debug setting `TS_DEBUG_NETSTACK_SUBNETS=1`. Reload `tailnet-guard.service`; never restart it, which restarts Tailscale.
-- **Two secret systems, split by layer:** Ansible Vault (`group_vars/all/local.vault.yml`, git-ignored) for host/playbook variables, and SOPS+age for Kubernetes Secrets (`.sops.yaml`, the key and the procedure in `k8s/README-secrets.md`). Do not put k8s Secrets in `vault.yml`.
-- **The nodes' firewall drops what no rule lets in, so a new port on a node needs a rule.** Talos's ingress firewall (`group_vars/kubernetes/talos.yml`: `NetworkDefaultActionConfig` blocks, each `NetworkRuleConfig` lets a port in) answers the LAN on the Talos API (50000) and, on the control plane, the Kubernetes API (6443), both behind client certificates; the rest only the nodes: etcd (the control plane alone), trustd, the kubelet, Flannel's VXLAN, MetalLB's memberlist, and, to the pod network too (talosctl's default, which `roles/talos` asks talosctl for as it renders, `talos_pod_subnets`, so that no private range is written in the repo; `just lint talos` checks that each rendered kubelet rule names it), the kubelet and the metrics Prometheus scrapes on the nodes. Everything else to a node is dropped, kube-proxy's health checks and the node port of Traefik's Service among them, while Talos always lets in established connections, ICMP, pod-to-pod and pod-to-service traffic and pods' DNS queries, and the firewall never sees what kube-proxy forwards to pods, the load balancers' addresses included. A hostNetwork pod's new port, or a new scrape target on a node, times out until a rule names it. Try a changed rule first with `talosctl apply-config --mode try` on the rendered configuration (`talos_keep_rendered`), which reverts by itself: a rule that closes 50000 locks the role out of the node, leaving only its console in Proxmox and a reinstall.
-- **The NAS's NFS shares and the VM backups trust addresses, on a flat LAN.** NFS with `sec=sys` trusts the client's address, and the shares map root to root: the cluster's to the worker's address, the VM and backup shares to the Proxmox host's. The nightly backups hold the control plane's machine configuration (every key of the cluster) and its etcd (every Secret, flux-system's age key included), so treat `homeserver-backup` as secret-level. A device that leases a node's address (an unreserved DHCP lease) or ARP-spoofs it reads them as root. The owner's answer is the network, decided 2026-10-17: DHCP reservations for every node and a servers VLAN the IoT and Wi-Fi devices cannot reach (`TODO.md`); Proxmox Backup Server's client-side encryption was considered and left out. The NAS takes only privileged source ports (`allow_nonroot: false`), and pods cannot reach it (above).
+- **Every change to the NAS goes through `roles/truenas`.** No UI clicks, ad-hoc API calls or SSH; a fresh install
+  plus one run must rebuild it. Read-only API queries are fine.
+- **Flux holds cluster-admin, so merge rights on `main` are the cluster's admin boundary.** kustomize-controller and
+  helm-controller apply whatever the synced branch holds, with cluster-admin. Whoever can merge to `main` (the "Protect
+  main" ruleset: a pull request and `ci-success` required, nobody bypassing) controls the cluster, which is why
+  `flux_sync_url` has no default and a fork syncs its own repository; another branch is unprotected, so syncing one
+  takes `flux_sync_ref_unprotected: true` and its source suspended while it is not being tested
+  (`scripts/runbooks/talos.md`). Read the live ruleset (`gh api repos/kawadeomkar/homeserver/rulesets/24555579`) before
+  relying on it. No other cluster-admin principal runs in the cluster: `portainer` used to bind `cluster-admin` to its
+  pod's ServiceAccount on three NodePorts plus an Ingress, and was deleted rather than scoped; use `k9s` or Headlamp
+  from a workstation instead.
+- **No plaintext `Secret` manifest may be committed.** Every Kubernetes Secret is a `k8s/**/*.sops.yaml`, encrypted
+  with SOPS for the cluster's age key (`k8s/README-secrets.md`; `k8s/CLAUDE.md` lists the checks that refuse a
+  plaintext one). **This repo is public** — that is also why `.claude/` and `inventory` are ignored.
+- **Two secret systems, split by layer:** Ansible Vault (`group_vars/all/local.vault.yml`, git-ignored) for host and
+  playbook variables, and SOPS+age for Kubernetes Secrets (`.sops.yaml`, the key and the procedure in
+  `k8s/README-secrets.md`). Do not put Kubernetes Secrets in the vault.
+- **The NAS's NFS shares and the VM backups trust addresses, on a flat LAN.** NFS with `sec=sys` trusts the client's
+  address, and the shares map root to root: the cluster's to the worker's address, the VM and backup shares to the
+  Proxmox host's. The nightly backups hold the control plane's machine configuration (every key of the cluster) and
+  its etcd (every Secret, flux-system's age key included), so treat `homeserver-backup` as secret-level. A device that
+  leases a node's address (an unreserved DHCP lease) or ARP-spoofs it reads them as root. The owner's answer is the
+  network, decided 2026-10-17: DHCP reservations for every node and a servers VLAN the IoT and Wi-Fi devices cannot
+  reach (`TODO.md`); Proxmox Backup Server's client-side encryption was considered and left out. The NAS takes only
+privileged source ports, and pods cannot reach it.
+- **The Tailscale subnet router masquerades every tailnet client to the Proxmox host's address**, the very address the
+  NAS exports VM disks and backups to. The tailnet policy's grants and the role's fail-closed nftables guard each keep
+  tailnet clients to the NAS's web UI, but any proxy on the host itself connects from the trusted address unseen by the
+  guard. Reload `tailnet-guard.service`; never restart it, which restarts Tailscale
+  (`roles/proxmox_tailscale/README.md`).
+- **The nodes' firewall drops what no rule lets in** (`group_vars/kubernetes/talos.yml`), and **NetworkPolicies are
+  enforced** (`k8s/CLAUDE.md`): a new port on a node, or a new path between pods or to the NAS, times out until a rule
+  names it. Try a changed node rule first with `talosctl apply-config --mode try`: one that closes 50000 locks the role
+  out of the node, leaving only its console in Proxmox and a reinstall (`roles/talos/README.md`).
 
 ## Conventions
 
-- **Manifests**: every image pinned by tag and digest, requests on every workload and no CPU or memory limits on the apps, and the steps for adding an app are in `k8s/CLAUDE.md`.
-- **Roles** live in `./roles` beside the playbooks at the repo root, variables prefixed with the role name (ansible-lint enforces it). `ansible.cfg` deliberately sets no `roles_path`: roles beside a playbook are found by default, while `ansible-galaxy install` then defaults to `~/.ansible/roles`, which keeps third-party code out of this public repo. No role depends on a Galaxy collection. Task names in imported task files carry a `<file> | ` prefix (ansible-lint's `name[prefix]`). Every mutating step must be skipped in check mode and report what it would do, and a second run must report no changes. `tests/integration` checks every role against stateful fakes (`fake_truenas.py`, a TLS JSON-RPC server; `fake_pve.py` behind `fake_pve_bin/`, with `apt-get` reading the scratch repository directory the test passes as `proxmox_apt_sources_dir`), running each role with this repo's configuration: a dry run, an apply, a second apply, a dry run, then drift corrected once. A new API method or command needs a matching fake, or the test fails on purpose. The fakes always answer, so `tests/unit/test_truenas_client.py` covers in process, with a scripted socket and a clock that never waits, what they never do: TrueNAS refusing a login or a call, rate-limiting logins, dropping the connection, failing or never finishing a job, and refusing an interface commit, which must discard the saved change, or never seeing the check-in, after which TrueNAS rolls the address back by itself. The fakes cannot prove the real machines behave the same, so still run check mode against the real machine first.
-- **No address in any tracked file.** IP addresses, and anything else that identifies this network, are never written in a task, a role default, a template or an example — tasks reference a variable, and the real value lives only in the gitignored `group_vars/all/local.yml`. `group_vars/all/local.yml.example` is its committed counterpart and uses RFC 5737 placeholders (`192.0.2.x`). Adding such a variable means adding it to both files, and to the list `just init` asks from (`scripts/init/settings.py`; `tests/policy/test_make_init_settings.py` checks the three agree, and that every vault variable the group_vars read is asked for too). `.gitleaks.toml` writes the rule down for gitleaks, on top of its default secret rules: private, CGNAT and link-local IPv4 anywhere, and a private network written in part (its first three numbers, then `.x`, `.*` or a `/prefix`); any IPv4 in code, tests, manifests, scripts, workflows, `host_vars/` and Markdown anywhere (RFC 5737, loopback and `0.0.0.0` excepted); private IPv6; MAC addresses, with colons, dashes, or dots between groups of four; a disk's `/dev/disk/by-id/` name, which carries its model and serial, and WWNs (QEMU's virtual disks excepted); tailnet names; plaintext `Secret` manifests under `k8s/`; and, by path alone, the files that are never committed (the vault, at its path now or its old one, vault password files, `local.yml`, just init's `.init-tmp` copies of those three, a root `inventory`, `MACHINES*`, `talosconfig` and `kubeconfig` with any suffix, `*.kubeconfig`, age keys, Talos's generated `secrets.yaml`, `controlplane.yaml` and `worker.yaml`, run logs). `tests/policy/test_gitleaks_rules.py` proves each rule on generated fixtures, including what must not match (RFC 5737, loopback, image tags, version strings, QEMU's disk names, the certificate-pin placeholder). CI's `leaks` job scans the commits each change adds with these rules. The address literals the old manifests held (K8S-9) went with them; the tree has none.
-- **Variables**: environment-specific values go in `local.yml` as above. Ansible secrets go in the vault, `group_vars/all/local.vault.yml` under a `vault_` prefix and are exposed by indirection from a plain variable (the old example was `discord_token: "{{ vault_discord_token }}"`). Kubernetes Secrets do not go there — see the Landmines note above.
-- `inventory`, `.claude/` and `docs/` are gitignored because **this repo is public** — they would otherwise publish host addresses, and `docs/MACHINES.md` also lists MAC addresses and drive serials. A fresh clone recreates `inventory` from the committed, address-free `inventory.example` (`just init` copies it).
-- YAML style comes from `.yamlfmt` (basic, `---` document start, line breaks retained). `.yamllint` (160-column lines, run with `--strict`) and `.ansible-lint` (production profile, with `strict`, so its warnings fail too) both skip `k8s/`, which `just lint k8s` covers with kubeconform and kube-linter. A task that calls a TrueNAS or OPNsense module carries `# noqa: args`: ansible-lint's args rule cannot import a role's `module_utils` (only a collection's, ansible-lint#3891), and without the comment it stopped at the first such task with a warning and checked no task after it in the file; `test_roles.py` checks those tasks' options and the comment, so ansible-lint prints no warning. `just lint` runs both, each a type of its own, plus `poetry check --lock --strict`, ruff (below), `ansible-doc` on every custom module (ansible-lint does not check `DOCUMENTATION`; the options every TrueNAS module shares are documented once, in the doc fragment `roles/truenas/doc_fragments/truenas_api.py`, which `ansible.cfg` points `ansible-doc` at), check-jsonschema on `dependabot.yml` and the workflows (SchemaStore's schemas, bundled), the role references (`just lint docs`, below), and the Kubernetes checks (`just lint k8s`); `just test` then runs the unit, policy, gitleaks and idempotence tests, each a type too. `tests/policy` checks the repo's own rules: the lock matches `pyproject.toml` and hashes every package, no vault is tracked, its path is ignored and its example lists every secret the group_vars read, the ruleset body requires the workflow's gate job, and the roles keep their conventions (`test_roles.py`): each role default matches its argument-spec entry, each module's documentation matches its argument spec and documents its check-mode, diff-mode and platform support (`attributes`), check mode as its AnsibleModule declares it, the tracked configuration passes every role's argument specs and input checks, with `local.yml.example` and with the `local.yml` of a setup without a NAS, while both playbooks refuse NAS settings that come without an address, tasks pass only options the custom modules accept, and every option whose name looks like a secret (ansible-test's `no-log-needed` pattern) is `no_log`, bar a short list of named exceptions. The manifests keep theirs where kube-linter cannot check them (`test_k8s.py`, described in its docstring): every Flux Kustomization decrypts and substitutes, every `${VAR}` is a setting, every namespace is declared once and a controller's comes with it, no node ports, no PodDisruptionBudget, the privileged namespaces, the hostPath volumes and the service accounts that can read every Secret match lists in the test (the charts' output too, after `just lint charts`), the apps' replicas, strategy, hardening, ingresses and labels, the shared volumes' `chown-mount` and no `fsGroup` on NFS, every Secret is SOPS-encrypted, and LinuxServer.io tags are immutable, and every quantity parses once substituted.
-- **Python** is formatted and linted by ruff, configured in `ruff.toml`: 120 columns, Python 3.12, and modules and callback plugins exempt from `E402`, since their imports follow their documentation strings. `ruff format` formats; `just lint python` checks both. The commit that first formatted everything is listed in `.git-blame-ignore-revs`, which GitHub reads and `just init` points `git blame` at; list any later reformatting commit there too. `just test unit` also reports the modules' coverage (`.coveragerc`): a report, not a gate, since it sees only the in-process tests and not the modules the idempotence tests run inside ansible-playbook.
-- **Role references** (`roles/<role>/REFERENCE.md`) are docsible's pages, written whole by `just fix docs` from the role as it is: `meta/main.yml`, `meta/argument_specs.yml`, the defaults and vars as tables linked to their lines, and each tasks file as a table and a Mermaid graph. Never edit one by hand, and never give docsible a template or its comment annotations: a page says what the role says. A role's `README.md` stays its own, written by hand, and links to its page; `.gitattributes` marks the pages generated, so a pull request's diff folds them. A commit that changes a file under `roles/` runs `just fix docs` in the pre-commit hook `role-references`, which writes the pages from the staged roles and, as pre-commit does with any hook that changes a file, fails the commit until the pages it wrote are added too. `just lint docs` (CI's `docs` job, on its own so a stale page is a failed check of its own within a minute) generates every page again from a copy of `roles/` in `.cache/docsible` and fails on a difference, a role without a page, and any docsible output but its "Documentation generated at" line: docsible reports a file it cannot read (in 0.8.0, one with an `!unsafe` tag), leaves it out and exits 0. The justfile says why each flag is set. Links are relative, without `--repository-url`: `detect` would write the current branch into every link, and for a role outside a collection docsible leaves `roles/<role>/` out of the link (docsible#95). docsible 0.8.0's limits, left as they are: a block's `always` tasks are in neither the table nor the graph, the table shows no tags for a task inside a block (it reads them from top-level tasks only, so `roles/truenas`'s stage tags, the ones `just deploy truenas --tags …` selects, read blank), table rows end in spaces, and `--comments` and `--task-line` stay off (the first splits a table row at a multi-line comment, the second links a task whose name holds a quote to `#L`). A Dependabot bump of docsible that changes the pages fails `just lint docs` until `just fix docs` is run on its branch.
-- **CI** (`.github/workflows/ci.yml`) splits `just lint`'s and `just test`'s types between its jobs; `ci-success` aggregates them and is the one check the "Protect main" ruleset requires. No job gets a secret or reaches the home network, so `just check` stays local. The jobs, the ruleset and Dependabot are in `.github/CLAUDE.md`.
-- **What CI cannot vouch for.** The gate is written by the pull request it judges: `ci-success` comes from the PR's own `.github/**`, `justfile`, `scripts/**`, `tests/**`, `pytest.ini`, `pyproject.toml`, `poetry.lock`, `poetry.toml` and the linters' configuration (`.yamllint`, `.ansible-lint`, `ruff.toml`, `.kube-linter.yaml`, `.kube-linter-charts.yaml`), so a green check proves nothing about a change to those files; review them as the gate itself. They, with `ansible.cfg`, `roles/**`, `group_vars/**`, `vars_plugins/**` and the playbooks, also run with the vault password, the TrueNAS API key or root SSH whenever `just check`, `just deploy`, `just suspend`, `just resume`, `just talos-upgrade` or `just etcd-snapshot` runs on the workstation, with or without a playbook named, so never run `just` on an unmerged outside PR in the clone that holds `.vault_pass` and `local.yml`; use a separate clone without them.
-- **Git hooks** (`.pre-commit-config.yaml`, run by pre-commit from the lock; `just init` installs them): gitleaks over the staged changes, then `scripts/ci/check-sops-staged.sh` (both in `scripts/ci/check-staged.sh`), and before a push, `scripts/ci/check-range.sh` over the commits being pushed (pre-commit's refs as its `BASE` and `HEAD`), the check CI runs. Each leak hook runs its script directly, not through just, and needs only bash and gitleaks from Homebrew (`brew install gitleaks`), so it works in any shell, with or without the virtualenv active. The one more, `role-references`, runs `just fix docs` when a staged file is under `roles/`, so it needs just on `PATH` and the project's virtualenv, found as just always finds it (a commit from a tool that runs git without pyenv on `PATH` fails there, saying how to choose one); it fails a commit whose pages it changed, and the commit goes through once they are added. The linters stay in `just lint` and CI. A hook can be skipped with `--no-verify`, which is why CI's `leaks` and `docs` jobs repeat the checks.
-- **When a leak check fires.** A pushed commit is published, even on a pull-request branch. Do not merge, and close the pull request if the finding is real. Rotate a leaked secret at once: the TrueNAS API key through the role and the vault, and re-key the vault if its password was involved. For an identifier, RFC 1918 addresses are low impact, while public addresses, tailnet names, MACs and serials are higher; decide whether anything on the network needs to change. Ask GitHub Support to purge cached views and the `refs/pull/*` copies. If it reached `main`, removing it means rewriting history, which needs the ruleset's force-push rule switched off for the time and every clone re-made. Then add a fixture to `tests/policy/test_gitleaks_rules.py` for whatever the checks missed. `SECURITY.md` tells others how to report a problem privately.
-- **Python dependencies** are managed with Poetry (2.x, non-package mode). Direct pins are exact (`==`) and live in `pyproject.toml`: what the playbooks need in `[project] dependencies`, and the linters, tests and hooks in the `dev` dependency group (PEP 735 `[dependency-groups]`, never `[tool.poetry.group.*.dependencies]`). `just lock` updates `poetry.lock`, which resolves once for every Python in `requires-python`, with markers, and records a sha256 for every file, which Poetry checks when it installs. It changes only what `pyproject.toml` changed (`just lock <packages>` moves those on too), and `poetry.toml` makes it take only releases at least 7 days old (`solver.min-release-age`). `poetry.toml` also installs wheels only, keeps the keyring closed, and lets Poetry run without `VIRTUAL_ENV` make an environment of its own in its cache, never one in the checkout; it is committed so that it overrides each user's global Poetry configuration. Poetry itself is not in the lock: each user installs it (above), `requires-poetry` says which versions work, and CI installs `POETRY_VERSION` with pipx. `just install` runs `poetry sync`, which installs exactly the main and `dev` groups and removes anything else but pip. CI makes a virtualenv of setup-python's Python in `$RUNNER_TEMP` and exports it as `VIRTUAL_ENV` before `just install`. `just lint lock` (`poetry check --lock --strict`) fails when the lock is stale, and `tests/policy/test_lock.py` when a pin is not exact or not the locked version, or a package has no hashes. gitleaks's default rules skip `poetry.lock`, as they do every lock file; `pyproject.toml` is scanned.
-- **Pins no bot can see** (CI's tools, the schema refs, the Flux Operator, the Talos pins, Home Assistant's OVA) are bumped by hand each quarter, each with its checksum or digest: `scripts/runbooks/dependency-bumps.md`.
-- `TODO.md` is the running backlog. Its Ansible-layer items went with the Ubuntu host layer; what remains is CI follow-ups, NAS and Proxmox work, manifest defects and open migration decisions.
-- `scripts/runbooks/REBUILD.md` is the recovery procedure after a hardware failure: the manual prerequisites (a fresh install's API user and key, the certificate pin, root SSH to Proxmox with the `ssh-copy-id` form that survives OpenSSH 10's `PerSourcePenalties`, DHCP reservations) and the run order. When a role gains or loses a prerequisite, or the run order changes, update it in the same change.
-- **Runbooks, scripts and helpers live in `scripts/`**: procedures followed by hand in `scripts/runbooks/`, the leak checks CI and the git hooks run in `scripts/ci/`. Other docs link to a runbook rather than repeat it. CI's shellcheck covers only `scripts/ci/*.sh`, so a shell helper added elsewhere under `scripts/` means widening that glob in `ci.yml`.
-- **Commit style**: history before the current change stack used short lowercase subjects with no body; the stack uses Conventional Commits with an explanatory body. Follow the latter. Dependabot's commits are the exception: `commit-message.prefix` in `dependabot.yml` sets both its PR titles and its commit subjects, so they read `[dependencies] Bump …`.
-- **Pull request descriptions show the change by example**: the command a reader would run and what it prints, so the description shows what changes rather than only describing it. A change to `just init` shows the run and its new question, a new refusal the playbook's message, a new setting the `local.yml` lines and what they render, a role change the lines of its dry run that change. The output is real, never written by hand, and says where it came from: the machines, a testing VM, or the test suite's fakes (a throwaway test that reuses the suite's helpers and prints instead of asserting, run at the PR's head and never committed). Trim it to the lines that matter, and leave out addresses and secrets.
+- **No address in any tracked file.** IP addresses, and anything else that identifies this network, are never written
+  in a task, a role default, a template or an example: tasks reference a variable, and the real value lives only in
+  the gitignored `group_vars/all/local.yml`. `group_vars/all/local.yml.example` is its committed counterpart, with RFC
+  5737 placeholders (`192.0.2.x`). Adding such a variable means adding it to both files and to the list `just init`
+  asks from (`scripts/init/settings.py`; `tests/policy/test_make_init_settings.py` checks the three agree).
+  `.gitleaks.toml` writes the rule down for gitleaks, on top of its default secret rules: private, CGNAT and
+  link-local IPv4 anywhere and any IPv4 in code, tests, manifests, scripts and Markdown (RFC 5737, loopback and
+  `0.0.0.0` excepted), private IPv6, MAC addresses, disk ids and WWNs (QEMU's virtual disks excepted), tailnet names,
+  plaintext Secrets under `k8s/`, and by path the files that are never committed. So tests build their MACs at run
+  time.
+- `inventory`, `.claude/` and `docs/` are gitignored because **this repo is public** — they would otherwise publish
+  host addresses, and `docs/MACHINES.md` also lists MAC addresses and drive serials. A fresh clone recreates
+  `inventory` from the committed, address-free `inventory.example` (`just init` copies it).
+- **Lint.** YAML style comes from `.yamlfmt` (basic, `---` document start, line breaks retained); `.yamllint`
+  (160-column lines, `--strict`) and `.ansible-lint` (production profile, strict) both skip `k8s/`, which `just lint
+  k8s` covers. Python is formatted and linted by ruff (`ruff.toml`: 120 columns, Python 3.12, modules and callback
+  plugins exempt from `E402`, since their imports follow their documentation strings); the commit that first formatted
+  everything is in `.git-blame-ignore-revs`, and so goes any later reformatting commit.
+- **Python dependencies** are managed with Poetry (2.x, non-package mode). Direct pins are exact (`==`) in
+  `pyproject.toml`: what the playbooks need in `[project] dependencies`, the linters, tests and hooks in the `dev`
+  dependency group (PEP 735 `[dependency-groups]`, never `[tool.poetry.group.*.dependencies]`). `just lock` updates
+  `poetry.lock`, which hashes every file and takes only releases at least 7 days old (`poetry.toml`, committed so it
+  overrides each user's configuration); `just lint lock` fails when it is stale and `tests/policy/test_lock.py` when a
+  pin is not exact or not the locked version. gitleaks's default rules skip `poetry.lock`, as they do every lock
+  file; `pyproject.toml` is scanned.
+- **Role references** (`roles/<role>/REFERENCE.md`) are docsible's pages: never edit one by hand; `just fix docs`
+  writes them, and the pre-commit hook `role-references` fails a commit under `roles/` until the pages it wrote are
+  added too (`roles/CLAUDE.md`).
+- **CI** (`.github/workflows/ci.yml`) splits `just lint`'s and `just test`'s types between its jobs; `ci-success`
+  aggregates them and is the one check the "Protect main" ruleset is to require (`.github/rulesets/main.json`, which
+  takes effect only when applied). No job gets a secret or reaches the home network, so `just check` stays local. The
+  jobs, the ruleset and Dependabot are in `.github/CLAUDE.md`. Read each Dependabot or Renovate PR before merging it:
+  Flux deploys `main` as soon as it lands.
+- **What CI cannot vouch for.** The gate is written by the pull request it judges: `ci-success` comes from the PR's own
+  `.github/**`, `justfile`, `scripts/**`, `tests/**`, `pytest.ini`, `pyproject.toml`, `poetry.lock`, `poetry.toml` and
+  the linters' configuration (`.yamllint`, `.ansible-lint`, `ruff.toml`, `.kube-linter.yaml`,
+  `.kube-linter-charts.yaml`), so a green check proves nothing about a change to those files; review them as the gate
+  itself. They, with `ansible.cfg`, `roles/**`, `group_vars/**`, `vars_plugins/**` and the playbooks, also run with the
+  vault password, the TrueNAS API key or root SSH whenever `just check`, `just deploy`, `just suspend`, `just resume`,
+  `just talos-upgrade` or `just etcd-snapshot` runs on the workstation, with or without a playbook named, so never run
+  `just` on an unmerged outside PR in the clone that holds `.vault_pass` and `local.yml`; use a separate clone without
+  them.
+- **Git hooks** (`.pre-commit-config.yaml`, run by pre-commit from the lock; `just init` installs them): gitleaks over
+  the staged changes and `scripts/ci/check-sops-staged.sh` (both in `scripts/ci/check-staged.sh`), and before a push,
+  `scripts/ci/check-range.sh` over the commits being pushed, the check CI runs. The leak hooks need only bash and
+  gitleaks (`brew install gitleaks`); `role-references` runs `just fix docs`, so it needs just and the project's
+  virtualenv, found as just always finds it: a commit from a tool that runs git without pyenv on `PATH` fails there,
+  saying how to choose one. A hook can be skipped with `--no-verify`, which is why CI's `leaks` and `docs` jobs repeat
+  the checks.
+- **When a leak check fires.** A pushed commit is published, even on a pull-request branch. Do not merge, and close
+  the pull request if the finding is real. Rotate a leaked secret at once: the TrueNAS API key through the role and
+  the vault, and re-key the vault if its password was involved. For an identifier, RFC 1918 addresses are low impact,
+  while public addresses, tailnet names, MACs and serials are higher; decide whether anything on the network needs to
+  change. Ask GitHub Support to purge cached views and the `refs/pull/*` copies. If it reached `main`, removing it
+  means rewriting history, which needs the ruleset's force-push rule switched off for the time and every clone re-made.
+  Then add a fixture to `tests/policy/test_gitleaks_rules.py` for whatever the checks missed. `SECURITY.md` tells
+  others how to report a problem privately.
+- **Pins no bot can see** (CI's tools, the schema refs, the Flux Operator, the Talos pins, Home Assistant's OVA) are
+  bumped by hand each quarter, each with its checksum or digest: `scripts/runbooks/dependency-bumps.md`.
+- `TODO.md` is the running backlog: CI follow-ups, NAS and Proxmox work, manifest defects and open migration decisions.
+- `scripts/runbooks/REBUILD.md` is the recovery procedure after a hardware failure: the manual prerequisites (a fresh
+  install's API user and key, the certificate pin, root SSH to Proxmox with the `ssh-copy-id` form that survives
+  OpenSSH 10's `PerSourcePenalties`, DHCP reservations) and the run order. When a role gains or loses a prerequisite,
+  or the run order changes, update it in the same change.
+- **Runbooks, scripts and helpers live in `scripts/`**: procedures followed by hand in `scripts/runbooks/`, the leak
+  checks CI and the git hooks run in `scripts/ci/`. Other docs link to a runbook rather than repeat it. CI's
+  shellcheck covers only `scripts/ci/*.sh`, so a shell helper added elsewhere under `scripts/` means widening that
+  glob in `ci.yml`.
+- **Commit style**: Conventional Commits with an explanatory body (history before the current change stack used short
+  lowercase subjects with no body). Dependabot's commits are the exception: `commit-message.prefix` in
+  `dependabot.yml` makes them read `[dependencies] Bump …`.
+- **Pull request descriptions show the change by example**: the command a reader would run and what it prints, so the
+  description shows what changes rather than only describing it. A change to `just init` shows the run and its new
+  question, a new refusal the playbook's message, a new setting the `local.yml` lines and what they render, a role
+  change the lines of its dry run that change. The output is real, never written by hand, and says where it came from:
+  the machines, a testing VM, or the test suite's fakes (a throwaway test that reuses the suite's helpers and prints
+  instead of asserting, run at the PR's head and never committed). Trim it to the lines that matter, and leave out
+  addresses and secrets.
+
+## Where the rest is written
+
+This file loads into every session, so it holds only what every session needs; `tests/policy/test_claude_md.py` keeps
+it under 40,000 characters and every other `CLAUDE.md` under 35,000. A change writes what it adds where the work is:
+
+| Subject | Where |
+|---|---|
+| a role's design, refusals, history and tests | `roles/<role>/README.md`; the conventions every role keeps, `roles/CLAUDE.md` |
+| the manifests, Flux, the apps, storage, networking, monitoring, the GPU, Renovate | `k8s/CLAUDE.md` |
+| the output engine, NEXT STEPS, the live region | `filter_plugins/CLAUDE.md` |
+| the test types, the fakes, the policy tests | `tests/CLAUDE.md` |
+| CI's jobs, the ruleset, Dependabot | `.github/CLAUDE.md` |
+| a procedure followed by hand | `scripts/runbooks/` |
+| the owner's view of the whole, setups and switching between them | `README.md` |
+
+A `CLAUDE.md` below the root loads when Claude reads a file under its directory, and only then.
