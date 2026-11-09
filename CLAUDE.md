@@ -150,8 +150,8 @@ built from the workstation), and no addresses.
 | `status` | `just status`: what runs and what needs doing, through an exact list of reads | change what it reads, or read a secret |
 
 **Each role's design is in its `README.md`**: what it refuses and why, what was seen on the real machines, and the
-tests and fakes that cover it. Read it before changing the role; `roles/CLAUDE.md` holds the conventions every role
-keeps.
+tests and fakes that cover it. Read it before changing the role: a rule in `.claude/rules/` says so as Claude reaches
+the role's files, its group_vars or its tests. `roles/CLAUDE.md` holds the conventions every role keeps.
 
 **One engine draws every run, report and live output** (`filter_plugins/`, `callback_plugins/homeserver.py`, named in
 `ansible.cfg`): what a run prints at a terminal and in its log, NEXT STEPS, the live region and its rules are in
@@ -233,7 +233,8 @@ clone) holds the audits and reviews behind them.
   from a workstation instead.
 - **No plaintext `Secret` manifest may be committed.** Every Kubernetes Secret is a `k8s/**/*.sops.yaml`, encrypted
   with SOPS for the cluster's age key (`k8s/README-secrets.md`; `k8s/CLAUDE.md` lists the checks that refuse a
-  plaintext one). **This repo is public** — that is also why `.claude/` and `inventory` are ignored.
+  plaintext one). **This repo is public** — that is also why `inventory` and all of `.claude/` but its rules are
+  ignored.
 - **Two secret systems, split by layer:** Ansible Vault (`group_vars/all/local.vault.yml`, git-ignored) for host and
   playbook variables, and SOPS+age for Kubernetes Secrets (`.sops.yaml`, the key and the procedure in
   `k8s/README-secrets.md`). Do not put Kubernetes Secrets in the vault.
@@ -267,8 +268,8 @@ privileged source ports, and pods cannot reach it.
   `0.0.0.0` excepted), private IPv6, MAC addresses, disk ids and WWNs (QEMU's virtual disks excepted), tailnet names,
   plaintext Secrets under `k8s/`, and by path the files that are never committed. So tests build their MACs at run
   time.
-- `inventory`, `.claude/` and `docs/` are gitignored because **this repo is public** — they would otherwise publish
-  host addresses, and `docs/MACHINES.md` also lists MAC addresses and drive serials. A fresh clone recreates
+- `inventory`, `docs/` and `.claude/` (bar `.claude/rules/`) are gitignored because **this repo is public** — they
+  would otherwise publish host addresses, and `docs/MACHINES.md` also lists MAC addresses and drive serials. A fresh clone recreates
   `inventory` from the committed, address-free `inventory.example` (`just init` copies it).
 - **Lint.** YAML style comes from `.yamlfmt` (basic, `---` document start, line breaks retained); `.yamllint`
   (160-column lines, `--strict`) and `.ansible-lint` (production profile, strict) both skip `k8s/`, which `just lint
@@ -349,6 +350,7 @@ it under 40,000 characters and every other `CLAUDE.md` under 35,000. A change wr
 | the output engine, NEXT STEPS, the live region | `filter_plugins/CLAUDE.md` |
 | the test types, the fakes, the policy tests | `tests/CLAUDE.md` |
 | CI's jobs, the ruleset, Dependabot | `.github/CLAUDE.md` |
+| what to read before changing a part of the tree, on paths a directory cannot cover | `.claude/rules/`, one small file with `paths:`, in words and never an `@import`, which loads in every session |
 | a procedure followed by hand | `scripts/runbooks/` |
 | the owner's view of the whole, setups and switching between them | `README.md` |
 
