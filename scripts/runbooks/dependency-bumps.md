@@ -9,8 +9,8 @@ alone fails CI's download check, a policy test or the role that reads it.
 
 - `ACTIONLINT_VERSION`, `KUBECONFORM_VERSION`, `KUBE_LINTER_VERSION`, `GITLEAKS_VERSION`, `KUSTOMIZE_VERSION` and
   `HELM_VERSION`, each with its `_SHA256`.
-- `TALOSCTL_VERSION` with its `_SHA256`, bumped with `talos_version` (below), whose minor release it must share; a
-  policy test checks.
+- `TALOSCTL_VERSION` with its `_SHA256`, bumped with `talos_version` (below), which it must equal; a policy test
+  checks.
 - `JUST_VERSION` with its two checksums (`JUST_SHA256_X86_64`, `JUST_SHA256_AARCH64`, one per runner architecture).
   `set minimum-version` in the justfile must not be newer; a policy test checks.
 - `POETRY_VERSION`, which has none and must stay within `pyproject.toml`'s `requires-poetry`.
