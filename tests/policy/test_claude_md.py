@@ -4,8 +4,9 @@ Claude Code loads the root CLAUDE.md into every session, and a CLAUDE.md below i
 directory. Its limit for one file is 5% of the model's context window at three characters a token, and never less than
 40,000 characters, the limit on a 200k-token window. Over it, a file loaded at launch is still read whole but warned
 about, and a file loaded on demand is cut off there, so Claude never reads its end. The root file keeps under the
-floor, so no model warns, and every other one keeps a margin under it. Each one below the root is named in the root's
-"Where the rest is written", so a session knows it exists before it loads.
+floor, so no model warns, and to the 200 lines Claude Code's documentation recommends, and every other one keeps a
+margin under it. Each one below the root is named in the root's "Where the rest is written", so a session knows it
+exists before it loads.
 
 A rule in .claude/rules/ loads once Claude works on a file its paths match. A README loads only when Claude reads it,
 which a line in a CLAUDE.md alone got done in 5 of 12 measured runs, and a rule per role, saying so in words, in 11 of
@@ -23,6 +24,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 
 ROOT_LIMIT = 40_000
+ROOT_LINES = 200
 NESTED_LIMIT = 35_000
 # Its whole text is an import of filter_plugins/CLAUDE.md, which the root names.
 UNNAMED = {"callback_plugins/CLAUDE.md"}
@@ -54,10 +56,11 @@ def rules() -> dict[str, tuple[dict, str]]:
 
 
 def test_the_root_claude_md_stays_under_the_smallest_limit():
-    size = len((ROOT / "CLAUDE.md").read_text())
-    assert size <= ROOT_LIMIT, (
-        f"CLAUDE.md is {size} characters, over {ROOT_LIMIT}: move what only one part of the tree needs into that "
-        "part's README.md or CLAUDE.md"
+    text = (ROOT / "CLAUDE.md").read_text()
+    size, lines = len(text), text.count("\n")
+    assert size <= ROOT_LIMIT and lines <= ROOT_LINES, (
+        f"CLAUDE.md is {size} characters and {lines} lines, over {ROOT_LIMIT} or {ROOT_LINES}: move what only one part "
+        "of the tree needs into that part's README.md, CLAUDE.md or a rule"
     )
 
 
