@@ -1,4 +1,4 @@
-"""The roles keep the conventions CLAUDE.md sets for them.
+"""The roles keep the conventions roles/CLAUDE.md sets for them.
 
 - Every role default has an entry in meta/argument_specs.yml with the same default, and every entry a default.
 - Each custom module's DOCUMENTATION, with its doc fragments merged in, matches the argument spec its main()

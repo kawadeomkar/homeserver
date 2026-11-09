@@ -20,7 +20,7 @@ spec:
         kind: GitRepository
         name: csi-driver-nfs
   values:
-    # Each image by its version and digest (CLAUDE.md): a chart bump changes both here too.
+    # Each image by its version and digest (k8s/CLAUDE.md): a chart bump changes both here too.
     image:
       nfs:
         tag: v4.13.5@sha256:19162ec4fb3f56a7e53f578721b0d5b8e9c691c27d2789aecb17e9de60a94595

@@ -29,7 +29,7 @@ talos_kubernetes_version: 1.37.1
 kubernetes_iso_schematic: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
 # What the Image Factory must serve for these pins, since it publishes no checksum to anyone without a subscription:
 # each pinned once, from a download checked against the copy already in use, and bumped with talos_version
-# (CLAUDE.md). The ISO's SHA-256, which Proxmox checks as it downloads (sha256sum of the ISO); each schematic's id
+# (scripts/runbooks/dependency-bumps.md). The ISO's SHA-256, which Proxmox checks as it downloads (sha256sum of the ISO); each schematic's id
 # (the factory's POST /schematics); and the digest of the installer image of each schematic at talos_version, which
 # the nodes install from (crane digest factory.talos.dev/metal-installer/<id>:<version>). A bump adds the new
 # release's digests and keeps those of the release the nodes run until just talos-upgrade has moved them: a running

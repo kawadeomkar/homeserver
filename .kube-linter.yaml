@@ -4,7 +4,7 @@
 # carries an ignore-check.kube-linter.io/<check> annotation saying why. tests/policy/test_k8s.py checks
 # the conventions kube-linter cannot express.
 checks:
-  # Every workload is probed (CLAUDE.md): a run-once Job says why it is not.
+  # Every workload is probed (k8s/CLAUDE.md): a run-once Job says why it is not.
   include:
     - no-liveness-probe
     - no-readiness-probe
@@ -13,21 +13,21 @@ checks:
     - no-read-only-root-fs
     # LinuxServer images start as root and drop to PUID 1000.
     - run-as-non-root
-    # It requires memory limits, which the apps do not set: a spike is never OOM-killed (CLAUDE.md).
+    # It requires memory limits, which the apps do not set: a spike is never OOM-killed (k8s/CLAUDE.md).
     # unset-memory-request below requires the requests instead. The default unset-cpu-requirements
     # already requires CPU requests, and only those.
     - unset-memory-requirements
 customChecks:
   - name: no-pull-always
-    description: imagePullPolicy Always defeats tag pinning (CLAUDE.md)
+    description: imagePullPolicy Always defeats tag pinning (k8s/CLAUDE.md)
     remediation: Pin the image to an immutable tag and leave imagePullPolicy unset.
     template: image-pull-policy
     params:
       forbiddenPolicies: [Always]
-  # A container without a memory request is scheduled as if it needed none (CLAUDE.md: requests on every
+  # A container without a memory request is scheduled as if it needed none (k8s/CLAUDE.md: requests on every
   # workload). This flags a request between 0 and 0 MB, which is what an unset one reads as.
   - name: unset-memory-request
-    description: Every container requests memory (CLAUDE.md)
+    description: Every container requests memory (k8s/CLAUDE.md)
     remediation: Set resources.requests.memory.
     template: memory-requirements
     params:

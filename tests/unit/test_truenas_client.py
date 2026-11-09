@@ -383,8 +383,8 @@ class TestInterfaceCommit:
         assert len(fake.called("interface.checkin")) == 1 and clock.slept == [2]
 
 
-# system.general.config carries the UI certificate, private key included (CLAUDE.md: modules return only the
-# fields they manage).
+# system.general.config carries the UI certificate, private key included (roles/truenas/README.md: modules return only
+# the fields they manage).
 PRIVATE_KEY = "FAKE-UI-PRIVATE-KEY"
 GENERAL = {
     "ui_httpsredirect": False,

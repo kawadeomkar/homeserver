@@ -3,7 +3,7 @@
 # repository's k8s/clusters/<setup> and applies everything below it.
 flux_bootstrap_kubeconfig: "{{ talos_config_dir }}/kubeconfig"
 # The Flux Operator, and through it Flux, which runs with cluster-admin rights: each pinned so that nothing moves
-# unreviewed. A bump changes each pair together (CLAUDE.md): the release with its install.yaml's SHA-256 (sha256sum
+# unreviewed. A bump changes each pair together (scripts/runbooks/dependency-bumps.md): the release with its install.yaml's SHA-256 (sha256sum
 # of the downloaded file) and its image's digest (crane digest ghcr.io/controlplaneio-fluxcd/flux-operator:<version>),
 # and the Flux release with the manifests artifact holding it (crane digest
 # ghcr.io/controlplaneio-fluxcd/flux-operator-manifests:latest, read on the day of the bump).
