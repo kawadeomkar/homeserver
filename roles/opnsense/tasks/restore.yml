@@ -1,0 +1,139 @@
+---
+# Restores a backup onto the router, only when asked (-e opnsense_restore=latest, or a backup's name), through the web
+# UI: the API cannot upload a configuration (library/opnsense_restore.py). On the router as it is known, whose API
+# answers at its address with the pin and the key pair, its configuration is backed up first, as it is, and nothing is
+# restored when it already runs the backup. Anything else is a fresh install at opnsense_bootstrap_host, whose own new
+# certificate must be pinned first (-e opnsense_bootstrap_cert_sha256): without it the run prints the fingerprint and
+# stops, having sent nothing. The router reboots into the backup, which brings back its address, its certificate and
+# the API user and key; the run waits for its API there, and the backup stage after this one backs the result up.
+
+- name: restore | List the backups
+  ansible.builtin.find:
+    paths: "{{ opnsense_backup_dir | expanduser }}"
+    patterns: config-*.xml
+  register: _opnsense_backups
+
+- name: restore | Choose the backup to restore, and where a fresh install answers
+  ansible.builtin.set_fact:
+    _opnsense_fresh_host: "{{ opnsense_bootstrap_host or opnsense_api_host }}"
+    opnsense_restore_file: "{{ _opnsense_backups.files | map(attribute='path') | opnsense_backup_pick(opnsense_restore) }}"
+
+- name: restore | Refuse a backup that is not there
+  ansible.builtin.assert:
+    that: opnsense_restore_file | length > 0
+    fail_msg: >-
+      There is no backup {{ opnsense_restore }} in {{ opnsense_backup_dir }}: name one of its config-<time>.xml files,
+      or latest for the newest.
+    quiet: true
+
+# failed_when: false clears the result's failed, so whether it answered is whether it said its version.
+- name: restore | Ask the router at its address whether it is the one known
+  opnsense_info: {}  # noqa: args
+  register: _opnsense_known
+  failed_when: false
+
+- name: restore | Restore onto the router as it is known
+  when: _opnsense_known.version is defined
+  block:
+    - name: restore | Back the router's configuration up first, as it is
+      opnsense_backup:  # noqa: args
+        backup_dir: "{{ opnsense_backup_dir }}"
+        password: "{{ opnsense_backup_password }}"
+        version: "OPNsense {{ _opnsense_known.version | default('') }}"
+        accept: true
+      register: _opnsense_before
+
+    - name: restore | Say the router runs the backup already
+      ansible.builtin.debug:
+        msg: The router runs {{ opnsense_restore_file | basename }} already, so nothing is restored.
+      when: _opnsense_before.router.id == opnsense_restore_file | basename
+
+    - name: restore | Restore the backup onto the router, which then reboots
+      opnsense_restore:  # noqa: args
+        api_host: "{{ opnsense_api_host }}"
+        api_port: "{{ opnsense_api_port }}"
+        validate_certs: "{{ opnsense_validate_certs }}"
+        api_cert_sha256: "{{ opnsense_api_cert_sha256 }}"
+        api_timeout: "{{ opnsense_api_timeout }}"
+        gui_user: "{{ opnsense_gui_user }}"
+        gui_password: "{{ opnsense_gui_password }}"
+        backup_file: "{{ opnsense_restore_file }}"
+        backup_password: "{{ opnsense_backup_password }}"
+      register: _opnsense_restored_known
+      when: _opnsense_before.router.id != opnsense_restore_file | basename
+
+- name: restore | Restore onto a fresh router
+  when: _opnsense_known.version is not defined
+  block:
+    - name: restore | Read the certificate the fresh router presents, sending nothing else
+      opnsense_restore:  # noqa: args
+        api_host: "{{ _opnsense_fresh_host }}"
+        api_port: "{{ opnsense_bootstrap_port }}"
+        api_timeout: "{{ opnsense_api_timeout }}"
+        fingerprint_only: true
+      register: _opnsense_bootstrap
+      when: not opnsense_bootstrap_cert_sha256
+
+    - name: restore | Stop until the fresh router's certificate is pinned
+      ansible.builtin.assert:
+        that: opnsense_bootstrap_cert_sha256 | length > 0
+        fail_msg: >-
+          The router does not answer as the one known at {{ opnsense_api_host }}
+          ({{ _opnsense_known.msg | default('no answer') }}), so it is taken for a fresh install at
+          {{ _opnsense_fresh_host }}, which presents certificate SHA-256 {{ _opnsense_bootstrap.fingerprint
+          | default('') }}. Nothing was sent to it. Compare that with the certificate a browser shows at
+          https://{{ _opnsense_fresh_host }}, then run again with -e opnsense_bootstrap_cert_sha256={{
+          _opnsense_bootstrap.fingerprint | default('') }} (scripts/runbooks/opnsense.md, section 6).
+        quiet: true
+
+    - name: restore | Restore the backup onto the fresh router, which then reboots
+      opnsense_restore:  # noqa: args
+        api_host: "{{ _opnsense_fresh_host }}"
+        api_port: "{{ opnsense_bootstrap_port }}"
+        api_cert_sha256: "{{ opnsense_bootstrap_cert_sha256 }}"
+        api_timeout: "{{ opnsense_api_timeout }}"
+        gui_user: "{{ opnsense_gui_user }}"
+        gui_password: "{{ opnsense_gui_password }}"
+        backup_file: "{{ opnsense_restore_file }}"
+        backup_password: "{{ opnsense_backup_password }}"
+      register: _opnsense_restored_fresh
+
+- name: restore | Note what was restored
+  ansible.builtin.set_fact:
+    _opnsense_restore_result: >-
+      {{ _opnsense_restored_known if _opnsense_restored_known is not skipped else _opnsense_restored_fresh }}
+
+- name: restore | Stop for the console when the router's interfaces do not match the backup's
+  ansible.builtin.assert:
+    that: not _opnsense_restore_result.interface_mismatch | default(false)
+    fail_msg: >-
+      The router restored {{ opnsense_restore_file | basename }}, but the interfaces it names are not all on this
+      machine, so it did not reboot. At the router's console choose 1) Assign interfaces, give each of the backup's
+      interfaces a device, then 6) Reboot, and run just deploy router again (scripts/runbooks/opnsense.md, section 6).
+    quiet: true
+
+- name: restore | Say what a real run would restore
+  ansible.builtin.debug:
+    msg: >-
+      Would restore {{ opnsense_restore_file | basename }} (made on {{ _opnsense_restore_result.backup_version
+      | default('?') }}) onto the router at {{ opnsense_api_host if _opnsense_restored_known is not skipped
+      else _opnsense_fresh_host }}, which then reboots into it: the web UI login and the backup's password were
+      checked, and nothing was uploaded.
+  when: _opnsense_restore_result.would_restore | default(false)
+
+# A dry run stops here: what follows reads the router the restore would have made.
+- name: restore | End a dry run that would restore
+  ansible.builtin.meta: end_role
+  when: _opnsense_restore_result.would_restore | default(false)
+
+- name: restore | Wait for the router to come back on its address
+  opnsense_info: {}  # noqa: args
+  register: _opnsense_back
+  until: _opnsense_back is succeeded
+  retries: "{{ (opnsense_restore_wait | int) // (opnsense_restore_poll | int) }}"
+  delay: "{{ opnsense_restore_poll }}"
+  when: _opnsense_restore_result.restored | default(false)
+
+- name: restore | Remember that the router runs a restored configuration
+  ansible.builtin.set_fact:
+    opnsense_restored: "{{ _opnsense_restore_result.restored | default(false) }}"

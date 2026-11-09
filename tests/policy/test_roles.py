@@ -200,12 +200,16 @@ TAILSCALE_CHECK = "TASK [proxmox_tailscale : Check the role's inputs]"
 
 def argspec_pass(tree, playbook="site.yml", *extra):
     """Run `playbook` with only the tasks tagged `always`: the argument-spec validation Ansible adds to each
-    role, and the roles' and playbooks' own input checks. truenas_info, also always, would connect to the NAS."""
+    role, and the roles' and playbooks' own input checks. truenas_info and opnsense_info, also always, would connect to
+    the NAS and the router."""
     return ansible_cli(
         tree,
         "ansible-playbook",
-        *["-i", "inventory.example", playbook, "--tags", "__argspec_only__", "--skip-tags", "truenas_info"],
-        *["-e", "ansible_connection=local", "-e", "vault_truenas_api_key=stub"],
+        *["-i", "inventory.example", playbook, "--tags", "__argspec_only__"],
+        *["--skip-tags", "truenas_info,opnsense_info", "-e", "ansible_connection=local"],
+        *["-e", "vault_truenas_api_key=stub"],
+        *["-e", "vault_opnsense_api_key=stub", "-e", "vault_opnsense_api_secret=stub"],
+        *["-e", "vault_opnsense_backup_password=stub"],
         *["-e", "vault_truenas_mail_password=stub", "-e", "vault_haos_owner_password=stub-password", *extra],
     )
 
@@ -1255,6 +1259,94 @@ def test_kubernetes_present_cannot_be_set(tmp_path, playbook):
     assert rc != 0, out[-3000:]
     assert "kubernetes_present is worked out from kubernetes_node_addresses" in out, out[-3000:]
     assert "TASK [truenas :" not in out and "TASK [proxmox_" not in out, out[-3000:]
+
+
+# local.yml's router section, with an RFC 5737 address and the example's made-up pin.
+ROUTER_LOCAL_YML = (
+    'opnsense_address: 192.0.2.1\nopnsense_api_cert_sha256: "'
+    + ":".join(["AA", "BB", "CC", "DD", "EE", "FF", "00", "11", "22", "33", "44", "55", "66", "77", "88", "99"] * 2)
+    + '"\n'
+)
+
+
+def test_router_play_passes_its_checks(tmp_path):
+    """With the router section, router.yml's role validates its arguments and passes its own input checks; the
+    connection itself (opnsense_info) is left out here."""
+    rc, out = argspec_pass(example_tree(tmp_path, PROXMOX_ONLY_LOCAL_YML + ROUTER_LOCAL_YML), "router.yml")
+    assert rc == 0, out[-3000:]
+    assert out.count("Validating arguments against arg spec 'main'") == 1, out[-3000:]
+    assert "validate | Check the role's inputs" in out, out[-3000:]
+
+
+def test_router_play_ends_without_an_address(tmp_path):
+    rc, out = argspec_pass(example_tree(tmp_path, PROXMOX_ONLY_LOCAL_YML), "router.yml")
+    assert rc == 0, out[-3000:]
+    assert "so this setup leaves the router alone" in out and "TASK [opnsense :" not in out, out[-3000:]
+
+
+@pytest.mark.parametrize(
+    ("local_yml", "extra", "message"),
+    [
+        pytest.param(
+            ROUTER_LOCAL_YML,
+            ("-e", "router_present=false"),
+            "router_present is worked out from opnsense_address",
+            id="switch-given",
+        ),
+        pytest.param(
+            ROUTER_LOCAL_YML.replace("192.0.2.1", "router.example"),
+            (),
+            "must be the router's IPv4 address, not router.example",
+            id="not-an-address",
+        ),
+        pytest.param(
+            ROUTER_LOCAL_YML.replace("opnsense_address", "opnsense_adress"),
+            (),
+            "sets opnsense_api_cert_sha256 but no opnsense_address",
+            id="misspelt-address",
+        ),
+        pytest.param(
+            "",
+            ("-e", "opnsense_restore=latest"),
+            "This run asks for opnsense_restore, but group_vars/all/local.yml gives no opnsense_address",
+            id="restore-without-address",
+        ),
+        pytest.param(
+            "",
+            ("-e", "opnsense_backup_accept=true", "-e", "opnsense_bootstrap_cert_sha256=AA:BB"),
+            "asks for opnsense_backup_accept and opnsense_bootstrap_cert_sha256, but",
+            id="backup-options-without-address",
+        ),
+    ],
+)
+def test_router_settings_that_make_no_sense_are_refused(tmp_path, local_yml, extra, message):
+    """Refused before the role runs, by the play on localhost, so an inventory without the router group cannot hide
+    them."""
+    rc, out = argspec_pass(example_tree(tmp_path, PROXMOX_ONLY_LOCAL_YML + local_yml), "router.yml", *extra)
+    assert rc != 0, out[-3000:]
+    assert message in out and "TASK [opnsense :" not in out, out[-3000:]
+
+
+@pytest.mark.parametrize(("local_yml", "refused"), [("", False), (ROUTER_LOCAL_YML, True)])
+def test_inventory_without_the_router_group(tmp_path, local_yml, refused):
+    """An inventory made before the router group has none: without a router it still works, and with one the run is
+    refused rather than matching no host and ending without a word."""
+    tree = example_tree(tmp_path, PROXMOX_ONLY_LOCAL_YML + local_yml)
+    inventory = tree / "inventory.example"
+    inventory.write_text(re.sub(r"(?ms)^# The LAN's router.*?^opnsense\n", "", inventory.read_text()))
+    assert "[router]" not in inventory.read_text()
+    rc, out = argspec_pass(tree, "router.yml")
+    assert (rc != 0) == refused, out[-3000:]
+    if refused:
+        assert "add [router] and opnsense to inventory" in out, out[-3000:]
+
+
+def test_router_test_playbook_runs_the_real_plays_roles():
+    """tests/integration/router.yml runs router.yml's role with router.yml's pre-tasks, so the integration tests run
+    what just deploy router does."""
+    real = next(play for play in yaml.safe_load((ROOT / "router.yml").read_text()) if play["hosts"] == "router")
+    (test,) = yaml.safe_load((ROOT / "tests" / "integration" / "router.yml").read_text())
+    assert test["roles"] == real["roles"] and test["pre_tasks"] == real["pre_tasks"]
 
 
 def test_task_arguments_match_module_specs():

@@ -1,0 +1,25 @@
+---
+# Read-only. Checks the router answers with the pinned certificate, accepts the key, and runs a release the role
+# supports.
+
+- name: connect | Connect to the router and read its release
+  opnsense_info: {}  # noqa: args
+  register: opnsense_state
+
+# A development release has no release number to compare, and is refused with the rest.
+- name: connect | Check the router runs a release the role supports
+  ansible.builtin.assert:
+    that: opnsense_state.release | length > 0 and opnsense_state.release is version(opnsense_min_version, '>=')
+    fail_msg: >-
+      The router runs OPNsense {{ opnsense_state.version or 'of an unknown version' }}; this role needs
+      {{ opnsense_min_version }} or later. Update it by hand (System > Firmware), a major release at a time, as
+      scripts/runbooks/opnsense.md says, then run this again.
+    quiet: true
+
+# The gist first, then the details, one line each.
+- name: connect | Report the router's state
+  ansible.builtin.debug:
+    msg:
+      - "OPNsense {{ opnsense_state.version }} at {{ opnsense_state.api_host }}"
+      - "kernel {{ opnsense_state.kernel or '?' }}, base {{ opnsense_state.base or '?' }}"
+      - "plugins: {{ opnsense_state.plugins | map(attribute='name') | join(', ') or 'none' }}"

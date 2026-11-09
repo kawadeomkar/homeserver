@@ -74,8 +74,8 @@ fix_types := 'python|docs'
 # The playbooks check and deploy take, and suspend's and resume's options, each written once for every recipe that
 # takes them. --only is checked loosely, as the playbooks read it (blanks and empty names dropped); they refuse a name
 # that is no app, group or homeassistant.
-playbooks := 'site|truenas|proxmox|homeassistant|kubernetes'
-playbook_help := 'site (the default: every one, the NAS first), truenas, proxmox, homeassistant or kubernetes'
+playbooks := 'site|truenas|router|proxmox|homeassistant|kubernetes'
+playbook_help := 'site (the default: every one but router, the NAS first), truenas, router, proxmox, homeassistant or kubernetes'
 only_pattern := '[a-z0-9, -]*'
 only_help := 'some apps, groups or homeassistant, comma-separated'
 check_help := 'what it would do, changing nothing'

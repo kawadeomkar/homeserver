@@ -19,6 +19,26 @@ vault_truenas_api_key: ""
 # next run sends it to the NAS.
 vault_truenas_mail_password: ""
 
+# ------------------------------------------------------------------- Router ---
+# With the router (opnsense_address in local.yml): the API key pair of its user
+# for this project, made under System > Access > Users
+# (scripts/runbooks/opnsense.md). OPNsense shows the pair once, in the file it
+# downloads: its key= line here,
+vault_opnsense_api_key: ""
+# and its secret= line here.
+vault_opnsense_api_secret: ""
+
+# With the router: the password its configuration backups are encrypted with.
+# Make one up, long and random (openssl rand -hex 32): OPNsense has no setting
+# for it. Keep it in your password manager too, where it must stay: nothing
+# else opens the backups, and the router's own Restore page asks for it.
+vault_opnsense_backup_password: ""
+
+# With the router, needed only for a restore: root's web UI password, which a
+# restore logs in with (the API cannot upload a configuration). Give a fresh
+# install the same one in its installer, and it serves there too.
+vault_opnsense_root_password: ""
+
 # ------------------------------------------------------------------ Proxmox ---
 # With remote access (tailscale_enabled or tailscale_advertise_routes in
 # local.yml): a one-off, pre-approved auth key, tagged tag:homeserver, spent at

@@ -1,0 +1,96 @@
+---
+argument_specs:
+  main:
+    short_description: Configure the OPNsense router through its API
+    description:
+      - Runs on the controller and calls the router's HTTPS API with an API key and secret; nothing goes over SSH.
+      - It connects, checks the router runs a release it supports, and reports that release and the plugins installed.
+      - With opnsense_backup_dir, it backs up the router's configuration when it changed, encrypted in OPNsense's own
+        format, and refuses a router that does not descend from the newest backup.
+      - With opnsense_restore, and only then, it restores a backup through the web UI, onto the router as it is known
+        or onto a fresh install, which reboots into it.
+      - Nothing, neither the key pair nor a password, goes to a server presenting another certificate than the pinned
+        one.
+    options:
+      opnsense_api_host:
+        type: str
+        default: ""
+        description: The router's address.
+      opnsense_api_port:
+        type: int
+        default: 443
+        description: HTTPS port of the router's web server.
+      opnsense_api_key:
+        type: str
+        default: ""
+        no_log: true
+        description: The key of the API key pair. Keep it in an ansible-vault file.
+      opnsense_api_secret:
+        type: str
+        default: ""
+        no_log: true
+        description: The secret of the API key pair. Keep it in an ansible-vault file.
+      opnsense_validate_certs:
+        type: bool
+        default: false
+        description: Verify the router's certificate against the controller's trusted authorities.
+      opnsense_api_cert_sha256:
+        type: str
+        default: ""
+        description: >-
+          SHA-256 fingerprint of the router's certificate; the key and secret go only to that server. Required while
+          opnsense_validate_certs is off.
+      opnsense_api_timeout:
+        type: int
+        default: 60
+        description: Seconds to wait for the connection and for each answer.
+      opnsense_min_version:
+        type: str
+        default: "26.7.2"
+        description: The oldest release the role runs against; an older router fails the run.
+      opnsense_backup_dir:
+        type: str
+        default: ""
+        description: Where the router's configuration is backed up, outside any repository; empty, nothing is backed up.
+      opnsense_backup_password:
+        type: str
+        default: ""
+        no_log: true
+        description: The password the backups are encrypted with. Keep it in an ansible-vault file.
+      opnsense_backup_accept:
+        type: bool
+        default: false
+        description: Back the router's configuration up even when it does not descend from the newest backup.
+      opnsense_restore:
+        type: str
+        default: ""
+        description: What to restore - latest, or a backup's name; empty, nothing is restored.
+      opnsense_gui_user:
+        type: str
+        default: root
+        description: The web UI user a restore logs in as.
+      opnsense_gui_password:
+        type: str
+        default: ""
+        no_log: true
+        description: That user's password. Keep it in an ansible-vault file.
+      opnsense_bootstrap_host:
+        type: str
+        default: ""
+        description: Where a fresh install answers; empty, the router's own address.
+      opnsense_bootstrap_port:
+        type: int
+        default: 443
+        description: The HTTPS port a fresh install answers on.
+      opnsense_bootstrap_cert_sha256:
+        type: str
+        default: ""
+        description: The SHA-256 of the certificate the fresh install presents, once checked by hand.
+      opnsense_restore_wait:
+        type: int
+        default: 900
+        description: Seconds to wait for the router to come back on its address after a restore.
+      opnsense_restore_poll:
+        type: int
+        default: 15
+        description: Seconds between the questions while waiting.
