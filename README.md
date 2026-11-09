@@ -571,4 +571,4 @@ ruleset to require; `.github/rulesets/main.json` holds that ruleset's body, appl
 job gets a secret, and none reaches the home network: the roles are tested only against the fakes in
 `tests/integration`. Dependabot proposes weekly updates to the SHA-pinned actions and every package in the
 Python lock. The actionlint, kubeconform and gitleaks versions and the schema pins are bumped by hand;
-CLAUDE.md lists them.
+`scripts/runbooks/dependency-bumps.md` lists them.

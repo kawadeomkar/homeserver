@@ -25,7 +25,7 @@ env:
   PY_COLORS: "1"
   # No ANSIBLE_FORCE_COLOR: it overrides the ANSIBLE_NOCOLOR the idempotence tests run ansible-playbook with.
   # Binary tools are pinned by version and checksum. Dependabot cannot see them, so they are bumped by hand
-  # with the other pins CLAUDE.md lists; bump each version with its checksum.
+  # with the other pins scripts/runbooks/dependency-bumps.md lists; bump each version with its checksum.
   ACTIONLINT_VERSION: "1.7.12"
   ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
   KUBECONFORM_VERSION: "0.8.0"
