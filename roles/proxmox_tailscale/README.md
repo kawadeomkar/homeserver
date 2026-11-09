@@ -189,7 +189,8 @@ remote access back. `group_vars/proxmox/tailscale.yml` sets it from `group_vars/
 - **The routes** are `tailscale_advertise_routes`, the LAN's prefix: every VM on the host's bridge, the NAS and the
   router then answer from the tailnet without Tailscale of their own. With `tailscale_enabled` alone, the host joins
   the tailnet as a device of its own.
-- **The tag** is `tag:homeserver`: a tagged node's key never expires, and the tailnet's policy grants by tag.
+- **The tag** is `tag:homeserver`: Tailscale turns key expiry off for a tagged node by default (the role reports a
+  key that expires all the same), and the tailnet's policy grants by tag.
 - **The auth key** is the vault's `vault_tailscale_auth_key`, a one-off, pre-approved key tagged `tag:homeserver`,
   spent at the host's first login and read only while it is logged out. A spent key does nothing, so it stays in the
   vault.

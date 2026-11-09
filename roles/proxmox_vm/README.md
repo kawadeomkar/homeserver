@@ -223,8 +223,9 @@ The rest of `vms.yml`:
 - `proxmox_vm_rebuild_command` and `proxmox_vm_move_command`: `just deploy kubernetes -e
   proxmox_vm_ignore_existing_volumes=true` and `just deploy kubernetes -e proxmox_vm_move_disks=true`.
 
-The NAS's storages are not budgeted (NFS); the NAS's quota on `persistent/proxmox/vm`
-(`vm_storage_persistent_quota_gib`) caps them.
+The NAS's storages are not budgeted (NFS); the NAS's quotas cap them: `homeserver-persistent` by the quota on
+`persistent/proxmox/vm` (`vm_storage_persistent_quota_gib`), `homeserver-ephemeral` by the 1 TiB quota on
+`ephemeral/proxmox`, which it shares with the project pools.
 
 A built cluster moved to the other setup is refused before anything changes, its disks being on the other storages,
 until run with `proxmox_vm_move_disks`. The nightly backup covers both VMs in either setup, and the root README's

@@ -49,10 +49,13 @@ from a plain variable.
   `tailscale`, `talos`, `etcd`, `backup`, `home_assistant`), and commands come from `status_commands`
   (`group_vars/all/status.yml`) where it has one, so no role names a recipe itself. NEXT STEPS prints them
   (`filter_plugins/CLAUDE.md`).
-- A role that reads or changes a machine checks that its credentials are that machine's before it sends any, and
-  refuses (or, in `roles/status`, leaves unread) anything else: the certificate pins of the NAS and the router, the
-  talosconfig's and kubeconfig's endpoint and CA (`roles/talos`, `roles/app_scale`), so a test host's run never
-  touches the home machines.
+- Credentials go only to the machine they belong to, and not every role checks that itself. The NAS's and the
+  router's clients compare the certificate pin before they send a key; `roles/talos` refuses a talosconfig or
+  kubeconfig whose endpoint or CA is another cluster's; `roles/app_scale` compares the kubeconfig's server alone;
+  `roles/status` leaves another server's kubeconfig unread. `roles/flux_bootstrap` has no check of its own: it is
+  safe only after `roles/talos` in the same play, as in `kubernetes.yml`, and run anywhere else it would apply the
+  age key to whatever cluster its kubeconfig names. A role that reaches a cluster or a machine checks its
+  credentials first, so a test host's run never touches the home machines.
 
 ## Role references
 

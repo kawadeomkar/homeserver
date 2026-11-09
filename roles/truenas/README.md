@@ -203,8 +203,8 @@ so a rebuild matches, and the system dataset stays on the boot pool, off the sin
 - With a NAS and a cluster, `ephemeral/proxmox/vm` itself carries a `refreservation` of the cluster's disks on it (the
   worker's system disk), which neither the media nor the project pools can then take, since a worker whose disk
   cannot grow pauses with every app.
-- The reservation, the refreservation and every quota are always sent, 0 for none, so one removed from the
-  configuration is removed on the NAS too.
+- The reservation, the refreservation and every quota of a dataset the role manages are always sent, 0 for none,
+  so one removed from the configuration is removed on the NAS too; the `create_only` media dataset is left alone.
 - 64K records match qcow2's cluster size and waste no padding on the RAIDZ1; POSIX ACLs, which TrueNAS pairs with
   `aclmode` DISCARD, suit root-owned disk images served to a Linux client. The cluster's datasets hold large files,
   hence 1M records.

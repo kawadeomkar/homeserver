@@ -5,14 +5,16 @@ CI, the ruleset that guards `main`, and Dependabot. Claude Code loads this file 
 
 ## CI
 
-`.github/workflows/ci.yml` runs on every pull request and every push to `main`, splitting `just lint`'s and `just
+`.github/workflows/ci.yml` runs on every pull request into `main` and every push to it (a pull request stacked on
+another branch gets no CI until it is retargeted), splitting `just lint`'s and `just
 test`'s types between its jobs (`tests/policy/test_github.py` checks that each type runs somewhere):
 
 - `just lint` with every type but the documentation and the Kubernetes checks;
 - `just lint docs` in a job of its own (`docs`: the role references and the modules' documentation), so a stale page
   is a failed check of its own within a minute;
-- `just test unit policy` and `just test idempotence` on Python 3.13 and 3.14, on Arm runners (free for public
-  repositories, and faster at the CPU-bound idempotence suite than x64);
+- `just test unit policy` and `just test idempotence` without its `cluster` tests on Python 3.13 and 3.14, and the
+  `cluster` tests (the VM, backup, Talos and Flux roles) in a sharded `cluster` job on 3.14 alone, all on Arm
+  runners (free for public repositories, and faster at the CPU-bound idempotence suite than x64);
 - `just lint k8s` (kubeconform, kube-linter, the charts and the Talos configurations; talosctl downloaded by version
   and checksum);
 - `leaks`, which runs `just test gitleaks` and `scripts/ci/check-range.sh` (gitleaks over the commits the change adds,
@@ -57,4 +59,4 @@ rebases only on its schedule or a conflict: after merging one of its PRs, commen
 
 What neither Dependabot nor Renovate can see is bumped by hand each quarter: `scripts/runbooks/dependency-bumps.md`
 lists every such pin with the integrity value that moves with it. Renovate, for what is under `k8s/`, is in
-`k8s/CLAUDE.md`.
+`k8s/CLAUDE.md`; it runs only once the Mend Renovate app is installed (`TODO.md`).

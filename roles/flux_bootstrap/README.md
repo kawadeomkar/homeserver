@@ -49,7 +49,8 @@ stay at zero and come back held with their Kustomization. Empty, the FluxInstanc
 for each one left out to be deleted; kubectl's wait passes for one already gone, and it times out should a release
 of the operator stop passing its patches on to the sync.
 
-A FluxInstance that already syncs another path is refused, in a dry run too, before anything is applied: Flux
+A FluxInstance that already syncs another path is refused, in a dry run too, before any of the three objects is
+applied (a real run has installed or upgraded the operator by then, which prunes nothing): Flux
 prunes what the new path lacks, so moving it deletes everything the old one applied, the apps' volumes and their
 data with them. `flux_bootstrap_allow_path_change` lets one run do it.
 

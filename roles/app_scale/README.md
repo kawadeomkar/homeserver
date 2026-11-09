@@ -24,10 +24,13 @@ a dry run too, with the list of both, unless `app_scale_other_names` holds it, f
   run changes nothing either. Flux takes the app back at its next reconciliation, applying whatever changed in Git
   meanwhile.
 - Apps carrying `app_scale_late_label` (their databases) stop in a second wave, once the others' pods are gone,
-  and start in a first, so an app never loses its database under it. A wave that times out ends the run before the
-  next begins (a database is never stopped under pods that linger, and an app never starts before its database is
-  available), and the next run picks up where it stopped. Each wave's loop label says what it holds, `apps` or
-  `late apps`, which a live run draws as a step of its own.
+  and start in a first, so in a run that names both an app and its database the app never loses its database under
+  it; `--only` naming a database alone stops it under its running app. A wave that times out ends the run before
+  the next begins, so within that run a database is never stopped under pods that linger, and an app never starts
+  before its database is available. The next run does not wait again for what the last one patched: down counts an
+  app already held at zero as done, and up a database whose record it already removed, so after a timeout check
+  that the apps' pods are gone (down) or that the databases are available (up) before running it again. Each wave's
+  loop label says what it holds, `apps` or `late apps`, which a live run draws as a step of its own.
 
 Claims, Services, Ingresses and the platform are left alone: data stays, and so does Flux, which is what keeps an
 app down across reboots, Talos upgrades and `just deploy kubernetes`, and brings it back. A stopped app is out of

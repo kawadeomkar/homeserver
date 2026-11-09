@@ -103,8 +103,8 @@ measured): `homeserver-persistent` and `homeserver-ephemeral`, one per project p
 `claude-on-proxmox-ephemeral`), and `homeserver-backup`, which holds backups only. The server is `nas_address`, the
 NAS's static address, never `truenas_bootstrap_address`, a DHCP lease the NAS play replaces: with only the bootstrap
 address the role refuses, naming `proxmox_storage_nfs_server`. At boot, as after a power cut, the VMs marked
-start-on-boot wait 120 seconds (the NAS boots more slowly than Proxmox), then up to ten minutes more for each of
-the NAS's storages that holds VM disks, the backups' left out.
+start-on-boot wait 120 seconds (the NAS boots more slowly than Proxmox), then up to ten minutes more in all until
+every one of the NAS's storages that holds VM disks is active, the backups' left out.
 
 `proxmox_storage_local` is the installer's storage (`vm_storage_installer`: `local-lvm`, or `local.yml`'s
 `proxmox_local_vm_storage`, such as `local-zfs` on a ZFS install), checked without a NAS, where it is the only VM

@@ -314,8 +314,9 @@ privileged source ports, and pods cannot reach it.
   means rewriting history, which needs the ruleset's force-push rule switched off for the time and every clone re-made.
   Then add a fixture to `tests/policy/test_gitleaks_rules.py` for whatever the checks missed. `SECURITY.md` tells
   others how to report a problem privately.
-- **Pins no bot can see** (CI's tools, the schema refs, the Flux Operator, the Talos pins, Home Assistant's OVA) are
-  bumped by hand each quarter, each with its checksum or digest: `scripts/runbooks/dependency-bumps.md`.
+- **Pins no bot can see** (CI's tools, the schema refs, the Flux Operator, the Talos pins, Home Assistant's OVA, and,
+  until the Renovate app is installed, the images and charts under `k8s/`) are bumped by hand each quarter, each with
+  its checksum or digest: `scripts/runbooks/dependency-bumps.md`.
 - `TODO.md` is the running backlog: CI follow-ups, NAS and Proxmox work, manifest defects and open migration decisions.
 - `scripts/runbooks/REBUILD.md` is the recovery procedure after a hardware failure: the manual prerequisites (a fresh
   install's API user and key, the certificate pin, root SSH to Proxmox with the `ssh-copy-id` form that survives
