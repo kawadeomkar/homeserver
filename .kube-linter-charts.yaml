@@ -12,13 +12,13 @@ checks:
     - unset-memory-request
 customChecks:
   - name: no-pull-always
-    description: imagePullPolicy Always defeats tag pinning (CLAUDE.md)
+    description: imagePullPolicy Always defeats tag pinning (k8s/CLAUDE.md)
     remediation: Pin the image to an immutable tag and leave imagePullPolicy unset.
     template: image-pull-policy
     params:
       forbiddenPolicies: [Always]
   - name: unset-memory-request
-    description: Every container requests memory (CLAUDE.md)
+    description: Every container requests memory (k8s/CLAUDE.md)
     remediation: Set resources.requests.memory in the chart's values.
     template: memory-requirements
     params:

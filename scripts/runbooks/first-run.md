@@ -30,7 +30,7 @@ Only the apps this host runs are there: all of them, unless `local.yml`'s `kuber
 | FileBrowser | `media` | `svc/filebrowser 8081:8080` | Nothing: user `admin`, password `FILEBROWSER_ADMIN_PASSWORD` from its SOPS file |
 | PhotoPrism | `photoprism` | `svc/photoprism 2342` | Nothing: user `admin`, password `PHOTOPRISM_ADMIN_PASSWORD` from its SOPS file |
 | Frigate | `frigate` | `svc/frigate 8971` | Nothing: user `admin`, with the password Frigate printed in its log at its first start (`kubectl -n frigate logs deploy/frigate \| grep -i password`); change it in Frigate's settings |
-| Grafana | `monitoring` | `svc/kube-prometheus-stack-grafana 3001:80` | Nothing: user `admin`, password as CLAUDE.md's Monitoring says |
+| Grafana | `monitoring` | `svc/kube-prometheus-stack-grafana 3001:80` | Nothing: user `admin`, password as `k8s/CLAUDE.md`'s Monitoring says |
 | Homepage | `homepage` | `svc/homepage 3000` | Nothing: it has no login, and shows only links |
 
 `k8s/README-secrets.md` says how to read a value from a SOPS file without printing the others.

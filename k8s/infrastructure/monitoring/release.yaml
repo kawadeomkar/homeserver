@@ -30,7 +30,7 @@ spec:
       disabled:
         KubeCPUOvercommit: true
         KubeMemoryOvercommit: true
-    # Each image by its version and digest (CLAUDE.md): a chart bump changes both here too. The charts take the
+    # Each image by its version and digest (k8s/CLAUDE.md): a chart bump changes both here too. The charts take the
     # digest's hex alone, in sha, but kube-state-metrics's whole, in sha, and node-exporter's whole, in digest.
     alertmanager:
       alertmanagerSpec:
