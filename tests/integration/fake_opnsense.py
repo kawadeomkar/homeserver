@@ -137,6 +137,7 @@ def main():
         Path(args.state).write_text(json.dumps(initial_state(), indent=1))
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler(args.state, args.call_log))
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(args.cert, args.key)
     server.socket = context.wrap_socket(server.socket, server_side=True)
     server.serve_forever()
