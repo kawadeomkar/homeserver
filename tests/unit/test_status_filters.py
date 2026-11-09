@@ -200,6 +200,7 @@ def results(**more):
         "rrd-300": ok(history(lambda t: 0.05)),
         "rrd-301": ok(history(lambda t: 0.9 if t > NOW - 3600 else 0.2)),
         "rrd-310": ok(history(lambda t: 0.01)),
+        "rrd-9001": ok(history(lambda t: 0.3)),
         "pending-300": ok([{"key": "cores", "value": 2}]),
         "pending-301": ok(PENDING),
         "pending-310": ok([]),
@@ -271,7 +272,7 @@ def test_the_host():
     assert host["reboot"] is True and len(host["upgrades"]) == 2 and host["errors"] == []
 
 
-def test_this_setups_vms_and_the_others_counted():
+def test_this_setups_vms_and_every_other():
     vms = {vm["vmid"]: vm for vm in found()["vms"]}
     assert list(vms) == [300, 301, 310]
     assert vms[301]["pending"] == ["memory", "watchdog"] and vms[300]["pending"] == []
@@ -282,7 +283,25 @@ def test_this_setups_vms_and_the_others_counted():
     # The nodes are the cluster's, and Home Assistant an app at the address its agent reports, past its bridges.
     assert vms[300]["node"] == "homeserver-cp-1" and "node" not in vms[310]
     assert vms[310]["app"] == {"name": "homeassistant", "url": "http://192.0.2.32:8123"}
-    assert found()["others"] == {"vmids": [9001], "templates": [9000], "running": 1, "cores": 4, "memory": 8 * GIB}
+    # Every other VM on the host is shown as Proxmox sees it: a template by its name, a running VM with its use, its
+    # day's history and its boot disk.
+    template, other = found()["others"]
+    assert template == {"vmid": 9000, "name": "ubuntu-template", "status": "template"}
+    assert other["vmid"] == 9001 and other["status"] == "running" and other["cores"] == 4
+    assert other["memory"] == {"used": GIB, "total": 8 * GIB} and other["cpu_24h"] == [0.3] * 12
+    assert other["boot_disk"] == 32 * GIB and "pending" not in other and "made_by" not in other
+    # A VM on another node of a Proxmox cluster is that node's to show.
+    elsewhere = vm_entry(9002, "on-another-node") | {"node": "pve2"}
+    assert [vm["vmid"] for vm in found(resources=ok([*RESOURCES, elsewhere]))["others"]] == [9000, 9001]
+
+
+def test_whose_history_is_read():
+    # Every running VM's: this setup's and any other, never a template's or a stopped one's, nor another node's.
+    elsewhere = vm_entry(9002, "on-another-node") | {"node": "pve2"}
+    stopped = vm_entry(9003, "stopped-one", status="stopped")
+    read = {"resources": ok([*RESOURCES, elsewhere, stopped])}
+    assert fs.running_vms(read, "pve") == [300, 301, 310, 9001]
+    assert fs.running_vms({}, "pve") == [] and fs.running_vms({"resources": failed("no")}, "pve") == []
 
 
 def test_storages_and_the_disk_budget():
@@ -497,7 +516,10 @@ def test_the_text_says_what_matters():
     assert "→ qm reboot 301" in out and "→ just deploy proxmox" in out
     assert "VMS  pve · Proxmox VE 9.2.21 · kernel 7.0.14-22-pve · up 13 d" in out
     assert "/mnt/data 4.9 / 30" in out and "Home Assistant OS 18.3" in out
-    assert "+ 1 other VM (9001), 4 cores, 8.0 GiB, 1 running and 1 template (9000), not this repo's" in out
+    # Every other VM follows this setup's, a diamond for its dot.
+    assert " 9000  ◇ ubuntu-template      template" in out
+    assert " 9001  ◆ another-project      5 h 30 m  13%  ▃▃▃▃▃▃▃▃▃▃▃▃   1.0 / 8.0   boot disk — / 32" in out
+    assert " ◆ ◇ not this repo's: another project's, or made by hand; shown, never a problem or a thing to do" in out
     assert "the host's view: ballooning is off" in out
     assert "disks 68 of 68 GiB budgeted" in out
     assert out.rstrip().endswith(
@@ -505,12 +527,28 @@ def test_the_text_says_what_matters():
     )
 
 
-def test_many_other_vms_wrap_under_their_line():
-    others = [vm_entry(vmid, f"vm-{vmid}", cores=4, maxmem=16) for vmid in (9002, 9003, 9004, 9005, 9006)]
-    lines = report_text(resources=ok(RESOURCES + others)).splitlines()
+def test_other_vms_follow_this_setups_and_line_up():
+    others = [vm_entry(vmid, f"vm-{vmid}", cores=4, maxmem=16) for vmid in (9002, 9003)]
+    long = vm_entry(100, "a-testing-vm-with-a-long-name", status="stopped")
+    lines = report_text(resources=ok(RESOURCES + others + [long])).splitlines()
     assert max(len(line) for line in lines) <= 100, "\n".join(lines)
-    first = next(i for i, line in enumerate(lines) if line.startswith("       + 6 other VMs (9001, 9002, "))
-    assert lines[first + 1].startswith("         ") and lines[first + 1].rstrip().endswith("not this repo's")
+    rows = [line for line in lines if re.match(r" +\d+  [●○◆◇] ", line)]
+    assert [int(line.split()[0]) for line in rows] == [300, 301, 310, 100, 9000, 9001, 9002, 9003]
+    # A name too long for its column is cut, and the columns stay where the header puts them.
+    header = next(line for line in lines if line.lstrip().startswith("VMID"))
+    assert "  100  ◇ a-testing-vm-with-a-long…  stopped" in lines
+    vm = next(line for line in rows if "vm-9002" in line)
+    assert vm[header.index("UP") :].startswith("5 h 30 m") and vm[header.index("DISKS") :].startswith("boot disk")
+    # None of them is ever a thing to do, stopped or not.
+    out = "\n".join(lines)
+    assert "ATTENTION  0 problems · 3 to do" in out and "a-testing-vm" not in out.split("ATTENTION")[1]
+
+
+def test_the_other_vms_colour_says_they_are_not_this_repos():
+    coloured = report_text(color=True)
+    assert "\033[1mhomeserver-cp-1\033[0m" in coloured and "\033[36manother-project\033[0m" in coloured
+    assert "\033[32m◆\033[0m \033[36manother-project" in coloured
+    assert "\033[90m◇\033[0m \033[36mubuntu-template" in coloured
 
 
 def test_long_messages_wrap_under_their_subject():

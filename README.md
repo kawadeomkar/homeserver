@@ -142,8 +142,9 @@ the same order, with a line for each still to come, and the line on what is bein
 status vms storage` shows some sections (of apps, admin, tailscale, vms, storage, backups, cluster and nas), reading
 only the machines they need, and `--json` prints the report as JSON. It exits with the report's own code: 0 when nothing
 is wrong, 1 for a problem, 2 when a source could not be read, 3 when the run failed; the code also ends its last line
-and is the `exit` field of `--json`. Another project's VMs on the host are counted, never named. It reads no Secret and
-checks no certificate, and never uses a kubeconfig of another cluster.
+and is the `exit` field of `--json`. Every other VM on the host, another project's or one made by hand, is shown
+too, marked as not this repo's and never named as a problem. It reads no Secret and checks no certificate, and never
+uses a kubeconfig of another cluster.
 
 **What a run shows.** Every playbook run is drawn as it goes, whether just starts it or you run `ansible-playbook`
 yourself. At a terminal, the bottom of the screen shows each stage (the NAS, the Proxmox host, Home Assistant, the

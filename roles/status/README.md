@@ -9,7 +9,9 @@ Two entry points:
   `status_found`.
   - On the Proxmox host (`proxmox`): the host itself (version, kernel, uptime, CPU over the last day, memory, root
     filesystem), each of `status_vms` (state, uptime, CPU over the last day, memory, settings waiting for a restart,
-    and, where its guest agent reports them, its filesystems, OS and address), every other VM counted in one line,
+    and, where its guest agent reports them, its filesystems, OS and address), every other VM as Proxmox sees it
+    (state, uptime, CPU now and over the last day, memory, its boot disk's size: another project's, or made by hand,
+    drawn with a diamond for its dot and never a problem),
     each storage's use, the disk budget of `status_budget_storages`, the upgrades apt would make and whether an
     upgrade asked for a reboot, and the backups: each of `status_backup_jobs` against the host's job of that id
     (there, enabled, writing to its storage, covering its VMs, and when it runs next), each VM's newest backup on its
@@ -101,7 +103,7 @@ kubelet, since Talos's guest agent lists no filesystem.
 |---|---|---|
 | `status_source` | `""` | What the host is: `proxmox`, `cluster`, `nas`; empty reads nothing |
 | `status_types` | `[]` | The report's sections to show (`apps`, `admin`, `tailscale`, `vms`, `storage`, `backups`, `cluster`, `nas`); empty means every one |
-| `status_vms` | `[]` | This setup's VMs, each `{vmid, name, made_by, start, guest_agent, node, app}`; every other VM is only counted |
+| `status_vms` | `[]` | This setup's VMs, each `{vmid, name, made_by, start, guest_agent, node, app}`; every other VM is shown as Proxmox sees it, never judged |
 | `status_setup` | `{}` | What the setup has, `{nas, cluster, home_assistant}`, for the report's first line |
 | `status_proxmox_node` | `""` | The Proxmox node's name; empty takes the host's short hostname |
 | `status_budget_storages` | `[]` | Storages whose disk budget the report shows |

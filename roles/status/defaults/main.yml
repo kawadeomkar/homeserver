@@ -10,7 +10,7 @@ status_types: []
 # The VMs this setup makes, each {vmid, name, made_by, start, guest_agent, node, app}: what makes it, what starts it,
 # whether its guest agent reports its filesystems, the cluster node it is (whose memory and disks the cluster reports),
 # and the app it serves, {name, url, port} (its address from the guest agent when url is empty). Every other VM on the
-# host is only counted.
+# host is shown as Proxmox sees it, and never judged.
 status_vms: []
 # What this setup has, {nas, cluster, home_assistant}, for the report's first line.
 status_setup: {}

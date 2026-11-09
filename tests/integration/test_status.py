@@ -578,8 +578,21 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
         {"mount": "data", "used": 4 * GIB, "total": 20 * GIB},
         {"mount": "media", "used": 30 * GIB, "total": 100 * GIB},
     ]
-    others = {"vmids": [9001], "templates": [9000], "running": 1, "cores": 2, "memory": 4 * GIB}
-    assert report["proxmox"]["others"] == others
+    # Every other VM on the host, as Proxmox sees it, the running one with its day's history.
+    assert report["proxmox"]["others"] == [
+        {"vmid": 9000, "name": "ubuntu-template", "status": "template"},
+        {
+            "vmid": 9001,
+            "name": "another-project",
+            "status": "running",
+            "uptime": 3600,
+            "cpu": 0.1,
+            "cores": 2,
+            "memory": {"used": 2 * GIB, "total": 4 * GIB},
+            "cpu_24h": [0.1] * 12,
+            "boot_disk": 0,
+        },
+    ]
     budget = next(s for s in report["proxmox"]["storages"] if s["id"] == "local-lvm")["budget"]
     assert budget == {"provisioned": 216 * GIB, "limit": 200 * GIB}
     assert [v["id"] for v in report["volumes"]] == ["homeserver-worker-1 data", "homeserver-worker-1 media"]
@@ -615,7 +628,9 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
     assert " nas " not in line and "NAS  " not in out, out
     assert "TASK [" not in out and "PLAY RECAP" not in out and "\033[" not in out, out
     assert "VMS  pve · Proxmox VE 9.2.2-1 · kernel 7.0.2-6-pve" in out
-    assert "+ 1 other VM (9001), 2 cores, 4.0 GiB, 1 running and 1 template (9000), not this repo's" in out
+    assert " 9000  ◇ ubuntu-template      template" in out
+    assert " 9001  ◆ another-project      1 h 0 m   10%  ▁▁▁▁▁▁▁▁▁▁▁▁   2.0 / 4.0   —" in out
+    assert " ◆ ◇ not this repo's: another project's, or made by hand; shown, never a problem or a thing to do" in out
     assert "disks 216 of 200 GiB budgeted" in out
     assert "APPS  https://<app>.homeserver.invalid → Traefik 192.0.2.40 · allowlist 127.0.0.1/32" in out
     assert " Nodes      ● homeserver-cp-1 Ready · ● homeserver-worker-1 Ready · etcd healthy" in out
@@ -625,6 +640,21 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
     assert "etcd snapshot                —  none yet  in ~/.talos/homeserver/etcd  → just etcd-snapshot" in out
     assert out.rstrip().endswith(" · sections: apps admin tailscale vms storage backups cluster nas · --json"), out
     assert max(len(line) for line in lines) <= 100, out
+
+
+def test_a_node_named_in_advance_reads_the_same(tree, tmp_path):
+    """With status_proxmox_node given, the host's name is not asked: with the VMs shown the guest list is read alone
+    first, and without them (just status storage) there is no first read, the guest list read with the rest. Each
+    report is the one the run that asks the name makes."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    for args in ((), ("storage",)):
+        rc, asked, err = just_status(tree, state, *args)
+        assert rc == 0, asked + err
+        rc, named, err = just_status(tree, state, *args, status_proxmox_node="pve")
+        assert rc == 0, named + err
+        assert without_times(named) == without_times(asked)
+    assert "◆ another-project" not in named and "◆ another-project" in just_status(tree, state)[1]
 
 
 def test_just_status_exits_with_the_reports_code(tree, tmp_path):
