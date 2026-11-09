@@ -102,7 +102,7 @@ kubelet, since Talos's guest agent lists no filesystem.
 | Variable | Default | Meaning |
 |---|---|---|
 | `status_source` | `""` | What the host is: `proxmox`, `cluster`, `nas`; empty reads nothing |
-| `status_types` | `[]` | The report's sections to show (`apps`, `admin`, `tailscale`, `vms`, `storage`, `backups`, `cluster`, `nas`); empty means every one |
+| `status_types` | `[]` | The report's sections to show (`admin`, `vms`, `nas`, `storage`, `cluster`, `apps`, `tailscale`, `backups`), in that order; empty means every one |
 | `status_vms` | `[]` | This setup's VMs, each `{vmid, name, made_by, start, guest_agent, node, app}`; every other VM is shown as Proxmox sees it, never judged |
 | `status_setup` | `{}` | What the setup has, `{nas, cluster, home_assistant}`, for the report's first line |
 | `status_proxmox_node` | `""` | The Proxmox node's name; empty takes the host's short hostname |

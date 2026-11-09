@@ -546,18 +546,19 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
     assert stat.S_IMODE((tree / ".cache" / "status" / "report.json").stat().st_mode) == 0o600
     assert report["setup"] == {"nas": False, "cluster": True, "home_assistant": True}
     assert report["exit"] == 0, report["attention"]
+    # In the sections' order: the VMs', the storage's, the apps', the backups'.
     assert [(a["subject"], a["command"]) for a in report["attention"]] == [
+        ("reboot", "reboot it at a quiet time"),
+        ("upgrades", "just deploy proxmox"),
+        ("restart", "qm reboot 301"),
+        # The disks provisioned on local-lvm add up to more than it holds, as on a host run with overcommit allowed.
+        ("local-lvm", "keep its use well below 100% (pvesm status)"),
         ("suspended", "just resume --only sonarr"),
         (
             "allowlist",
             "the first visits (scripts/runbooks/first-run.md), then kubernetes_ingress_allowed_range in local.yml "
             "and just deploy kubernetes",
         ),
-        ("reboot", "reboot it at a quiet time"),
-        ("upgrades", "just deploy proxmox"),
-        ("restart", "qm reboot 301"),
-        # The disks provisioned on local-lvm add up to more than it holds, as on a host run with overcommit allowed.
-        ("local-lvm", "keep its use well below 100% (pvesm status)"),
         # Without a NAS and without vm_backup_storage there is no backup job.
         (
             "backup",
@@ -565,7 +566,7 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
             "deploy proxmox",
         ),
     ]
-    assert report["attention"][0]["text"] == f"sonarr is suspended since {at(days=-2)[:10]}"
+    assert report["attention"][4]["text"] == f"sonarr is suspended since {at(days=-2)[:10]}"
     vms = {v["vmid"]: v for v in report["proxmox"]["vms"]}
     assert sorted(vms) == [300, 301, 310]
     assert vms[301]["pending"] == ["memory"] and vms[301]["cpu"] == 0.42
@@ -638,7 +639,7 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
     assert " Kubernetes API   https://192.0.2.30:6443" in out
     assert "BACKUPS  no backup job: 300, 301 and 310 are not backed up" in out
     assert "etcd snapshot                —  none yet  in ~/.talos/homeserver/etcd  → just etcd-snapshot" in out
-    assert out.rstrip().endswith(" · sections: apps admin tailscale vms storage backups cluster nas · --json"), out
+    assert out.rstrip().endswith(" · sections: admin vms nas storage cluster apps tailscale backups · --json"), out
     assert max(len(line) for line in lines) <= 100, out
 
 
@@ -679,7 +680,7 @@ def test_just_status_exits_with_the_reports_code(tree, tmp_path):
 
     # A section just status does not have: the recipe refuses it before anything runs, with 3.
     rc, out, err = just_status(tree, state, "vms", "disks")
-    assert rc == 3 and "just status has no section disks: it takes apps admin tailscale vms storage" in err, out + err
+    assert rc == 3 and "just status has no section disks: it takes admin vms nas storage cluster" in err, out + err
     assert "ATTENTION" not in out and "reading" not in out
     # And a make-style parameter, rather than reading it as a section.
     rc, out, err = just_status(tree, state, "TYPE=vms")
@@ -1283,32 +1284,32 @@ SETUPS = {
     ),
     "proxmox-cluster": (
         PROXMOX_ONLY_CLUSTER_LOCAL_YML,
-        ["APPS", "ADMIN", "VMS", "STORAGE", "BACKUPS", "CLUSTER"],
+        ["ADMIN", "VMS", "STORAGE", "CLUSTER", "APPS", "BACKUPS"],
         [
-            ("todo", "suspended"),
-            ("todo", "allowlist"),
             ("todo", "upgrades"),
             ("todo", "restart"),
             ("todo", "local-lvm"),
+            ("todo", "suspended"),
+            ("todo", "allowlist"),
             ("todo", "backup"),
         ],
         0,
     ),
     "nas": (
         example_without_kubernetes(),
-        ["ADMIN", "VMS", "STORAGE", "NAS"],
+        ["ADMIN", "VMS", "NAS", "STORAGE"],
         [("todo", "upgrades"), ("todo", "local-lvm")],
         0,
     ),
     "nas-cluster": (
         None,
-        ["APPS", "ADMIN", "VMS", "STORAGE", "BACKUPS", "CLUSTER", "NAS"],
+        ["ADMIN", "VMS", "NAS", "STORAGE", "CLUSTER", "APPS", "BACKUPS"],
         [
-            ("todo", "suspended"),
-            ("todo", "allowlist"),
             ("todo", "upgrades"),
             ("todo", "restart"),
             ("todo", "local-lvm"),
+            ("todo", "suspended"),
+            ("todo", "allowlist"),
         ],
         0,
     ),

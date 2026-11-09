@@ -385,14 +385,14 @@ def test_what_needs_attention_and_the_exit_code():
     assert model["attention"][2]["text"] == "301 homeserver-worker-1 waits for a restart to apply memory, watchdog"
     assert model["attention"][2]["command"] == "qm reboot 301"
     assert model["exit"] == 0 and model["types"] == [
-        "apps",
         "admin",
-        "tailscale",
         "vms",
-        "storage",
-        "backups",
-        "cluster",
         "nas",
+        "storage",
+        "cluster",
+        "apps",
+        "tailscale",
+        "backups",
     ]
     # A command not given is suggested by text alone.
     assert fs.report({"proxmox": found()}, SETUP)["attention"][1]["command"] == ""
@@ -449,7 +449,7 @@ def test_types_narrow_the_report():
     model = fs.report({"proxmox": found()}, SETUP, ["storage"])
     assert model["types"] == ["storage"] and model["attention"] == []
     assert fs.unknown_types(["vms", "apps", "nas", "disks"]) == ["disks"]
-    assert fs.types_shown([]) == ["apps", "admin", "tailscale", "vms", "storage", "backups", "cluster", "nas"]
+    assert fs.types_shown([]) == ["admin", "vms", "nas", "storage", "cluster", "apps", "tailscale", "backups"]
     assert fs.types_shown(["storage", "vms"]) == ["vms", "storage"]
 
 
@@ -523,7 +523,7 @@ def test_the_text_says_what_matters():
     assert "the host's view: ballooning is off" in out
     assert "disks 68 of 68 GiB budgeted" in out
     assert out.rstrip().endswith(
-        "exit 0 · nothing is wrong · sections: apps admin tailscale vms storage backups cluster nas · --json"
+        "exit 0 · nothing is wrong · sections: admin vms nas storage cluster apps tailscale backups · --json"
     )
 
 
@@ -573,7 +573,7 @@ def test_the_text_of_a_host_not_read():
     out = fs.text(fs.report({"proxmox": {"unread": "it did not answer"}}, SETUP), False)
     assert "ATTENTION  1 problem · 0 to do" in out and "could not be read: it did not answer" in out
     assert "VMS" not in out and out.rstrip().endswith(
-        "exit 2 · 1 source not read · sections: apps admin tailscale vms storage backups cluster nas · --json"
+        "exit 2 · 1 source not read · sections: admin vms nas storage cluster apps tailscale backups · --json"
     )
 
 
@@ -1267,8 +1267,9 @@ def test_the_guest_view_replaces_proxmoxs_for_the_nodes():
 def test_a_healthy_cluster_asks_for_nothing():
     model = full_report()
     subjects = [a["subject"] for a in model["attention"]]
-    assert subjects == ["suspended", "reboot", "upgrades", "restart"], model["attention"]
-    suspended = model["attention"][0]
+    # In the sections' order: the VMs', then the apps'.
+    assert subjects == ["reboot", "upgrades", "restart", "suspended"], model["attention"]
+    suspended = model["attention"][3]
     assert suspended["text"] == f"sonarr is suspended since {iso(SUSPENDED_AT)[:10]}"
     assert suspended["command"] == "just resume --only sonarr" and model["exit"] == 0
 
@@ -2468,7 +2469,7 @@ def blocks_of(found, types=()):
 
 def test_the_text_is_its_blocks_in_order():
     blocks, model = blocks_of(everything())
-    sections = ["apps", "admin", "tailscale", "vms", "storage", "backups", "cluster", "nas"]
+    sections = ["admin", "vms", "nas", "storage", "cluster", "apps", "tailscale", "backups"]
     assert list(blocks) == ["head", *sections, "attention", "exit"]
     assert fs.text(model) == "\n".join(line for lines in blocks.values() for line in lines) + "\n"
     assert fs.text(model, True) == "\n".join(line for _, lines in fs.blocks(model, True) for line in lines) + "\n"
@@ -2515,6 +2516,6 @@ def test_the_hosts_findings_put_together():
 
 def test_the_sections_a_setup_can_have():
     nothing = {"nas": False, "cluster": False, "home_assistant": False}
-    assert fs.sections_expected(nothing) == ["admin", "tailscale", "vms", "storage", "backups"]
+    assert fs.sections_expected(nothing) == ["admin", "vms", "storage", "tailscale", "backups"]
     assert fs.sections_expected(nothing | {"home_assistant": True}, ["apps", "cluster"]) == ["apps"]
     assert fs.sections_expected(EVERY_SETUP, ["nas", "vms"]) == ["vms", "nas"]

@@ -1912,8 +1912,8 @@ def test_status_refuses_a_section_it_does_not_have(tmp_path):
     types = json.dumps({"types": "vms,disks"})
     rc, out = argspec_pass(example_tree(tmp_path), "status.yml", *CLUSTER_ARGS, "-e", types)
     assert rc != 0, out[-3000:]
-    message = "The report has no section disks: its sections are apps, admin, tailscale, vms, storage, backups, "
-    message += "cluster, nas."
+    message = "The report has no section disks: its sections are admin, vms, nas, storage, cluster, apps, tailscale, "
+    message += "backups."
     assert message in out, out[-3000:]
 
 

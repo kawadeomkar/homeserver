@@ -85,7 +85,7 @@ playbook_args_help := "ansible-playbook's, after the playbook: --tags <stage>, -
 option_args_help := "ansible-playbook's, after --: before it, just reads a word that begins with - as one of this recipe's options"
 # status's sections, in the order the report shows them, and the file each run writes the report to, which the recipe
 # reads its exit code from.
-status_sections := 'apps|admin|tailscale|vms|storage|backups|cluster|nas'
+status_sections := 'admin|vms|nas|storage|cluster|apps|tailscale|backups'
 status_report := '.cache/status/report.json'
 
 # The vault: git-ignored, at a path no commit ever held. Until 2026-10-20 it was committed as group_vars/all/vault.yml.
@@ -509,8 +509,8 @@ etcd-snapshot *ansible_args:
 # is drawn at once and kept up to date (STATUS_LIVE), except on one that says it can do nothing but print (TERM=dumb).
 # The setup's links are checked by vars_plugins/setup_links.py, which keeps stdout to the report alone.
 [arg('json', long='json', value='true', help='the report as JSON, alone on stdout')]
-[arg('sections', help="some of apps admin tailscale vms storage backups cluster nas; then, after --, ansible-playbook's arguments")]
-[doc('What runs, where to reach it and what needs doing, read without changing anything; sections: apps admin tailscale vms storage backups cluster nas')]
+[arg('sections', help="some of admin vms nas storage cluster apps tailscale backups; then, after --, ansible-playbook's arguments")]
+[doc('What runs, where to reach it and what needs doing, read without changing anything; sections: admin vms nas storage cluster apps tailscale backups')]
 [group('machines')]
 [no-exit-message]
 [script]

@@ -65,7 +65,7 @@ SMALL_FILESYSTEM = GIB
 # A storage this full is a thing to do, and this full a problem.
 STORAGE_TODO, STORAGE_PROBLEM = 0.8, 0.9
 # The sections just status knows, in the order it shows them.
-TYPES = ("apps", "admin", "tailscale", "vms", "storage", "backups", "cluster", "nas")
+TYPES = ("admin", "vms", "nas", "storage", "cluster", "apps", "tailscale", "backups")
 # A guest's interfaces that are never the address it is reached at: loopback, container bridges, tunnels.
 INNER_INTERFACES = ("lo", "docker", "hassio", "veth", "br-", "cni", "flannel", "tailscale", "virbr")
 
@@ -2201,8 +2201,8 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
     )
     if "tailscale" in shown and tail:
         attention["tailscale"] += _tailscale_attention(tail, commands)
-    # In the order they were worked out, the Proxmox host's Tailscale last.
-    flat = [a for t in (*(t for t in TYPES if t != "tailscale"), "tailscale") for a in attention[t]]
+    # In the sections' order.
+    flat = [a for t in TYPES for a in attention[t]]
     ranked = unread + [a for a in flat if a["level"] == "problem"] + [a for a in flat if a["level"] == "todo"]
     problems = sum(1 for a in ranked if a["level"] == "problem")
     return {
