@@ -1,12 +1,12 @@
 ---
 - name: nfs | Apply the NFS service settings
-  truenas_config:
+  truenas_config:  # noqa: args
     namespace: nfs
     settings: "{{ truenas_nfs_settings }}"
   when: truenas_nfs_settings | length > 0
 
 - name: nfs | Create or update the NFS shares
-  truenas_resource:
+  truenas_resource:  # noqa: args
     namespace: sharing.nfs
     key: [path]
     entries: "{{ truenas_nfs_shares }}"

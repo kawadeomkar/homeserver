@@ -2,7 +2,7 @@
 # Read-only. Finds the address the NAS answers on and checks it is the release this role targets.
 
 - name: connect | Connect to the NAS and read its state
-  truenas_info:
+  truenas_info:  # noqa: args
     api_hosts: "{{ truenas_api_hosts }}"
   register: truenas_state
 

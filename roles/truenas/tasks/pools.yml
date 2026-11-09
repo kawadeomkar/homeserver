@@ -3,7 +3,7 @@
 # TrueNAS moves it onto the first data pool it imports. Choosing it explicitly (pool_set) stops that.
 # Only done when the role manages pools, since that is what it protects.
 - name: pools | Pin the system dataset before any pool is imported
-  truenas_config: &truenas_system_dataset
+  truenas_config: &truenas_system_dataset  # noqa: args
     namespace: systemdataset
     settings:
       pool: "{{ truenas_system_dataset_pool }}"
@@ -15,7 +15,7 @@
     - truenas_pools | length > 0
 
 - name: pools | Import or create the pools
-  truenas_pool:
+  truenas_pool:  # noqa: args
     pools: "{{ truenas_pools }}"
     allow_create: "{{ truenas_pool_allow_create }}"
     disk_serials: "{{ truenas_pool_disks }}"
@@ -25,7 +25,7 @@
   when: truenas_pools | length > 0
 
 - name: pools | Check the system dataset is still where it was pinned
-  truenas_config: *truenas_system_dataset
+  truenas_config: *truenas_system_dataset  # noqa: args
   when:
     - truenas_system_dataset_pool | default('', true) | length > 0
     - truenas_pools | length > 0

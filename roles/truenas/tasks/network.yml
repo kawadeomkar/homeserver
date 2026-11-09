@@ -1,6 +1,6 @@
 ---
 - name: network | Apply the network settings
-  truenas_config:
+  truenas_config:  # noqa: args
     namespace: network.configuration
     settings: "{{ truenas_network_settings }}"
   when: truenas_network_settings | length > 0
@@ -8,7 +8,7 @@
 # The interface change is committed with a check-in timeout: the module reconnects on the new
 # address and confirms it, and if it cannot, TrueNAS rolls the change back by itself.
 - name: network | Give the NAS its static address
-  truenas_interface:
+  truenas_interface:  # noqa: args
     interface: "{{ truenas_interface | default(omit, true) }}"
     address: "{{ truenas_static_address }}"
     gateway: "{{ truenas_gateway }}"

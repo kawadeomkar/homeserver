@@ -15,7 +15,9 @@
   Kubernetes section stops them too, with a message per problem. Deleting the truenas host from the
   inventory, which inventory.example advises against, still gives a working run without a NAS.
 - Every task that calls a custom module passes only options the module accepts. ansible-lint's args rule
-  cannot load these modules, so nothing else checks it.
+  cannot import a module that imports its role's module_utils (the TrueNAS and OPNsense modules), so
+  nothing else checks theirs, and a task that calls one carries `# noqa: args`: the failed import stopped
+  the rule for the rest of the file.
 - Every option whose name looks like a secret is no_log, in the modules and in the roles' argument specs.
   The idempotence tests cannot see a missing no_log: at default verbosity Ansible prints neither a
   module's arguments nor its results.
@@ -1373,6 +1375,38 @@ def test_task_arguments_match_module_specs():
                     problems.append(f"{where}: {context}: {module} has no option {option!r}")
     assert problems == []
     assert called == set(specs), f"modules no task calls: {sorted(set(specs) - called)}"
+
+
+def task_nodes(node):
+    """Every task's node in a task list's, including those inside blocks: a node knows the line it was read from."""
+    for task in node.value if isinstance(node, yaml.SequenceNode) else []:
+        if isinstance(task, yaml.MappingNode):
+            yield task
+            for key, value in task.value:
+                if key.value in ("block", "rescue", "always"):
+                    yield from task_nodes(value)
+
+
+def test_tasks_calling_a_module_with_role_module_utils_skip_the_args_rule():
+    """ansible-lint's args rule runs a module's main() to check a task's options, and cannot import a role's
+    module_utils (only a collection's, ansible-lint#3891): the import failed at the first task calling a TrueNAS or
+    OPNsense module, and the rule skipped the rest of that file with a warning. Each such task carries # noqa: args,
+    so the rule checks every other task; test_task_arguments_match_module_specs checks its options."""
+    own = {path.stem for path in ROOT.glob("roles/*/module_utils/*.py")}
+    unimportable = {
+        path.stem for path in MODULES if set(re.findall(r"ansible\.module_utils\.(\w+)", path.read_text())) & own
+    }
+    assert unimportable, "no module imports its role's module_utils: remove the noqa comments and this test"
+    missing = []
+    for tasks_file in sorted(ROOT.glob("roles/*/tasks/*.yml")):
+        text = tasks_file.read_text()
+        lines = text.splitlines()
+        for task in task_nodes(yaml.compose(text, Loader=yaml.SafeLoader)):
+            for key, _ in task.value:
+                line = key.start_mark.line
+                if key.value.removeprefix("ansible.legacy.") in unimportable and "# noqa: args" not in lines[line]:
+                    missing.append(f"{tasks_file.relative_to(ROOT)}:{line + 1}: {key.value}")
+    assert missing == [], "each needs # noqa: args on the module's line"
 
 
 def test_secret_options_are_no_log():
