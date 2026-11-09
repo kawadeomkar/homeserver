@@ -15,9 +15,9 @@
   Kubernetes section stops them too, with a message per problem. Deleting the truenas host from the
   inventory, which inventory.example advises against, still gives a working run without a NAS.
 - Every task that calls a custom module passes only options the module accepts. ansible-lint's args rule
-  cannot import a module that imports its role's module_utils (the TrueNAS modules), so nothing else checks
-  theirs, and a task that calls one carries `# noqa: args`: the failed import stopped the rule for the rest
-  of the file.
+  cannot import a module that imports its role's module_utils (the TrueNAS and OPNsense modules), so
+  nothing else checks theirs, and a task that calls one carries `# noqa: args`: the failed import stopped
+  the rule for the rest of the file.
 - Every option whose name looks like a secret is no_log, in the modules and in the roles' argument specs.
   The idempotence tests cannot see a missing no_log: at default verbosity Ansible prints neither a
   module's arguments nor its results.
@@ -1389,9 +1389,9 @@ def task_nodes(node):
 
 def test_tasks_calling_a_module_with_role_module_utils_skip_the_args_rule():
     """ansible-lint's args rule runs a module's main() to check a task's options, and cannot import a role's
-    module_utils (only a collection's, ansible-lint#3891): the import failed at the first task calling a TrueNAS
-    module, and the rule skipped the rest of that file with a warning. Each such task carries # noqa: args, so the
-    rule checks every other task; test_task_arguments_match_module_specs checks its options."""
+    module_utils (only a collection's, ansible-lint#3891): the import failed at the first task calling a TrueNAS or
+    OPNsense module, and the rule skipped the rest of that file with a warning. Each such task carries # noqa: args,
+    so the rule checks every other task; test_task_arguments_match_module_specs checks its options."""
     own = {path.stem for path in ROOT.glob("roles/*/module_utils/*.py")}
     unimportable = {
         path.stem for path in MODULES if set(re.findall(r"ansible\.module_utils\.(\w+)", path.read_text())) & own

@@ -20,10 +20,10 @@ kinds:
   - yaml: "**/*.yml.example"
 
 enable_list:
-  # A task that calls a TrueNAS module carries "# noqa: args". The rule imports a module to check its options, and
-  # cannot import a role's module_utils (only a collection's: ansible-lint#3891), so it stopped at the first such task,
-  # warning, and left the rest of the file unchecked. tests/policy/test_roles.py checks those tasks' options instead,
-  # and that each carries the comment.
+  # A task that calls a TrueNAS or OPNsense module carries "# noqa: args". The rule imports a module to check its
+  # options, and cannot import a role's module_utils (only a collection's: ansible-lint#3891), so it stopped at the
+  # first such task, warning, and left the rest of the file unchecked. tests/policy/test_roles.py checks those tasks'
+  # options instead, and that each carries the comment.
   - args
   - empty-string-compare
   - no-log-password
