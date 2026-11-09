@@ -1,0 +1,48 @@
+---
+# Allowed values and types are checked by meta/argument_specs.yml before this runs. Each problem gets its own
+# sentence, naming the variable to change.
+
+- name: validate | Check the role's inputs
+  ansible.builtin.assert:
+    that: _errors | length == 0
+    fail_msg: "{{ _errors | join(' ') }}"
+    quiet: true
+  vars:
+    _repo: "{{ playbook_dir | realpath }}"
+    _backup_dir: "{{ opnsense_backup_dir | expanduser | realpath if opnsense_backup_dir else '' }}"
+    _errors: >-
+      {%- set out = [] -%}
+      {%- if not opnsense_api_host or not opnsense_api_key or not opnsense_api_secret -%}
+      {%-   set _ = out.append('Set opnsense_api_host, opnsense_api_key and opnsense_api_secret: the router\'s address in '
+                               ~ 'local.yml (opnsense_address), the key pair in the vault (vault_opnsense_api_key, '
+                               ~ 'vault_opnsense_api_secret; scripts/runbooks/opnsense.md says how to make it).') -%}
+      {%- endif -%}
+      {%- if not (opnsense_validate_certs | bool) and not opnsense_api_cert_sha256 -%}
+      {%-   set _ = out.append('Certificate validation is off and opnsense_api_cert_sha256 is empty, so nothing would '
+                               ~ 'prove that what answers is the router before the API key goes to it. Pin the '
+                               ~ "certificate's SHA-256 in local.yml (scripts/runbooks/opnsense.md says how to read it), "
+                               ~ 'or turn opnsense_validate_certs on with a certificate the controller trusts.') -%}
+      {%- endif -%}
+      {%- if opnsense_backup_dir and not opnsense_backup_password -%}
+      {%-   set _ = out.append("opnsense_backup_dir is set, so the router's configuration is backed up, encrypted with "
+                               ~ 'opnsense_backup_password: put a long random one in the vault as '
+                               ~ 'vault_opnsense_backup_password, and in your password manager, since nothing else '
+                               ~ 'opens the backups (scripts/runbooks/opnsense.md, section 4).') -%}
+      {%- endif -%}
+      {%- if _backup_dir and (_backup_dir == _repo or _backup_dir.startswith(_repo ~ '/')) -%}
+      {%-   set _ = out.append("opnsense_backup_dir must be outside the repository: the backups hold every secret of "
+                               ~ 'the router, and a commit would publish them.') -%}
+      {%- endif -%}
+      {%- if opnsense_restore and opnsense_restore != 'latest' and not (opnsense_restore | opnsense_is_backup_name) -%}
+      {%-   set _ = out.append('opnsense_restore takes latest, or a backup by its name (config-<time>.xml in '
+                               ~ 'opnsense_backup_dir), not ' ~ opnsense_restore ~ '.') -%}
+      {%- endif -%}
+      {%- if opnsense_restore and not opnsense_backup_dir -%}
+      {%-   set _ = out.append('opnsense_restore restores a backup, but opnsense_backup_dir names no directory of them.') -%}
+      {%- endif -%}
+      {%- if opnsense_restore and not opnsense_gui_password -%}
+      {%-   set _ = out.append("opnsense_restore needs opnsense_gui_password, the web UI password of "
+                               ~ opnsense_gui_user ~ ' (vault_opnsense_root_password): the API cannot upload a '
+                               ~ 'configuration, so the restore logs in to the web UI.') -%}
+      {%- endif -%}
+      {{ out }}

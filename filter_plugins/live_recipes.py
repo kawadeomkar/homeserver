@@ -106,6 +106,8 @@ NAS_STEPS = (
 
 # The play every cluster playbook but kubernetes.yml begins with, on localhost.
 REFUSE = "Refuse a cluster without the kubernetes inventory group"
+# The play router.yml begins with, on localhost.
+REFUSE_ROUTER = "Refuse a router without the router inventory group"
 # just suspend's and resume's options, as just's _scale passes them.
 SCALE_OPTIONS = (("only", "--only"), ("cluster_vms", "--all"))
 # The apps' waves (roles/app_scale's loop labels): every app, then the late ones, which are the databases here.
@@ -136,7 +138,7 @@ RECIPES = (
     Recipe(
         name="deploy",
         check_name="check",
-        playbooks=("site.yml", "truenas.yml", "proxmox.yml", "homeassistant.yml", "kubernetes.yml"),
+        playbooks=("site.yml", "truenas.yml", "proxmox.yml", "homeassistant.yml", "kubernetes.yml", "router.yml"),
         stages=(
             Stage(
                 "NAS",
@@ -172,6 +174,20 @@ RECIPES = (
                     Step("VMs", plays=("kubernetes.yml:Create the cluster's VMs",)),
                     Step("Talos", roles=("talos",)),
                     Step("Flux", roles=("flux_bootstrap",)),
+                ),
+            ),
+            # site.yml leaves the router out for now: only just deploy router draws it. Its steps in the order the
+            # role runs them: a restore comes between the inputs' check and the connection, and is drawn as skipped
+            # unless asked for.
+            Stage(
+                "router",
+                plays=("router.yml",),
+                absent="Say why the router is skipped",
+                steps=(
+                    Step("settings", plays=(f"router.yml:{REFUSE_ROUTER}",), files=("opnsense/tasks/validate.yml",)),
+                    Step("restore", files=("opnsense/tasks/restore.yml",)),
+                    Step("connect", files=("opnsense/tasks/connect.yml",)),
+                    Step("backup", files=("opnsense/tasks/backup.yml",)),
                 ),
             ),
         ),

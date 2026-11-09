@@ -1,7 +1,8 @@
 """Every setting just init asks for: group_vars/all/local.yml's, and the secrets that go in the vault.
 
-Each section of local.yml is switched on by a setting of its own (the NAS's addresses, the cluster's node addresses,
-Home Assistant's MAC, tailscale_enabled), as the playbooks work it out; the others are asked only when it is on.
+Each section of local.yml is switched on by a setting of its own (the NAS's addresses, the router's address, the
+cluster's node addresses, Home Assistant's MAC, tailscale_enabled), as the playbooks work it out; the others are asked
+only when it is on.
 tests/policy/test_make_init_settings.py checks this list against local.yml.example and against the vault variables
 the group_vars read, so a setting added to one and not the other fails.
 
@@ -17,15 +18,18 @@ from urllib.parse import urlsplit
 SECTIONS = {
     "proxmox": "Proxmox host",
     "nas": "TrueNAS NAS",
+    "router": "OPNsense router",
     "remote": "Remote access through Tailscale",
     "cluster": "Kubernetes cluster",
     "homeassistant": "Home Assistant",
 }
 
 # The question that switches each optional section on, and the setting whose value decides it (as nas_present,
-# kubernetes_present, haos_present and proxmox_tailscale_enabled do). A yes/no setting takes the answer itself.
+# router_present, kubernetes_present, haos_present and proxmox_tailscale_enabled do). A yes/no setting takes the answer
+# itself.
 SWITCHES = {
     "nas": ("Is there a TrueNAS NAS, for the VMs' disks, the backups and the apps' data?", "truenas_static_address"),
+    "router": ("Is the LAN's router OPNsense, for Ansible to configure through its API?", "opnsense_address"),
     "remote": ("Should the Proxmox host join your tailnet through Tailscale, for remote access?", "tailscale_enabled"),
     "cluster": ("Should the Proxmox host run the Kubernetes cluster (Talos and Flux)?", "kubernetes_node_addresses"),
     "homeassistant": ("Should the Proxmox host run Home Assistant OS in a VM of its own?", "haos_mac"),
@@ -50,6 +54,7 @@ DEFAULTS = {
     "haos_vmid": 310,
     "haos_size": {"cores": 2, "memory_mib": 4096, "disk_gib": 32},
     "proxmox_local_vm_storage": "local-lvm",
+    "router_backup_dir": "~/.opnsense/homeserver",
     "kubernetes_iso_storage": "local",
     "haos_import_storage": "local",
 }
@@ -482,6 +487,77 @@ SETTINGS: tuple[Setting, ...] = (
         popular=True,
     ),
     S("truenas_alert_email", "nas", "email", "Where the alerts go", after="truenas_mail_server", need="recommended"),
+    # -------------------------------------------------------------------------------------------------- Router ---
+    S(
+        "opnsense_address",
+        "router",
+        "ipv4",
+        "The router's address, where its web UI and API answer",
+        need="required",
+        help="Ansible calls the router's API from this machine, never over SSH (scripts/runbooks/opnsense.md).",
+    ),
+    S(
+        "vault_opnsense_api_key",
+        "router",
+        "secret",
+        "The key of the router's API key pair",
+        need="required",
+        secret=True,
+        help="Made for a user of its own under System -> Access -> Users (scripts/runbooks/opnsense.md, section 1). "
+        "OPNsense puts the key and the secret in a file it downloads once.",
+    ),
+    S(
+        "vault_opnsense_api_secret",
+        "router",
+        "secret",
+        "The secret of the router's API key pair",
+        need="required",
+        secret=True,
+        help="From the same downloaded file as the key.",
+    ),
+    S(
+        "opnsense_api_cert_sha256",
+        "router",
+        "fingerprint",
+        "The SHA-256 fingerprint of the router's web certificate, so the API key pair goes to no other server",
+        need="required",
+        help="Compare it with System -> Trust -> Certificates in the OPNsense web UI. Replace it whenever the "
+        "certificate is.",
+    ),
+    S(
+        "vault_opnsense_backup_password",
+        "router",
+        "secret",
+        "The password the router's configuration backups are encrypted with",
+        need="required",
+        secret=True,
+        help="Long and random, kept in your password manager too: nothing else opens the backups, and the router's own "
+        "Restore page asks for it (scripts/runbooks/opnsense.md, section 4).",
+    ),
+    S(
+        "vault_opnsense_root_password",
+        "router",
+        "secret",
+        "root's web UI password on the router, for a restore",
+        need="recommended",
+        secret=True,
+        help="The API cannot upload a configuration, so a restore logs in to the web UI as root. Give a fresh install "
+        "the same password in its installer (scripts/runbooks/opnsense.md, section 6).",
+    ),
+    S(
+        "router_backup_dir",
+        "router",
+        "path",
+        "Where the router's configuration backups go, when not ~/.opnsense/homeserver",
+        help="Outside the repository; keep a copy of it in your password manager or another backup.",
+    ),
+    S(
+        "opnsense_bootstrap_address",
+        "router",
+        "ipv4",
+        "Where a freshly installed router answers, for a restore onto it",
+        help="Its factory LAN address, unless its console gave it another. Unset, the router's own address.",
+    ),
     # -------------------------------------------------------------------------------------------------- Remote ---
     S(
         "tailscale_enabled",

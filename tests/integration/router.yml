@@ -1,0 +1,31 @@
+---
+# router.yml's play on the router, pointed at fake_opnsense.py: this repo's group_vars for the router, the play's
+# pre-tasks and its role. The address, port, certificate pin and key pair come from the test as extra vars.
+# test_roles.py checks the pre-tasks and roles are router.yml's.
+- name: Configure the fake router
+  hosts: router
+  gather_facts: false
+  vars_files:
+    - ../../group_vars/all/router.yml
+    - ../../group_vars/router/connection.yml
+    - ../../group_vars/router/backup.yml
+  pre_tasks:
+    - name: Refuse router settings that make no sense
+      ansible.builtin.assert:
+        that: router_settings_error | length == 0
+        fail_msg: "{{ router_settings_error }}"
+        quiet: true
+      tags: [always]
+    - name: Say why the router is skipped
+      ansible.builtin.debug:
+        msg: >-
+          opnsense_address is not set in group_vars/all/local.yml, so this setup leaves the router alone: it stays
+          configured by hand.
+      when: not router_present
+      tags: [always]
+    - name: Skip the router when local.yml gives it no address
+      ansible.builtin.meta: end_host
+      when: not router_present
+      tags: [always]
+  roles:
+    - role: opnsense

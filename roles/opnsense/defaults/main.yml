@@ -1,0 +1,49 @@
+---
+# Neutral defaults: with nothing else set, the role connects, reports, and changes nothing. The router's address and
+# credentials are configuration (group_vars/router/, from local.yml and the vault). See README.md.
+
+# ------------------------------------------------------------------ connection ---
+# The router's address.
+opnsense_api_host: ""
+# HTTPS port of the router's web server.
+opnsense_api_port: 443
+# The API key pair of the router's user for this role (System > Access > Users). Kept in the vault.
+opnsense_api_key: ""
+opnsense_api_secret: ""
+opnsense_validate_certs: false
+# SHA-256 fingerprint of the router's web certificate (colons optional): nothing, neither the key pair nor a password,
+# is sent to a server presenting another. Required while opnsense_validate_certs is off, since nothing else would prove
+# what answers is the router. Update it if the certificate is replaced.
+opnsense_api_cert_sha256: ""
+# Seconds to wait for the connection and for each answer.
+opnsense_api_timeout: 60
+# The oldest release the role runs against. 26.7.2 is the first with FreeBSD-SA-26:52's WireGuard fix, and 26.7 the
+# series whose API the role was written against. An older router fails the run, in a dry run too.
+opnsense_min_version: "26.7.2"
+
+# --------------------------------------------------------------------- backups ---
+# Where the router's configuration is backed up, outside any repository, made with mode 0700. Empty, nothing is backed
+# up. Each backup is named after its revision's history id on the router, in OPNsense's own encrypted format.
+opnsense_backup_dir: ""
+# The password the backups are encrypted with: the router's own Restore page opens them with it too. Kept in the vault.
+opnsense_backup_password: ""
+# Back the router's configuration up even when it does not descend from the newest backup, for one run (-e).
+opnsense_backup_accept: false
+
+# --------------------------------------------------------------------- restore ---
+# What to restore, for one run (-e): latest, the newest backup, or a backup's own name. Empty, nothing is restored.
+opnsense_restore: ""
+# The web UI user the restore logs in as, and its password: the API cannot upload a configuration. On a fresh install
+# root, with the password set in its installer. Kept in the vault.
+opnsense_gui_user: root
+opnsense_gui_password: ""
+# Where a fresh install answers, when the router does not answer as the one known: its factory LAN address, or
+# whatever its console gave it. Empty, the router's own address. Then the HTTPS port it answers on.
+opnsense_bootstrap_host: ""
+opnsense_bootstrap_port: 443
+# The SHA-256 of the certificate the fresh install presents, for one run (-e), once checked by hand. Empty, the run
+# prints it and stops before sending anything.
+opnsense_bootstrap_cert_sha256: ""
+# How long to wait for the router to come back on its address after a restore, and how often to ask, in seconds.
+opnsense_restore_wait: 900
+opnsense_restore_poll: 15

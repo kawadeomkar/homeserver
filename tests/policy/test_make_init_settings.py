@@ -82,6 +82,7 @@ def test_the_defaults_make_init_shows_are_the_ones_the_playbooks_use(tmp_path):
     )
     mail = resolve_on(tree, "truenas", "truenas_mail", "-e", "truenas_mail_server=smtp.example.invalid")
     used |= {"truenas_mail_port": mail["port"], "truenas_mail_security": mail["security"]}
+    used["router_backup_dir"] = resolve_on(tree, "opnsense", "opnsense_backup_dir")
     for path in ("kubernetes_talos_config_dir", "sops_age_key_file"):
         used[path] = cfg.DEFAULTS[path] if used[path] == os.path.expanduser(cfg.DEFAULTS[path]) else used[path]
     nodes, size_keys = used.pop("nodes"), used.pop("size_keys")
