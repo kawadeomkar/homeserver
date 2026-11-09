@@ -26,6 +26,7 @@ import email.parser
 import email.policy
 import html
 import json
+import os
 import secrets
 import ssl
 import subprocess
@@ -45,6 +46,8 @@ ROOT_PASSWORD = "FAKE-ROOT-PASSWORD-MUST-NOT-LEAK"
 CONFIG_SECRET = "FAKE-CONFIG-SECRET-MUST-NOT-LEAK"
 # The current release when the role was written.
 RELEASE = "26.7.8_2"
+# The one web UI page the fake serves, the Restore page: a login there redirects back to it.
+PAGE = "/diag_backup.php"
 LOCK = threading.Lock()
 
 
@@ -193,8 +196,7 @@ def openssl_decrypt(text, password):
         started = True
         body.append(line.strip())
     with tempfile.TemporaryDirectory() as work:
-        secret, sealed, opened = Path(work, "pass"), Path(work, "enc"), Path(work, "dec")
-        secret.write_text(password)
+        sealed, opened = Path(work, "enc"), Path(work, "dec")
         sealed.write_bytes(base64.b64decode("".join(body)))
         command = ["openssl", "enc", "-d", f"-{head.get('cipher', '').lower()}", "-md", head.get("hash", "").lower()]
         command += [
@@ -206,9 +208,11 @@ def openssl_decrypt(text, password):
             "-out",
             opened,
             "-pass",
-            f"file:{secret}",
+            "env:FAKE_OPNSENSE_PASSWORD",
         ]
-        if subprocess.run(command, capture_output=True).returncode:
+        # The password reaches openssl through its environment, never a file.
+        environment = os.environ | {"FAKE_OPNSENSE_PASSWORD": password}
+        if subprocess.run(command, capture_output=True, env=environment).returncode:
             return None
         return opened.read_text()
 
@@ -301,7 +305,7 @@ def handler(state_path, call_log, sessions, address):
                 return
             if self.path.startswith("/api/"):
                 self.api(state)
-            elif self.path == "/diag_backup.php":
+            elif self.path == PAGE:
                 self.web(state, body)
             else:
                 self.log(credentials=False)
@@ -345,7 +349,7 @@ def handler(state_path, call_log, sessions, address):
                     sessions.pop(sid)
                     sid = secrets.token_hex(8)
                     sessions[sid] = session | {"user": "root"}
-                    headers = (("Set-Cookie", f"PHPSESSID={sid}; path=/; secure; HttpOnly"), ("Location", self.path))
+                    headers = (("Set-Cookie", f"PHPSESSID={sid}; path=/; secure; HttpOnly"), ("Location", PAGE))
                     self.send(302, "", "text/html", headers)
                 else:
                     self.send(200, login_page(session, "Wrong username or password."), "text/html", cookie)
@@ -434,6 +438,7 @@ def handler(state_path, call_log, sessions, address):
 def server(port, cert, key, state, call_log, sessions, address):
     httpd = ThreadingHTTPServer(("127.0.0.1", port), handler(state, call_log, sessions, address))
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(cert, key)
     httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
     return httpd
