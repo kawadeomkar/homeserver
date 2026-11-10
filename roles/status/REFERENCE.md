@@ -20,7 +20,7 @@ Description: Read the homeserver's machines without changing them, and report wh
 
 **Description**: 
 - Reads the host the play runs on, as status_source names it, and leaves what it found in the fact status_found for the report entry point. Every command goes through the role's module status_read, which runs them at once and refuses any that is not on its read list.
-- On the Proxmox host (proxmox) it reads the host, its storages and the VMs of status_vms; every other VM is only counted.
+- On the Proxmox host (proxmox) it reads the host, its storages and the VMs of status_vms; every other VM is shown as Proxmox sees it, and never judged.
 - For the cluster (cluster), on this machine, it reads the nodes, the apps (each Ingress's Service, then the Deployment it selects, and every Deployment a Flux Kustomization under status_cluster_apps_path applies), Flux, the certificates, the nodes' kubelet statistics, Alertmanager's alerts, etcd's state and the newest commit of the branch Flux syncs. It reads the credentials under no_log, keeping only the server the kubeconfig names and when each client certificate expires, and reports another cluster's credentials rather than use them. It never reads a Secret.
 - For the NAS (nas) it reads nothing itself, and works out what status_nas_state says, the result of truenas_info with its status option, which roles/truenas's status entry point reads in one login - the pools' health, capacity and last scrub, TrueNAS's alerts, the snapshot tasks' last runs, the NFS service.
 - Unless status_probe_apps is off, asks from this machine the addresses of the apps it found (the cluster's, and an app on a VM of its own) with the role's module status_probe, checking no certificate and sending no credentials.
@@ -69,7 +69,7 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Type**: list
     - **Default**: []
   
-    - **Description**: The VMs this setup makes; every other VM on the host is only counted.
+    - **Description**: The VMs this setup makes; every other VM on the host is shown as Proxmox sees it, and never judged.
   
   
   
@@ -646,7 +646,7 @@ Description: Read the homeserver's machines without changing them, and report wh
 | ---- | ------ | -------------- |
 | proxmox ¦ Read this machine's Tailscale DNS | status_read | True |
 | proxmox ¦ Say what its Tailscale says | ansible.builtin.set_fact | True |
-| proxmox ¦ Read the node's name | status_read | True |
+| proxmox ¦ Read the node's name and its guests | status_read | True |
 | proxmox ¦ Use the node's name | ansible.builtin.set_fact | True |
 | proxmox ¦ Read the host, its storages and its VMs, at once | status_read | True |
 | proxmox ¦ Read the logs of the backup runs that failed | status_read | True |
@@ -733,9 +733,9 @@ classDef rescue stroke:#665352,stroke-width:2px;
 
   Start-->|Task| proxmox___Read_this_machine_s_Tailscale_DNS0[proxmox   read this machine s tailscale dns<br>When: **tailscale  in status reads and status tailscale<br>state routes   default       selectattr <br>advertised     list   length   0**]:::task
   proxmox___Read_this_machine_s_Tailscale_DNS0-->|Task| proxmox___Say_what_its_Tailscale_says1[proxmox   say what its tailscale says<br>When: **tailscale  in status reads**]:::task
-  proxmox___Say_what_its_Tailscale_says1-->|Task| proxmox___Read_the_node_s_name2[proxmox   read the node s name<br>When: **proxmox  in status reads and status proxmox node <br> length    0**]:::task
-  proxmox___Read_the_node_s_name2-->|Task| proxmox___Use_the_node_s_name3[proxmox   use the node s name<br>When: **proxmox  in status reads**]:::task
-  proxmox___Use_the_node_s_name3-->|Task| proxmox___Read_the_host__its_storages_and_its_VMs__at_once4[proxmox   read the host  its storages and its vms <br>at once<br>When: **proxmox  in status reads and not  status proxmox<br>name unreachable   default false**]:::task
+  proxmox___Say_what_its_Tailscale_says1-->|Task| proxmox___Read_the_node_s_name_and_its_guests2[proxmox   read the node s name and its guests<br>When: **proxmox  in status reads and  commands   length  <br>0**]:::task
+  proxmox___Read_the_node_s_name_and_its_guests2-->|Task| proxmox___Use_the_node_s_name3[proxmox   use the node s name<br>When: **proxmox  in status reads**]:::task
+  proxmox___Use_the_node_s_name3-->|Task| proxmox___Read_the_host__its_storages_and_its_VMs__at_once4[proxmox   read the host  its storages and its vms <br>at once<br>When: **proxmox  in status reads and not  status proxmox<br>first unreachable   default false   and  commands <br> length   0**]:::task
   proxmox___Read_the_host__its_storages_and_its_VMs__at_once4-->|Task| proxmox___Read_the_logs_of_the_backup_runs_that_failed5[proxmox   read the logs of the backup runs that<br>failed<br>When: **runs   length   0**]:::task
   proxmox___Read_the_logs_of_the_backup_runs_that_failed5-->|Task| proxmox___Work_out_what_the_host_says6[proxmox   work out what the host says]:::task
   proxmox___Work_out_what_the_host_says6-->|Task| proxmox___Ask_Home_Assistant_s_address7[proxmox   ask home assistant s address<br>When: **status probe apps and  targets   length   0**]:::task

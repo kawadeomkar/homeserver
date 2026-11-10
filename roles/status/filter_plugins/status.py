@@ -65,7 +65,7 @@ SMALL_FILESYSTEM = GIB
 # A storage this full is a thing to do, and this full a problem.
 STORAGE_TODO, STORAGE_PROBLEM = 0.8, 0.9
 # The sections just status knows, in the order it shows them.
-TYPES = ("apps", "admin", "tailscale", "vms", "storage", "backups", "cluster", "nas")
+TYPES = ("admin", "vms", "nas", "storage", "cluster", "apps", "tailscale", "backups")
 # A guest's interfaces that are never the address it is reached at: loopback, container bridges, tunnels.
 INNER_INTERFACES = ("lo", "docker", "hassio", "veth", "br-", "cni", "flannel", "tailscale", "virbr")
 
@@ -172,15 +172,55 @@ def upgrades(text):
     return out
 
 
+def running_vms(results, node=""):
+    """The VMIDs of the VMs running on `node`, from /cluster/resources as status_read read it: whose day's history to
+    read, this setup's and every other; none when it was not read."""
+    resources, _ = _json(results, "resources")
+    return sorted(
+        int(r["vmid"])
+        for r in resources or []
+        if isinstance(r, dict)
+        and r.get("type") == "qemu"
+        and "vmid" in r
+        and r.get("status") == "running"
+        and not r.get("template")
+        and (not node or r.get("node") == node)
+    )
+
+
+def _other_vm(entry, results):
+    """A VM this setup does not make, as Proxmox sees it: a template only by its name, a running VM with its use, its
+    day's history and its boot disk's size (Proxmox reports no VM's disk use: disk is 0 even with a guest agent, seen on
+    a Proxmox VE 9.2 host), a stopped one by its state."""
+    vmid = int(entry["vmid"])
+    item = {
+        "vmid": vmid,
+        "name": entry.get("name") or "",
+        "status": "template" if entry.get("template") else entry.get("status") or "unknown",
+    }
+    if item["status"] != "running":
+        return item
+    rrd, _ = _json(results, f"rrd-{vmid}")
+    return item | {
+        "uptime": int(entry.get("uptime") or 0),
+        "cpu": float(entry.get("cpu") or 0),
+        "cores": int(entry.get("maxcpu") or 0),
+        "memory": {"used": int(entry.get("mem") or 0), "total": int(entry.get("maxmem") or 0)},
+        "cpu_24h": cpu_buckets(rrd),
+        "boot_disk": int(entry.get("maxdisk") or 0),
+    }
+
+
 def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file="", backup_jobs=()):
     """What the Proxmox host's reads say, as the report needs it.
 
     `found` is {unread, node, results}: why the host could not be read at all (else ""), the node's name, and
-    status_read's results by name (resources, node, rrd-node, rrd-<vmid>, pending-<vmid>, fsinfo-<vmid>,
+    status_read's results by name (resources, hostname, node, rrd-node, rrd-<vmid>, pending-<vmid>, fsinfo-<vmid>,
     osinfo-<vmid>, network-<vmid>, content-<storage>, updates, reboot, and for the backups backup-jobs,
     backup-tasks, backups-<storage>, schedule-<job> and log-<upid>). `vms` is this repo's VMs, each {vmid, name,
     made_by, start, guest_agent, node, app}: `node` the cluster node it is, `app` {name, url, port} the app it serves
-    (its address from its guest agent when `url` is empty); every other VM on the host is only counted. Storages in
+    (its address from its guest agent when `url` is empty). Every other VM on the host, another project's or one made
+    by hand, is shown as Proxmox sees it (others), with its day's history when it runs, and never judged. Storages in
     `budget_storages` show their disk budget. `backup_jobs` is the backup jobs this setup has, as roles/proxmox_backup
     takes them ({id, schedule, storage, vmid, enabled}), checked against the host's.
     """
@@ -262,16 +302,11 @@ def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file="", back
                 item["os"] = os_name(_agent(osinfo))
         out_vms.append(item)
 
-    others = [r for vmid, r in sorted(guests.items()) if vmid not in ours]
-    templates = [r for r in others if r.get("template")]
-    machines = [r for r in others if not r.get("template")]
-    other = {
-        "vmids": [int(r["vmid"]) for r in machines],
-        "templates": [int(r["vmid"]) for r in templates],
-        "running": sum(1 for r in machines if r.get("status") == "running"),
-        "cores": sum(int(r.get("maxcpu") or 0) for r in machines),
-        "memory": sum(int(r.get("maxmem") or 0) for r in machines),
-    }
+    others = [
+        _other_vm(entry, results)
+        for vmid, entry in sorted(guests.items())
+        if vmid not in ours and (not node or entry.get("node") == node)
+    ]
 
     storages = []
     for entry in sorted(
@@ -315,7 +350,7 @@ def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file="", back
         "kernel": str((status.get("current-kernel") or {}).get("release") or ""),
         "host": host,
         "vms": out_vms,
-        "others": other,
+        "others": others,
         "storages": storages,
         "upgrades": upgrades(text) if text is not None else None,
         "reboot": reboot,
@@ -2166,8 +2201,8 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
     )
     if "tailscale" in shown and tail:
         attention["tailscale"] += _tailscale_attention(tail, commands)
-    # In the order they were worked out, the Proxmox host's Tailscale last.
-    flat = [a for t in (*(t for t in TYPES if t != "tailscale"), "tailscale") for a in attention[t]]
+    # In the sections' order.
+    flat = [a for t in TYPES for a in attention[t]]
     ranked = unread + [a for a in flat if a["level"] == "problem"] + [a for a in flat if a["level"] == "todo"]
     problems = sum(1 for a in ranked if a["level"] == "problem")
     return {
@@ -2197,6 +2232,9 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
 # -------------------------------------------------------------------------------------------- the text ---
 
 WIDTH = 100
+# The dots of a VM this setup does not make, running or not, and the most a VM's name takes of a row.
+OTHER_DOTS = {"running": ("◆", "g"), "": ("◇", "d")}
+NAME_ROOM = 25
 # How each app state is drawn: its dot, and the style of the dot and the word.
 STATE_STYLES = {
     "running": ("●", "g"),
@@ -2468,6 +2506,11 @@ def _reach_line(model):
     return _phrases("Tailnet", phrases)
 
 
+def _cut(text, room):
+    """text in at most `room` characters, ending in "…" when cut."""
+    return text if len(text) <= room else text[: room - 1] + "…"
+
+
 def _vm_lines(found):
     lines = []
     host = found["host"]
@@ -2478,8 +2521,10 @@ def _vm_lines(found):
         f"up {_uptime(host['uptime'])}",
     ]
     lines.append(Line().add("VMS", "h").add("  ").add(" · ".join(p for p in facts if p), "d"))
-    vms = found.get("vms") or []
-    name_width = max([len(vm["name"]) for vm in vms] + [16]) + 2
+    vms, others = found.get("vms") or [], found.get("others") or []
+    # Another project's VMs, or ones made by hand, follow this setup's, each with a diamond for its dot and its name in
+    # another colour; a name too long for the column is cut, so that the row still fits.
+    name_width = min(max([len(vm["name"]) for vm in vms + others] + [16]), NAME_ROOM) + 2
     columns = [("VMID", 6), ("NAME", name_width + 2), ("UP", 9)]
     header = Line().add(" ")
     for title, width in columns:
@@ -2488,10 +2533,10 @@ def _vm_lines(found):
     lines.append(header.add("DISKS GiB, used / size", "k"))
     disks_column = 1 + 6 + name_width + 2 + 9 + 4 + 2 + 14 + 13
 
-    def row(vmid, name, state, up, cpu, spark, memory, disks):
+    def row(vmid, name, state, up, cpu, spark, memory, disks, other=False):
         line = Line().add(" ").cell(vmid, 4, "d", right=True).add("  ")
-        dot = {"running": ("●", "g"), "missing": ("○", "r")}.get(state, ("○", "d"))
-        line.add(*dot).add(" ").cell(name, name_width, "b")
+        dots = OTHER_DOTS if other else {"running": ("●", "g"), "missing": ("○", "r"), "": ("○", "d")}
+        line.add(*dots.get(state, dots[""])).add(" ").cell(_cut(name, NAME_ROOM), name_width, "c" if other else "b")
         if state != "running":
             return [line.add(state, "y" if state == "missing" else "d")]
         line.cell(up, 9).cell(cpu, 4, right=True).add("  ")
@@ -2540,20 +2585,25 @@ def _vm_lines(found):
         )
         if vm.get("os"):
             lines.append(Line().add(" " * (7 + name_width + 2)).add(vm["os"], "d"))
-    other = found.get("others") or {}
-    if other.get("vmids") or other.get("templates"):
-        parts = []
-        if other.get("vmids"):
-            count = len(other["vmids"])
-            parts.append(
-                f"{count} other VM{'s' if count != 1 else ''} ({', '.join(map(str, other['vmids']))}), "
-                f"{other['cores']} cores, {_gib(other['memory'], 1)} GiB, {other['running']} running"
+    for vm in others:
+        mem = vm.get("memory") or {}
+        lines += row(
+            vm["vmid"],
+            vm["name"],
+            vm["status"],
+            _uptime(vm.get("uptime")),
+            f"{vm.get('cpu', 0):.0%}",
+            screen.spark(vm.get("cpu_24h")),
+            f"{_gib(mem.get('used', 0), 1):>4} / {_gib(mem.get('total', 0), 1)}",
+            [f"boot disk — / {_gib(vm['boot_disk'])}"] if vm.get("boot_disk") else ["—"],
+            other=True,
+        )
+    if others:
+        lines.append(
+            Line().add(
+                " ◆ ◇ not this repo's: another project's, or made by hand; shown, never a problem or a thing to do", "d"
             )
-        if other.get("templates"):
-            count = len(other["templates"])
-            parts.append(f"{count} template{'s' if count != 1 else ''} ({', '.join(map(str, other['templates']))})")
-        for i, part in enumerate(screen.fill(" and ".join(parts) + ", not this repo's", WIDTH - 9)):
-            lines.append(Line().add(" " * 7).add("+ " if i == 0 else "  ", "k").add(part, "d"))
+        )
     if host_view:
         lines.append(
             Line().add(
@@ -2943,6 +2993,7 @@ class FilterModule:
     def filters(self):
         return {
             "status_proxmox": proxmox,
+            "status_running_vms": running_vms,
             "status_backup_failed_runs": backup_failed_runs,
             "status_cluster": cluster,
             "status_nas": nas,

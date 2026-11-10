@@ -88,18 +88,22 @@ def test_the_sections_come_in_order_whatever_host_answers_first():
     progress = callback.Progress(fs, SETTINGS)
     seen = []
 
-    # The NAS first: its section waits for every section before it, the apps first, which need both other hosts.
+    # The NAS first: its section waits for every section before it, the admin pages first, which the Proxmox host's
+    # Tailscale says.
     progress.update("truenas", found=hosts["truenas"][0])
     blocks, end = progress.advance()
     assert blocks == [] and end is None
-    assert states(progress)[0] == ("waiting", "apps") and ("todo", "nas") in states(progress)
-    assert progress.lines()[0][2] == "waiting for the Proxmox host and the cluster"
+    assert states(progress)[0] == ("waiting", "admin") and ("todo", "nas") in states(progress)
+    assert progress.lines()[0][2] == "waiting for the Proxmox host"
     assert dict((s, t) for _, s, t in progress.lines())["nas"] == "read · 1 to do"
 
-    # The Proxmox host's Tailscale, early: the admin pages are read, and wait for the apps.
+    # The Proxmox host's Tailscale, early: the admin pages, first, show at once, and the VMs wait for both other hosts.
     progress.update("homeserver", early=hosts["homeserver"][1])
     blocks, end = progress.advance()
-    assert blocks == [] and ("read", "admin") in states(progress)
+    seen += blocks
+    assert [block[0].split()[0] for block in blocks] == ["ADMIN"] and end is None
+    assert states(progress)[0] == ("waiting", "vms")
+    assert progress.lines()[0][2] == "waiting for the Proxmox host and the cluster"
 
     progress.update("homeserver-k8s", found=hosts["homeserver-k8s"][0])
     blocks, end = progress.advance()
@@ -117,7 +121,8 @@ def test_the_sections_come_in_order_whatever_host_answers_first():
 
 
 def test_a_section_shows_once_the_sections_before_it_have():
-    """With the Proxmox host and the cluster read, every section but the NAS's is printed, and the NAS's waits."""
+    """With the Proxmox host and the cluster read, the sections before the NAS's are printed; the NAS's waits for it,
+    and every section after it, read, waits behind it with its problems and things to do."""
     hosts = findings()
     progress = callback.Progress(fs, SETTINGS)
     seen = []
@@ -126,16 +131,16 @@ def test_a_section_shows_once_the_sections_before_it_have():
         blocks, end = progress.advance()
         seen += blocks
         assert end is None
-    assert [block[0].split()[0] for block in seen] == [
-        "APPS",
-        "ADMIN",
-        "TAILSCALE",
-        "VMS",
-        "STORAGE",
-        "BACKUPS",
-        "CLUSTER",
+    assert [block[0].split()[0] for block in seen] == ["ADMIN", "VMS"]
+    assert states(progress) == [
+        ("waiting", "nas"),
+        ("read", "storage"),
+        ("read", "cluster"),
+        ("todo", "apps"),
+        ("read", "tailscale"),
+        ("read", "backups"),
+        ("waiting", "attention"),
     ]
-    assert states(progress) == [("waiting", "nas"), ("waiting", "attention")]
     assert progress.lines()[0][2] == "waiting for the NAS"
     progress.update("truenas", found=hosts["truenas"][0])
     blocks, end = progress.advance()
@@ -187,7 +192,7 @@ def test_the_live_lines_fit_the_terminal():
     module._hosts = {"homeserver": {"label": "proxmox", "state": "ok", "done": False, "since": 0.0, "seconds": 0.0}}
     lines = module._frame(100, 40, "⠋")
     assert len(lines) == 10 and lines[-1].startswith("reading  proxmox ⠋")
-    assert lines[0].startswith(" ⠋ ") and "APPS       waiting for the Proxmox host and the cluster · " in lines[0]
+    assert lines[0].startswith(" ⠋ ") and "ADMIN      waiting for the Proxmox host · " in lines[0]
     assert lines[-2].endswith("ATTENTION  once every section is read")
     assert [line[:9] for line in module._frame(100, 8, "⠋")] == ["reading  "]
     # Each cut short of the terminal's width, so that none wraps.

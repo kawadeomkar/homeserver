@@ -2,7 +2,7 @@
 # just status (status.yml, roles/status): what this setup has, and the VMs it reports on, which every play that
 # reports reads. These are the VMs this repo makes, the same ones the nightly backup covers (vm_backup_vmids,
 # group_vars/proxmox/backup.yml): the cluster's nodes, Home Assistant's, and local.yml's vm_backup_extra_vmids. Any
-# other VM on the Proxmox host, another project's, is only counted, never named as a problem.
+# other VM on the Proxmox host, another project's or one made by hand, is shown after them, never named as a problem.
 status_setup:
   nas: "{{ nas_present }}"
   cluster: "{{ kubernetes_present }}"
