@@ -1,4 +1,4 @@
-"""The Kubernetes manifests keep the conventions CLAUDE.md sets for them that kube-linter cannot check.
+"""The Kubernetes manifests keep the conventions k8s/CLAUDE.md sets for them that kube-linter cannot check.
 
 Flux syncs k8s/clusters/<setup>/, whose Flux Kustomizations each apply one path of k8s/; a path's files are found by
 following its kustomization.yaml's resources, as kustomize does. kustomization.yaml files themselves, and documents
@@ -350,7 +350,7 @@ def test_what_holds_data_is_never_pruned():
         )
         and ((obj["metadata"].get("annotations") or {}).get(PRUNE)) != "disabled"
     ]
-    assert wrong == [], f"annotate it {PRUNE}: disabled (CLAUDE.md, Storage model)"
+    assert wrong == [], f"annotate it {PRUNE}: disabled (k8s/CLAUDE.md, Storage model)"
 
 
 # What Flux's substitution makes of a form the scripts and tests do not emulate: $$ becomes $, and a shell form such as
@@ -424,7 +424,7 @@ def test_every_flux_kustomization_decrypts_and_substitutes():
                 sources = (spec.get("postBuild") or {}).get("substituteFrom") or []
                 if {"kind": "ConfigMap", "name": "cluster-settings"} not in sources:
                     wrong.append(f"{setup}/{obj['metadata']['name']}: no substitution from cluster-settings")
-    assert wrong == [], "a SOPS Secret or a ${VAR} added later must not stall a Kustomization (CLAUDE.md)"
+    assert wrong == [], "a SOPS Secret or a ${VAR} added later must not stall a Kustomization (k8s/CLAUDE.md)"
 
 
 # The Flux Kustomizations whose path differs by setup: the controllers (csi-driver-nfs with a NAS) and the static
@@ -615,7 +615,7 @@ def test_privileged_pods_only_in_privileged_namespaces():
         for _, obj, spec in workloads()
         if (found := beyond_baseline(spec)) and namespace(obj) not in allowed
     }
-    assert wrong == {}, "Talos enforces baseline: label the namespace and say why (CLAUDE.md, adding a service)"
+    assert wrong == {}, "Talos enforces baseline: label the namespace and say why (k8s/CLAUDE.md, adding an app)"
 
 
 def test_local_volumes_stay_under_var_mnt():
@@ -635,7 +635,7 @@ def test_local_volumes_stay_under_var_mnt():
 
 def test_host_paths_are_pinned():
     found = set().union(*(host_paths(obj) for _, obj in manifests()))
-    assert sorted(found - HOST_PATHS) == [], "use a PersistentVolumeClaim, not a new hostPath (CLAUDE.md)"
+    assert sorted(found - HOST_PATHS) == [], "use a PersistentVolumeClaim, not a new hostPath (k8s/CLAUDE.md)"
     assert sorted(HOST_PATHS - found) == [], "these are gone: remove them from the list"
 
 
@@ -659,7 +659,7 @@ def test_linuxserver_tags_are_immutable():
     }
     assert images, "no LinuxServer.io image found"
     mutable = {image: owner for image, owner in images.items() if not IMMUTABLE.search(image)}
-    assert mutable == {}, "LinuxServer.io re-points x.y.z at every build: pin x.y.z-lsNNN (CLAUDE.md)"
+    assert mutable == {}, "LinuxServer.io re-points x.y.z at every build: pin x.y.z-lsNNN (k8s/CLAUDE.md)"
 
 
 def test_apps_set_no_cpu_or_memory_limits():
@@ -673,7 +673,7 @@ def test_apps_set_no_cpu_or_memory_limits():
         for key in (container.get("resources") or {}).get("limits") or {}
         if key in ("cpu", "memory")
     ]
-    assert capped == [], "a CPU or memory limit throttles or OOM-kills an app at a spike: set requests (CLAUDE.md)"
+    assert capped == [], "a CPU or memory limit throttles or OOM-kills an app at a spike: set requests (k8s/CLAUDE.md)"
 
 
 # --------------------------------------------------------------------------------- what the charts render ---

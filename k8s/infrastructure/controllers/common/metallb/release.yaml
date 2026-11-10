@@ -15,7 +15,7 @@ spec:
   values:
     frrk8s:
       enabled: false
-    # Each image by its version and digest (CLAUDE.md): a chart bump changes both here too.
+    # Each image by its version and digest (k8s/CLAUDE.md): a chart bump changes both here too.
     controller:
       image:
         tag: v0.16.1@sha256:f51ab515de9ccd20dc3dccb093e48df8adddac019326c456f449e55ba91b6420

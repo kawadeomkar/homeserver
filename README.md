@@ -485,7 +485,7 @@ a merged change reaches the cluster without anyone running anything. To see what
 `flux get kustomizations` (KUBECONFIG as in `scripts/runbooks/talos.md`).
 
 Monitoring is kube-prometheus-stack: Grafana answers at `https://grafana.<domain>`, with the admin password the
-chart generated (CLAUDE.md, Monitoring, says how to read it). The Proxmox host is on the Node Exporter dashboards
+chart generated (`k8s/CLAUDE.md`, Monitoring, says how to read it). The Proxmox host is on the Node Exporter dashboards
 beside the nodes, by its address, once `just deploy proxmox` has run with the cluster in `local.yml`: its CPU and
 memory across every guest, its disks, temperatures and systemd units.
 
@@ -572,4 +572,4 @@ ruleset to require; `.github/rulesets/main.json` holds that ruleset's body, appl
 job gets a secret, and none reaches the home network: the roles are tested only against the fakes in
 `tests/integration`. Dependabot proposes weekly updates to the SHA-pinned actions and every package in the
 Python lock. The actionlint, kubeconform and gitleaks versions and the schema pins are bumped by hand;
-CLAUDE.md lists them.
+`scripts/runbooks/dependency-bumps.md` lists them.
