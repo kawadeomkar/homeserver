@@ -9,18 +9,22 @@ Two entry points:
   `status_found`.
   - On the Proxmox host (`proxmox`): the host itself (version, kernel, uptime, CPU over the last day, memory, root
     filesystem), each of `status_vms` (state, uptime, CPU over the last day, memory, settings waiting for a restart,
-    and, where its guest agent reports them, its filesystems, OS and address), every other VM counted in one line,
+    and, where its guest agent reports them, its filesystems, OS and address), every other VM as Proxmox sees it
+    (state, uptime, CPU now and over the last day, memory, its boot disk's size: another project's, or made by hand,
+    drawn with a diamond for its dot and never a problem),
     each storage's use, the disk budget of `status_budget_storages`, the upgrades apt would make and whether an
     upgrade asked for a reboot, and the backups: each of `status_backup_jobs` against the host's job of that id
     (there, enabled, writing to its storage, covering its VMs, and when it runs next), each VM's newest backup on its
     job's storage, and, from the logs of the newest runs that failed, which VMs failed and why. It reads in two
-    steps: the node's name (`hostname -s`, unless `status_proxmox_node` gives it), which the API's paths need, then
-    everything else at once: `/cluster/resources` (the node, every VM and every storage in one call), the node's
-    status and day history, each of `status_vms`' day history and pending settings, and for a VM whose guest agent
-    reports them (Home Assistant's) its filesystems and OS, and its address when it serves an app without a URL of
-    its own, past the Docker bridges and other inner interfaces Home Assistant OS has. Talos's guest agent lists no
-    filesystem and no OS version (seen on the NUC). Every other VM on the host, another project's, is never named as
-    a problem. A host that does not answer (every read has `ignore_unreachable`) is recorded with Ansible's message
+    steps. First the node's name (`hostname -s`, unless `status_proxmox_node` gives it), which the API's paths need,
+    with `/cluster/resources` (the node, every VM and every storage in one call) when the VMs are shown, since the
+    second step reads every running VM's history. Then everything else at once: `/cluster/resources` if not yet read,
+    the node's status and day history, the day history of every running VM, each of `status_vms`' pending settings,
+    and for a VM whose guest agent reports them (Home Assistant's) its filesystems and OS, and its address when it
+    serves an app without a URL of its own, past the Docker bridges and other inner interfaces Home Assistant OS has.
+    Talos's guest agent lists no filesystem and no OS version (seen on the NUC). Every other VM on the host, another
+    project's or one made by hand, is a row after this setup's, its name in cyan, and never named as a problem. A
+    host that does not answer (every read has `ignore_unreachable`) is recorded with Ansible's message
     and reported, never a failure. Its Tailscale is read before, through roles/proxmox_tailscale's `status` entry
     point, when the setup turns it on, and passed in `status_tailscale_state`.
   - For the cluster (`cluster`), from this machine: the nodes (Ready, pressure, Talos and Kubernetes against
@@ -91,9 +95,10 @@ path; and on this machine `tailscale dns status --json`. None of them writes or 
 secrets`, never `talosctl get`, since the machine configuration holds every key of the cluster. Each command runs in
 the C.UTF-8 locale, so no output it parses is translated, and git never asks for a password. Measured on a four-core
 Proxmox host (2026-10-21): every `pvesh` or `qm` call takes 1.1 to 1.3 s, Proxmox's Perl API started afresh, so the
-host's 15 reads take 25 s one after another and 8 s at once, and `apt-get -s` takes 0.7 s where the API's own update
-list takes 4.5 s; the cluster's reads take about 0.1 s each and `git ls-remote` about 1 s, so the cluster is read in
-about a second.
+host's 15 reads take 25 s one after another and 8 s at once (reading the guests first, and every running VM's history,
+took the home host from 5 s to 7 s with seven other VMs running, 2026-11-09), and `apt-get -s` takes 0.7 s where the
+API's own update list takes 4.5 s; the cluster's reads take about 0.1 s each and `git ls-remote` about 1 s, so the
+cluster is read in about a second.
 
 The module `status_probe` looks each app's name up in DNS as this machine does, compared with the address the Ingress
 says Traefik answers on, and sends one `GET` per URL to that address, whatever DNS says, closing the connection once
@@ -167,8 +172,8 @@ its mount in `status_cluster_volumes`.
 | Variable | Default | Meaning |
 |---|---|---|
 | `status_source` | `""` | What the host is: `proxmox`, `cluster`, `nas`; empty reads nothing |
-| `status_types` | `[]` | The report's sections to show (`apps`, `admin`, `tailscale`, `vms`, `storage`, `backups`, `cluster`, `nas`); empty means every one |
-| `status_vms` | `[]` | This setup's VMs, each `{vmid, name, made_by, start, guest_agent, node, app}`; every other VM is only counted |
+| `status_types` | `[]` | The report's sections to show (`admin`, `vms`, `nas`, `storage`, `cluster`, `apps`, `tailscale`, `backups`), in that order; empty means every one |
+| `status_vms` | `[]` | This setup's VMs, each `{vmid, name, made_by, start, guest_agent, node, app}`; every other VM is shown as Proxmox sees it, never judged |
 | `status_setup` | `{}` | What the setup has, `{nas, cluster, home_assistant}`, for the report's first line |
 | `status_proxmox_node` | `""` | The Proxmox node's name; empty takes the host's short hostname |
 | `status_budget_storages` | `[]` | Storages whose disk budget the report shows |

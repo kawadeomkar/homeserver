@@ -1912,8 +1912,8 @@ def test_status_refuses_a_section_it_does_not_have(tmp_path):
     types = json.dumps({"types": "vms,disks"})
     rc, out = argspec_pass(example_tree(tmp_path), "status.yml", *CLUSTER_ARGS, "-e", types)
     assert rc != 0, out[-3000:]
-    message = "The report has no section disks: its sections are apps, admin, tailscale, vms, storage, backups, "
-    message += "cluster, nas."
+    message = "The report has no section disks: its sections are admin, vms, nas, storage, cluster, apps, tailscale, "
+    message += "backups."
     assert message in out, out[-3000:]
 
 
@@ -2073,8 +2073,8 @@ def test_status_reads_the_cluster_as_it_is_built(tmp_path):
     ],
 )
 def test_status_reports_on_the_vms_the_backup_covers(tmp_path, local_yml, extra):
-    """The VMs just status names are this repo's own, the same the nightly backup covers; any other VM on the host is
-    only counted."""
+    """The VMs just status judges are this repo's own, the same the nightly backup covers; any other VM on the host is
+    only shown."""
     tree = example_tree(tmp_path, local_yml)
     reported = resolve_on(tree, "homeserver", "status_vms | map(attribute='vmid') | list", *extra)
     assert reported == resolve_on(tree, "homeserver", "vm_backup_vmids", *extra)

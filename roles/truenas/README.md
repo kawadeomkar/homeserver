@@ -171,7 +171,8 @@ holds the NAS's configuration, and `group_vars/all/storage.yml` the VM storage l
 so a share and the storage that mounts it cannot drift apart. Addresses, the certificate pin and the pools' disk
 serials are `local.yml`'s. The play's pre-tasks, tagged `always`, refuse `nas_section_error` and
 `kubernetes_settings_error`, and when `local.yml` gives the NAS neither address they say so and end the host before
-the role runs. SSH stays off on the NAS, as does every sharing service but NFS.
+the role runs (`always`, since `meta` tasks honour tags; the `debug` that says why is what gives the host a recap
+line). SSH stays off on the NAS, as does every sharing service but NFS.
 
 **Pools.** The two pools are named by class, never by hardware (`nas_pools` in `group_vars/all/storage.yml`;
 `local.yml` can name them otherwise with `truenas_pool_persistent` and `truenas_pool_ephemeral`): `persistent` is

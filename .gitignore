@@ -272,5 +272,7 @@ cython_debug/
 
 # Claude Code local config. Never commit: settings.local.json holds
 # machine-specific permission rules that embed the Tailscale host address
-# this repo deliberately withholds by gitignoring `inventory`.
-.claude/
+# this repo deliberately withholds by gitignoring `inventory`. The rules alone
+# are shared: what to read before changing a part of the tree, and no address.
+.claude/*
+!.claude/rules/

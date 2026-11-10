@@ -62,5 +62,6 @@ wrote, for the tests that run one on a pseudo-terminal.
 - every option whose name looks like a secret (ansible-test's `no-log-needed` pattern) is `no_log`, bar a short list of
   named exceptions.
 
-The manifests keep theirs where kube-linter cannot check them (`test_k8s.py`, described in its docstring and in
+`test_claude_md.py` keeps the `CLAUDE.md` files and `.claude/rules/` small, scoped and free of imports, and gives each
+role a rule. The manifests keep theirs where kube-linter cannot check them (`test_k8s.py`, described in its docstring and in
 `k8s/CLAUDE.md`).
