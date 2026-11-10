@@ -7,7 +7,7 @@ argument_specs:
         status_found for the report entry point. Every command goes through the role's module status_read, which
         runs them at once and refuses any that is not on its read list.
       - On the Proxmox host (proxmox) it reads the host, its storages and the VMs of status_vms; every other VM is
-        only counted.
+        shown as Proxmox sees it, and never judged.
       - For the cluster (cluster), on this machine, it reads the nodes, the apps (each Ingress's Service, then the
         Deployment it selects, and every Deployment a Flux Kustomization under status_cluster_apps_path applies),
         Flux, the certificates, the nodes' kubelet statistics, Alertmanager's alerts, etcd's state and the newest
@@ -40,7 +40,8 @@ argument_specs:
         type: list
         elements: dict
         default: []
-        description: The VMs this setup makes; every other VM on the host is only counted.
+        description: >-
+          The VMs this setup makes; every other VM on the host is shown as Proxmox sees it, and never judged.
         options:
           vmid:
             type: int
