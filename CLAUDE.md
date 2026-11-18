@@ -66,8 +66,8 @@ requires blocking IO"; redirect stdin from `/dev/null` and stdout/stderr to a fi
 
 **The vault** is `group_vars/all/local.vault.yml`, git-ignored like `local.yml` and committed nowhere, since this public
 repo would publish even its ciphertext; every setup needs it and `.vault_pass` (`just vault new`).
-`local.vault.yml.example` is its template: every key, each `""` under a comment saying what it is for
-(`vault_discord_token`, in an older vault, is left over from the deleted roles). The Talos secrets bundle, every key of
+`local.vault.yml.example` is its template: every key, each `""` (`{}` for a mapping) under a comment saying what it is
+for (`vault_discord_token`, in an older vault, is left over from the deleted roles). The Talos secrets bundle, every key of
 the cluster, lives in `talos_config_dir` alone, and a Kubernetes Secret is a SOPS file. **Never print the vault's
 contents; check it by listing variable names only.**
 

@@ -19,7 +19,9 @@ audit of the tree before the cluster was built.
       `haos_url` at that name (`scripts/runbooks/haos.md`)
 - [ ] A servers VLAN for the NAS, the Proxmox host and the nodes, which the IoT and Wi-Fi devices cannot reach: NFS
       with sec=sys trusts addresses, and the nightly VM backups on the NAS hold the cluster's keys and etcd
-      (CLAUDE.md, Landmines). Then narrow `kubernetes_ingress_allowed_range` to the clients' VLAN
+      (CLAUDE.md, Landmines). Then narrow `kubernetes_ingress_allowed_range` to the clients' VLAN, and let the clients'
+      VLAN reach the NAS on tcp/445 for Time Machine: Bonjour stops at the VLAN's edge, so a Mac then adds its disk by
+      address (`smb://tm-<name>@<nas>/tm-<name>`), or the router repeats mDNS
 
 ## CI
 

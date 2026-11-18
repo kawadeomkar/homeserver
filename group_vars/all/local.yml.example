@@ -58,6 +58,20 @@ truenas_pool_disks:
 # truenas_mail_from: nas@example.org
 # truenas_alert_email: admin@example.org
 
+# ------------------------------------------------------------- Time Machine ---
+# With a NAS: Macs that back up to it with Time Machine, over SMB on the LAN
+# (scripts/runbooks/timemachine.md). Each gets a dataset, an SMB share and a
+# login of its own, all named tm-<name>, and the SMB service starts. Per Mac:
+# its name, lower-case letters, digits and hyphens, up to 16; the most its
+# dataset may hold in GiB, snapshots included (give the Mac itself a limit of
+# about half of it); and the login's uid, 3000 or more and a number of its own,
+# which a rebuilt NAS gives it again. Each login's password goes in the vault,
+# under the Mac's name in vault_timemachine_passwords (just vault). A Mac whose
+# entry also says retired: true keeps its backup, its login and share closed;
+# its password can then leave the vault.
+# timemachine_backups:
+#   - {name: laptop, quota_gib: 2048, uid: 3101}
+
 # ------------------------------------------------------------------ Proxmox ---
 # The Proxmox host: reached over root SSH, and the only host allowed to mount
 # the NAS's VM shares.

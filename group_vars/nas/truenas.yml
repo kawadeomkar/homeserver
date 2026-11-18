@@ -4,9 +4,12 @@
 
 # ------------------------------------------------------------------- network ---
 truenas_network_mode: static
-truenas_network_settings:
-  hostname: truenas
-  domain: local
+# With a Mac backing up (group_vars/nas/timemachine.yml), the announcements SMB would bring: mDNS, through which the Mac
+# finds its disk and without which TrueNAS refuses a Time Machine share, and neither NetBIOS nor WS-Discovery, which
+# serve Windows clients, of which there are none.
+truenas_network_settings: >-
+  {{ {'hostname': 'truenas', 'domain': 'local'}
+     | combine({'service_announcement': {'netbios': false, 'mdns': true, 'wsd': false}} if timemachine_present else {}) }}
 # truenas_static_address, truenas_gateway and truenas_nameservers are set in local.yml.
 
 # --------------------------------------------------------------------- pools ---
@@ -43,7 +46,9 @@ truenas_ntp_server_defaults: {iburst: true, burst: false, prefer: false, minpoll
 # 64K records match qcow2's cluster size and waste no padding on a five-wide RAIDZ1 at ashift 12.
 # POSIX ACLs (which TrueNAS pairs with aclmode DISCARD) suit root-owned disk images served to a
 # Linux client; the pools' roots carry NFSv4 ACLs from TrueNAS CORE.
-truenas_datasets: "{{ truenas_datasets_vm_classes + truenas_datasets_vm_consumers + truenas_datasets_kubernetes }}"
+truenas_datasets: >-
+  {{ truenas_datasets_vm_classes + truenas_datasets_vm_consumers + truenas_datasets_kubernetes
+     + truenas_datasets_timemachine }}
 truenas_datasets_vm_classes:
   - name: "{{ vm_storage.persistent.dataset | dirname }}"
     properties: {compression: LZ4, atime: "OFF", acltype: POSIX, aclmode: DISCARD}
@@ -118,6 +123,7 @@ truenas_snapshot_tasks: >-
                             common | combine(daily, {'dataset': d.name, 'lifetime_value': 30}),
                             common | combine(weekly, {'dataset': d.name, 'lifetime_value': 12})]) -%}
   {%- endfor -%}
+  {%- set _ = out.extend(truenas_snapshot_tasks_timemachine) -%}
   {{ out }}
 
 # ----------------------------------------------------------------------- NFS ---
@@ -175,9 +181,14 @@ truenas_alert_services: >-
      [{'name': 'Email', 'attributes': {'type': 'Mail', 'email': truenas_alert_email}, 'level': 'WARNING', 'enabled': true}] }}
 
 # ------------------------------------------------------------------ services ---
-truenas_services:
+# SMB (cifs) is started by the SMB stage while a Mac backs up (truenas_smb_services, group_vars/nas/timemachine.yml),
+# after its check that no SMB login it does not list exists, and is left out here then: this stage runs under its own
+# tag, without that check. With no Mac to back up it is stopped here, as before.
+truenas_services: >-
+  {{ truenas_services_base
+     | combine({} if truenas_smb_services else {'cifs': {'enabled': false, 'state': 'stopped'}}) }}
+truenas_services_base:
   nfs: {enabled: true, state: started}
-  cifs: {enabled: false, state: stopped}
   ftp: {enabled: false, state: stopped}
   iscsitarget: {enabled: false, state: stopped}
   nvmet: {enabled: false, state: stopped}

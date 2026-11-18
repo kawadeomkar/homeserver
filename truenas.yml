@@ -23,6 +23,12 @@
         fail_msg: "{{ kubernetes_settings_error | join(' ') }}"
         quiet: true
       tags: [always]
+    - name: Refuse an incomplete Time Machine section
+      ansible.builtin.assert:
+        that: timemachine_settings_error | length == 0
+        fail_msg: "{{ timemachine_settings_error | join(' ') }}"
+        quiet: true
+      tags: [always]
     - name: Say why the NAS is skipped
       ansible.builtin.debug:
         msg: >-

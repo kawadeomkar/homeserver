@@ -19,6 +19,14 @@ vault_truenas_api_key: ""
 # next run sends it to the NAS.
 vault_truenas_mail_password: ""
 
+# With Time Machine (timemachine_backups in local.yml): each Mac's SMB password,
+# under its name, as laptop: <password>, one line each. 20 characters at least,
+# long and random (openssl rand -base64 30); the Mac keeps it in its keychain.
+# Not the backup's own encryption password, which never leaves the Mac and your
+# password manager. Changing one here is not enough: just deploy truenas with
+# -e '{"truenas_users_reset": ["tm-<name>"]}' sends it (scripts/runbooks/timemachine.md).
+vault_timemachine_passwords: {}
+
 # ------------------------------------------------------------------- Router ---
 # With the router (opnsense_address in local.yml): the API key pair of its user
 # for this project, made under System > Access > Users

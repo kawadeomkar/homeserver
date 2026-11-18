@@ -177,7 +177,8 @@ addresses and serials in the git-ignored `all/local.yml`. Each role's `README.md
 
 Secrets go in the vault, `group_vars/all/local.vault.yml`, an Ansible Vault file encrypted with the password in
 `.vault_pass`, which `ansible.cfg` names: `vault_truenas_api_key` with a NAS, `vault_truenas_mail_password` with alert
-mail, `vault_opnsense_api_key`, `vault_opnsense_api_secret`, `vault_opnsense_backup_password` and `vault_opnsense_root_password` with the router, `vault_tailscale_auth_key` with remote access and `vault_haos_owner_password` with Home Assistant
+mail, `vault_opnsense_api_key`, `vault_opnsense_api_secret`, `vault_opnsense_backup_password` and `vault_opnsense_root_password` with the router, `vault_tailscale_auth_key` with remote access, `vault_haos_owner_password` with Home Assistant
+and `vault_timemachine_passwords`, each Mac's SMB password under its name, with Time Machine
 (`local.vault.yml.example` lists them, each explained). Both files are gitignored, like `local.yml`: nothing reads them
 from the repository, and this public repository would publish even the vault's ciphertext, for anyone to guess its
 password at leisure. Every run decrypts the vault, so both must exist even when they hold nothing a setup uses:
@@ -187,7 +188,8 @@ just vault new     # what is missing: a random .vault_pass readable by you alone
 just vault         # fill in or change a secret
 ```
 
-A new vault is `local.vault.yml.example` as it is: every key, each empty and explained by the comment above it. An
+A new vault is `local.vault.yml.example` as it is: every key, each empty (`""`, or `{}` for the Macs' passwords) and
+explained by the comment above it. An
 empty key counts as unset, so fill in only those your setup uses (`just init` asks for them) and leave the others.
 `just vault` lays a vault made before the template, or from an older one, out the same way before it opens it: every
 comment and key of the template, each value you set kept, and what the template does not hold (a key no playbook reads
@@ -440,6 +442,11 @@ in `vm_backup_storage`: a USB disk added as a directory storage, set up as a che
 (`pvesm set <id> --is_mountpoint yes --create-base-path 0`, which the role insists on), or a Proxmox Backup
 Server. Without it nothing is backed up, and every `just deploy proxmox` says so. Restoring, and the drill that
 proves a backup restores without disturbing the running cluster: `scripts/runbooks/vm-restore.md`.
+
+With a NAS, the Macs listed in `local.yml`'s `timemachine_backups` back up to it with Time Machine, over SMB on the
+LAN: a dataset, a share and an SMB-only login per Mac, the backup encrypted by the Mac itself, and snapshots after every
+completed backup and weekly, so a damaged disk image can be rolled back. Each Mac's SMB password goes in the vault, and
+adding the disk on the Mac is by hand: `scripts/runbooks/timemachine.md`.
 
 ### Home Assistant
 

@@ -686,6 +686,65 @@ def test_smb_starts_only_with_its_stage(nas):
         assert call_count(nas) == since, "the NAS was asked something"
 
 
+def test_truenas_role_backs_up_a_mac(nas):
+    """This repo's configuration with a Mac in local.yml's timemachine_backups: its dataset, weekly task, SMB-only
+    login, directory owner and Time Machine share, the API key's user out of SMB, and SMB started by the SMB stage,
+    which the services stage alone never does. Then the Mac retired, its login, share and task closed and SMB
+    stopped, and its entry deleted, with no refusal and nothing deleted on the NAS."""
+    mac = {"name": "laptop", "quota_gib": 2048, "uid": 3101}
+    extra = {**nas_vars(nas), "timemachine_backups": [mac], "vault_timemachine_passwords": {"laptop": TM_PASSWORD}}
+    outputs = []
+    with fresh_nas(nas):
+        result = run("truenas.yml", extra, args=["--tags", "truenas_services"])
+        expect(result, "truenas", note="the services stage alone")
+        assert smb_state(nas)[3]["cifs"]["state"] == "STOPPED", "the services stage started SMB"
+
+        result = run("truenas.yml", extra, check=True)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=True, note="dry run with a Mac")
+        result = run("truenas.yml", extra)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=True, note="first run with a Mac")
+        result = run("truenas.yml", extra)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=0, note=f"second run with a Mac (changed: {changed_tasks(result[2])})")
+        result = run("truenas.yml", extra, check=True)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=0, note="dry run after applying, with a Mac")
+
+        s, users, share, services = smb_state(nas)
+        dataset = "persistent/timemachine/laptop"
+        assert s["datasets"][dataset]["quota"]["rawvalue"] == str(2048 * 2**30)
+        assert [t["lifetime_value"] for t in s["snapshot_tasks"] if t["dataset"] == dataset] == [8]
+        assert (users["tm-laptop"]["uid"], users["tm-laptop"]["smb"]) == (3101, True)
+        assert users["tm-laptop"]["password"] == fake_truenas.password_hash(TM_PASSWORD)
+        assert users[fake_truenas.API_USER]["smb"] is False
+        assert s["paths"][f"/mnt/{dataset}"]["mode"] == 0o700 and not s["paths"][f"/mnt/{dataset}"]["acl"]
+        assert (share["name"], share["enabled"], share["options"]["auto_snapshot"]) == ("tm-laptop", True, True)
+        assert services["cifs"]["enable"] and services["cifs"]["state"] == "RUNNING"
+        assert s["smb"]["encryption"] == "REQUIRED" and s["network"]["service_announcement"]["mdns"] is True
+        assert len(s["shares"]) == len(EXPECTED_SHARES), "the NFS shares changed"
+
+        retired = {**extra, "timemachine_backups": [{**mac, "retired": True}], "vault_timemachine_passwords": {}}
+        result = run("truenas.yml", retired)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=True, note="the Mac retired")
+        expect(run("truenas.yml", retired), "truenas", changed=0, note="the Mac retired, second run")
+        s, users, share, services = smb_state(nas)
+        assert (users["tm-laptop"]["smb"], users["tm-laptop"]["locked"]) == (False, True)
+        assert share["enabled"] is False and services["cifs"]["state"] == "STOPPED" and not services["cifs"]["enable"]
+        assert [t["enabled"] for t in s["snapshot_tasks"] if t["dataset"] == dataset] == [False]
+
+        gone = {**extra, "timemachine_backups": [], "vault_timemachine_passwords": {}}
+        expect(run("truenas.yml", gone), "truenas", changed=0, note="the retired Mac's entry deleted")
+        s = smb_state(nas)[0]
+        assert dataset in s["datasets"] and s["smb_shares"] and "tm-laptop" in {u["username"] for u in s["users"]}
+
+    for out in outputs:
+        assert TM_PASSWORD not in out and fake_truenas.password_hash(TM_PASSWORD) not in out
+        assert fake_truenas.API_KEY not in out
+
+
 # ---------------------------------------------------------------------------------- Proxmox ---
 
 

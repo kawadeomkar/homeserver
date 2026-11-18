@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 SECTIONS = {
     "proxmox": "Proxmox host",
     "nas": "TrueNAS NAS",
+    "timemachine": "Time Machine backups of the Macs",
     "router": "OPNsense router",
     "remote": "Remote access through Tailscale",
     "cluster": "Kubernetes cluster",
@@ -29,11 +30,15 @@ SECTIONS = {
 # itself.
 SWITCHES = {
     "nas": ("Is there a TrueNAS NAS, for the VMs' disks, the backups and the apps' data?", "truenas_static_address"),
+    "timemachine": ("Should Macs back up to the NAS with Time Machine, over SMB on the LAN?", "timemachine_backups"),
     "router": ("Is the LAN's router OPNsense, for Ansible to configure through its API?", "opnsense_address"),
     "remote": ("Should the Proxmox host join your tailnet through Tailscale, for remote access?", "tailscale_enabled"),
     "cluster": ("Should the Proxmox host run the Kubernetes cluster (Talos and Flux)?", "kubernetes_node_addresses"),
     "homeassistant": ("Should the Proxmox host run Home Assistant OS in a VM of its own?", "haos_mac"),
 }
+
+# A section that means something only with another on, whose switch is asked only then: Time Machine needs the NAS.
+NEEDS = {"timemachine": "nas"}
 
 CONTROL_PLANE = "homeserver-cp-1"
 WORKER = "homeserver-worker-1"
@@ -217,6 +222,41 @@ def _count(text: str) -> int:
     return value
 
 
+def _mac_names(text: str) -> list[str]:
+    """timemachine_backups' names: each names a dataset, a login and a share (tm-<name>)."""
+    names = _split(text.lower())
+    if not names:
+        raise ValueError("give at least one name, separated by commas")
+    for name in names:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,15}", name):
+            raise ValueError(
+                f"{name!r}: up to 16 lower-case letters, digits and hyphens, starting with a letter or digit"
+            )
+    if len(set(names)) < len(names):
+        raise ValueError("a name is given twice")
+    return names
+
+
+def _quota_gib(text: str) -> int:
+    value = _int(text)
+    if value < 64:
+        raise ValueError("give a whole number of GiB, 64 or more")
+    return value
+
+
+def _uid(text: str) -> int:
+    value = _int(text)
+    if value < 3000:
+        raise ValueError("give a whole number of 3000 or more, which no other user on the NAS has")
+    return value
+
+
+def _smb_password(text: str) -> str:
+    if len(text) < 20:
+        raise ValueError("at least 20 characters, long and random (openssl rand -base64 30)")
+    return text
+
+
 def _size_or_none(text: str) -> int:
     value = _int(text)
     if value < 0:
@@ -335,13 +375,20 @@ PARSERS = {
     "secret": _secret,
     "owner_password": _owner_password,
     "positive_int": _count,
+    "mac_names": _mac_names,
+    "quota_gib": _quota_gib,
+    "uid": _uid,
+    "smb_password": _smb_password,
     "size_or_none": _size_or_none,
     "app_list": _app_list,
 }
 
 # Composite kinds, asked part by part: node_map (each node's value, of fields' kind), node_sizes, haos_size,
-# pool_disks, and bool.
-COMPOSITE = {"node_map_ipv4", "node_map_mac", "node_sizes", "haos_size", "pool_disks", "bool"}
+# pool_disks, macs (the Macs' names, then each one's quota and uid), mac_passwords (each Mac's, in the vault), and bool.
+COMPOSITE = {"node_map_ipv4", "node_map_mac", "node_sizes", "haos_size", "pool_disks", "macs", "mac_passwords", "bool"}
+# What just init offers a new Mac: a quota of 2048 GiB (give the Mac a limit of about half), and uids from 3101 up.
+MAC_QUOTA_GIB = 2048
+MAC_FIRST_UID = 3101
 
 NODE_SIZE_FIELDS = {
     CONTROL_PLANE: ("cores", "memory_mib", "system_disk_gib"),
@@ -352,6 +399,29 @@ OPTIONAL_DISKS = ("media_disk_gib",)
 
 S = Setting
 SETTINGS: tuple[Setting, ...] = (
+    # -------------------------------------------------------------------------------------------- Time Machine ---
+    S(
+        "timemachine_backups",
+        "timemachine",
+        "macs",
+        "The Macs that back up to the NAS: each one's name, its dataset's quota in GiB and its login's uid",
+        need="required",
+        help="Each gets a dataset, an SMB share and a login, all named tm-<name> (scripts/runbooks/timemachine.md). "
+        "The quota counts the snapshots: give the Mac itself a limit of about half of it. The uid is the login's, "
+        "which a rebuilt NAS gives it again. A Mac retired by hand (retired: true) keeps its entry.",
+    ),
+    S(
+        "vault_timemachine_passwords",
+        "timemachine",
+        "mac_passwords",
+        "Each Mac's SMB password, 20 characters or more",
+        need="required",
+        secret=True,
+        after="timemachine_backups",
+        help="Long and random (openssl rand -base64 30), kept in your password manager and the Mac's keychain. Not the "
+        "backup's own encryption password, which never leaves the Mac. Changing one here is not enough: just deploy "
+        'truenas with -e \'{"truenas_users_reset": ["tm-<name>"]}\' sends it.',
+    ),
     # ------------------------------------------------------------------------------------------------- Proxmox ---
     S(
         "proxmox_address",

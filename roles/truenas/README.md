@@ -199,7 +199,7 @@ so a share and the storage that mounts it cannot drift apart. Addresses, the cer
 serials are `local.yml`'s. The play's pre-tasks, tagged `always`, refuse `nas_section_error` and
 `kubernetes_settings_error`, and when `local.yml` gives the NAS neither address they say so and end the host before
 the role runs (`always`, since `meta` tasks honour tags; the `debug` that says why is what gives the host a recap
-line). SSH stays off on the NAS, as does every sharing service but NFS.
+line). SSH stays off on the NAS, as does every sharing service but NFS, and SMB while no Mac backs up to it (below).
 
 **Pools.** The two pools are named by class, never by hardware (`nas_pools` in `group_vars/all/storage.yml`;
 `local.yml` can name them otherwise with `truenas_pool_persistent` and `truenas_pool_ephemeral`): `persistent` is
@@ -220,6 +220,8 @@ so a rebuild matches, and the system dataset stays on the boot pool, off the sin
 | `persistent/nextcloud`, `persistent/photoprism` | with a cluster: Nextcloud's files, PhotoPrism's originals | `sync=standard`, 1M records |
 | `ephemeral/frigate` | with a cluster: camera recordings | `sync=disabled`, 1M records, quota 500G |
 | `ephemeral/jellyfin` | with a cluster: the media library, from before this repo | `create_only`: properties and NFSv4 ACLs left alone |
+| `persistent/timemachine` | with a Mac: the Macs' Time Machine backups' parent | SMB preset |
+| `persistent/timemachine/<name>` | each Mac's backup (`timemachine_backups`) | SMB preset, `sync=standard`, quota `quota_gib` |
 
 - The persistent VMs keep synchronous writes synchronous. Their quota counts their snapshots, so a disk that fills
   never fills the pool under the backups, which share it; a thin qcow2 disk only grows.
@@ -252,6 +254,22 @@ unprivileged process on a client can speak NFS. The VM and backup shares go to t
 (`kubernetes_nas_datasets`, `group_vars/all/kubernetes.yml`) to the worker alone, all with root mapped to root: each
 app's pod makes its own mount point uid 1000.
 
+**Time Machine.** Each Mac in `local.yml`'s `timemachine_backups` (`{name, quota_gib, uid}`, optionally `retired`)
+gets, from `group_vars/nas/timemachine.yml`, a dataset under `persistent/timemachine` made with the SMB preset (the only
+moment case-insensitivity can be chosen) with its quota and `sync=standard`, a weekly snapshot task kept eight weeks, an
+SMB-only login `tm-<name>` with its pinned uid and the vault's password (`vault_timemachine_passwords`), its directory
+owned by that login alone with the preset's template ACL stripped, and a Time Machine share `tm-<name>` with
+`auto_snapshot` (Samba snapshots the dataset after each completed backup and keeps a week) and a volume id derived from
+the Mac's name, so a rebuilt NAS announces the volume the Mac knows. With a Mac, SMB requires transport encryption and
+has the Apple extensions on, SMB1, NTLMv1, multichannel and the master-browser election off; the NAS announces itself
+over mDNS alone; the API key's own user is taken out of SMB; and the SMB stage starts the service, which the services
+stage keeps stopped otherwise. The Mac's own Time Machine limit, about half the quota, is the working limit and the
+quota the backstop. A retired Mac keeps its dataset and snapshots, its login closed (out of SMB, locked, no password),
+its share and task disabled; with no Mac left backing up, SMB stops. `group_vars/all/timemachine.yml`'s
+`timemachine_settings_error`, which `truenas.yml` asserts first, refuses a bad name, quota or uid, a uid or name given
+twice, an active Mac without a password of 20 characters, and a password for a Mac not listed; `nas_section_error`
+refuses the setting without a NAS. The Mac's side is by hand: `scripts/runbooks/timemachine.md`.
+
 **Alerts.** When `local.yml` names a mail server, the NAS mails warnings and worse (a degraded pool, a pool filling
 up, a failed snapshot task) to `truenas_alert_email`, the password from the vault's `vault_truenas_mail_password`.
 `nas_section_error` refuses what TrueNAS would refuse: a mail server without a sender address, and an alert address
@@ -271,6 +289,11 @@ and a dry run that change nothing, then drift in every stage corrected once, a n
 lost and made again, a reservation removed, and a rotated mail password; neither the private key, the API key nor a
 mail password may appear in any run's output. Other tests run it without a cluster, with only the role's defaults
 (nothing changes), and with a wrong pin (no login is tried) or none (nothing is asked, in a dry run too).
+
+`test_truenas_role_backs_up_a_mac` runs `truenas.yml` with a Mac in `timemachine_backups`: the services stage alone
+starts nothing, then a dry run, an apply, a second apply and a dry run, the Mac retired (SMB stopped, nothing deleted),
+and its entry deleted, which nothing refuses. `tests/policy/test_roles.py` checks each of the section's refusals and
+what the NAS is handed per Mac, retired or not.
 
 The SMB stage runs from `tests/integration/truenas_smb.yml`, the role with variables of its own: a Time Machine share
 for one Mac on a pool the run imports. The fake's SMB service, users, SMB shares and directory permissions follow
