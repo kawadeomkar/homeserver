@@ -37,9 +37,10 @@ and backs up when it is home again.
    ```
 
    The run refuses a Mac without one, and a password for a name `timemachine_backups` does not list.
-3. **If TrueNAS requires two-factor authentication** for its logins (Credentials, Two-Factor Authentication), the API
-   key's user needs it set up too: TrueNAS otherwise refuses the run's change to that user, taking it out of SMB, and a
-   dry run cannot show that.
+3. **If TrueNAS requires two-factor authentication** for its logins, the API key's user needs it set up too: TrueNAS
+   otherwise refuses the run's change to that user, taking it out of SMB, and a dry run cannot show that. In 25.10 the
+   switch is not under Credentials but on System, Advanced Settings (Global Two Factor Authentication); the read-only
+   API call `auth.twofactor.config` gives it as `enabled`.
 
 ## The run
 
