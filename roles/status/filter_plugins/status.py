@@ -173,8 +173,15 @@ def upgrades(text):
 
 
 def running_vms(results, node=""):
-    """The VMIDs of the VMs running on `node`, from /cluster/resources as status_read read it: whose day's history to
-    read, this setup's and every other; none when it was not read."""
+    """The VMIDs of the VMs running on `node`, as status_read read them: whose day's history to read, this setup's and
+    every other. From the listing of qemu-server's run directory (`running`), a <vmid>.pid for each VM running on this
+    node, when it was read, else from /cluster/resources; none when neither was. A pid file a VM that died left
+    behind only adds a history read the report never uses."""
+    listing, _ = _out(results, "running")
+    if listing is not None:
+        # A VMID as Proxmox allows it (100 up, nine digits at most) and status_read's read list takes: a stray file
+        # named otherwise must not put a read off that list, which would refuse the whole pass.
+        return sorted({int(name[:-4]) for name in listing.split() if re.fullmatch(r"[1-9][0-9]{2,8}\.pid", name)})
     resources, _ = _json(results, "resources")
     return sorted(
         int(r["vmid"])
@@ -215,8 +222,8 @@ def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file="", back
     """What the Proxmox host's reads say, as the report needs it.
 
     `found` is {unread, node, results}: why the host could not be read at all (else ""), the node's name, and
-    status_read's results by name (resources, hostname, node, rrd-node, rrd-<vmid>, pending-<vmid>, fsinfo-<vmid>,
-    osinfo-<vmid>, network-<vmid>, content-<storage>, updates, reboot, and for the backups backup-jobs,
+    status_read's results by name (running, resources, hostname, node, rrd-node, rrd-<vmid>, pending-<vmid>,
+    fsinfo-<vmid>, osinfo-<vmid>, network-<vmid>, content-<storage>, updates, reboot, and for the backups backup-jobs,
     backup-tasks, backups-<storage>, schedule-<job> and log-<upid>). `vms` is this repo's VMs, each {vmid, name,
     made_by, start, guest_agent, node, app}: `node` the cluster node it is, `app` {name, url, port} the app it serves
     (its address from its guest agent when `url` is empty). Every other VM on the host, another project's or one made
@@ -338,6 +345,10 @@ def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file="", back
     text, why = _out(results, "updates")
     if text is None and "updates" in results:
         errors.append(f"the pending upgrades: {why}")
+    # Without the listing of which VMs run, no other VM's day history was read.
+    _, why = _out(results, "running")
+    if "running" in results and why:
+        errors.append(f"which VMs run: {why}")
     reboot = None
     if reboot_file:
         result = results.get("reboot") or {}
@@ -1516,11 +1527,16 @@ def types_shown(types):
 
 
 # What the report is worked out from: the Proxmox host's findings (proxmox, and tailscale, its Tailscale), the
-# cluster's (cluster, and etcd_snapshots, the snapshot files on this machine), the NAS's (nas), and from this machine
-# the apps' probes and its own Tailscale's view of the tailnet's DNS (tailnet_dns). Each host reads only the sources
-# the sections shown need, so just status nas reads neither the Proxmox host nor the cluster.
+# cluster's (cluster, etcd_snapshots, the snapshot files on this machine, and tailnet_dns, this machine's own
+# Tailscale's view of the tailnet's DNS, read with the cluster since only the cluster's apps need it), the NAS's (nas),
+# and from this machine the apps' probes. Each host reads only the sources the sections shown need, so just status
+# nas reads neither the Proxmox host nor the cluster.
 SOURCES = ("proxmox", "tailscale", "tailnet_dns", "cluster", "etcd_snapshots", "probes", "nas")
-HOST_SOURCES = {"proxmox": ("proxmox", "tailscale"), "cluster": ("cluster", "etcd_snapshots"), "nas": ("nas",)}
+HOST_SOURCES = {
+    "proxmox": ("proxmox", "tailscale"),
+    "cluster": ("cluster", "etcd_snapshots", "tailnet_dns"),
+    "nas": ("nas",),
+}
 
 
 def section_sources(section, types=()):
@@ -1557,12 +1573,13 @@ def host_reads(source, types=()):
 
 
 # Whose findings say each source, by the label just status gives each host (proxmox, cluster, nas): the Proxmox
-# host's say its Tailscale and this machine's view of the tailnet's DNS (in status_early, before its own reads), the
-# probes come from the cluster's (its apps) and the Proxmox host's (Home Assistant's VM), both asked from this machine.
+# host's say its Tailscale (in status_early, before its own reads), the cluster's this machine's view of the tailnet's
+# DNS with its own reads, and the probes come from the cluster's (its apps) and the Proxmox host's (Home Assistant's
+# VM), both asked from this machine.
 SOURCE_HOSTS = {
     "proxmox": ("proxmox",),
     "tailscale": ("proxmox",),
-    "tailnet_dns": ("proxmox",),
+    "tailnet_dns": ("cluster",),
     "cluster": ("cluster",),
     "etcd_snapshots": ("cluster",),
     "probes": ("cluster", "proxmox"),

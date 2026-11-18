@@ -2116,9 +2116,8 @@ def test_status_reads_only_through_status_read():
         "ansible.builtin.set_fact",
         "ansible.builtin.include_tasks",
         "ansible.builtin.debug",
-        # The report entry point's own directory and file.
-        "ansible.builtin.file",
-        "ansible.builtin.copy",
+        # The report entry point's own file, written on the controller by the role's action plugin.
+        "status_write_json",
     }
     used = {}
     for tasks_file in sorted((ROOT / "roles" / "status" / "tasks").glob("*.yml")):
@@ -2136,8 +2135,16 @@ def test_status_reads_only_through_status_read():
     }
     assert delegated == {"localhost"}
     report = yaml.safe_load((ROOT / "roles" / "status" / "tasks" / "report.yml").read_text())
-    writes = [t for t in tasks_in(report) if {"ansible.builtin.file", "ansible.builtin.copy"} & set(t)]
-    assert all("status_report_file" in json.dumps(t) for t in writes), "the report entry point writes elsewhere"
+    writes = [t for t in tasks_in(report) if "status_write_json" in t]
+    assert writes and all(t["status_write_json"]["path"] == "{{ status_report_file }}" for t in writes), (
+        "the report entry point writes elsewhere"
+    )
+    used_elsewhere = {f.name for f in (ROOT / "roles" / "status" / "tasks").glob("*.yml") if f.name != "report.yml"}
+    assert not any(
+        "status_write_json" in task
+        for name in used_elsewhere
+        for task in tasks_in(yaml.safe_load((ROOT / "roles" / "status" / "tasks" / name).read_text()))
+    ), "only the report entry point writes"
 
 
 def test_the_nas_is_read_with_truenas_info_alone():

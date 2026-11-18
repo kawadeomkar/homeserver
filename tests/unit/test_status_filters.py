@@ -302,6 +302,26 @@ def test_whose_history_is_read():
     read = {"resources": ok([*RESOURCES, elsewhere, stopped])}
     assert fs.running_vms(read, "pve") == [300, 301, 310, 9001]
     assert fs.running_vms({}, "pve") == [] and fs.running_vms({"resources": failed("no")}, "pve") == []
+    # Or, read at once, qemu-server's run directory: a <vmid>.pid for each VM running on this node, among the other
+    # files a Proxmox VE 9.2 host keeps there (seen on the home host, 2026-11-17), whatever /cluster/resources says.
+    listing = "\n".join(
+        [f"{vmid}.{kind}" for vmid in (300, 301, 310, 9001) for kind in ("cleanup", "pid", "qga", "qmp", "serial0")]
+        + ["310.vnc", "efidisk", "host-hw-capabilities.json", "pci-id-reservations", "pci-id-reservations.lock"]
+    )
+    assert fs.running_vms({"running": ok(listing + "\n"), **read}, "pve") == [300, 301, 310, 9001]
+    assert fs.running_vms({"running": ok("")}, "pve") == []
+    # The listing wins whatever /cluster/resources says: 9003 runs by its pid file though resources call it stopped,
+    # and 301, which resources call running, has none.
+    other = "\n".join(["300.pid", "310.pid", "9003.pid", "9003.qmp"])
+    assert fs.running_vms({"running": ok(other), **read}, "pve") == [300, 310, 9003]
+    # A stray file whose number is no VMID (100 up, nine digits at most) is not one: its history read would be off
+    # status_read's read list, which refuses the whole pass.
+    assert fs.running_vms({"running": ok("12.pid\n1234567890.pid\n0310.pid\n310.pid")}, "pve") == [310]
+    # A listing that failed reads no other VM's history, and says so among the host's errors.
+    assert fs.running_vms({"running": failed("ls: cannot access: No such file or directory", rc=2)}, "pve") == []
+    errors = found(running=failed("ls: cannot access: No such file or directory", rc=2))["errors"]
+    assert "which VMs run: ls: cannot access: No such file or directory" in errors
+    assert not any(e.startswith("which VMs run") for e in found(running=ok(listing))["errors"])
 
 
 def test_storages_and_the_disk_budget():
@@ -458,6 +478,17 @@ def test_the_report_is_json():
     assert json.loads(json.dumps(model)) == model
 
 
+def test_each_source_is_said_by_the_host_that_reads_it():
+    """SOURCE_HOSTS, whose findings the live callback waits for, and HOST_SOURCES, what each host reads, must agree: a
+    source moved in one alone (as this machine's tailnet DNS moved to the cluster's) would leave the callback waiting
+    for the wrong host. The probes are every host's own, read in its play beside its findings."""
+    for source in fs.SOURCES:
+        if source == "probes":
+            continue
+        readers = tuple(host for host, reads in fs.HOST_SOURCES.items() if source in reads)
+        assert fs.SOURCE_HOSTS[source] == readers, source
+
+
 def test_each_host_reads_only_what_the_sections_shown_need():
     every = ["proxmox", "tailscale", "tailnet_dns", "cluster", "etcd_snapshots", "probes", "nas"]
     assert fs.sources([]) == every
@@ -472,6 +503,11 @@ def test_each_host_reads_only_what_the_sections_shown_need():
     assert fs.host_reads("proxmox", ["admin"]) == ["tailscale"]
     assert fs.host_reads("cluster", ["backups"]) == ["etcd_snapshots"]
     assert fs.host_reads("nas", []) == ["nas"] and fs.host_reads("", []) == []
+    # This machine's view of the tailnet's DNS is read with the cluster, the one source whose apps need it, so the
+    # Proxmox host's own reads never wait for it.
+    assert fs.host_reads("cluster", ["tailscale"]) == ["cluster", "tailnet_dns"]
+    assert fs.host_reads("proxmox", ["tailscale"]) == ["tailscale"]
+    assert fs.host_reads("cluster", ["apps"]) == ["cluster"]
 
 
 def test_a_source_no_section_shown_needs_is_not_missed():

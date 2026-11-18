@@ -7,8 +7,8 @@ short_description: Run read-only commands at once and return each one's output
 description:
   - Runs every command in O(commands) at the same time, at most O(parallel) of them at once, each with
     O(timeout) seconds to finish, and returns each one's exit status, output and duration. On a Proxmox host
-    each C(pvesh) or C(qm) call starts Proxmox's API afresh and takes about a second, so twenty of them one
-    after another, as a loop of tasks would run them, take twenty seconds.
+    each C(pvesh) or C(qm) call starts Proxmox's API afresh and takes about a second of CPU, so twenty of them
+    one after another, as a loop of tasks would run them, take twenty seconds.
   - Runs a command only if it has one of the exact forms in the module's own read list, and otherwise refuses
     the whole task before running anything. A tool's name alone is never enough, since most tools also write or
     return secrets, such as C(kubectl get secrets) or C(talosctl get machineconfig).
@@ -21,13 +21,20 @@ options:
     type: dict
     required: true
   parallel:
-    description: How many commands run at once.
+    description:
+      - How many commands run at once. Unset, as many as the machine the module runs on has CPUs, 8 at most, since
+        each C(pvesh) call is a second of CPU and about 180 MB of memory.
     type: int
-    default: 8
   timeout:
     description: Seconds each command may take before it is stopped and reported as timed out.
     type: int
     default: 30
+  timeouts:
+    description:
+      - Seconds for a command of its own, by its name in O(commands), in place of O(timeout), so one that should
+        give up sooner can run in the same pass as slower ones.
+    type: dict
+    default: {}
 attributes:
   check_mode:
     support: full
@@ -43,6 +50,7 @@ EXAMPLES = r"""
 - name: Read the host and its guests
   status_read:
     commands:
+      running: [ls, /run/qemu-server]
       resources: [pvesh, get, /cluster/resources, --output-format, json]
       fsinfo-310: [qm, guest, cmd, "310", get-fsinfo]
   register: found
@@ -85,6 +93,9 @@ PATH = r"/[A-Za-z0-9_./-]+"
 UPID = rf"UPID:{NODE}:[0-9A-F]{{8,}}:[0-9A-F]{{8,}}:[0-9A-F]{{8,}}:vzdump:[0-9]*:[A-Za-z0-9@._!-]+:"
 COUNT = r"[1-9][0-9]{0,4}"
 SCHEDULE = r"[A-Za-z0-9*][A-Za-z0-9 :.,*/~-]{0,99}"
+# The directory where qemu-server keeps a <vmid>.pid for each VM running on the node (/run/qemu-server), wherever
+# a test keeps its own: only a directory of that name, through no . or .. part, whose listing is file names alone.
+QEMU_RUN_DIR = r"(/(?!\.\.?(/|$))[A-Za-z0-9_.-]+)*/qemu-server"
 # A credentials file, wherever its owner keeps it: no shell ever reads an argument, so any absolute path is one word.
 CONFIG = r"/[^\x00\n]+"
 JSON = ["--output-format", "json"]
@@ -98,14 +109,15 @@ GIT_URL = r"(https://|ssh://)[A-Za-z0-9._~:/@%+=-]+|git@[A-Za-z0-9.-]+:[A-Za-z0-
 GIT_REF = r"refs/(heads|tags)/[A-Za-z0-9._/-]+"
 
 # Every command this module runs, as one regular expression per argument. Nothing here writes, and nothing returns
-# a secret: no other pvesh path (the backup jobs, the backup tasks and their logs, and when a schedule next fires
-# among them), no qm guest command beyond these three reads, apt-get only simulating, kubectl only
-# listing kinds that hold no secret (the Deployments with the times each field was set), one ConfigMap, a node's
-# kubelet statistics and Alertmanager's alerts, talosctl only the etcd service's state (talosctl get could read the
-# machine configuration, every key of the cluster), and git only the commit a branch points at.
+# a secret: ls only of the VMs' run directory, no other pvesh path (the backup jobs, the backup tasks and their logs,
+# and when a schedule next fires among them), no qm guest command beyond these three reads, apt-get only simulating,
+# kubectl only listing kinds that hold no secret (the Deployments with the times each field was set), one ConfigMap,
+# a node's kubelet statistics and Alertmanager's alerts, talosctl only the etcd service's state (talosctl get could
+# read the machine configuration, every key of the cluster), and git only the commit a branch points at.
 READS = [
     ["hostname", "-s"],
     ["test", "-e", PATH],
+    ["ls", QEMU_RUN_DIR],
     ["pvesh", "get", "/cluster/resources", *JSON],
     ["pvesh", "get", f"/nodes/{NODE}/status", *JSON],
     ["pvesh", "get", f"/nodes/{NODE}/rrddata", *DAY, *JSON],
@@ -178,10 +190,12 @@ def run_one(argv, timeout):
     }
 
 
-def run_all(commands, parallel, timeout):
-    """Every command's result by name, the commands run at most `parallel` at a time."""
+def run_all(commands, parallel, timeout, timeouts=None):
+    """Every command's result by name, the commands run at most `parallel` at a time, each within its own of
+    `timeouts` or else `timeout`."""
+    timeouts = timeouts or {}
     with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:
-        futures = {name: pool.submit(run_one, argv, timeout) for name, argv in commands.items()}
+        futures = {name: pool.submit(run_one, argv, timeouts.get(name, timeout)) for name, argv in commands.items()}
         return {name: future.result() for name, future in futures.items()}
 
 
@@ -189,8 +203,9 @@ def main():
     module = AnsibleModule(
         argument_spec=dict(
             commands=dict(type="dict", required=True),
-            parallel=dict(type="int", default=8),
+            parallel=dict(type="int"),
             timeout=dict(type="int", default=30),
+            timeouts=dict(type="dict", default={}),
         ),
         supports_check_mode=True,
     )
@@ -206,9 +221,14 @@ def main():
         commands[name] = argv
     if problems:
         module.fail_json(msg="Not on status_read's read list, so nothing was run: " + "; ".join(problems))
-    if module.params["parallel"] < 1 or module.params["timeout"] < 1:
-        module.fail_json(msg="parallel and timeout must be at least 1.")
-    module.exit_json(changed=False, results=run_all(commands, module.params["parallel"], module.params["timeout"]))
+    # Unset, one per CPU, but never more than main's 8: each pvesh call holds about 180 MB while it runs.
+    parallel = module.params["parallel"] if module.params["parallel"] is not None else min(os.cpu_count() or 1, 8)
+    timeouts = module.params["timeouts"]
+    if not all(isinstance(s, int) and not isinstance(s, bool) for s in timeouts.values()):
+        module.fail_json(msg="timeouts must give each command a whole number of seconds.")
+    if parallel < 1 or module.params["timeout"] < 1 or any(s < 1 for s in timeouts.values()):
+        module.fail_json(msg="parallel, timeout and timeouts must be at least 1.")
+    module.exit_json(changed=False, results=run_all(commands, parallel, module.params["timeout"], timeouts))
 
 
 if __name__ == "__main__":

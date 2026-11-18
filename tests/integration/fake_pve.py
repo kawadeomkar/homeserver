@@ -159,12 +159,37 @@ def load():
     return json.loads(state_path().read_text())
 
 
-def save(state):
-    # Written aside and renamed over the state, so that a command reading it meanwhile sees it whole.
-    path = state_path()
+def run_dir(path):
+    """qemu-server's run directory (/run/qemu-server) as the fake keeps it, beside the state file at `path`: a
+    <vmid>.pid and a <vmid>.qmp for each VM running, as on a Proxmox VE 9.2 host, which just status lists to learn
+    whose day's history to read (status_proxmox_run_dir)."""
+    return Path(path).parent / "qemu-server"
+
+
+def store(path, state):
+    """The state written aside and renamed over the file at `path`, so that a command reading it meanwhile sees it
+    whole, then the run directory made to match it."""
+    path = Path(path)
     scratch = path.with_name(f".{path.name}.{os.getpid()}")
     scratch.write_text(json.dumps(state, indent=1, sort_keys=True))
     os.replace(scratch, path)
+    running = run_dir(path)
+    running.mkdir(exist_ok=True)
+    files = {
+        f"{vmid}.{kind}"
+        for vmid, vm in (state.get("vms") or {}).items()
+        if vm.get("status") == "running"
+        for kind in ("pid", "qmp")
+    }
+    for old in running.iterdir():
+        if old.name not in files:
+            old.unlink()
+    for name in files:
+        (running / name).touch()
+
+
+def save(state):
+    store(state_path(), state)
 
 
 def fail(message):

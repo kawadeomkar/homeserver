@@ -20,24 +20,13 @@
                          admin=status_admin, commands=status_commands,
                          now=status_now or now().timestamp() | int) }}
 
-- name: report | Write the report
+# In the controller's own process (action_plugins/status_write_json.py): copy took 0.4 s of every run, two modules.
+- name: report | Write the report as JSON
+  status_write_json:
+    path: "{{ status_report_file }}"
+    content: "{{ status_report }}"
+  check_mode: false
   when: status_report_file | length > 0
-  block:
-    # Only the first time: a task less to wait for on every run after.
-    - name: report | Make the report's directory
-      ansible.builtin.file:
-        path: "{{ status_report_file | dirname }}"
-        state: directory
-        mode: "0700"
-      check_mode: false
-      when: status_report_file | dirname is not directory
-
-    - name: report | Write the report as JSON
-      ansible.builtin.copy:
-        content: "{{ status_report | to_nice_json }}\n"
-        dest: "{{ status_report_file }}"
-        mode: "0600"
-      check_mode: false
 
 - name: report | Show the report
   ansible.builtin.debug:

@@ -16,10 +16,13 @@ Two entry points:
     upgrade asked for a reboot, and the backups: each of `status_backup_jobs` against the host's job of that id
     (there, enabled, writing to its storage, covering its VMs, and when it runs next), each VM's newest backup on its
     job's storage, and, from the logs of the newest runs that failed, which VMs failed and why. It reads in two
-    steps. First the node's name (`hostname -s`, unless `status_proxmox_node` gives it), which the API's paths need,
-    with `/cluster/resources` (the node, every VM and every storage in one call) when the VMs are shown, since the
-    second step reads every running VM's history. Then everything else at once: `/cluster/resources` if not yet read,
-    the node's status and day history, the day history of every running VM, each of `status_vms`' pending settings,
+    steps. First, at once, the node's name (`hostname -s`, unless `status_proxmox_node` gives it), which the API's
+    paths need, and when the VMs are shown which VMs run on the node, from the `<vmid>.pid` files qemu-server keeps in
+    `status_proxmox_run_dir`, since the second step reads every running VM's history. Both are instant where
+    `/cluster/resources`, the API's own answer, is a `pvesh` call (0.7 to 1.4 s on the home host); without
+    `status_proxmox_run_dir` the first step reads that instead. Then everything else at once: `/cluster/resources`
+    (the node, every VM and every storage in one call), the node's status and day history, the day history of every
+    running VM, each of `status_vms`' pending settings,
     and for a VM whose guest agent reports them (Home Assistant's) its filesystems and OS, and its address when it
     serves an app without a URL of its own, past the Docker bridges and other inner interfaces Home Assistant OS has.
     Talos's guest agent lists no filesystem and no OS version (seen on the NUC). Every other VM on the host, another
@@ -36,9 +39,10 @@ Two entry points:
     answers or not (a `fileglob` on this machine). The credentials are read first, under `no_log`, keeping only the
     server the kubeconfig names and when each client certificate expires (the filter `status_credentials`); one
     naming another server than `status_cluster_server`, such as the home cluster's on a test host, is reported as a
-    source not read and never used. Then everything else at once. No Secret is ever read. A cluster that does not
-    answer while the Proxmox host says its nodes' VMs are stopped is a note, not a source not read: the stopped VMs
-    say why, and are a thing to do already.
+    source not read and never used. Then everything else at once, with this machine's view of the tailnet's DNS when
+    `status_tailnet_dns` asks for it (below). No Secret is ever read. A cluster that does not answer while the
+    Proxmox host says its nodes' VMs are stopped is a note, not a source not read: the stopped VMs say why, and are a
+    thing to do already.
   - On the NAS (`nas`) it reads nothing itself: the play reads the NAS first, through roles/truenas's `status` entry
     point (`roles/truenas/tasks/status.yml`: `truenas_info` with its `status` option, one login), and the role works
     out what `status_nas_state` says: each pool's health, use, layout and last scrub, TrueNAS's alerts, each snapshot
@@ -52,7 +56,9 @@ Two entry points:
 - **report** (`tasks_from: report`), on localhost, puts together what each of `status_hosts` found (`status_merge`,
   every host's probes together), ranks what needs attention (sources not read, problems, things to do, each with the
   command from `status_commands` that deals with it, so the role names none of this repository's recipes itself),
-  writes the report to `status_report_file` as JSON, mode 0600 in a 0700 directory (it holds addresses), and shows it
+  writes the report to `status_report_file` as JSON, mode 0600 in a 0700 directory (it holds addresses), through the
+  role's action plugin `status_write_json`, in the controller's own process (`ansible.builtin.copy` took 0.4 s of
+  every run, two modules), and shows it
   as text unless `status_quiet`: the sections, then what needs attention, after the sections it is worked out from,
   last, above the exit line, where a terminal leaves it in view. It writes in a dry run too (`check_mode: false`),
   since `just status` runs as one and takes its exit code from the file: 2 when a source could not be read, else 1
@@ -74,20 +80,27 @@ the NAS. Shown the NAS alone, the role reads neither the Proxmox host nor the cl
 needs is never one not read. A host with nothing to read still sets `status_found`, empty, so that the report play
 can tell it from one refused before its reads, which leaves none. Each host's play also asks from this machine the
 addresses of the apps it found (unless `status_probe_apps` is off): the cluster's from the cluster's host, which is
-this machine, Home Assistant's delegated to it from the Proxmox host's play, which first says its Tailscale and this
-machine's view of the tailnet's DNS (`tailscale dns status --json`, delegated to localhost too) in the fact
-`status_early`. Nothing is delegated anywhere but localhost.
+this machine, Home Assistant's delegated to it from the Proxmox host's play, which first says its Tailscale in the
+fact `status_early`. This machine's view of the tailnet's DNS (`tailscale dns status --json`) is read with the
+cluster's reads, on this machine, when `status_tailnet_dns` asks for it (here whenever the Proxmox host runs
+Tailscale; the filter shows it only for a route the host's own Tailscale says it advertises), within
+`status_probe_timeout` as a probe is, not the cluster's longer time: only the cluster's apps need it, and read in the
+Proxmox host's play it held that host's own reads up by a quarter of a second. Nothing is delegated anywhere but
+localhost.
 
-Every command goes through the role's module `status_read`, which runs a list of them at once (`status_parallel`, 8
-at a time, each within `status_timeout`, 30 s, which `group_vars/kubernetes/status.yml` lowers to 15 s for the
-cluster, so that a cluster that does not answer does not hold the report up for long: kubectl gives up after its own
+Every command goes through the role's module `status_read`, which runs a list of them at once (`status_parallel`, as
+many at a time as the host has CPUs, 8 at most, since a `pvesh` call holds about 180 MB, unless it is set, each within
+`status_timeout`, 30 s, or a time of its own by name, `timeouts`;
+`group_vars/kubernetes/status.yml` runs the cluster's 32 at a time, each a light client, and lowers the time to 15 s,
+so that a cluster that does not answer holds the report up once and not for long: kubectl gives up after its own
 10 s, `status_cluster_request_timeout`) and refuses the whole task before running anything if any is not one of the
 exact forms on its read list (`READS` in `library/status_read.py`, each argument matched whole). A tool's name alone
 is never enough, since most tools also write or return secrets. The list: named `pvesh get` paths
 (`/cluster/resources`, the node's status and day history, a VM's day history and pending settings, a storage's
 content and its backups, the backup jobs, `schedule-analyze`, the `vzdump` runs and a `vzdump` run's log alone), `qm
 guest cmd` with `get-fsinfo`, `get-osinfo` or `network-get-interfaces`, `apt-get -q -s dist-upgrade` (a simulation),
-`hostname -s`, `test -e`; `kubectl get` of nodes, pods, services, ingresses, persistentvolumes, kustomizations,
+`hostname -s`, `test -e`, `ls` of a directory named `qemu-server` alone (file names, never a file's contents);
+`kubectl get` of nodes, pods, services, ingresses, persistentvolumes, kustomizations,
 helmreleases, fluxinstances, certificates and deployments (with `--show-managed-fields`), of one ConfigMap, and
 `--raw` of a node's kubelet statistics alone, `kubectl exec` of `amtool alert query` in Alertmanager's container
 alone; `talosctl service etcd`; `git ls-remote` over HTTPS or SSH, never `ext::`, which runs a command, or a local
@@ -98,7 +111,9 @@ Proxmox host (2026-10-21): every `pvesh` or `qm` call takes 1.1 to 1.3 s, Proxmo
 host's 15 reads take 25 s one after another and 8 s at once (reading the guests first, and every running VM's history,
 took the home host from 5 s to 7 s with seven other VMs running, 2026-11-09), and `apt-get -s` takes 0.7 s where the
 API's own update list takes 4.5 s; the cluster's reads take about 0.1 s each and `git ls-remote` about 1 s, so the
-cluster is read in about a second.
+cluster is read in about a second. On the home host each `pvesh` call took 0.65 s idle, all but 0.02 s of it Perl
+loading Proxmox's modules, and 1.1 to 1.4 s with its guests busy (2026-11-17), when `apt-get -s` took 2.1 s. The
+plan that measured it is `docs/STATUS-PERFORMANCE-PLAN.md` (git-ignored).
 
 The module `status_probe` looks each app's name up in DNS as this machine does, compared with the address the Ingress
 says Traefik answers on, and sends one `GET` per URL to that address, whatever DNS says, closing the connection once
@@ -195,8 +210,10 @@ its mount in `status_cluster_volumes`.
 | `status_cluster_snapshot_dir` | `""` | The directory of the etcd snapshots, each `<anything>-<UTC time>.db`; empty shows none |
 | `status_nas_state` | `{}` | What `truenas_info` returned with its `status` option, or its failure |
 | `status_nas_release` | `""` | The TrueNAS release (major.minor) the NAS's configuration is written for; empty compares none |
+| `status_proxmox_run_dir` | `""` | Where Proxmox keeps a `<vmid>.pid` for each VM running on the node, which says whose day's history to read; empty reads `/cluster/resources` first instead |
+| `status_tailnet_dns` | `false` | Whether the cluster's play also reads this machine's view of the tailnet's DNS, for where the tailnet sends the apps' domain |
 | `status_tailscale_state` | `{}` | The Proxmox host's Tailscale, as roles/proxmox_tailscale's `status` entry point records it; empty when it is off |
-| `status_parallel` | `8` | How many reads run at once on a host |
+| `status_parallel` | `null` | How many reads run at once on a host; null runs as many as the host has CPUs, 8 at most |
 | `status_timeout` | `30` | Seconds each read may take |
 | `status_hosts` | `[]` | report: the hosts whose findings it puts together |
 | `status_report_file` | `""` | report: where it writes the report as JSON; empty writes none |
@@ -214,10 +231,11 @@ its mount in `status_cluster_volumes`.
 This repository's `status.yml` reads the Proxmox host (and its Tailscale), the cluster and the NAS at once (`strategy:
 free`), then reports, with `group_vars/all/status.yml` (the VMs this repo makes, the same the nightly backup covers; the
 admin pages; the commands), `group_vars/proxmox/status.yml` (the installer's storage, its headroom, Debian's reboot
-flag, the nightly backup job roles/proxmox_backup keeps, the Tailscale state roles/proxmox_tailscale read),
-`group_vars/kubernetes/status.yml` (the credentials roles/talos writes in `talos_config_dir`, the apps as
-roles/app_scale finds them, the worker's user volumes, the settings roles/flux_bootstrap keeps, Alertmanager's pod, the
-pins, where roles/talos keeps the etcd snapshots) and `group_vars/nas/status.yml` (what roles/truenas's `status` entry
+flag, qemu-server's run directory, the nightly backup job roles/proxmox_backup keeps, the Tailscale state
+roles/proxmox_tailscale read), `group_vars/kubernetes/status.yml` (the credentials roles/talos writes in
+`talos_config_dir`, the apps as roles/app_scale finds them, the worker's user volumes, the settings roles/flux_bootstrap
+keeps, Alertmanager's pod, the pins, the tailnet's DNS whenever the Proxmox host runs Tailscale, where roles/talos
+keeps the etcd snapshots, and every read at once) and `group_vars/nas/status.yml` (what roles/truenas's `status` entry
 point read, and `truenas_supported_version`, the release that role is written for, in scope through `status.yml`'s
 import of it). `status_source` is `proxmox` on the Proxmox host, `cluster` on `homeserver-k8s` and `nas` on `truenas`,
 the last two empty without a cluster or a NAS. `status_vms` is the same list of VMIDs as `vm_backup_vmids` (the
@@ -257,7 +275,7 @@ block by block (the filter's `blocks`, which its `text` joins), from the same fi
 `roles/status/filter_plugins/status.py` beside the playbook, and the settings the first play says, which the report
 play then uses too: the head at once, then each section in the report's fixed order as soon as every source it is
 worked out from is read (`section_sources`; `SOURCE_HOSTS` says whose findings say each source, and the Proxmox host
-says its Tailscale and this machine's tailnet DNS first, in `status_early`) and every section before it is printed,
+says its Tailscale first, in `status_early`) and every section before it is printed,
 then, once every host is read, the failed reads, what needs attention, the line on what was read and the exit line.
 Below what is printed, a line per section still to come (a spinner and the hosts it waits for, or, for one already
 read behind an unfinished one, its problems and things to do, from the report's per-section `counts`), one for what
@@ -276,10 +294,14 @@ Without the filter, the sections are shown at the end, and the callback says so 
   source in turn and compares each section, which is what lets the callback print it early.
 - `tests/unit/test_status_callback.py`: the callback's `Progress`, which is pure: the sections in order whatever host
   answers first, the lines below them, and that what it prints in the end is the report play's own text.
-- `tests/unit/test_status_read.py`: the read list, every form allowed and others refused, and the parallel runs.
+- `tests/unit/test_status_read.py`: the read list, every form allowed and others refused, and the parallel runs, as
+  many as the machine has CPUs unless told.
+- `tests/unit/test_status_write_json.py`: the action plugin that writes the report: its modes, the text the copy
+  module wrote, a dry run that writes nothing, and a failed write that leaves the old report whole.
 - `tests/unit/test_status_probe.py`: the probe, against servers in the test's process.
 - `tests/policy/test_roles.py`: `test_status_reads_only_through_status_read` keeps every other task of the role to a
-  short list of modules, delegated to localhost alone, and the report entry point's writes to `status_report_file`.
+  short list of modules, delegated to localhost alone, and the report entry point's write, its own action, to
+  `status_report_file` alone.
 - `tests/integration/test_status.py` runs the real `status.yml`, callback and `just status` in a scratch tree against
   the fake Proxmox host, the fake cluster and, in `local.yml.example`'s setup, `fake_truenas.py` (`fake_kubectl.py`
   lists the kinds the role reads, makes pods up from the Deployments and answers kubelet's statistics and amtool,

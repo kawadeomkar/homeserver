@@ -29,6 +29,9 @@ AMTOOL = ["--", "amtool", "alert", "query", "-o", "json", "--alertmanager.url=ht
     [
         ["hostname", "-s"],
         ["test", "-e", "/run/reboot-required"],
+        # Which VMs run: qemu-server's pid files, on the host and where a test keeps its own.
+        ["ls", "/run/qemu-server"],
+        ["ls", "/tmp/pytest-0/test_x/qemu-server"],
         ["pvesh", "get", "/cluster/resources", *JSON],
         ["pvesh", "get", "/nodes/pve/status", *JSON],
         ["pvesh", "get", "/nodes/pve/rrddata", *DAY, *JSON],
@@ -163,6 +166,15 @@ def test_reads_are_allowed(argv):
         ["apt-get", "-q", "-s", "dist-upgrade", "-y"],
         ["test", "-e", "relative/path"],
         ["test", "-e", "/run/x; rm -rf /"],
+        # ls of the VMs' run directory alone: no other directory, no option, no file of it.
+        ["ls", "/etc/pve/priv"],
+        ["ls", "/run/qemu-server/../../etc/pve/priv"],
+        ["ls", "/var/run/../qemu-server"],
+        ["ls", "/etc/pve/priv/../../run/qemu-server"],
+        ["ls", "/./qemu-server"],
+        ["ls", "-la", "/run/qemu-server"],
+        ["ls", "/run/qemu-server/310.pid"],
+        ["ls", "qemu-server"],
         # A path's parts must be what they say.
         ["pvesh", "get", "/nodes/pve/qemu/../../access/users/pending", *JSON],
         ["pvesh", "get", "/nodes/pve/qemu/1/pending", *JSON],
@@ -246,7 +258,7 @@ class _Module:
     """AnsibleModule as far as main() uses it, recording what it ends with."""
 
     def __init__(self, params):
-        self.params = {"parallel": 8, "timeout": 30, **params}
+        self.params = {"parallel": None, "timeout": 30, "timeouts": {}, **params}
         self.ended = None
 
     def fail_json(self, **kwargs):
@@ -285,3 +297,26 @@ def test_reads_report_no_change(monkeypatch):
     )
     assert state == "ok" and result["changed"] is False
     assert json.loads(json.dumps(result["results"])) == {"node": {"rc": 0}, "vm": {"rc": 0}}
+
+
+def test_reads_run_as_many_at_once_as_the_machine_has_cpus_unless_told(monkeypatch):
+    """Unset, parallel is the machine's CPU count, 8 at most: each pvesh call is a second of CPU and about 180 MB."""
+    widths = []
+    monkeypatch.setattr(status_read, "run_all", lambda commands, parallel, *_: widths.append(parallel) or {})
+    for cpus in (20, 4, None):
+        monkeypatch.setattr(status_read.os, "cpu_count", lambda cpus=cpus: cpus)
+        assert run_main(monkeypatch, commands={"node": ["hostname", "-s"]})[0] == "ok"
+    assert run_main(monkeypatch, commands={"node": ["hostname", "-s"]}, parallel=32)[0] == "ok"
+    assert widths == [8, 4, 1, 32]
+    for bad in ({"parallel": 0}, {"timeouts": {"node": 0}}, {"timeouts": {"node": "5"}}):
+        state, _ = run_main(monkeypatch, commands={"node": ["hostname", "-s"]}, **bad)
+        assert state == "failed", bad
+
+
+def test_a_command_can_have_a_time_of_its_own():
+    """This machine's tailnet DNS gives up as a probe does, in the cluster's batch, whose reads may take longer."""
+    commands = {"quick": [sys.executable, "-c", "import time; time.sleep(5)"], "slow": [sys.executable, "-c", "pass"]}
+    started = time.monotonic()
+    results = status_read.run_all(commands, parallel=2, timeout=30, timeouts={"quick": 1})
+    assert results["quick"]["error"] == "timed out after 1 s" and results["slow"]["rc"] == 0
+    assert time.monotonic() - started < 4

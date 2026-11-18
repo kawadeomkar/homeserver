@@ -400,7 +400,7 @@ def seed(path, **more):
     state["guest_ip"] = "192.0.2.32"
     state["packages"]["lists"] = dict(state["packages"]["repository"])
     state.update(more)
-    path.write_text(json.dumps(state))
+    fake_pve.store(path, state)
     return state
 
 
@@ -448,12 +448,14 @@ def environment(tree, state, fake=True, **more):
 def extra_vars(tree, local=True, cluster=True, **more):
     """The variables a run needs here: the local connection, unless the inventory gives one, this Python, the
     placeholders' values (a cluster's and Home Assistant's, unless the setup has neither), the reboot flag in the tree,
-    the cluster's credentials, and no probes unless asked."""
+    the fake's pid files, the cluster's credentials, and no probes unless asked."""
     return json.dumps(
         {
             **({"ansible_connection": "local"} if local else {}),
             "ansible_python_interpreter": sys.executable,
             "status_reboot_required_file": str(tree / "run" / "reboot-required"),
+            # Where the fake keeps a pid file for each VM it runs, beside its state (tmp_path / "pve.json").
+            "status_proxmox_run_dir": str(fake_pve.run_dir(tree.parent / "pve.json")),
             "talos_config_dir": str(talos_dir(tree.parent)),
             "status_probe_apps": False,
             **(CLUSTER_VARS if cluster else {}),
@@ -644,9 +646,9 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
 
 
 def test_a_node_named_in_advance_reads_the_same(tree, tmp_path):
-    """With status_proxmox_node given, the host's name is not asked: with the VMs shown the guest list is read alone
-    first, and without them (just status storage) there is no first read, the guest list read with the rest. Each
-    report is the one the run that asks the name makes."""
+    """With status_proxmox_node given, the host's name is not asked: with the VMs shown which VMs run is read alone
+    first, and without them (just status storage) there is no first read. Each report is the one the run that asks the
+    name makes."""
     state = tmp_path / "pve.json"
     seed(state)
     for args in ((), ("storage",)):
@@ -739,7 +741,7 @@ def test_a_stopped_cluster_is_no_unread_source(tree, tmp_path):
     pve = json.loads(state.read_text())
     for vmid in ("300", "301"):
         pve["vms"][vmid]["status"] = "stopped"
-    state.write_text(json.dumps(pve))
+    fake_pve.store(state, pve)
     seed_cluster(tmp_path / "talos.json", bootstrapped=False)
     rc, out, err = just_status(tree, state, status_timeout=5)
     report = report_of(tree)
@@ -887,14 +889,16 @@ def test_the_hosts_tailscale(tree, tmp_path, approved):
     after = json.loads(tailscale.read_text())
     assert after["mutations"] == 0
     calls = [c for c in after["calls"] if c[0] != "ip"]
-    assert sorted(calls[:5]) == [
+    # The host's five reads and this machine's tailnet DNS, in whatever order: the host's play and the cluster's run at
+    # once (strategy free), and the DNS is read in the cluster's batch.
+    assert sorted(calls) == [
         ["nft", "list", "table", "inet", "tailnet_guard"],
         ["sysctl", "-n", "net.ipv4.ip_forward"],
+        ["tailscale", "dns", "status", "--json"],
         ["tailscale", "get", "--json"],
         ["tailscale", "serve", "status", "--json"],
         ["tailscale", "status", "--json"],
     ]
-    assert calls[5:] == [["tailscale", "dns", "status", "--json"]]
 
     report = report_of(tree)
     tail = report["tailscale"]
@@ -1229,7 +1233,7 @@ def seed_backups(path, runs, vmids=(300, 301, 310), job=True, next_in=4 * 3600 -
         state["next_runs"] = {"vm-nightly": next_run}
     for days, failures in runs:
         fake_pve.backup_run(state, next_run - (days + 1) * DAY + 1, list(vmids), "homeserver-backup", failures)
-    path.write_text(json.dumps(state))
+    fake_pve.store(path, state)
     return state
 
 
@@ -1244,7 +1248,7 @@ def test_the_backups_of_this_setups_vms(nas_tree, nas, tmp_path):
     seed_backups(state, [(1, {}), (0, {301: FREEZE})], vmids=(300, 301))
     pve = json.loads(state.read_text())
     pve["backup_jobs"]["vm-nightly"]["vmid"] = "300,301,310"
-    state.write_text(json.dumps(pve))
+    fake_pve.store(state, pve)
     snapshots = talos_dir(tmp_path) / "etcd"
     snapshots.mkdir()
     taken = datetime.now(UTC) - timedelta(days=3, hours=1)

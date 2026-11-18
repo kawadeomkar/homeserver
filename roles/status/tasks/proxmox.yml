@@ -1,35 +1,24 @@
 ---
-# The Proxmox host, in two reads: the node's name, which the API's paths need, and when the VMs are shown every guest
-# on it, which says whose day's history to read; then everything else at once. Each pvesh or qm command starts
-# Proxmox's Perl API afresh, a second of CPU, so they run in parallel: on a four-core host the second read took about
-# eight seconds, and reading the guests first adds a second, each running VM's history a little more (5 s to 7 s on a
-# host with seven other VMs running, 2026-11-09). A host that does not answer is recorded, not a failure: the report
-# says so.
+# The Proxmox host, in two reads: the node's name, which the API's paths need, and when the VMs are shown which VMs
+# run, from the pid files qemu-server keeps (status_proxmox_run_dir), which says whose day's history to read, both at
+# once; then everything else at once. Each pvesh or qm command starts Proxmox's Perl API afresh, about a second of
+# CPU, so they run in parallel, as many as the host has CPUs: on a four-core host the second read took about eight
+# seconds, and each running VM's history adds a little (5 s to 7 s on a host with seven other VMs running,
+# 2026-11-09). Without status_proxmox_run_dir the first read is /cluster/resources, one call of that API. A host that
+# does not answer is recorded, not a failure: the report says so.
 # status_reads (main.yml) says what the sections shown need: the host itself (proxmox), its Tailscale (tailscale,
 # which status.yml read before), or both.
 
-# This machine's view of the tailnet's DNS, beside the host's Tailscale, when the host advertises routes and this machine
-# runs Tailscale; then both, before the host's own reads, in status_early, for just status's callback to show the
-# sections that need nothing else as soon as they are read.
-- name: proxmox | Read this machine's Tailscale DNS
-  status_read:
-    commands:
-      dns: [tailscale, dns, status, --json]
-    timeout: "{{ status_probe_timeout }}"
-  delegate_to: localhost
-  register: status_tailnet_dns
-  when:
-    - "'tailscale' in status_reads"
-    - status_tailscale_state.routes | default([]) | selectattr('advertised') | list | length > 0
-
+# Its Tailscale, before the host's own reads, in status_early, for just status's callback to show the sections that
+# need nothing else (the admin pages) as soon as it is read. This machine's view of the tailnet's DNS is the cluster's
+# to read (cluster.yml), so it is never said here: the findings' merge lets the last host to say a source win.
 - name: proxmox | Say what its Tailscale says
   ansible.builtin.set_fact:
     status_early:
       tailscale: "{{ status_tailscale_state }}"
-      tailnet_dns: "{{ status_tailnet_dns.results.dns | default(none) }}"
   when: "'tailscale' in status_reads"
 
-- name: proxmox | Read the node's name and its guests
+- name: proxmox | Read the node's name and which VMs run
   status_read:
     commands: "{{ _commands }}"
     parallel: "{{ status_parallel }}"
@@ -41,7 +30,11 @@
     _commands: >-
       {%- set c = {} -%}
       {%- if 'vms' in status_types | status_types_shown -%}
-      {%-   set _ = c.update({'resources': ['pvesh', 'get', '/cluster/resources', '--output-format', 'json']}) -%}
+      {%-   if status_proxmox_run_dir | length > 0 -%}
+      {%-     set _ = c.update({'running': ['ls', status_proxmox_run_dir]}) -%}
+      {%-   else -%}
+      {%-     set _ = c.update({'resources': ['pvesh', 'get', '/cluster/resources', '--output-format', 'json']}) -%}
+      {%-   endif -%}
       {%- endif -%}
       {%- if status_proxmox_node | length == 0 -%}
       {%-   set _ = c.update({'hostname': ['hostname', '-s']}) -%}
@@ -177,5 +170,4 @@
       proxmox: "{{ status_proxmox_found }}"
       # What roles/proxmox_tailscale's status entry point read, before this role ran: {} when Tailscale is off.
       tailscale: "{{ status_tailscale_state if 'tailscale' in status_reads else none }}"
-      tailnet_dns: "{{ status_tailnet_dns.results.dns | default(none) }}"
       probes: "{{ status_proxmox_probes.results | default([]) }}"
