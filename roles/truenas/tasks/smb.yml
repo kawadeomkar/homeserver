@@ -55,7 +55,7 @@
         users_reset: "{{ truenas_users_reset }}"
         smb_closed_users: "{{ truenas_smb_closed_users }}"
         api_user_smb: "{{ omit if truenas_api_user_smb is none else truenas_api_user_smb }}"
-      register: _smb_users
+      register: truenas_smb_logins
       when: >-
         _starts or truenas_users | length > 0 or truenas_smb_closed_users | length > 0
         or truenas_api_user_smb is not none
@@ -83,7 +83,7 @@
              else 'Starting SMB would let them log in over the network.' }} {{ _remedy }}
         quiet: true
       vars:
-        _strays: "{{ _smb_users.smb_users | difference(truenas_users | map(attribute='username') | list) }}"
+        _strays: "{{ truenas_smb_logins.smb_users | difference(truenas_users | map(attribute='username') | list) }}"
       when: _starts
 
     - name: smb | Start or stop the SMB service
