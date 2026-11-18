@@ -404,6 +404,7 @@ def test_a_vault_from_before_the_template_is_laid_out_as_it_every_value_kept():
         "vault_opnsense_api_secret",
         "vault_opnsense_backup_password",
         "vault_opnsense_root_password",
+        "vault_proxmox_token_secret",
         "vault_tailscale_auth_key",
     ]
     assert own_keys == ["vault_discord_token"] and own_comments == 2
@@ -454,6 +455,7 @@ def test_a_laid_out_vault_keeps_its_password_vault_id_and_mode(root, capsys):
             "vault_opnsense_api_secret",
             "vault_opnsense_backup_password",
             "vault_opnsense_root_password",
+            "vault_proxmox_token_secret",
             "vault_tailscale_auth_key",
         ]
     )

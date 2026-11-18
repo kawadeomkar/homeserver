@@ -68,6 +68,8 @@ NOT_SECRET = {
     ("flux_bootstrap", "flux_bootstrap_age_key_file"): "the key file's path; the role reads the key, never prints it",
     ("talos", "talos_secrets_file"): "the bundle's path; the role reads the bundle under no_log, never prints it",
     ("proxmox_tailscale", "proxmox_tailscale_keyring"): "the path of Tailscale's public signing key",
+    ("status_read", "api_token_id"): "the Proxmox API token's name; its secret is api_token_secret, no_log",
+    ("status", "status_proxmox_token_id"): "the Proxmox API token's name; its secret is status_proxmox_token_secret",
 }
 
 # The modules import their role's module_utils as ansible.module_utils.<name>, as Ansible ships them.

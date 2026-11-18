@@ -43,6 +43,7 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "tests" / "policy"))
 sys.path.insert(0, str(ROOT / "tests"))
+import certs  # noqa: E402
 import fake_pve  # noqa: E402
 import fake_tailscale  # noqa: E402
 import fake_talos  # noqa: E402
@@ -445,10 +446,95 @@ def environment(tree, state, fake=True, **more):
     }
 
 
+# The fake Proxmox API of each test, by the test's directory (the tree's parent), which extra_vars asks for its address,
+# token and certificate (the pve_api fixture, FakeApi).
+APIS = {}
+TOKEN_ID = "homeserver@pve!homeserver"
+
+
+@pytest.fixture(scope="module")
+def api_certificates(tmp_path_factory):
+    """The certificate the fake API serves, and another, as an impostor's."""
+    work = tmp_path_factory.mktemp("pve-api")
+    return {"served": certs.self_signed(work, "served"), "other": certs.self_signed(work, "other")}
+
+
+class FakeApi:
+    """fake_pve_api.py for one test, on a port of its own, answering from the test's fake host (tmp_path / "pve.json")
+    with a token of its own, every request logged to tmp_path / "api-calls.jsonl". It starts when a run first needs it
+    (vars(), which extra_vars calls), so a test that never reads the Proxmox host starts none. restart() runs it again
+    with the fake's own options: a token's privileges narrower than the runbook's, or paths it answers 403."""
+
+    def __init__(self, tmp_path, certificate):
+        self.tmp_path, self.certificate = tmp_path, certificate
+        self.port, self.secret, self.proc, self.options = free_port(), os.urandom(16).hex(), None, ()
+        self.calls = tmp_path / "api-calls.jsonl"
+        self.calls.touch()
+
+    def __getitem__(self, name):
+        return getattr(self, name)
+
+    def start(self):
+        cert, key = self.certificate
+        command = [sys.executable, HERE / "fake_pve_api.py", "--port", str(self.port), "--cert", cert, "--key", key]
+        command += ["--state", self.tmp_path / "pve.json", "--token-id", TOKEN_ID, "--token-secret", self.secret]
+        self.proc = subprocess.Popen(
+            [*command, "--log", self.calls, *self.options], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            try:
+                socket.create_connection(("127.0.0.1", self.port), timeout=1).close()
+                return
+            except OSError:
+                time.sleep(0.1)
+        self.proc.kill()
+        pytest.fail("the fake Proxmox API did not start")
+
+    def vars(self):
+        """What a run needs to read the fake as the Proxmox host's API, the fake started first if it is not yet."""
+        if self.proc is None:
+            self.start()
+        return {
+            "status_proxmox_api_url": f"https://127.0.0.1:{self.port}/api2/json",
+            "status_proxmox_token_id": TOKEN_ID,
+            "status_proxmox_token_secret": self.secret,
+            "status_proxmox_api_cert_files": [str(self.tmp_path / "no-such.pem"), str(self.certificate[0])],
+        }
+
+    def stop(self):
+        if self.proc:
+            self.proc.terminate()
+            self.proc.wait(timeout=10)
+            self.proc = None
+
+    def restart(self, *options):
+        """The fake with other options, from the next run on."""
+        self.stop()
+        self.options = options
+
+
+@pytest.fixture(autouse=True)
+def pve_api(tmp_path, api_certificates):
+    """The fake Proxmox API of each test here (FakeApi), which extra_vars finds by the test's directory, the tree's
+    parent: every tree here is tmp_path / "tree"."""
+    api = FakeApi(tmp_path, api_certificates["served"])
+    APIS[tmp_path] = api
+    yield api
+    APIS.pop(tmp_path, None)
+    api.stop()
+
+
+def api_calls(tmp_path):
+    """What the fake API was asked, each {path, token}."""
+    return [json.loads(line) for line in (tmp_path / "api-calls.jsonl").read_text().splitlines()]
+
+
 def extra_vars(tree, local=True, cluster=True, **more):
     """The variables a run needs here: the local connection, unless the inventory gives one, this Python, the
     placeholders' values (a cluster's and Home Assistant's, unless the setup has neither), the reboot flag in the tree,
-    the fake's pid files, the cluster's credentials, and no probes unless asked."""
+    the fake's pid files, the fake Proxmox API with its token, the cluster's credentials, and no probes unless
+    asked."""
     return json.dumps(
         {
             **({"ansible_connection": "local"} if local else {}),
@@ -459,6 +545,7 @@ def extra_vars(tree, local=True, cluster=True, **more):
             "talos_config_dir": str(talos_dir(tree.parent)),
             "status_probe_apps": False,
             **(CLUSTER_VARS if cluster else {}),
+            **(APIS[tree.parent].vars() if tree.parent in APIS else {}),
             **more,
         }
     )
@@ -645,6 +732,99 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
     assert max(len(line) for line in lines) <= 100, out
 
 
+def test_the_host_is_read_through_its_api_with_the_token(tree, tmp_path, pve_api):
+    """Proxmox's own reads go to its API on the host, every one with the token; the token's secret is in nothing just
+    status writes or prints."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    rc, out, err = just_status(tree, state)
+    assert rc == 0, out + err
+    asked = api_calls(tmp_path)
+    assert asked and all(call["token"] for call in asked)
+    paths = {call["path"] for call in asked}
+    assert {"/cluster/resources", "/nodes/pve/status", "/nodes/pve/qemu/310/agent/get-fsinfo"} <= paths
+    # The two listings Proxmox gives no read-only token stay pvesh's (the fake host's), never the API's.
+    assert not any(path.endswith("/content") for path in paths)
+    report = (tree / ".cache" / "status" / "report.json").read_text()
+    assert pve_api["secret"] not in out + err + report
+
+
+def test_a_token_missing_or_refused_leaves_the_host_unread(tree, tmp_path, pve_api):
+    """Without the token, or with one Proxmox refuses, the host could not be read, and the report says how to make
+    it; with a missing one, nothing is asked at all."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    rc, out, err = just_status(tree, state, status_proxmox_token_secret="")
+    assert rc == 2, out + err
+    unread = next(a for a in report_of(tree)["attention"] if a["subject"] == "proxmox")
+    assert unread["text"] == "the Proxmox host could not be read: Proxmox's API, /cluster/resources: no API token"
+    assert "scripts/runbooks/proxmox-token.md" in unread["command"]
+    assert api_calls(tmp_path) == []
+
+    other = os.urandom(16).hex()
+    rc, out, err = just_status(tree, state, status_proxmox_token_secret=other)
+    assert rc == 2, out + err
+    unread = next(a for a in report_of(tree)["attention"] if a["subject"] == "proxmox")
+    assert unread["text"].endswith(f"Proxmox refused the API token {TOKEN_ID} (HTTP 401)")
+    assert "scripts/runbooks/proxmox-token.md" in unread["command"]
+    assert other not in out + err
+
+    # A secret of another shape, a line break at its end as a YAML block scalar leaves one: refused before anything
+    # is sent, and never quoted (the HTTP library's own error would quote the whole Authorization header).
+    asked = len(api_calls(tmp_path))
+    rc, out, err = just_status(tree, state, status_proxmox_token_secret=pve_api["secret"] + "\n")
+    assert rc == 2, out + err
+    unread = next(a for a in report_of(tree)["attention"] if a["subject"] == "proxmox")
+    assert "the API token's secret is not a token's" in unread["text"]
+    assert "scripts/runbooks/proxmox-token.md" in unread["command"]
+    assert pve_api["secret"] not in out + err and len(api_calls(tmp_path)) == asked
+
+
+def test_a_token_that_may_not_see_the_host_is_named_not_taken_for_an_empty_host(tree, tmp_path, pve_api):
+    """Proxmox answers /cluster/resources to any token, leaving out what it may not see: a token without VM.Audit and
+    Datastore.Audit (privilege separation left on, say) leaves the host unread, naming them, never a host whose VMs
+    are all missing."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    pve_api.restart("--privileges", json.dumps({"/": ["Sys.Audit"], "/nodes/pve": ["Sys.Audit"]}))
+    rc, out, err = just_status(tree, state)
+    assert rc == 2, out + err
+    unread = next(a for a in report_of(tree)["attention"] if a["subject"] == "proxmox")
+    assert unread["text"] == (
+        "the Proxmox host could not be read: the Proxmox API token lacks VM.Audit on /vms, Datastore.Audit on /storage"
+    )
+    assert "scripts/runbooks/proxmox-token.md" in unread["command"]
+    assert "is not on this host" not in out
+
+
+def test_a_read_the_token_may_not_make_is_a_problem_with_the_runbook(tree, tmp_path, pve_api):
+    """A read Proxmox answers 403, the guest agent's here: the host is read, and the report says which reads the token
+    was refused, with the runbook as the thing to do."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    pve_api.restart("--forbid", "/agent/")
+    rc, out, err = just_status(tree, state)
+    assert rc == 1, out + err
+    problem = next(a for a in report_of(tree)["attention"] if a["subject"] == "API token")
+    assert problem["level"] == "problem"
+    assert problem["text"].startswith("the Proxmox API token may not read everything: Proxmox refused it")
+    assert "fsinfo-310" in problem["text"] and "scripts/runbooks/proxmox-token.md" in problem["command"]
+
+
+def test_the_token_goes_only_to_the_nodes_own_certificate(tree, tmp_path, api_certificates):
+    """A server that presents another certificate than the node's own file gets no request at all, the token least of
+    all: the host is not read, and the report says why."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    other = str(api_certificates["other"][0])
+    rc, out, err = just_status(tree, state, status_proxmox_api_cert_files=[other])
+    assert rc == 2, out + err
+    unread = next(a for a in report_of(tree)["attention"] if a["subject"] == "proxmox")
+    assert unread["text"].endswith(f"serves another certificate than {other}'s: no token sent")
+    assert unread["command"] == ""
+    assert api_calls(tmp_path) == []
+
+
 def test_a_node_named_in_advance_reads_the_same(tree, tmp_path):
     """With status_proxmox_node given, the host's name is not asked: with the VMs shown which VMs run is read alone
     first, and without them (just status storage) there is no first read. Each report is the one the run that asks the
@@ -674,11 +854,17 @@ def test_just_status_exits_with_the_reports_code(tree, tmp_path):
     assert rc == 1 and "exit 1 · 1 problem" in out and "error:" not in err, out + err
     assert "the storage is unknown" in out
 
-    # A host whose commands are not there could not be read: exit 2.
+    # A host that is no Proxmox host, its commands not there and no API answering: it could not be read, exit 2.
     seed(state)
-    rc, out, err = just_status(tree, state, fake=False)
+    rc, out, err = just_status(
+        tree, state, fake=False, status_proxmox_api_url=f"https://127.0.0.1:{free_port()}/api2/json"
+    )
     assert rc == 2 and "exit 2 · 1 source not read" in out, out + err
-    assert "could not be read: pvesh get /cluster/resources" in out
+    unread = next(a for a in report_of(tree)["attention"] if a["subject"] == "proxmox")
+    assert unread["text"].startswith(
+        "the Proxmox host could not be read: Proxmox's API, /cluster/resources: pveproxy does not answer at"
+    )
+    assert unread["command"].startswith("systemctl status pveproxy")
 
     # A section just status does not have: the recipe refuses it before anything runs, with 3.
     rc, out, err = just_status(tree, state, "vms", "disks")

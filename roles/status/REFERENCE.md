@@ -20,7 +20,7 @@ Description: Read the homeserver's machines without changing them, and report wh
 
 **Description**: 
 - Reads the host the play runs on, as status_source names it, and leaves what it found in the fact status_found for the report entry point. Every command goes through the role's module status_read, which runs them at once and refuses any that is not on its read list.
-- On the Proxmox host (proxmox) it reads the host, its storages and the VMs of status_vms; every other VM is shown as Proxmox sees it, and never judged.
+- On the Proxmox host (proxmox) it reads the host, its storages and the VMs of status_vms; every other VM is shown as Proxmox sees it, and never judged. It reads them through Proxmox's API on the host's own loopback, with the API token status_proxmox_token_id and status_proxmox_token_secret, sent only on a connection serving the node's own certificate, but for a storage's VM disks and its backups, which Proxmox lists only to a token that may change them (pvesh, as root). Without a token the host is not read.
 - For the cluster (cluster), on this machine, it reads the nodes, the apps (each Ingress's Service, then the Deployment it selects, and every Deployment a Flux Kustomization under status_cluster_apps_path applies), Flux, the certificates, the nodes' kubelet statistics, Alertmanager's alerts, etcd's state and the newest commit of the branch Flux syncs. It reads the credentials under no_log, keeping only the server the kubeconfig names and when each client certificate expires, and reports another cluster's credentials rather than use them. It never reads a Secret. With status_tailnet_dns, it also reads where this machine's Tailscale sends the apps' domain, in the same pass.
 - For the NAS (nas) it reads nothing itself, and works out what status_nas_state says, the result of truenas_info with its status option, which roles/truenas's status entry point reads in one login - the pools' health, capacity and last scrub, TrueNAS's alerts, the snapshot tasks' last runs, the NFS service.
 - Unless status_probe_apps is off, asks from this machine the addresses of the apps it found (the cluster's, and an app on a VM of its own) with the role's module status_probe, checking no certificate and sending no credentials.
@@ -133,6 +133,48 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Description**: 
    - The directory where Proxmox keeps a <vmid>.pid for each VM running on the node, which says whose day's history to read.
    - Empty reads /cluster/resources first instead.
+  
+  
+  
+  
+
+  - **status_proxmox_api_url**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+    - **Description**: 
+   - Where Proxmox's API answers on the host itself, its api2/json root on the loopback address, which the Proxmox host's reads go to; empty makes none, and the host is not read.
+  
+  
+  
+  
+
+  - **status_proxmox_token_id**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The Proxmox API token's id, <user>@<realm>!<name>.
+  
+  
+  
+
+  - **status_proxmox_token_secret**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The Proxmox API token's secret; empty makes no API read, and the host is not read.
+  
+  
+  
+
+  - **status_proxmox_api_cert_files**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+    - **Description**: 
+   - The files that may hold the certificate the API serves, the first that exists taken; the token goes only to a connection serving that certificate, the node's own.
   
   
   
@@ -459,7 +501,7 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Type**: dict
     - **Default**: {}
   
-    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns. One left out is suggested by text alone.
+    - **Description**: The commands the report suggests, by purpose: upgrade, proxmox_token, pveproxy, reboot, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns. One left out is suggested by text alone.
   
   
   
@@ -574,7 +616,7 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Type**: dict
     - **Default**: {}
   
-    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns. One left out is suggested by text alone.
+    - **Description**: The commands the report suggests, by purpose: upgrade, proxmox_token, pveproxy, reboot, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns. One left out is suggested by text alone.
   
   
   
@@ -603,38 +645,42 @@ Description: Read the homeserver's machines without changing them, and report wh
 | [status_storage_headroom_gib](defaults/main.yml#L22)   | int | `0` |    
 | [status_reboot_required_file](defaults/main.yml#L24)   | str |  |    
 | [status_proxmox_run_dir](defaults/main.yml#L27)   | str |  |    
-| [status_backup_jobs](defaults/main.yml#L31)   | list | `[]` |    
-| [status_cluster_kubeconfig](defaults/main.yml#L34)   | str |  |    
-| [status_cluster_talosconfig](defaults/main.yml#L35)   | str |  |    
-| [status_cluster_server](defaults/main.yml#L36)   | str |  |    
-| [status_cluster_nodes](defaults/main.yml#L38)   | list | `[]` |    
-| [status_cluster_apps_path](defaults/main.yml#L41)   | str |  |    
-| [status_cluster_annotation](defaults/main.yml#L42)   | str |  |    
-| [status_cluster_database_label](defaults/main.yml#L43)   | str |  |    
-| [status_cluster_volumes](defaults/main.yml#L45)   | dict | `{}` |    
-| [status_cluster_settings](defaults/main.yml#L48)   | dict | `{}` |    
-| [status_cluster_alertmanager](defaults/main.yml#L50)   | dict | `{}` |    
-| [status_cluster_flux_url](defaults/main.yml#L52)   | str |  |    
-| [status_cluster_flux_ref](defaults/main.yml#L53)   | str |  |    
-| [status_cluster_pins](defaults/main.yml#L55)   | dict | `{}` |    
-| [status_cluster_request_timeout](defaults/main.yml#L57)   | int | `10` |    
-| [status_tailnet_dns](defaults/main.yml#L60)   | bool | `False` |    
-| [status_cluster_snapshot_dir](defaults/main.yml#L63)   | str |  |    
-| [status_nas_state](defaults/main.yml#L66)   | dict | `{}` |    
-| [status_nas_release](defaults/main.yml#L67)   | str |  |    
-| [status_tailscale_state](defaults/main.yml#L69)   | dict | `{}` |    
-| [status_parallel](defaults/main.yml#L71)   | NoneType | `None` |    
-| [status_timeout](defaults/main.yml#L72)   | int | `30` |    
-| [status_hosts](defaults/main.yml#L75)   | list | `[]` |    
-| [status_report_file](defaults/main.yml#L76)   | str |  |    
-| [status_color](defaults/main.yml#L77)   | bool | `False` |    
-| [status_quiet](defaults/main.yml#L78)   | bool | `False` |    
-| [status_read_at](defaults/main.yml#L81)   | str |  |    
-| [status_now](defaults/main.yml#L82)   | int | `0` |    
-| [status_probe_apps](defaults/main.yml#L85)   | bool | `True` |    
-| [status_probe_timeout](defaults/main.yml#L86)   | int | `5` |    
-| [status_admin](defaults/main.yml#L89)   | list | `[]` |    
-| [status_commands](defaults/main.yml#L97)   | dict | `{}` |    
+| [status_proxmox_api_url](defaults/main.yml#L31)   | str |  |    
+| [status_proxmox_token_id](defaults/main.yml#L32)   | str |  |    
+| [status_proxmox_token_secret](defaults/main.yml#L33)   | str |  |    
+| [status_proxmox_api_cert_files](defaults/main.yml#L34)   | list | `[]` |    
+| [status_backup_jobs](defaults/main.yml#L38)   | list | `[]` |    
+| [status_cluster_kubeconfig](defaults/main.yml#L41)   | str |  |    
+| [status_cluster_talosconfig](defaults/main.yml#L42)   | str |  |    
+| [status_cluster_server](defaults/main.yml#L43)   | str |  |    
+| [status_cluster_nodes](defaults/main.yml#L45)   | list | `[]` |    
+| [status_cluster_apps_path](defaults/main.yml#L48)   | str |  |    
+| [status_cluster_annotation](defaults/main.yml#L49)   | str |  |    
+| [status_cluster_database_label](defaults/main.yml#L50)   | str |  |    
+| [status_cluster_volumes](defaults/main.yml#L52)   | dict | `{}` |    
+| [status_cluster_settings](defaults/main.yml#L55)   | dict | `{}` |    
+| [status_cluster_alertmanager](defaults/main.yml#L57)   | dict | `{}` |    
+| [status_cluster_flux_url](defaults/main.yml#L59)   | str |  |    
+| [status_cluster_flux_ref](defaults/main.yml#L60)   | str |  |    
+| [status_cluster_pins](defaults/main.yml#L62)   | dict | `{}` |    
+| [status_cluster_request_timeout](defaults/main.yml#L64)   | int | `10` |    
+| [status_tailnet_dns](defaults/main.yml#L67)   | bool | `False` |    
+| [status_cluster_snapshot_dir](defaults/main.yml#L70)   | str |  |    
+| [status_nas_state](defaults/main.yml#L73)   | dict | `{}` |    
+| [status_nas_release](defaults/main.yml#L74)   | str |  |    
+| [status_tailscale_state](defaults/main.yml#L76)   | dict | `{}` |    
+| [status_parallel](defaults/main.yml#L78)   | NoneType | `None` |    
+| [status_timeout](defaults/main.yml#L79)   | int | `30` |    
+| [status_hosts](defaults/main.yml#L82)   | list | `[]` |    
+| [status_report_file](defaults/main.yml#L83)   | str |  |    
+| [status_color](defaults/main.yml#L84)   | bool | `False` |    
+| [status_quiet](defaults/main.yml#L85)   | bool | `False` |    
+| [status_read_at](defaults/main.yml#L88)   | str |  |    
+| [status_now](defaults/main.yml#L89)   | int | `0` |    
+| [status_probe_apps](defaults/main.yml#L92)   | bool | `True` |    
+| [status_probe_timeout](defaults/main.yml#L93)   | int | `5` |    
+| [status_admin](defaults/main.yml#L96)   | list | `[]` |    
+| [status_commands](defaults/main.yml#L105)   | dict | `{}` |    
 
 
 
@@ -753,9 +799,9 @@ classDef includeVars stroke:#8e44ad,stroke-width:2px;
 classDef rescue stroke:#665352,stroke-width:2px;
 
   Start-->|Task| proxmox___Say_what_its_Tailscale_says0[proxmox   say what its tailscale says<br>When: **tailscale  in status reads**]:::task
-  proxmox___Say_what_its_Tailscale_says0-->|Task| proxmox___Read_the_node_s_name_and_which_VMs_run1[proxmox   read the node s name and which vms run<br>When: **proxmox  in status reads and  commands   length  <br>0**]:::task
+  proxmox___Say_what_its_Tailscale_says0-->|Task| proxmox___Read_the_node_s_name_and_which_VMs_run1[proxmox   read the node s name and which vms run<br>When: **proxmox  in status reads and   commands   length <br>  api   length    0**]:::task
   proxmox___Read_the_node_s_name_and_which_VMs_run1-->|Task| proxmox___Use_the_node_s_name2[proxmox   use the node s name<br>When: **proxmox  in status reads**]:::task
-  proxmox___Use_the_node_s_name2-->|Task| proxmox___Read_the_host__its_storages_and_its_VMs__at_once3[proxmox   read the host  its storages and its vms <br>at once<br>When: **proxmox  in status reads and not  status proxmox<br>first unreachable   default false   and  commands <br> length   0**]:::task
+  proxmox___Use_the_node_s_name2-->|Task| proxmox___Read_the_host__its_storages_and_its_VMs__at_once3[proxmox   read the host  its storages and its vms <br>at once<br>When: **proxmox  in status reads and not  status proxmox<br>first unreachable   default false   and   commands<br>  length    api   length    0**]:::task
   proxmox___Read_the_host__its_storages_and_its_VMs__at_once3-->|Task| proxmox___Read_the_logs_of_the_backup_runs_that_failed4[proxmox   read the logs of the backup runs that<br>failed<br>When: **runs   length   0**]:::task
   proxmox___Read_the_logs_of_the_backup_runs_that_failed4-->|Task| proxmox___Work_out_what_the_host_says5[proxmox   work out what the host says]:::task
   proxmox___Work_out_what_the_host_says5-->|Task| proxmox___Ask_Home_Assistant_s_address6[proxmox   ask home assistant s address<br>When: **status probe apps and  targets   length   0**]:::task

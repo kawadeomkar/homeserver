@@ -40,6 +40,13 @@ vault_opnsense_backup_password: ""
 vault_opnsense_root_password: ""
 
 # ------------------------------------------------------------------ Proxmox ---
+# The project's Proxmox API token: the secret of homeserver@pve!homeserver,
+# or of the token local.yml's proxmox_token_id names, made on the host with
+# pveum (scripts/runbooks/proxmox-token.md, which also lists what it may do).
+# just status reads the host with it; another role may later, adding the
+# privileges it needs there. Proxmox shows the secret once.
+vault_proxmox_token_secret: ""
+
 # With remote access (tailscale_enabled or tailscale_advertise_routes in
 # local.yml): a one-off, pre-approved auth key, tagged tag:homeserver, spent at
 # the host's first login (scripts/runbooks/tailscale.md, section 4). A spent key

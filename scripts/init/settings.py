@@ -54,6 +54,7 @@ DEFAULTS = {
     "haos_vmid": 310,
     "haos_size": {"cores": 2, "memory_mib": 4096, "disk_gib": 32},
     "proxmox_local_vm_storage": "local-lvm",
+    "proxmox_token_id": "homeserver@pve!homeserver",
     "router_backup_dir": "~/.opnsense/homeserver",
     "kubernetes_iso_storage": "local",
     "haos_import_storage": "local",
@@ -238,6 +239,14 @@ def _storage_id(text: str) -> str:
     return text
 
 
+def _api_token_id(text: str) -> str:
+    text = text.strip()
+    # Proxmox's own rule: the token's name is two characters at least, the first a letter.
+    if not re.fullmatch(r"[A-Za-z0-9._-]+@[A-Za-z0-9._-]+![A-Za-z][A-Za-z0-9._-]+", text):
+        raise ValueError(f"{text!r} is not a Proxmox API token's id, such as homeserver@pve!homeserver")
+    return text
+
+
 def _pool_name(text: str) -> str:
     text = text.strip()
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.:-]*", text):
@@ -326,6 +335,7 @@ PARSERS = {
     "vmid": _vmid,
     "vmid_list": _list_of(_vmid),
     "storage_id": _storage_id,
+    "api_token_id": _api_token_id,
     "pool_name": _pool_name,
     "fingerprint": _fingerprint,
     "username": _username,
@@ -361,6 +371,23 @@ SETTINGS: tuple[Setting, ...] = (
         need="required",
         help="The address the Proxmox installer gave the host. Ansible logs in as root with an SSH key: "
         "scripts/runbooks/REBUILD.md (section 3) has the ssh-copy-id line that works with Proxmox VE 9.",
+    ),
+    S(
+        "vault_proxmox_token_secret",
+        "proxmox",
+        "secret",
+        "The secret of the project's Proxmox API token, which just status reads the host with",
+        secret=True,
+        need="recommended",
+        help="Made on the host with pveum, for a user of its own with read privileges alone "
+        "(scripts/runbooks/proxmox-token.md). Proxmox shows it once. Unset, just status cannot read the Proxmox host.",
+    ),
+    S(
+        "proxmox_token_id",
+        "proxmox",
+        "api_token_id",
+        f"The Proxmox API token's id, when it is not {DEFAULTS['proxmox_token_id']}",
+        help="<user>@<realm>!<name>, as pveum user token list shows it. Its secret goes in the vault.",
     ),
     S(
         "proxmox_local_vm_storage",

@@ -355,10 +355,73 @@ def test_a_guest_agent_that_does_not_answer():
 
 def test_a_host_that_does_not_answer_or_has_no_api():
     assert fs.proxmox({"unread": "it did not answer"}, VMS) == {"unread": "it did not answer"}
-    host = fs.proxmox(
-        {"unread": "", "node": "pve", "results": {"resources": failed("pvesh: command not found", 127)}}, VMS
+    broken = {"rc": None, "stdout": "", "stderr": "", "error": "HTTP 500: Internal Server Error"}
+    host = fs.proxmox({"unread": "", "node": "pve", "results": {"resources": broken}}, VMS)
+    assert host == {
+        "unread": "Proxmox's API, /cluster/resources: HTTP 500: Internal Server Error",
+        "token": False,
+        "unanswered": False,
+    }
+    # A token missing, refused or forbidden is the owner's to put right: the report then says how. status_read marks
+    # it with `token`; the words alone never decide.
+    for kind in ("missing", "refused", "forbidden"):
+        failed_read = {"rc": None, "stdout": "", "stderr": "", "error": "whatever it says", "token": kind}
+        assert fs.proxmox({"unread": "", "node": "pve", "results": {"resources": failed_read}}, VMS)["token"] is True
+    worded = {"rc": None, "stdout": "", "stderr": "", "error": "Proxmox refused the API token t (HTTP 401)"}
+    assert fs.proxmox({"unread": "", "node": "pve", "results": {"resources": worded}}, VMS)["token"] is False
+    # An API nothing answers: pveproxy down, or listening elsewhere, which the report then says how to check.
+    down = {"rc": None, "stdout": "", "stderr": "", "error": "pveproxy does not answer", "unanswered": True}
+    host = fs.proxmox({"unread": "", "node": "pve", "results": {"resources": down}}, VMS)
+    assert host["unanswered"] is True and host["token"] is False
+    model = fs.report({"proxmox": host}, commands={"pveproxy": "check pveproxy", "proxmox_token": "make it"})
+    item = next(a for a in model["attention"] if a["subject"] == "proxmox")
+    assert (item["level"], item["command"]) == ("unread", "check pveproxy")
+
+
+AUDITOR = {"Datastore.Audit": 1, "Sys.Audit": 1, "VM.Audit": 1, "VM.GuestAgent.Audit": 1}
+
+
+def test_a_token_that_may_not_see_the_host_leaves_it_unread_naming_what_it_lacks():
+    """/cluster/resources answers any token, leaving out what it may not see; /access/permissions says what it may,
+    each path's effective privileges, a path not listed taking its nearest listed parent's."""
+    assert fs.missing_privileges({"/": AUDITOR}, "pve") == []
+    assert fs.missing_privileges({"/vms": AUDITOR, "/storage": AUDITOR, "/nodes/pve": AUDITOR}, "pve") == [
+        "Sys.Audit on /"
+    ]
+    assert fs.missing_privileges({"/": {"Sys.Audit": 1}, "/vms": {"VM.Audit": 0}}, "pve") == [
+        "VM.Audit on /vms",
+        "Datastore.Audit on /storage",
+    ]
+    host = found(permissions=ok({"/": {"Sys.Audit": 1}}))
+    assert host == {
+        "unread": "the Proxmox API token lacks VM.Audit on /vms, Datastore.Audit on /storage",
+        "token": True,
+    }
+    assert found(permissions=ok({"/": AUDITOR}))["unread"] == ""
+    # Without the read (an older run's results), nothing is judged.
+    assert found()["unread"] == ""
+
+
+def test_reads_the_token_may_not_make_are_one_problem_with_the_runbook():
+    forbidden = {
+        "rc": None,
+        "stdout": "",
+        "stderr": "",
+        "error": "the API token may not read this",
+        "token": "forbidden",
+    }
+    host = found(permissions=ok({"/": AUDITOR}), **{"fsinfo-310": forbidden, "osinfo-310": forbidden})
+    assert host["token_problem"] == (
+        "the Proxmox API token may not read everything: Proxmox refused it 2 reads (fsinfo-310, osinfo-310)"
     )
-    assert host == {"unread": "pvesh get /cluster/resources: pvesh: command not found"}
+    without_agent = {"/": {k: 1 for k in AUDITOR if k != "VM.GuestAgent.Audit"}}
+    assert found(permissions=ok(without_agent))["token_problem"] == (
+        "the Proxmox API token may not read everything: it lacks VM.GuestAgent.Audit on /vms"
+    )
+    assert found(permissions=ok({"/": AUDITOR}))["token_problem"] == ""
+    model = fs.report({"proxmox": host}, commands={"proxmox_token": "make it"})
+    item = next(a for a in model["attention"] if a["subject"] == "API token")
+    assert (item["level"], item["command"]) == ("problem", "make it")
 
 
 def test_partial_failures_are_listed_not_fatal():

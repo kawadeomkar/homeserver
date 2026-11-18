@@ -1,5 +1,11 @@
 ---
-# How roles/proxmox_storage reaches the Proxmox host: root SSH. The address is set in
-# group_vars/all/local.yml.
+# How the roles reach the Proxmox host: root SSH, the address set in group_vars/all/local.yml, and Proxmox's API with
+# the project's one API token, made by hand (scripts/runbooks/proxmox-token.md), its secret in the vault. just status
+# reads the host's API with it, on the host's own loopback.
 ansible_host: "{{ proxmox_address }}"
 ansible_user: root
+# The token, as any role reads it: local.yml's proxmox_token_id, else the runbook's name, and the vault's secret. One
+# mapping under one stem, which local.yml's own name cannot clash with.
+proxmox_token:
+  id: "{{ proxmox_token_id | default('homeserver@pve!homeserver', true) }}"
+  secret: "{{ vault_proxmox_token_secret | default('') }}"

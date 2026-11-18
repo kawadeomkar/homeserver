@@ -9,27 +9,26 @@ Two entry points:
   `status_found`.
   - On the Proxmox host (`proxmox`): the host itself (version, kernel, uptime, CPU over the last day, memory, root
     filesystem), each of `status_vms` (state, uptime, CPU over the last day, memory, settings waiting for a restart,
-    and, where its guest agent reports them, its filesystems, OS and address), every other VM as Proxmox sees it
-    (state, uptime, CPU now and over the last day, memory, its boot disk's size: another project's, or made by hand,
-    drawn with a diamond for its dot and never a problem),
-    each storage's use, the disk budget of `status_budget_storages`, the upgrades apt would make and whether an
-    upgrade asked for a reboot, and the backups: each of `status_backup_jobs` against the host's job of that id
-    (there, enabled, writing to its storage, covering its VMs, and when it runs next), each VM's newest backup on its
-    job's storage, and, from the logs of the newest runs that failed, which VMs failed and why. It reads in two
-    steps. First, at once, the node's name (`hostname -s`, unless `status_proxmox_node` gives it), which the API's
-    paths need, and when the VMs are shown which VMs run on the node, from the `<vmid>.pid` files qemu-server keeps in
-    `status_proxmox_run_dir`, since the second step reads every running VM's history. Both are instant where
-    `/cluster/resources`, the API's own answer, is a `pvesh` call (0.7 to 1.4 s on the home host); without
-    `status_proxmox_run_dir` the first step reads that instead. Then everything else at once: `/cluster/resources`
-    (the node, every VM and every storage in one call), the node's status and day history, the day history of every
-    running VM, each of `status_vms`' pending settings,
-    and for a VM whose guest agent reports them (Home Assistant's) its filesystems and OS, and its address when it
-    serves an app without a URL of its own, past the Docker bridges and other inner interfaces Home Assistant OS has.
-    Talos's guest agent lists no filesystem and no OS version (seen on the NUC). Every other VM on the host, another
-    project's or one made by hand, is a row after this setup's, its name in cyan, and never named as a problem. A
-    host that does not answer (every read has `ignore_unreachable`) is recorded with Ansible's message
-    and reported, never a failure. Its Tailscale is read before, through roles/proxmox_tailscale's `status` entry
-    point, when the setup turns it on, and passed in `status_tailscale_state`.
+    and, where its guest agent reports them, its filesystems, OS and address), every other VM as Proxmox sees it (state,
+    uptime, CPU now and over the last day, memory, its boot disk's size: another project's, or made by hand, drawn with
+    a diamond for its dot and never a problem), each storage's use, the disk budget of `status_budget_storages`, the
+    upgrades apt would make and whether an upgrade asked for a reboot, and the backups: each of `status_backup_jobs`
+    against the host's job of that id (there, enabled, writing to its storage, covering its VMs, and when it runs next),
+    each VM's newest backup on its job's storage, and, from the logs of the newest runs that failed, which VMs failed
+    and why. It reads in two steps. First, at once, the node's name (`hostname -s`, unless `status_proxmox_node` gives
+    it), which the API's paths need, and when the VMs are shown which VMs run on the node, from the `<vmid>.pid` files
+    qemu-server keeps in `status_proxmox_run_dir`, since the second step reads every running VM's history. Both are
+    instant; without `status_proxmox_run_dir` the first step reads `/cluster/resources` instead. Then everything else at
+    once, through Proxmox's API with the project's token (below) but for a storage's VM disks and its backups:
+    `/cluster/resources` (the node, every VM and every storage in one call), the node's status and day history, the day
+    history of every running VM, each of `status_vms`' pending settings, and for a VM whose guest agent reports them
+    (Home Assistant's) its filesystems and OS, and its address when it serves an app without a URL of its own, past the
+    Docker bridges and other inner interfaces Home Assistant OS has. Talos's guest agent lists no filesystem and no OS
+    version (seen on the NUC). Every other VM on the host, another project's or one made by hand, is a row after this
+    setup's, its name in cyan, and never named as a problem. A host that does not answer (every read has
+    `ignore_unreachable`) is recorded with Ansible's message and reported, never a failure. Its Tailscale is read
+    before, through roles/proxmox_tailscale's `status` entry point, when the setup turns it on, and passed in
+    `status_tailscale_state`.
   - For the cluster (`cluster`), from this machine: the nodes (Ready, pressure, Talos and Kubernetes against
     `status_cluster_pins`, and from kubelet's statistics their memory and disks: `/var` and each Talos user volume of
     `status_cluster_volumes`), the apps, Flux (its version, the commit it applied against the one the branch points at
@@ -95,25 +94,53 @@ many at a time as the host has CPUs, 8 at most, since a `pvesh` call holds about
 so that a cluster that does not answer holds the report up once and not for long: kubectl gives up after its own
 10 s, `status_cluster_request_timeout`) and refuses the whole task before running anything if any is not one of the
 exact forms on its read list (`READS` in `library/status_read.py`, each argument matched whole). A tool's name alone
-is never enough, since most tools also write or return secrets. The list: named `pvesh get` paths
-(`/cluster/resources`, the node's status and day history, a VM's day history and pending settings, a storage's
-content and its backups, the backup jobs, `schedule-analyze`, the `vzdump` runs and a `vzdump` run's log alone), `qm
-guest cmd` with `get-fsinfo`, `get-osinfo` or `network-get-interfaces`, `apt-get -q -s dist-upgrade` (a simulation),
-`hostname -s`, `test -e`, `ls` of a directory named `qemu-server` alone (file names, never a file's contents);
-`kubectl get` of nodes, pods, services, ingresses, persistentvolumes, kustomizations,
+is never enough, since most tools also write or return secrets. The list: `pvesh get` of a storage's content and of
+its backups alone, the two lists Proxmox gives no read-only token (every other Proxmox read is the API's, below, and
+root's `pvesh` and `qm guest` forms of them are refused, so no later edit slips back to them), `apt-get -q -s
+dist-upgrade` (a simulation), `hostname -s`, `test -e`, `ls` of a directory named `qemu-server` alone (file names,
+never a file's contents); `kubectl get` of nodes, pods, services, ingresses, persistentvolumes, kustomizations,
 helmreleases, fluxinstances, certificates and deployments (with `--show-managed-fields`), of one ConfigMap, and
 `--raw` of a node's kubelet statistics alone, `kubectl exec` of `amtool alert query` in Alertmanager's container
 alone; `talosctl service etcd`; `git ls-remote` over HTTPS or SSH, never `ext::`, which runs a command, or a local
 path; and on this machine `tailscale dns status --json`. None of them writes or returns a secret: never `kubectl get
 secrets`, never `talosctl get`, since the machine configuration holds every key of the cluster. Each command runs in
-the C.UTF-8 locale, so no output it parses is translated, and git never asks for a password. Measured on a four-core
-Proxmox host (2026-10-21): every `pvesh` or `qm` call takes 1.1 to 1.3 s, Proxmox's Perl API started afresh, so the
-host's 15 reads take 25 s one after another and 8 s at once (reading the guests first, and every running VM's history,
-took the home host from 5 s to 7 s with seven other VMs running, 2026-11-09), and `apt-get -s` takes 0.7 s where the
-API's own update list takes 4.5 s; the cluster's reads take about 0.1 s each and `git ls-remote` about 1 s, so the
-cluster is read in about a second. On the home host each `pvesh` call took 0.65 s idle, all but 0.02 s of it Perl
-loading Proxmox's modules, and 1.1 to 1.4 s with its guests busy (2026-11-17), when `apt-get -s` took 2.1 s. The
+the C.UTF-8 locale, so no output it parses is translated, and git never asks for a password. `apt-get -s` takes 0.7
+to 2.1 s, as the host is idle or busy, where the API's own update list takes 4.5 s; the cluster's reads take about
+0.1 s each and `git ls-remote` about 1 s, so the cluster is read in about a second. Before the Proxmox host's reads
+went to the API (below), each was a `pvesh` or `qm` call, Proxmox's Perl API started afresh: 1.1 to 1.3 s on a
+four-core host (2026-10-21), whose 15 reads took 25 s one after another and 8 s at once, and on the home host 0.65 s
+idle, all but 0.02 s of it Perl loading Proxmox's modules, and 1.1 to 1.4 s with its guests busy (2026-11-17). The
 plan that measured it is `docs/STATUS-PERFORMANCE-PLAN.md` (git-ignored).
+
+**Proxmox's own reads go through its API**, on the host itself: `status_read`'s `api`, GETs to
+`status_proxmox_api_url` (the loopback address) with the project's API token (`status_proxmox_token_id`,
+`status_proxmox_token_secret`), each of the exact path forms on its API read list (`API_READS`): the reads of the
+`pvesh` list above but a storage's content and its backups, and the guest agent's three reads, whose reply the API
+wraps in `result` and the module unwraps, as `qm guest cmd` prints it. Each result is the API's `data`, as `pvesh get
+--output-format json` prints it, so the filter reads both alike; the shapes were compared read by read on the home host
+(Proxmox VE 9.2, 2026-11-18). A GET costs its handler, 4 to 36 ms there, 0.19 s for an agent's, all 20 of them 8 at a
+time 0.40 s, where `pvesh` took 0.65 s each. The token travels inside the root SSH connection (`ansible.cfg`
+pipelines the module, so it is never written to the host's disk; the option is `no_log`) and goes only to the host's
+loopback, on a connection whose certificate is the node's own: the first of `status_proxmox_api_cert_files` that
+exists (`pveproxy-ssl.pem` where one is installed, else `pve-ssl.pem`), compared before anything is sent, so no pin
+goes stale when Proxmox issues the certificate again and no CA is trusted. The token is made by hand, with a role of
+read privileges alone; `scripts/runbooks/proxmox-token.md` says which and why, and why **a storage's VM disks and its
+backups** stay `pvesh` reads, as root, in the same pass: Proxmox lists them only to a token that may change them.
+
+**What the token may not do is said, never mistaken for the host.** `status_read` marks a read that failed because of
+the token with `token` (missing: none, or not a token's shape, refused before anything is sent and never quoted, since
+a line break in it would make the HTTP library's own error quote the header; refused: HTTP 401; forbidden: HTTP 403),
+and the filter reads that field, never the words. A read that fails in a way nobody foresaw is named by its error's
+type alone. The token's own privileges are read too (`/access/permissions`): `/cluster/resources` answers any token,
+but leaves out each VM it lacks `VM.Audit` for, each storage it lacks `Datastore.Audit` for and the node's figures
+without `Sys.Audit` (`PVE/API2/Cluster.pm`), which would read as a host with nothing on it, so a token without those
+on `/vms`, `/storage`, `/` and the node leaves the host unread, naming what it lacks. Without a token, with one
+Proxmox refuses or one that lacks those privileges, the host could not be read; a read Proxmox answers 403, or the
+guest agent's privilege missing, is a problem of its own; each says how to put it right (`status_commands`'
+`proxmox_token`, the runbook). Once Proxmox refuses the token, the reads after it fail the same way without asking:
+Proxmox holds each refusal 3 s, which every read would otherwise wait out in turn. A server presenting another
+certificate is not read, and is sent nothing; an API nothing answers (pveproxy down, or listening elsewhere) leaves
+the host unread, and the report says what to check (`status_commands`' `pveproxy`).
 
 The module `status_probe` looks each app's name up in DNS as this machine does, compared with the address the Ingress
 says Traefik answers on, and sends one `GET` per URL to that address, whatever DNS says, closing the connection once
@@ -211,6 +238,9 @@ its mount in `status_cluster_volumes`.
 | `status_nas_state` | `{}` | What `truenas_info` returned with its `status` option, or its failure |
 | `status_nas_release` | `""` | The TrueNAS release (major.minor) the NAS's configuration is written for; empty compares none |
 | `status_proxmox_run_dir` | `""` | Where Proxmox keeps a `<vmid>.pid` for each VM running on the node, which says whose day's history to read; empty reads `/cluster/resources` first instead |
+| `status_proxmox_api_url` | `""` | Proxmox's API on the host itself, its `api2/json` root on the loopback address; empty makes no API read, and the host is not read |
+| `status_proxmox_token_id`, `status_proxmox_token_secret` | `""` | The Proxmox API token (`<user>@<realm>!<name>`) and its secret (`no_log`); no secret makes no API read |
+| `status_proxmox_api_cert_files` | `[]` | The files that may hold the certificate the API serves, the first that exists taken; the token goes only to a connection serving it |
 | `status_tailnet_dns` | `false` | Whether the cluster's play also reads this machine's view of the tailnet's DNS, for where the tailnet sends the apps' domain |
 | `status_tailscale_state` | `{}` | The Proxmox host's Tailscale, as roles/proxmox_tailscale's `status` entry point records it; empty when it is off |
 | `status_parallel` | `null` | How many reads run at once on a host; null runs as many as the host has CPUs, 8 at most |
@@ -224,15 +254,16 @@ its mount in `status_cluster_volumes`.
 | `status_probe_apps` | `true` | Whether each host's play asks the addresses of the apps it found from this machine |
 | `status_probe_timeout` | `5` | Seconds each lookup and request may take |
 | `status_admin` | `[]` | report: the admin pages it lists, each `{name, url}`; `tailscale_node: true` marks the page the Proxmox host serves itself |
-| `status_commands` | `{}` | report: the commands it suggests, by purpose (`upgrade`, `reboot`, `resume` with `{names}`, `talos_upgrade`, `credentials`, `allowlist`, `secrets`, `nas`, `nas_release`, `nas_network`, `backup`, `backup_target`, `etcd_snapshot`, `tailscale`, `tailscale_login`, `split_dns`) |
+| `status_commands` | `{}` | report: the commands it suggests, by purpose (`upgrade`, `proxmox_token`, `pveproxy`, `reboot`, `resume` with `{names}`, `talos_upgrade`, `credentials`, `allowlist`, `secrets`, `nas`, `nas_release`, `nas_network`, `backup`, `backup_target`, `etcd_snapshot`, `tailscale`, `tailscale_login`, `split_dns`) |
 
 ## In this repository
 
 This repository's `status.yml` reads the Proxmox host (and its Tailscale), the cluster and the NAS at once (`strategy:
 free`), then reports, with `group_vars/all/status.yml` (the VMs this repo makes, the same the nightly backup covers; the
-admin pages; the commands), `group_vars/proxmox/status.yml` (the installer's storage, its headroom, Debian's reboot
-flag, qemu-server's run directory, the nightly backup job roles/proxmox_backup keeps, the Tailscale state
-roles/proxmox_tailscale read), `group_vars/kubernetes/status.yml` (the credentials roles/talos writes in
+admin pages; the commands), `group_vars/proxmox/status.yml` (the API on the host's loopback with the project's token,
+from `group_vars/proxmox/connection.yml`, and the node's certificate files; the installer's storage, its headroom,
+Debian's reboot flag, qemu-server's run directory, the nightly backup job roles/proxmox_backup keeps, the Tailscale
+state roles/proxmox_tailscale read), `group_vars/kubernetes/status.yml` (the credentials roles/talos writes in
 `talos_config_dir`, the apps as roles/app_scale finds them, the worker's user volumes, the settings roles/flux_bootstrap
 keeps, Alertmanager's pod, the pins, the tailnet's DNS whenever the Proxmox host runs Tailscale, where roles/talos
 keeps the etcd snapshots, and every read at once) and `group_vars/nas/status.yml` (what roles/truenas's `status` entry
@@ -295,7 +326,10 @@ Without the filter, the sections are shown at the end, and the callback says so 
 - `tests/unit/test_status_callback.py`: the callback's `Progress`, which is pure: the sections in order whatever host
   answers first, the lines below them, and that what it prints in the end is the report play's own text.
 - `tests/unit/test_status_read.py`: the read list, every form allowed and others refused, and the parallel runs, as
-  many as the machine has CPUs unless told.
+  many as the machine has CPUs, 8 at most, unless told, and a command's own time; the API read list likewise, against
+  an HTTPS server in the test's process: the data as `pvesh` prints it, an agent's reply unwrapped, a failure's
+  reason, a refused token, and no request at all to a server with another certificate, nor without a certificate
+  file, a token or an https address.
 - `tests/unit/test_status_write_json.py`: the action plugin that writes the report: its modes, the text the copy
   module wrote, a dry run that writes nothing, and a failed write that leaves the old report whole.
 - `tests/unit/test_status_probe.py`: the probe, against servers in the test's process.
@@ -303,7 +337,9 @@ Without the filter, the sections are shown at the end, and the callback says so 
   short list of modules, delegated to localhost alone, and the report entry point's write, its own action, to
   `status_report_file` alone.
 - `tests/integration/test_status.py` runs the real `status.yml`, callback and `just status` in a scratch tree against
-  the fake Proxmox host, the fake cluster and, in `local.yml.example`'s setup, `fake_truenas.py` (`fake_kubectl.py`
+  the fake Proxmox host, its API (`fake_pve_api.py`, an HTTPS server per test that answers from the fake host's own
+  routes and state, wraps the agent's replies in `result`, refuses a request without the token and logs whether each
+  carried it), the fake cluster and, in `local.yml.example`'s setup, `fake_truenas.py` (`fake_kubectl.py`
   lists the kinds the role reads, makes pods up from the Deployments and answers kubelet's statistics and amtool,
   `fake_talos.py` answers `git ls-remote`), with HOME and the credentials the test's own. It checks the exit codes,
   `--json`, another cluster's kubeconfig, a stopped cluster, a host that refuses the connection, probes that get no
@@ -311,7 +347,10 @@ Without the filter, the sections are shown at the end, and the callback says so 
   no secret in the report, a failed and a not yet made backup with the reason from the run's log (`fake_pve.backup_run`
   seeds runs as vzdump leaves them), the host's Tailscale through `fake_tailscale.py` (after `fake_pve_bin` on PATH: a
   served and an unapproved route, `tailscaled` down, and no other device's or the tailnet's name in the report), each
-  of the four setups' sections and attention list against what it should have, and that no fake's state changes. It
+  of the four setups' sections and attention list against what it should have, every Proxmox read but the two
+  listings made through the API with the token and the token in nothing written or printed, a token missing or
+  refused (the host not read, the runbook as the thing to do), a server with another certificate sent nothing, and
+  that no fake's state changes. It
   also runs `just status` on a pseudo-terminal, replays what it wrote through `tests/vt.py`'s terminal and compares the
   result with the piped report, with no frame wrapped and no sequence a terminal would not know.
 - The fake NAS's alerts, scans, topology and root-dataset space follow TrueNAS 25.10's API reference, not a capture
@@ -330,6 +369,13 @@ Without the filter, the sections are shown at the end, and the callback says so 
           - {vmid: 310, name: homeassistant, start: qm start 310, guest_agent: true,
              app: {name: homeassistant, port: 8123}}
         status_budget_storages: [local-lvm]
+        # The Proxmox host is read through its API on its own loopback, with a read-only token
+        # (scripts/runbooks/proxmox-token.md) and the node's own certificate; without them it is not read.
+        status_proxmox_run_dir: /run/qemu-server
+        status_proxmox_api_url: https://127.0.0.1:8006/api2/json
+        status_proxmox_token_id: status@pve!status
+        status_proxmox_token_secret: "{{ vault_proxmox_token_secret }}"
+        status_proxmox_api_cert_files: [/etc/pve/local/pveproxy-ssl.pem, /etc/pve/local/pve-ssl.pem]
         status_cluster_kubeconfig: /home/me/.talos/homeserver/kubeconfig
         status_cluster_apps_path: k8s/apps
 

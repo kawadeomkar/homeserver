@@ -50,6 +50,12 @@ status_admin: >-
 # What the report suggests for each kind of thing to do; {names} is the apps just suspend stopped.
 status_commands:
   upgrade: just deploy proxmox
+  pveproxy: >-
+    systemctl status pveproxy on the Proxmox host, which serves its API and web UI (and /etc/default/pveproxy, should it
+    listen elsewhere)
+  proxmox_token: >-
+    the project's Proxmox API token, made on the host (scripts/runbooks/proxmox-token.md), its secret in the vault as
+    vault_proxmox_token_secret (just vault)
   reboot: reboot it at a quiet time
   resume: just resume --only {names}
   talos_upgrade: just talos-upgrade --check, then just talos-upgrade

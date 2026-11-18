@@ -25,6 +25,13 @@ status_reboot_required_file: ""
 # The directory where Proxmox keeps a <vmid>.pid for each VM running on the node, which says, at once, whose day's
 # history to read; empty reads /cluster/resources first instead, a call of Proxmox's API.
 status_proxmox_run_dir: ""
+# Proxmox's API on the host itself, which its reads go to: its api2/json root on the loopback address, the API token
+# (<user>@<realm>!<name>, and its secret, which never leaves the SSH connection and that address), and the files that
+# may hold the certificate it serves, the first that exists taken. Empty, the host is not read.
+status_proxmox_api_url: ""
+status_proxmox_token_id: ""
+status_proxmox_token_secret: ""
+status_proxmox_api_cert_files: []
 # The backup jobs this setup has, as roles/proxmox_backup takes them ({id, schedule, storage, vmid}), checked against
 # the host's: each VM's newest backup on its job's storage, the runs that failed and why. Empty with VMs to back up
 # says nothing is backed up.
@@ -87,11 +94,12 @@ status_probe_timeout: 5
 # The admin pages to list, each {name, url}; tailscale_node: true marks the page the Proxmox host serves itself,
 # which its tailnet name reaches too.
 status_admin: []
-# The commands the report suggests, by purpose: upgrade (the Proxmox host's packages), resume (suspended apps, with
-# {names} for theirs), talos_upgrade, credentials (renewed), allowlist (Traefik's still closed), secrets (an app's
-# missing Secret), nas (the NAS's settings applied again), nas_release (a TrueNAS release its configuration is not
-# written for), nas_network (interface changes never committed), backup (a backup job applied again), backup_target
-# (where backups could go, when there is no job), etcd_snapshot (taking one), tailscale (the Proxmox host's Tailscale
-# applied again), tailscale_login (its first login), split_dns (the tailnet's split DNS for the apps' domain). One left
-# out is suggested by text alone.
+# The commands the report suggests, by purpose: upgrade (the Proxmox host's packages), proxmox_token (its API token,
+# missing, refused or lacking a privilege), pveproxy (its API not answering), resume (suspended apps, with {names} for
+# theirs), talos_upgrade, credentials (renewed), allowlist (Traefik's still closed), secrets (an app's missing Secret),
+# nas (the NAS's settings applied again), nas_release (a TrueNAS release its configuration is not written for),
+# nas_network (interface changes never committed), backup (a backup job applied again), backup_target (where backups
+# could go, when there is no job), etcd_snapshot (taking one), tailscale (the Proxmox host's Tailscale applied again),
+# tailscale_login (its first login), split_dns (the tailnet's split DNS for the apps' domain). One left out is
+# suggested by text alone.
 status_commands: {}

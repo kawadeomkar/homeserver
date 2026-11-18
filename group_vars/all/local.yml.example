@@ -63,6 +63,11 @@ truenas_pool_disks:
 # the NAS's VM shares.
 proxmox_address: 192.0.2.20
 
+# The project's Proxmox API token, which just status reads the host with,
+# made by hand (scripts/runbooks/proxmox-token.md); its secret goes in the
+# vault. Name it here only when it is not homeserver@pve!homeserver.
+# proxmox_token_id: homeserver@pve!homeserver
+
 # The storage the Proxmox installer created, which holds the VM disks that
 # stay on the host: every VM's without a NAS, and the cluster's EFI disks
 # with one too. local-lvm unless this names another; a ZFS install calls it

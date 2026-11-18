@@ -7,7 +7,10 @@ argument_specs:
         status_found for the report entry point. Every command goes through the role's module status_read, which
         runs them at once and refuses any that is not on its read list.
       - On the Proxmox host (proxmox) it reads the host, its storages and the VMs of status_vms; every other VM is
-        shown as Proxmox sees it, and never judged.
+        shown as Proxmox sees it, and never judged. It reads them through Proxmox's API on the host's own loopback,
+        with the API token status_proxmox_token_id and status_proxmox_token_secret, sent only on a connection
+        serving the node's own certificate, but for a storage's VM disks and its backups, which Proxmox lists only
+        to a token that may change them (pvesh, as root). Without a token the host is not read.
       - For the cluster (cluster), on this machine, it reads the nodes, the apps (each Ingress's Service, then the
         Deployment it selects, and every Deployment a Flux Kustomization under status_cluster_apps_path applies),
         Flux, the certificates, the nodes' kubelet statistics, Alertmanager's alerts, etcd's state and the newest
@@ -112,6 +115,28 @@ argument_specs:
           - The directory where Proxmox keeps a <vmid>.pid for each VM running on the node, which says whose day's
             history to read.
           - Empty reads /cluster/resources first instead.
+      status_proxmox_api_url:
+        type: str
+        default: ""
+        description:
+          - Where Proxmox's API answers on the host itself, its api2/json root on the loopback address, which the
+            Proxmox host's reads go to; empty makes none, and the host is not read.
+      status_proxmox_token_id:
+        type: str
+        default: ""
+        description: The Proxmox API token's id, <user>@<realm>!<name>.
+      status_proxmox_token_secret:
+        type: str
+        default: ""
+        no_log: true
+        description: The Proxmox API token's secret; empty makes no API read, and the host is not read.
+      status_proxmox_api_cert_files:
+        type: list
+        elements: str
+        default: []
+        description:
+          - The files that may hold the certificate the API serves, the first that exists taken; the token goes only
+            to a connection serving that certificate, the node's own.
       status_backup_jobs:
         type: list
         elements: dict
@@ -268,9 +293,10 @@ argument_specs:
         type: dict
         default: {}
         description: >-
-          The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials,
-          allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale,
-          tailscale_login, split_dns. One left out is suggested by text alone.
+          The commands the report suggests, by purpose: upgrade, proxmox_token, pveproxy, reboot, resume (with
+          {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, backup,
+          backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns. One left out is suggested by text
+          alone.
   report:
     short_description: Put just status's findings together, write the report and show it
     description:
@@ -324,6 +350,7 @@ argument_specs:
         type: dict
         default: {}
         description: >-
-          The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials,
-          allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale,
-          tailscale_login, split_dns. One left out is suggested by text alone.
+          The commands the report suggests, by purpose: upgrade, proxmox_token, pveproxy, reboot, resume (with
+          {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, backup,
+          backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns. One left out is suggested by text
+          alone.

@@ -172,6 +172,51 @@ def upgrades(text):
     return out
 
 
+# What the Proxmox API token must hold for the host's lists, by the path Proxmox checks each on ({node}, the node's
+# name). Without them /cluster/resources still answers, but leaves out what the token may not see: a VM without
+# VM.Audit, a storage without Datastore.Audit, the node's figures without Sys.Audit (PVE/API2/Cluster.pm), which would
+# read as a host with nothing on it. The guest agent's reads need VM.GuestAgent.Audit as well.
+TOKEN_PRIVILEGES = (
+    ("/", "Sys.Audit"),
+    ("/nodes/{node}", "Sys.Audit"),
+    ("/vms", "VM.Audit"),
+    ("/storage", "Datastore.Audit"),
+)
+AGENT_PRIVILEGE = ("/vms", "VM.GuestAgent.Audit")
+
+
+def missing_privileges(permissions, node, needed=TOKEN_PRIVILEGES):
+    """Which of `needed` the token lacks, each "<privilege> on <path>", from /access/permissions as the token read it:
+    {path: {privilege: 1}}, each listed path's effective privileges, a path not listed taking its nearest listed
+    parent's, as Proxmox's ACLs propagate."""
+    permissions = permissions if isinstance(permissions, dict) else {}
+
+    def held(path):
+        while path not in permissions and path != "/":
+            path = path.rsplit("/", 1)[0] or "/"
+        return {name for name, on in (permissions.get(path) or {}).items() if on}
+
+    lacking = []
+    for path, privilege in needed:
+        path = path.format(node=node)
+        if privilege not in held(path):
+            lacking.append(f"{privilege} on {path}")
+    return lacking
+
+
+def token_problem(results, node):
+    """What the Proxmox API token could not read, beyond the host's lists: the guest agent's privilege when its reads
+    were made, and every read refused it (each status_read result's `token`); "" when it read all it was asked."""
+    asked_agent = any(name.startswith(("fsinfo-", "osinfo-", "network-")) for name in results)
+    permissions, _ = _json(results, "permissions")
+    lacking = missing_privileges(permissions, node, [AGENT_PRIVILEGE]) if asked_agent and permissions else []
+    refused = sorted(name for name, result in results.items() if isinstance(result, dict) and result.get("token"))
+    parts = [f"it lacks {', '.join(lacking)}"] if lacking else []
+    if refused:
+        parts.append(f"Proxmox refused it {len(refused)} read{'s' if len(refused) != 1 else ''} ({', '.join(refused)})")
+    return f"the Proxmox API token may not read everything: {'; '.join(parts)}" if parts else ""
+
+
 def running_vms(results, node=""):
     """The VMIDs of the VMs running on `node`, as status_read read them: whose day's history to read, this setup's and
     every other. From the listing of qemu-server's run directory (`running`), a <vmid>.pid for each VM running on this
@@ -222,14 +267,14 @@ def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file="", back
     """What the Proxmox host's reads say, as the report needs it.
 
     `found` is {unread, node, results}: why the host could not be read at all (else ""), the node's name, and
-    status_read's results by name (running, resources, hostname, node, rrd-node, rrd-<vmid>, pending-<vmid>,
-    fsinfo-<vmid>, osinfo-<vmid>, network-<vmid>, content-<storage>, updates, reboot, and for the backups backup-jobs,
-    backup-tasks, backups-<storage>, schedule-<job> and log-<upid>). `vms` is this repo's VMs, each {vmid, name,
-    made_by, start, guest_agent, node, app}: `node` the cluster node it is, `app` {name, url, port} the app it serves
-    (its address from its guest agent when `url` is empty). Every other VM on the host, another project's or one made
-    by hand, is shown as Proxmox sees it (others), with its day's history when it runs, and never judged. Storages in
-    `budget_storages` show their disk budget. `backup_jobs` is the backup jobs this setup has, as roles/proxmox_backup
-    takes them ({id, schedule, storage, vmid, enabled}), checked against the host's.
+    status_read's results by name (running, permissions, resources, hostname, node, rrd-node, rrd-<vmid>,
+    pending-<vmid>, fsinfo-<vmid>, osinfo-<vmid>, network-<vmid>, content-<storage>, updates, reboot, and for the
+    backups backup-jobs, backup-tasks, backups-<storage>, schedule-<job> and log-<upid>). `vms` is this repo's VMs,
+    each {vmid, name, made_by, start, guest_agent, node, app}: `node` the cluster node it is, `app` {name, url, port}
+    the app it serves (its address from its guest agent when `url` is empty). Every other VM on the host, another
+    project's or one made by hand, is shown as Proxmox sees it (others), with its day's history when it runs, and
+    never judged. Storages in `budget_storages` show their disk budget. `backup_jobs` is the backup jobs this setup
+    has, as roles/proxmox_backup takes them ({id, schedule, storage, vmid, enabled}), checked against the host's.
     """
     found = found or {}
     if found.get("unread"):
@@ -238,8 +283,22 @@ def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file="", back
     errors = []
     resources, why = _json(results, "resources")
     if resources is None:
-        return {"unread": f"pvesh get /cluster/resources: {why}"}
+        # A token missing, refused or forbidden is the owner's to put right, which the report then says how: status_read
+        # marks such a failure with `token`, never in words alone.
+        failure = results.get("resources") or {}
+        return {
+            "unread": f"Proxmox's API, /cluster/resources: {why}",
+            "token": bool(failure.get("token")),
+            # Nothing answered: pveproxy is down or listens elsewhere, which the report then says how to check.
+            "unanswered": bool(failure.get("unanswered")),
+        }
     node = found.get("node") or ""
+    # A token that may not see the VMs, the storages or the node's figures gets /cluster/resources without them: the
+    # host is then unread, saying which privileges, rather than a host with nothing on it.
+    permissions, _ = _json(results, "permissions")
+    lacking = missing_privileges(permissions, node) if permissions is not None else []
+    if lacking:
+        return {"unread": f"the Proxmox API token lacks {', '.join(lacking)}", "token": True}
     status, why = _json(results, "node")
     if status is None:
         # A read that was not asked for, for a section not shown, is no error.
@@ -368,6 +427,7 @@ def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file="", back
         "reboot_file": reboot_file,
         "backups": backed_up,
         "errors": errors,
+        "token_problem": token_problem(results, node),
     }
 
 
@@ -1382,6 +1442,8 @@ def _storage_attention(storages):
 
 def _host_attention(found, commands):
     out = []
+    if found.get("token_problem"):
+        out.append(_item("problem", "API token", found["token_problem"], commands.get("proxmox_token", "")))
     if found.get("reboot"):
         out.append(
             _item("todo", "reboot", "the host waits for a reboot an upgrade asked for", commands.get("reboot", ""))
@@ -2144,10 +2206,10 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
     status_merge puts the hosts' together; a source without findings was never read. `types` narrows the sections;
     empty means every one. `probes` is what status_probe saw, `found`'s own probes when not given, `admin` the admin
     pages ({name, url, and tailscale_node for the page the Proxmox host serves itself}) to list, `commands` the
-    commands to suggest by purpose (upgrade, resume with {names}, talos_upgrade, credentials, allowlist, secrets, nas,
-    nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns), `now`
-    seconds since the epoch, `tailnet_dns` what tailscale dns status --json said on this machine, if it runs
-    Tailscale, `found`'s own when not given."""
+    commands to suggest by purpose (upgrade, proxmox_token, pveproxy, reboot, resume with {names}, talos_upgrade,
+    credentials, allowlist, secrets, nas, nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale,
+    tailscale_login, split_dns), `now` seconds since the epoch, `tailnet_dns` what tailscale dns status --json said on
+    this machine, if it runs Tailscale, `found`'s own when not given."""
     shown, setup, commands = types_shown(types), dict(setup or {}), dict(commands or {})
     needed = sources(types)
     found = found or {}
@@ -2158,7 +2220,14 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
     if "proxmox" in needed and prox is None:
         unread.append(_item("unread", "proxmox", "the Proxmox host was not read"))
     elif "proxmox" in needed and prox.get("unread"):
-        unread.append(_item("unread", "proxmox", f"the Proxmox host could not be read: {prox['unread']}"))
+        command = (
+            commands.get("proxmox_token", "")
+            if prox.get("token")
+            else commands.get("pveproxy", "")
+            if prox.get("unanswered")
+            else ""
+        )
+        unread.append(_item("unread", "proxmox", f"the Proxmox host could not be read: {prox['unread']}", command))
     prox = prox or {}
     clu = found.get("cluster")
     if setup.get("cluster") and "cluster" in needed:
