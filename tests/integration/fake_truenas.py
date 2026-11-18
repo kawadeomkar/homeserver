@@ -257,8 +257,9 @@ def initial_state(address):
 
 def password_hash(password):
     """The fake's stand-in for the hashes user.query returns for a password: never TrueNAS's own, but as much a secret
-    in the tests, which check that no run's output carries one."""
-    return hashlib.sha256(f"fake-hash:{password}".encode()).hexdigest()[:32].upper()
+    in the tests, which check that no run's output carries one. A key-derivation function, as a password's hash
+    should be, though nothing here protects a real one."""
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), b"fake-truenas", 1000).hex()[:32].upper()
 
 
 def initial_users():
