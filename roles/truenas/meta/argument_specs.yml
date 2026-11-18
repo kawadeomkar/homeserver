@@ -195,6 +195,11 @@ argument_specs:
       truenas_api_user_smb:
         type: bool
         description: false takes the user the API key logs in as out of SMB. Unset or null leaves it alone.
+      truenas_smb_closed_users:
+        type: list
+        elements: str
+        default: []
+        description: Local logins taken out of SMB by name and otherwise left alone; never created.
       truenas_permissions:
         type: list
         elements: dict
@@ -205,16 +210,11 @@ argument_specs:
         elements: dict
         default: []
         description: SMB shares, each with name, which identifies it, and the fields of sharing.smb.create. Never deleted.
-      truenas_smb_share_defaults:
+      truenas_smb_service:
         type: dict
-        default: {}
-        description: Fields laid under every SMB share.
-      truenas_smb_services:
-        type: dict
-        default: {}
         description: >-
-          Service name to {enabled, state}, applied at the end of the SMB stage after its login check. Never also in
-          truenas_services.
+          The SMB service (cifs) as {enabled, state}, applied as the SMB stage's last step, after its login check when
+          it is to run. Null leaves it alone; the services stage refuses cifs.
       truenas_mail:
         type: dict
         default: {}

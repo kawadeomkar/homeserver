@@ -21,6 +21,11 @@ timemachine_settings_error: >-
   {%- set errors = [] -%}
   {%- set macs = timemachine_backups | default([], true) -%}
   {%- set passwords = vault_timemachine_passwords | default({}, true) -%}
+  {%- if timemachine_present is not boolean -%}
+  {%-   set _ = errors.append('timemachine_present is worked out from timemachine_backups in group_vars/all/local.yml,'
+                             ~ ' not set: given with -e it is a string, which counts as true whatever it says. To back'
+                             ~ ' no Mac up, leave timemachine_backups out.') -%}
+  {%- endif -%}
   {%- if macs is string or macs is mapping or macs is not iterable -%}
   {%-   set _ = errors.append('group_vars/all/local.yml: timemachine_backups is a list of Macs, each with name,'
                              ~ ' quota_gib and uid, such as [{name: laptop, quota_gib: 2048, uid: 3101}].') -%}
@@ -34,6 +39,11 @@ timemachine_settings_error: >-
   {%-     else -%}
   {%-       set name = mac.name | default('', true) | string -%}
   {%-       set label = 'timemachine_backups: ' ~ (name or 'an entry without a name') -%}
+  {%-       set unknown = mac | list | reject('in', ['name', 'quota_gib', 'uid', 'retired']) | list -%}
+  {%-       if unknown -%}
+  {%-         set _ = errors.append(label ~ ': unknown key(s) ' ~ unknown | join(', ') ~ '; an entry has name,'
+                                   ~ ' quota_gib, uid and, once the Mac is retired, retired.') -%}
+  {%-       endif -%}
   {%-       if name is not match('^[a-z0-9][a-z0-9-]{0,15}$') -%}
   {%-         set _ = errors.append(label ~ ': the name must be 1 to 16 lower-case letters, digits and hyphens,'
                                    ~ ' starting with a letter or a digit: it names a dataset, a login and a share.') -%}
@@ -57,8 +67,8 @@ timemachine_settings_error: >-
   {%-       set retired = mac.retired | default(false) -%}
   {%-       if retired is not boolean -%}
   {%-         set _ = errors.append(label ~ ': retired must be true or false.') -%}
-  {%-       elif not retired and (passwords is not mapping
-                                  or (passwords[name] | default('', true) | string | length) < 20) -%}
+  {%-       elif not retired and (passwords is not mapping or passwords[name] | default(none) is not string
+                                  or (passwords[name] | length) < 20) -%}
   {%-         set _ = errors.append(label ~ ': the vault has no SMB password of 20 characters or more for it under'
                                    ~ ' vault_timemachine_passwords (just vault).') -%}
   {%-       endif -%}
@@ -69,8 +79,15 @@ timemachine_settings_error: >-
                                ~ ' password.') -%}
   {%-   else -%}
   {%-     for name in passwords if name not in names -%}
-  {%-       set _ = errors.append("the vault's vault_timemachine_passwords has a password for " ~ name ~ ', which'
-                                 ~ ' timemachine_backups does not list: remove it, or add the Mac.') -%}
+  {#-       A key is shown only when it could be a Mac's name: one that cannot may be a password typed as a key. -#}
+  {%-       if name is string and name is match('^[a-z0-9][a-z0-9-]{0,15}$') -%}
+  {%-         set _ = errors.append("the vault's vault_timemachine_passwords has a password for " ~ name ~ ', which'
+                                   ~ ' timemachine_backups does not list: remove it, or add the Mac.') -%}
+  {%-       else -%}
+  {%-         set _ = errors.append("the vault's vault_timemachine_passwords has a key that is no Mac's name, not"
+                                   ~ ' shown here in case it is a password: each line under it is <name>: <password>'
+                                   ~ ' (just vault).') -%}
+  {%-       endif -%}
   {%-     endfor -%}
   {%-   endif -%}
   {%- endif -%}

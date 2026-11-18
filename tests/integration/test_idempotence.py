@@ -614,8 +614,7 @@ def test_truenas_smb_stage_is_idempotent(nas):
             "truenas_users": [closed_login],
             "truenas_user_passwords": {},
             "truenas_smb_shares": [{**SMB_PLAY["truenas_smb_shares"][0], "enabled": False}],
-            "truenas_smb_services": {},
-            "truenas_services": {"cifs": {"enabled": False, "state": "stopped"}},
+            "truenas_smb_service": {"enabled": False, "state": "stopped"},
         }
         result = run("truenas_smb.yml", closed)
         outputs.append(result[2])
@@ -646,31 +645,69 @@ def test_truenas_smb_stage_is_idempotent(nas):
         assert fake_truenas.API_KEY not in out, "the API key reached Ansible output"
 
 
+def add_smb_login(nas, username):
+    """A local SMB login made by hand, as an administrator might, which no variable of the role names."""
+    s, users, _, _ = smb_state(nas)
+    number = len(s["users"])
+    login = {**users[fake_truenas.API_USER], "id": 90 + number, "uid": 3040 + number, "roles": []}
+    s["users"].append({**login, "username": username, "full_name": username, "smb": True})
+    write(nas["state"], s)
+
+
 def test_truenas_smb_stage_refuses_an_unlisted_smb_login(nas):
-    """Starting SMB while a local SMB login the role does not list exists is refused, in a dry run too, before the
-    stage changes anything: the API key's own user unless truenas_api_user_smb takes it out, or any other."""
+    """Starting SMB while a local SMB login the role does not list exists is refused, in a dry run too and under the
+    stage's own tag, before the stage changes anything: the API key's own user unless truenas_api_user_smb takes it
+    out, or any other until truenas_smb_closed_users names it. A run that stops SMB is never refused."""
     with fresh_nas(nas):
         extra = smb_vars(nas, truenas_api_user_smb=None)
         for check in (True, False):
             rc, _, out = run("truenas_smb.yml", extra, check=check)
             assert rc != 0, out[-3000:]
-            assert f"SMB logins that truenas_users does not list: {fake_truenas.API_USER}." in out, out[-3000:]
+            assert f"SMB logins that the role does not list: {fake_truenas.API_USER}." in out, out[-3000:]
+            assert "Starting SMB would let them log in over the network." in out, out[-3000:]
             assert "is the API key's own user: set truenas_api_user_smb to false" in out, out[-3000:]
         s, users, share, services = smb_state(nas)
         assert "tm-laptop" not in users and share is None and not s["smb"]["aapl_extensions"]
         assert users[fake_truenas.API_USER]["smb"] is True and services["cifs"]["state"] == "STOPPED"
 
-        # Another SMB login, made by hand: the API key's user is taken out, this one is not.
-        s["users"].append({**users[fake_truenas.API_USER], "id": 99, "uid": 3050, "username": "someone", "roles": []})
-        write(nas["state"], s)
-        rc, _, out = run("truenas_smb.yml", smb_vars(nas), check=True)
-        assert rc != 0 and "SMB logins that truenas_users does not list: someone." in out, out[-3000:]
-        assert "is the API key's own user" not in out, out[-3000:]
+        # Another SMB login, made by hand: the API key's user is taken out, this one is not, under the tag alone too.
+        add_smb_login(nas, "someone")
+        for args in ((), ("--tags", "truenas_smb")):
+            rc, _, out = run("truenas_smb.yml", smb_vars(nas), check=True, args=args)
+            assert rc != 0 and "SMB logins that the role does not list: someone." in out, out[-3000:]
+            assert "is the API key's own user" not in out and "truenas_smb_closed_users" in out, out[-3000:]
+
+        # Named to close: taken out of SMB and otherwise left alone, and SMB starts.
+        closing = smb_vars(nas, truenas_smb_closed_users=["someone"])
+        result = run("truenas_smb.yml", closing)
+        expect(result, "truenas", changed=True, note="the hand-made login closed")
+        s, users, share, services = smb_state(nas)
+        assert users["someone"]["smb"] is False and users["someone"]["locked"] is False
+        assert services["cifs"]["state"] == "RUNNING"
+        expect(run("truenas_smb.yml", closing), "truenas", changed=0, note="closed, second run")
+
+        # One more made while SMB runs: refused, saying SMB already lets it in; stopping SMB is not refused.
+        add_smb_login(nas, "another")
+        rc, _, out = run("truenas_smb.yml", closing)
+        assert rc != 0 and "SMB is running, so they can log in over the network now." in out, out[-3000:]
+        stopping = {**closing, "truenas_smb_service": {"enabled": False, "state": "stopped"}}
+        result = run("truenas_smb.yml", stopping)
+        expect(result, "truenas", changed=True, note="SMB stopped with a stray login")
+        assert smb_state(nas)[3]["cifs"]["state"] == "STOPPED"
+
+
+def test_truenas_smb_stage_refuses_without_the_connections_reading(nas):
+    """With the connection's reading skipped, the login check refuses rather than passing on nothing."""
+    with fresh_nas(nas):
+        extra = smb_vars(nas, truenas_api_host=NAS_ADDRESS)
+        args = ["--tags", "truenas_smb", "--skip-tags", "truenas_info"]
+        rc, _, out = run("truenas_smb.yml", extra, check=True, args=args)
+        assert rc != 0 and "The connection's reading of the SMB logins is missing" in out, out[-3000:]
 
 
 def test_smb_starts_only_with_its_stage(nas):
-    """The SMB service is the SMB stage's to start, after its login check: the services stage, run on its own, leaves
-    it alone, and naming it in both stages is refused before anything is asked of the NAS."""
+    """The SMB service is the SMB stage's to start or stop, after its login check: the services stage, run on its
+    own, leaves it alone, and the services stage naming it is refused before anything is asked of the NAS."""
     with fresh_nas(nas):
         extra = smb_vars(nas)
         result = run("truenas_smb.yml", extra, args=["--tags", "truenas_services"])
@@ -679,10 +716,11 @@ def test_smb_starts_only_with_its_stage(nas):
         assert not cifs["enable"] and cifs["state"] == "STOPPED"
 
         since = call_count(nas)
-        both = {**extra, "truenas_services": {"cifs": {"enabled": True, "state": "started"}}}
-        for check in (True, False):
-            rc, _, out = run("truenas_smb.yml", both, check=check)
-            assert rc != 0 and "cifs is in both truenas_smb_services and truenas_services" in out, out[-3000:]
+        for state in ("started", "stopped"):
+            named = {**extra, "truenas_services": {"cifs": {"enabled": state == "started", "state": state}}}
+            for check in (True, False):
+                rc, _, out = run("truenas_smb.yml", named, check=check)
+                assert rc != 0 and "cifs is in truenas_services." in out, out[-3000:]
         assert call_count(nas) == since, "the NAS was asked something"
 
 

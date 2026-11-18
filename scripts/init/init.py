@@ -786,17 +786,20 @@ class Init:
     def switch(self, section: str) -> bool:
         question, key = cfg.SWITCHES[section]
         need = cfg.NEEDS.get(section)
-        # Without the section it needs it means nothing, and the playbooks refuse its settings: off, unasked.
-        on = (not need or self.on(need)) and self.yes_no(f"\n{question}", self.present(section), f"switch:{section}")
+        # Without the section it needs it means nothing, and the playbooks refuse its settings: off, unasked, and any
+        # settings it has left offered for deletion with delete as the answer.
+        orphaned = bool(need) and not self.on(need)
+        on = not orphaned and self.yes_no(f"\n{question}", self.present(section), f"switch:{section}")
         if on:
             if cfg.BY_KEY[key].kind == "bool":
                 self.apply(cfg.BY_KEY[key], True)
             return True
         keys = [s.key for s in cfg.SETTINGS if s.section == section and not s.secret and s.key in self.values]
         real = [k for k in keys if has_value(self.values[k])]
+        why = f" Without the {cfg.SECTIONS[need]} the playbooks refuse them." if orphaned else ""
         if real and not self.yes_no(
-            f"  local.yml sets {', '.join(real)}. Delete them, so the playbooks see no {cfg.SECTIONS[section]}?",
-            False,
+            f"  local.yml sets {', '.join(real)}. Delete them, so the playbooks see no {cfg.SECTIONS[section]}?{why}",
+            orphaned,
             f"clear:{section}",
         ):
             self.console.say("  Kept as they are, so the playbooks still see it: its settings come next.")

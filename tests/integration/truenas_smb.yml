@@ -50,7 +50,6 @@
         purpose: TIMEMACHINE_SHARE
         enabled: true
         options: {auto_snapshot: true, auto_dataset_creation: false, timemachine_quota: 0}
-    truenas_smb_services:
-      cifs: {enabled: true, state: started}
+    truenas_smb_service: {enabled: true, state: started}
   roles:
     - role: truenas

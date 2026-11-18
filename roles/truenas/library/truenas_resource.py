@@ -44,11 +44,14 @@ options:
     default: false
   update_together:
     description:
-      - Fields that go to C(<namespace>.update) as a group. When any of them differs, all of them are sent, a nested
-        object as the current one with the wanted keys laid over it; when none differs, none is sent.
-      - For C(sharing.smb), whose update refuses C(purpose) without C(options) and C(options) without C(purpose).
+      - Fields that go to C(<namespace>.update) as a group. When any of them differs, every one of them the entry
+        gives is sent, a nested object as the current one with the wanted keys laid over it; when none differs, none
+        is sent. When a plain field of the group changes too, a nested object goes as the entry gives it, since the
+        current one belongs to the old value and TrueNAS refuses keys the new one does not have.
+      - For C(sharing.smb), whose update refuses C(options) without C(purpose), and fills C(options) in from their
+        defaults when C(purpose) comes alone (TrueNAS 25.10.7's C(normalize_legacy_fields)), so the two go together.
         Laying the wanted options over the current ones keeps what the entry does not give, such as the Time Machine
-        volume's C(vuid), as it is.
+        volume's C(vuid), as it is; a new C(purpose) takes the entry's options alone.
       - Cannot be combined with O(update_whole).
     type: list
     elements: str
@@ -77,16 +80,17 @@ from ansible.module_utils.truenas_api import (
 
 
 def grouped(item, data, changes, together):
-    """The update's fields: those that differ, and with any field of the group the whole group, a nested object as
-    the current one with the wanted keys laid over it."""
+    """The update's fields: those that differ, and with any field of the group every one the entry gives, a nested
+    object as the current one with the wanted keys laid over it, unless a plain field of the group changes too: the
+    current object then belongs to the old value (a share's options to its old purpose), so it goes as wanted."""
     if not set(changes) & set(together):
         return changes
+    given = [key for key in together if key in data]
+    relaid = not any(key in changes and not isinstance(data[key], dict) for key in given)
     group = {}
-    for key in together:
-        if key not in data:
-            continue
+    for key in given:
         have, want = item.get(key), data[key]
-        group[key] = {**have, **want} if isinstance(have, dict) and isinstance(want, dict) else want
+        group[key] = {**have, **want} if relaid and isinstance(have, dict) and isinstance(want, dict) else want
     return {**changes, **group}
 
 
@@ -114,10 +118,11 @@ def ensure(api, module, namespace, match, data, state, update_whole=False, updat
     changes = differences(item, data)
     if not changes:
         return None, before, before
+    payload = {**match, **data} if update_whole else grouped(item, data, changes, update_together)
     if not module.check_mode:
-        payload = {**match, **data} if update_whole else grouped(item, data, changes, update_together)
         api.call(f"{namespace}.update", item["id"], payload)
-    return "update", before, {**before, **data}
+    # What the item holds after the update: the fields sent, a nested object laid over as it was sent.
+    return "update", before, {**before, **pick(payload, fields)}
 
 
 def main():

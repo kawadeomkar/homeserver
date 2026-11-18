@@ -181,13 +181,9 @@ truenas_alert_services: >-
      [{'name': 'Email', 'attributes': {'type': 'Mail', 'email': truenas_alert_email}, 'level': 'WARNING', 'enabled': true}] }}
 
 # ------------------------------------------------------------------ services ---
-# SMB (cifs) is started by the SMB stage while a Mac backs up (truenas_smb_services, group_vars/nas/timemachine.yml),
-# after its check that no SMB login it does not list exists, and is left out here then: this stage runs under its own
-# tag, without that check. With no Mac to back up it is stopped here, as before.
-truenas_services: >-
-  {{ truenas_services_base
-     | combine({} if truenas_smb_services else {'cifs': {'enabled': false, 'state': 'stopped'}}) }}
-truenas_services_base:
+# The SMB service is the SMB stage's alone (roles/truenas/README.md): truenas_smb_service, in
+# group_vars/nas/timemachine.yml, starts it while a Mac backs up and keeps it stopped otherwise.
+truenas_services:
   nfs: {enabled: true, state: started}
   ftp: {enabled: false, state: stopped}
   iscsitarget: {enabled: false, state: stopped}

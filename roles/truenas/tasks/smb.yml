@@ -1,54 +1,92 @@
 ---
-# The SMB service starts here, as the stage's last step, and never in the services stage: the check that no SMB login
-# the role does not list exists has to run in whatever run starts SMB, under whatever tag.
-
-# First, so a refused run changes nothing here. From what the connection read: a login this run creates or takes out
-# of SMB is one the role lists.
-- name: smb | Refuse an SMB login the role does not list
-  ansible.builtin.assert:
-    that: _strays | length == 0
-    fail_msg: >-
-      SMB logins that truenas_users does not list: {{ _strays | join(', ') }}. Starting SMB would let them log in
-      over the network. {{ _api_note }}List each in truenas_users, with smb false to close it.
-    quiet: true
+# The SMB service is this stage's alone, started or stopped as its last step and never by the services stage: the
+# check that no SMB login the role does not list exists has to run in whatever run starts SMB, under whatever tag. It
+# runs only when the service is to run, so a run that stops SMB is never refused, and twice: first from what the
+# connection read, so a refused run changes nothing, then just before the service, from the logins as the users task
+# left them.
+- name: smb | Configure SMB
   vars:
-    _listed: "{{ truenas_users | map(attribute='username') | list + ([_api_user] if truenas_api_user_smb is false else []) }}"
-    _strays: "{{ truenas_state.smb_users | default([]) | difference(_listed) }}"
+    _starts: >-
+      {{ truenas_smb_service is mapping
+         and ((truenas_smb_service.state | default('')) == 'started'
+              or (truenas_smb_service.enabled | default(false)) is true) }}
+    _running: "{{ ((truenas_state.services | default({})).cifs | default({})).state | default('') == 'RUNNING' }}"
     _api_user: "{{ truenas_state.api_user | default('') | string }}"
-    _api_note: >-
-      {{ (_api_user ~ " is the API key's own user: set truenas_api_user_smb to false to take it out of SMB. ")
-         if _api_user in (_strays | list) else '' }}
-  when: truenas_smb_shares | length > 0 or truenas_smb_services | length > 0
+    _remedy: >-
+      Close each: name it in truenas_smb_closed_users, which takes it out of SMB and leaves it otherwise alone, or
+      list it in truenas_users with smb false.
+  block:
+    - name: smb | Refuse an SMB login the role does not list
+      ansible.builtin.assert:
+        that:
+          - _seen is not none
+          - _strays | length == 0
+        fail_msg: >-
+          {{ ('SMB logins that the role does not list: ' ~ _strays | join(', ') ~ '. '
+              ~ ('SMB is running, so they can log in over the network now. ' if _running
+                 else 'Starting SMB would let them log in over the network. ')
+              ~ ((_api_user ~ " is the API key's own user: set truenas_api_user_smb to false to take it out of SMB. ")
+                 if _api_user in (_strays | list) else '')
+              ~ _remedy)
+             if _seen is not none else
+             "The connection's reading of the SMB logins is missing (was truenas_info skipped?), so SMB is not "
+             ~ 'started without its check.' }}
+        quiet: true
+      vars:
+        # A login this run creates, closes or takes out of SMB is one the role lists.
+        _seen: "{{ truenas_state.smb_users | default(none) }}"
+        _listed: >-
+          {{ truenas_users | map(attribute='username') | list + truenas_smb_closed_users
+             + ([_api_user] if truenas_api_user_smb is false else []) }}
+        _strays: "{{ [] if _seen is none else _seen | difference(_listed) }}"
+      when: _starts
 
-- name: smb | Apply the SMB service settings
-  truenas_config:  # noqa: args
-    namespace: smb
-    settings: "{{ truenas_smb_settings }}"
-  when: truenas_smb_settings | length > 0
+    - name: smb | Apply the SMB service settings
+      truenas_config:  # noqa: args
+        namespace: smb
+        settings: "{{ truenas_smb_settings }}"
+      when: truenas_smb_settings | length > 0
 
-- name: smb | Create or correct the users
-  truenas_user:  # noqa: args
-    users: "{{ truenas_users }}"
-    passwords: "{{ truenas_user_passwords }}"
-    reset_users: "{{ truenas_users_reset }}"
-    api_user_smb: "{{ omit if truenas_api_user_smb is none else truenas_api_user_smb }}"
-  when: truenas_users | length > 0 or truenas_api_user_smb is not none
+    # Also whenever SMB is to run, for the logins as they stand after it, which the second check reads.
+    - name: smb | Create or correct the users
+      truenas_user:  # noqa: args
+        users: "{{ truenas_users }}"
+        passwords: "{{ truenas_user_passwords }}"
+        users_reset: "{{ truenas_users_reset }}"
+        smb_closed_users: "{{ truenas_smb_closed_users }}"
+        api_user_smb: "{{ omit if truenas_api_user_smb is none else truenas_api_user_smb }}"
+      register: truenas_smb_logins
+      when: >-
+        _starts or truenas_users | length > 0 or truenas_smb_closed_users | length > 0
+        or truenas_api_user_smb is not none
 
-- name: smb | Give each share's directory its owner
-  truenas_permission:  # noqa: args
-    entries: "{{ truenas_permissions }}"
-  when: truenas_permissions | length > 0
+    - name: smb | Give each share's directory its owner
+      truenas_permission:  # noqa: args
+        entries: "{{ truenas_permissions }}"
+        created_paths: "{{ truenas_datasets | map(attribute='name') | map('regex_replace', '^', '/mnt/') | list }}"
+      when: truenas_permissions | length > 0
 
-- name: smb | Create or update the SMB shares
-  truenas_resource:  # noqa: args
-    namespace: sharing.smb
-    key: [name]
-    entries: "{{ truenas_smb_shares }}"
-    defaults: "{{ truenas_smb_share_defaults }}"
-    update_together: [purpose, options]
-  when: truenas_smb_shares | length > 0
+    - name: smb | Create or update the SMB shares
+      truenas_resource:  # noqa: args
+        namespace: sharing.smb
+        key: [name]
+        entries: "{{ truenas_smb_shares }}"
+        update_together: [purpose, options]
+      when: truenas_smb_shares | length > 0
 
-- name: smb | Start the SMB service
-  truenas_service:  # noqa: args
-    services: "{{ truenas_smb_services }}"
-  when: truenas_smb_services | length > 0
+    - name: smb | Refuse an SMB login the role does not list, as the logins now stand
+      ansible.builtin.assert:
+        that: _strays | length == 0
+        fail_msg: >-
+          After the users task, SMB logins that the role does not list: {{ _strays | join(', ') }}.
+          {{ 'SMB is running, so they can log in over the network now.' if _running
+             else 'Starting SMB would let them log in over the network.' }} {{ _remedy }}
+        quiet: true
+      vars:
+        _strays: "{{ truenas_smb_logins.smb_users | difference(truenas_users | map(attribute='username') | list) }}"
+      when: _starts
+
+    - name: smb | Start or stop the SMB service
+      truenas_service:  # noqa: args
+        services: {cifs: "{{ truenas_smb_service }}"}
+      when: truenas_smb_service is not none
