@@ -46,8 +46,8 @@ options:
     description:
       - Fields that go to C(<namespace>.update) as a group. When any of them differs, every one of them the entry
         gives is sent, a nested object as the current one with the wanted keys laid over it; when none differs, none
-        is sent. When a plain field of the group changes too, a nested object goes as the entry gives it: the current
-        one belongs to the old value, and TrueNAS refuses keys the new one does not have.
+        is sent. When a plain field of the group changes too, a nested object goes as the entry gives it, since the
+        current one belongs to the old value and TrueNAS refuses keys the new one does not have.
       - For C(sharing.smb), whose update refuses C(options) without C(purpose), and fills C(options) in from their
         defaults when C(purpose) comes alone (TrueNAS 25.10.7's C(normalize_legacy_fields)), so the two go together.
         Laying the wanted options over the current ones keeps what the entry does not give, such as the Time Machine
