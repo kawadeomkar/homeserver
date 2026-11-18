@@ -377,8 +377,8 @@ permission = load("truenas_permission", ROLE / "library" / "truenas_permission.p
 
 
 class TestUpdateTogether:
-    """sharing.smb.update refuses purpose without options and options without purpose (TrueNAS 25.10.7's
-    parse_nested): the two go to an update together, or not at all."""
+    """sharing.smb.update refuses options without purpose, and fills options in from their defaults when purpose
+    comes alone (TrueNAS 25.10.7's normalize_legacy_fields): the two go to an update together, or not at all."""
 
     SHARE: ClassVar[dict] = {
         "id": 1,
@@ -402,9 +402,15 @@ class TestUpdateTogether:
             "options": {"vuid": "d12aafdc", "auto_snapshot": False, "timemachine_quota": 0},
         }
 
-    def test_the_purpose_sends_the_options_as_they_are(self):
-        data = {"purpose": "LEGACY_SHARE", "options": {"auto_snapshot": True}}
-        assert self.updates(data) == {"purpose": "LEGACY_SHARE", "options": self.SHARE["options"]}
+    def test_a_new_purpose_takes_the_entrys_options_alone(self):
+        # The current options are the old purpose's; TrueNAS refuses keys the new one does not have.
+        data = {"purpose": "LEGACY_SHARE", "options": {"recyclebin": True}}
+        assert self.updates(data) == {"purpose": "LEGACY_SHARE", "options": {"recyclebin": True}}
+
+    def test_a_field_of_the_group_the_entry_does_not_give_is_not_sent(self):
+        assert self.updates({"options": {"auto_snapshot": False}}) == {
+            "options": {"vuid": "d12aafdc", "auto_snapshot": False, "timemachine_quota": 0}
+        }
 
     def test_nothing_differs_nothing_is_sent(self):
         assert self.updates({"purpose": "TIMEMACHINE_SHARE", "options": {"auto_snapshot": True}}) == {}
@@ -429,9 +435,19 @@ class TestPermissions:
         ("entry", "problem"),
         [
             ({"path": "/mnt/p/tm", "user": "u", "group": "g"}, "needs mode"),
-            ({"path": "/mnt/p/tm", "user": "u", "group": "g", "mode": "rwx"}, "is not an octal mode"),
+            ({"path": "/mnt/p/tm", "user": "u", "group": "g", "mode": "rwx"}, "is not an octal string"),
+            ({"path": "/mnt/p/tm", "user": "u", "group": "g", "mode": 504}, "is not an octal string"),
+            ({"path": "/mnt/p/tm", "user": "u", "group": "g", "mode": "2770"}, "is not an octal string"),
+            ({"path": "/mnt/p/tm", "user": "u", "group": "g", "mode": "000"}, "is not an octal string"),
             ({"path": "/mnt/p/tm", "user": "u", "group": "g", "mode": "700", "recursive": True}, "unknown field"),
+            ({"path": "/mnt/p", "user": "u", "group": "g", "mode": "700"}, "not a directory inside a pool"),
+            ({"path": "/srv/p/tm", "user": "u", "group": "g", "mode": "700"}, "not a directory inside a pool"),
+            ({"path": "/mnt/p/../q", "user": "u", "group": "g", "mode": "700"}, "not a directory inside a pool"),
         ],
     )
     def test_entries_are_checked_before_connecting(self, entry, problem):
         assert problem in "; ".join(permission.entry_problems([entry]))
+
+    def test_a_good_entry_passes(self):
+        entry = {"path": "/mnt/p/tm/laptop", "user": "u", "group": "g", "mode": "0700"}
+        assert permission.entry_problems([entry]) == []

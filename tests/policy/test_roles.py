@@ -933,7 +933,7 @@ TIME_MACHINE_INPUTS = (
     "{'datasets': truenas_datasets_timemachine, 'tasks': truenas_snapshot_tasks_timemachine,"
     " 'smb': truenas_smb_settings, 'users': truenas_users, 'passwords': truenas_user_passwords | list,"
     " 'api_user_smb': truenas_api_user_smb, 'permissions': truenas_permissions, 'shares': truenas_smb_shares,"
-    " 'smb_services': truenas_smb_services, 'cifs': truenas_services.cifs | default(none),"
+    " 'smb_service': truenas_smb_service, 'cifs': truenas_services.cifs | default(none),"
     " 'network': truenas_network_settings, 'all_datasets': truenas_datasets | map(attribute='name') | list,"
     " 'all_tasks': truenas_snapshot_tasks | map(attribute='dataset') | list}"
 )
@@ -1009,19 +1009,20 @@ def test_time_machine_gives_each_mac_a_dataset_login_and_share(tmp_path):
     # The volume's id is derived from the Mac's name, so a rebuilt NAS makes it again; another Mac's is another.
     assert str(uuid.UUID(vuid)) == vuid and vuid != got["shares"][1]["options"]["vuid"]
     assert resolve_on(tree, "truenas", "truenas_smb_shares[0].options.vuid", "-e", json.dumps(given)) == vuid
-    assert got["smb_services"] == {"cifs": {"enabled": True, "state": "started"}} and got["cifs"] is None
+    assert got["smb_service"] == {"enabled": True, "state": "started"} and got["cifs"] is None
     assert got["network"]["service_announcement"] == {"netbios": False, "mdns": True, "wsd": False}
 
-    # Every Mac retired: the service is stopped by the services stage, and no password is wanted.
+    # Every Mac retired: the service is stopped by the SMB stage, with no login check, and no password is wanted.
     retired = {"timemachine_backups": [{**MAC, "retired": True}, old], "vault_timemachine_passwords": {}}
     got = resolve_on(tree, "truenas", TIME_MACHINE_INPUTS, "-e", json.dumps(retired))
-    assert got["smb_services"] == {} and got["cifs"] == {"enabled": False, "state": "stopped"}
+    assert got["smb_service"] == {"enabled": False, "state": "stopped"} and got["cifs"] is None
     assert got["passwords"] == [] and not [sh for sh in got["shares"] if sh["enabled"]]
 
     # No Mac: nothing for the SMB stage, the API key's user and the announcements left alone, SMB stopped.
     got = resolve_on(tree, "truenas", TIME_MACHINE_INPUTS)
     assert (got["datasets"], got["tasks"], got["smb"], got["users"], got["shares"]) == ([], [], {}, [], [])
-    assert got["api_user_smb"] is None and got["cifs"] == {"enabled": False, "state": "stopped"}
+    assert got["api_user_smb"] is None and got["smb_service"] == {"enabled": False, "state": "stopped"}
+    assert got["cifs"] is None
     assert "service_announcement" not in got["network"]
 
 

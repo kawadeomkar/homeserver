@@ -103,5 +103,6 @@ truenas_smb_shares: >-
   {%- endfor -%}
   {{ out }}
 
-# Started by the SMB stage while a Mac backs up; once every Mac is retired, group_vars/nas/truenas.yml stops it.
-truenas_smb_services: "{{ {'cifs': {'enabled': true, 'state': 'started'}} if timemachine_active else {} }}"
+# The SMB service, the SMB stage's alone: started while a Mac backs up, stopped otherwise.
+truenas_smb_service: >-
+  {{ {'enabled': true, 'state': 'started'} if timemachine_active else {'enabled': false, 'state': 'stopped'} }}

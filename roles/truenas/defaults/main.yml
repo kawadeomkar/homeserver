@@ -105,16 +105,17 @@ truenas_user_passwords: {}
 truenas_users_reset: []
 # false takes the user the API key logs in as out of SMB; null leaves it alone.
 truenas_api_user_smb: null
+# Local logins taken out of SMB by name and otherwise left alone, such as one made by hand that the login check names;
+# never created.
+truenas_smb_closed_users: []
 # Directories given an owner, group and mode with no ACL beyond them, each {path, user, group, mode}; never recursive.
 truenas_permissions: []
 # SMB shares, each with name (which identifies it) and the fields of sharing.smb.create: path, purpose, options, ...
 # None is ever deleted.
 truenas_smb_shares: []
-# Fields laid under every SMB share; a share's own value wins.
-truenas_smb_share_defaults: {}
-# Service name -> {enabled, state}, like truenas_services, applied at the end of the SMB stage, after its check that no
-# SMB login the role does not list exists. Name SMB here, never in truenas_services, which would start it unchecked.
-truenas_smb_services: {}
+# The SMB service (cifs) as {enabled, state}, applied as the SMB stage's last step, after its check that no SMB login
+# the role does not list exists when it is to run; null leaves it alone. The services stage refuses cifs.
+truenas_smb_service: null
 
 # ---------------------------------------------------------------------- alerts ---
 # Fields for mail.update, e.g. {outgoingserver: smtp.example.org, port: 587, security: TLS, smtp: true,
@@ -127,6 +128,6 @@ truenas_mail_password: ""
 truenas_alert_services: []
 
 # -------------------------------------------------------------------- services ---
-# Service name -> {enabled: bool, state: started|stopped}. Applied last, after the shares exist. The SMB service is
-# truenas_smb_services', and the role refuses a service named in both.
+# Service name -> {enabled: bool, state: started|stopped}. Applied last, after the shares exist. The SMB service (cifs)
+# is truenas_smb_service's, and the role refuses it here.
 truenas_services: {}
