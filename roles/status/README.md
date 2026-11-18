@@ -41,10 +41,13 @@ Two entry points:
     say why, and are a thing to do already.
   - On the NAS (`nas`) it reads nothing itself: the play reads the NAS first, through roles/truenas's `status` entry
     point (`roles/truenas/tasks/status.yml`: `truenas_info` with its `status` option, one login), and the role works
-    out what `status_nas_state` says: each pool's health, use, layout and last scrub, TrueNAS's alerts, each snapshot
-    task's last run, the NFS and SMB services and their shares, each Time Machine backup against the Macs of
-    `status_nas_macs`, and whether the NAS runs `status_nas_release`. The `status` option adds `pool.scrub.query`,
-    `alert.list` and `pool.snapshottask.query` to `truenas_info`'s reads, and one `pool.snapshot.query` for every
+    out what `status_nas_state` says: its ports, each pool's health, use, layout and last scrub, each disk's
+    temperature, state and errors, TrueNAS's alerts, each snapshot task's last run, the NFS and SMB services and their
+    shares, who has the NFS shares mounted (named by `status_nas_known_clients`), the services that run though
+    `status_nas_services` keeps them stopped, the NAS's clock against this machine's, each Time Machine backup against
+    the Macs of `status_nas_macs`, and whether the NAS runs `status_nas_release`. The `status` option adds
+    `pool.scrub.query`, `alert.list` and `pool.snapshottask.query` to `truenas_info`'s reads, and one
+    `pool.snapshot.query` for every
     enabled Time Machine share whose dataset exists, none without one: `[["dataset", "in", [<their datasets>]]]`
     with `{"select": ["name"]}`, which TrueNAS answers on its fast path (`plugins/zfs_/snapshot.py` at TS-25.10.7),
     listing those datasets' snapshots by name and reading no property, where any other filter or select reads every
@@ -55,10 +58,26 @@ Two entry points:
     name on this machine, so that it counts for its own dataset alone. A time more than an hour ahead of this
     machine's clock is ignored: the NAS's clock was wrong, or the name was made by hand, and it would keep the Mac
     from ever reading as late (one past the year 9999 would fail the read). The API's times (`{"$date": ms}`) are
-    turned into RFC 3339. The entry point tries each address once
-    (`api_connect_wait: 0`) and never fails (`failed_when: false`): a NAS that did not answer, refused the key or
+    turned into RFC 3339. Last come three reads in the same login, each of which may fail without the NAS going
+    unread: `disk.temperatures` with `[]` and `true` (every disk, each `[celsius, critical celsius]`, either null for a
+    disk without a sensor TrueNAS can read), which TrueNAS answers from the kernel's sensors (hwmon: drivetemp, nvme)
+    and keeps for five minutes, so it asks nothing of the disks (0.04 s on the home NAS); `nfs.get_nfs3_clients`
+    (rmtab's `{ip, export}`, which can keep a client that has gone, NFSv3 having no way to tell); and
+    `nfs.get_nfs4_clients` (the kernel's clients, `info.address` with its port, `[...]:port` for IPv6), of which the
+    address alone is kept, without its port: an NFSv4 client's entry also names its host and every file it holds open.
+    One that fails (a `TrueNASError`) leaves its part null, and why in the status's `unread`, which the report lists
+    with the reads that failed, after the sections. Of what it read before, it keeps each pool's disks from
+    `pool.query`'s topology (every kind of vdev, depth first), each by the device name `disk.temperatures` gives it
+    (`disk`; a disk that is gone by the one TrueNAS last knew there, `unavail_disk`'s name, else its ZFS guid, never
+    the vdev's own name, which is its path's and, on a pool made by hand on a `/dev/disk/by-id` path, would carry the
+    disk's model and serial), with its state and ZFS's read, write and checksum error counts; each interface's type,
+    MTU and `active_media_subtype` (`40000Mb/s Direct Attach Copper` on the home NAS; the API's examples give
+    `1000baseT <full-duplex>`), never its MAC; and `system.info`'s `datetime`, beside this machine's clock halfway
+    through that call (`read_at`), within half its round trip. The boot pool's disks, which `pool.query` leaves out,
+    are `disk.details`' disks whose `imported_zpool` is no pool `pool.query` lists. The entry point tries each address
+    once (`api_connect_wait: 0`) and never fails (`failed_when: false`): a NAS that did not answer, refused the key or
     presented another certificate than the pinned one is reported as a source not read, not a failure, and the key
-    goes to no other server. `system.info`'s serial and the disks' serials never reach the report.
+    goes to no other server. `system.info`'s serial and the disks' serials and models never reach the report.
 - **report** (`tasks_from: report`), on localhost, puts together what each of `status_hosts` found (`status_merge`,
   every host's probes together), ranks what needs attention (sources not read, problems, things to do, each with the
   command from `status_commands` that deals with it, so the role names none of this repository's recipes itself),
@@ -166,9 +185,30 @@ provisioned on it against its size, less `status_storage_headroom_gib` on ZFS, d
 `proxmox_vm_host_headroom_gib`), and provisioned beyond that is a thing to do.
 
 **The NAS**: a pool not ONLINE or not healthy, 90% full, or whose last scrub found errors, a snapshot task in ERROR,
-an alert at ERROR or worse, NFS or SMB not running while it has shares, and TrueNAS not ready are problems; a pool 80%
-full, a scrub more than eight days past its task's threshold, a pool no scrub task scrubs, a WARNING alert, a release
-other than `status_nas_release`, and interface changes never committed are things to do.
+an alert at ERROR or worse, NFS or SMB not running while it has shares, a service running that `status_nas_services`
+keeps stopped (with `status_commands`' `nas`), an NFS share mounted from an address that is no machine of
+`status_nas_known_clients`, and TrueNAS not ready are problems; a pool 80% full, a scrub more than eight days past its
+task's threshold, a pool no scrub task scrubs, a WARNING alert, a release other than `status_nas_release`, interface
+changes never committed, a disk within 10 °C of its own critical temperature, a disk with any read, write or checksum
+errors (naming its pool and the counts), and the NAS's clock 60 s or more from this machine's either way (with
+`nas_clock`) are things to do.
+
+The section's lines, in order: the header; `Network`, each port that is up by its speed (Mb/s or Gb/s, from `<n>Mb/s`
+or `<n>base…`, else TrueNAS's own words), the MTU when it is not 1500, and how many of the ports (physical interfaces:
+a bridge, VLAN or link aggregation is none) are up, never judged; `Pools`; `Disks`, a line per pool, then the boot
+pool's and a disk in no pool, each disk with its temperature in whole degrees Celsius (a half rounded up), yellow
+within 10 °C of its critical one and red at or above it, `—` for no reading, and in brackets a state other than ONLINE
+(red) and its errors (yellow), as `nvme3n1 33 (3 checksum)`; `Snapshots`; `NFS`, with who has its shares mounted, `by
+the Proxmox host and homeserver-worker-1`, an address no machine has in red, or `mounted by nothing`; `SMB` and `Macs`;
+`Services`, only when one runs that is to be stopped; `Alerts`. A disk at or above its critical temperature is red and
+nothing more: TrueNAS's own alert (Disk Temperature Is Too Hot, critical) is among the alerts already. A pool's own
+line is the same whatever its disks' errors. A read of the temperatures or of the NFS clients that failed leaves them
+out of the section and is listed with the reads that failed; the NAS is read all the same. **Tailnet clients reach the
+LAN masqueraded as the Proxmox host's address** (roles/proxmox_tailscale), so the NAS sees a tailnet client that mounts
+a share as `the Proxmox host`: that name can stand for traffic from the tailnet too, which only the tailnet guard and
+the shares' hosts keep out. With no machine in `status_nas_known_clients`, every client is shown by its address and
+none is judged. Whatever sections are asked for, the NAS's section, what it needs and the reads that failed are the
+same: `just status` shows each section as `just status <section>` does.
 
 **A Mac's Time Machine backup** is judged by the Macs of `status_nas_macs`, each its share's name and whether it is
 retired, as the configuration says, never the share: TrueNAS disables a pool's shares when the pool is exported, and a
@@ -222,6 +262,8 @@ its mount in `status_cluster_volumes`.
 | `status_nas_state` | `{}` | What `truenas_info` returned with its `status` option, or its failure |
 | `status_nas_release` | `""` | The TrueNAS release (major.minor) the NAS's configuration is written for; empty compares none |
 | `status_nas_macs` | `[]` | The Macs that back up to the NAS with Time Machine, each `{share, retired}`, which each Time Machine share is judged by; empty judges none |
+| `status_nas_services` | `{}` | The NAS's services as its configuration keeps them, `{name: {enabled, state}}` as roles/truenas takes them; one running that is to be stopped is a problem; empty judges none |
+| `status_nas_known_clients` | `{}` | The machines of this setup, `{address: name}`, which name who has the NFS shares mounted; any other address is a problem; empty judges none |
 | `status_tailscale_state` | `{}` | The Proxmox host's Tailscale, as roles/proxmox_tailscale's `status` entry point records it; empty when it is off |
 | `status_parallel` | `8` | How many reads run at once on a host |
 | `status_timeout` | `30` | Seconds each read may take |
@@ -234,19 +276,23 @@ its mount in `status_cluster_volumes`.
 | `status_probe_apps` | `true` | Whether each host's play asks the addresses of the apps it found from this machine |
 | `status_probe_timeout` | `5` | Seconds each lookup and request may take |
 | `status_admin` | `[]` | report: the admin pages it lists, each `{name, url}`; `tailscale_node: true` marks the page the Proxmox host serves itself |
-| `status_commands` | `{}` | report: the commands it suggests, by purpose (`upgrade`, `reboot`, `resume` with `{names}`, `talos_upgrade`, `credentials`, `allowlist`, `secrets`, `nas`, `nas_release`, `nas_network`, `time_machine`, `time_machine_quota`, `backup`, `backup_target`, `etcd_snapshot`, `tailscale`, `tailscale_login`, `split_dns`) |
+| `status_commands` | `{}` | report: the commands it suggests, by purpose (`upgrade`, `reboot`, `resume` with `{names}`, `talos_upgrade`, `credentials`, `allowlist`, `secrets`, `nas`, `nas_release`, `nas_network`, `nas_clock`, `time_machine`, `time_machine_quota`, `backup`, `backup_target`, `etcd_snapshot`, `tailscale`, `tailscale_login`, `split_dns`) |
 
 ## In this repository
 
 This repository's `status.yml` reads the Proxmox host (and its Tailscale), the cluster and the NAS at once (`strategy:
 free`), then reports, with `group_vars/all/status.yml` (the VMs this repo makes, the same the nightly backup covers; the
-Macs `local.yml`'s `timemachine_backups` backs up to the NAS, as `status_nas_macs`; the admin pages; the commands),
+Macs `local.yml`'s `timemachine_backups` backs up to the NAS, as `status_nas_macs`; the Proxmox host and the cluster's
+nodes by the addresses `local.yml` gives them, `proxmox_address` and `kubernetes_node_addresses`, as
+`status_nas_known_clients`; the admin pages; the commands),
 `group_vars/proxmox/status.yml` (the installer's storage, its headroom, Debian's reboot flag, the nightly backup job
 roles/proxmox_backup keeps, the Tailscale state roles/proxmox_tailscale read), `group_vars/kubernetes/status.yml` (the
 credentials roles/talos writes in `talos_config_dir`, the apps as roles/app_scale finds them, the worker's user
 volumes, the settings roles/flux_bootstrap keeps, Alertmanager's pod, the pins, where roles/talos keeps the etcd
-snapshots) and `group_vars/nas/status.yml` (what roles/truenas's `status` entry point read, and
-`truenas_supported_version`, the release that role is written for, in scope through `status.yml`'s import of it).
+snapshots) and `group_vars/nas/status.yml` (what roles/truenas's `status` entry point read,
+`truenas_supported_version`, the release that role is written for, in scope through `status.yml`'s import of it, and
+`truenas_services` with the SMB service, `cifs`, from `truenas_smb_service`, which the SMB stage keeps and the services
+stage refuses, as `status_nas_services`).
 `status_source` is `proxmox` on the Proxmox host, `cluster` on `homeserver-k8s` and `nas` on `truenas`, the last two
 empty without a cluster or a NAS. `status_vms` is the same list of VMIDs as `vm_backup_vmids` (the cluster's nodes, Home
 Assistant's, and `local.yml`'s `vm_backup_extra_vmids`), which `test_status_reports_on_the_vms_the_backup_covers`
@@ -308,14 +354,31 @@ Without the filter, the sections are shown at the end, and the callback says so 
   share and missing dataset problems, a Mac without a share a thing to do, and a share no Mac names listed and never
   judged, nearly full and never backed up (`test_each_share_is_judged_by_the_macs_configured`); each threshold at its
   edge, exactly 80% and 90% of the quota and exactly ten days a thing to do or a problem, 79.9%, nine days and 23 hours
-  and no quota at all nothing; and the `Macs` line's colours, plain, yellow and red as a pool's bar.
+  and no quota at all nothing; and the `Macs` line's colours, plain, yellow and red as a pool's bar. The NAS's
+  details: the `Network` and `Disks` lines exactly, each disk by pool, the boot pool's and one in no pool, with no
+  serial or model in the JSON; a reading exactly 10 °C below its critical temperature (and 74.5 against 85, shown as
+  75) a thing to do in yellow, 11 below nothing, at or above it red and nothing more, and none without a critical
+  temperature (`test_a_disk_near_its_critical_temperature`); a disk's errors and state on its line, wrapped under the
+  first disk; a refused temperature read, the disks listed without readings and the read named among the reads that
+  failed; each port's speed from TrueNAS's words; no client, this setup's machines, an unknown client (a problem, in
+  red), and no machine configured (shown, never judged); the NFS clients not read; a service running though configured
+  stopped, alone or beside SMB, and none without the configuration; a clock 60 s ahead or behind a thing to do, 59 s
+  either way nothing; and the section's lines in order within 100 columns.
+  `test_just_status_shows_the_nas_as_just_status_nas_does` holds `just status` to the union of its sections: the NAS's
+  block, its attention items and counts, and the reads that failed are the same with `nas` alone and with every
+  section.
 - `tests/unit/test_truenas_modules.py`: `truenas_info`'s `status` read, against a scripted API that records each
   call's parameters and answers alike whatever they filter on: `sharing.smb.query` once, one `pool.snapshot.query`
   with exactly the fast path's filter and select, for the enabled Time Machine shares on a dataset, and none without
   one (`test_no_snapshot_is_read_without_an_enabled_time_machine_share_on_a_dataset`); each backup's time from its own
   dataset's snapshots, though another Mac's is newer, a disabled share's never read, a time in 2100 or in the year
   10000 ignored, and a share whose path names no dataset said so, without sizes
-  (`test_each_time_machine_backup_is_its_own_datasets_newest`).
+  (`test_each_time_machine_backup_is_its_own_datasets_newest`); each pool's disks, a gone one by the disk TrueNAS knew
+  there or its guid, a cache disk too; every disk's temperature, `disk.temperatures` asked `[]` and `true`; the NFS
+  clients' addresses once each, without their ports; the clock with this machine's during the read; the three reads
+  last; and no model, vdev name, MAC, client's own name or open file returned. A refused `disk.temperatures`,
+  `nfs.get_nfs3_clients` (after which `nfs.get_nfs4_clients` is not asked) or `nfs.get_nfs4_clients` leaves its part
+  null and says why, the rest whole (`test_a_read_that_fails_on_its_own_leaves_its_part_out`).
 - `tests/unit/test_status_callback.py`: the callback's `Progress`, which is pure: the sections in order whatever host
   answers first, the lines below them, and that what it prints in the end is the report play's own text.
 - `tests/unit/test_status_read.py`: the read list, every form allowed and others refused, and the parallel runs.
@@ -323,7 +386,9 @@ Without the filter, the sections are shown at the end, and the callback says so 
 - `tests/policy/test_roles.py`: `test_status_reads_only_through_status_read` keeps every other task of the role to a
   short list of modules, delegated to localhost alone, and the report entry point's writes to `status_report_file`;
   `test_status_reads_the_nas_as_its_play_reaches_it`, that `status_nas_macs` names the shares the NAS is handed for
-  `local.yml`'s Macs, retired as it says.
+  `local.yml`'s Macs, retired as it says, that `status_nas_services` is `truenas_services` with SMB's state as the SMB
+  stage keeps it, without a Mac and with one, and that `status_nas_known_clients` names the Proxmox host and each
+  node by `local.yml`'s addresses.
 - `tests/integration/test_status.py` runs the real `status.yml`, callback and `just status` in a scratch tree against
   the fake Proxmox host, the fake cluster and, in `local.yml.example`'s setup, `fake_truenas.py` (`fake_kubectl.py`
   lists the kinds the role reads, makes pods up from the Deployments and answers kubelet's statistics and amtool,
@@ -333,6 +398,11 @@ Without the filter, the sections are shown at the end, and the callback says so 
   no secret in the report, the Macs' Time Machine backups judged by `timemachine_backups` (`sharing.smb.query` once,
   one `pool.snapshot.query` whose parameters the fake's call log shows, none without a Time Machine share, a retired
   Mac's share listed, and laptop's backup late while desk's is an hour old: each Mac's time from its own dataset), a
+  the NAS section's details (`test_the_nas_sections_details`: the `Network`, `Disks`, `NFS` and `Services` lines
+  exactly and in order, a hot disk, one with checksum errors, ssh running, an NFS client of no machine of this setup
+  and the clock 95 s behind, the three new reads once each with their parameters, and no disk's serial or model, NFS
+  client's name or open file in the report; then the temperatures and the NFSv4 clients refused, the NAS read all the
+  same without them, saying so), a
   failed and a not yet made backup with the reason from the run's log (`fake_pve.backup_run` seeds runs as vzdump
   leaves them), the host's Tailscale through `fake_tailscale.py` (after `fake_pve_bin` on PATH: a served and an
   unapproved route, `tailscaled` down, and no other device's or the tailnet's name in the report), each of the four
@@ -344,7 +414,14 @@ Without the filter, the sections are shown at the end, and the callback says so 
   snapshots hold from `snapshot_space`. It answers `pool.snapshot.query` from the snapshot names in its state, with the
   `=`, `^` and `in` filters, and follows TrueNAS's fast path as `plugins/zfs_/snapshot.py` has it at TS-25.10.7: a
   select of `name` alone, filtered on name, pool or dataset alone, reads no property, so its entries have none, and
-  asked nothing more than that select and `=` or `in` on pool or dataset, it returns libzfs's entries whole.
+  asked nothing more than that select and `=` or `in` on pool or dataset, it returns libzfs's entries whole. Its disks,
+  NFS clients, links and clock follow TrueNAS 25.10.7's middleware source: each pool's topology with the `disk` and
+  `device` `pool.transform_topology` adds, `disk.details`' used disks by pool, the boot pool's included, with stand-in
+  serials and models, `disk.temperatures` from the state's `temperatures` (nulls for a disk it leaves out), rmtab's
+  and the kernel's NFS clients from `nfs3_clients` and `nfs4_clients`, each interface's `link`, `mtu` and `media`,
+  and `system.info`'s `datetime` set apart from this machine's by `clock_offset`. A method in the state's `refused` is
+  refused as TrueNAS refuses a call the key may not make. The shapes were checked against the middleware source and a
+  read-only read of the home NAS (2026-11-18), not a capture written out here.
 
 ## Example
 

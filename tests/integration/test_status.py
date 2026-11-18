@@ -965,7 +965,8 @@ def test_tailscale_that_is_not_running_is_a_problem(tree, tmp_path):
 
 
 # What just status may call on the NAS, reads alone: roles/truenas's status entry point, truenas_info with its status
-# option, whose one pool.snapshot.query reads the enabled Time Machine shares' snapshots together, by name alone.
+# option, whose one pool.snapshot.query reads the enabled Time Machine shares' snapshots together, by name alone, and
+# whose last three reads, the disks' temperatures and the NFS clients, may each fail without the NAS going unread.
 NAS_READS = {
     "auth.login_with_api_key",
     "network.configuration.config",
@@ -987,6 +988,9 @@ NAS_READS = {
     "alert.list",
     "pool.snapshottask.query",
     "pool.snapshot.query",
+    "disk.temperatures",
+    "nfs.get_nfs3_clients",
+    "nfs.get_nfs4_clients",
 }
 
 
@@ -1161,7 +1165,7 @@ def test_the_nas_is_read_through_its_api(nas_tree, nas, tmp_path):
         ("persistent", "raidz1", "ONLINE"),
         ("ephemeral", "stripe", "ONLINE"),
     ]
-    assert found["nfs"] == {"enabled": True, "state": "RUNNING", "shares": 1}
+    assert found["nfs"] == {"enabled": True, "state": "RUNNING", "shares": 1, "clients": []}
     assert [(a["level"], a["subject"], a["text"]) for a in report["attention"] if a["subject"] == "nas"] == [
         ("problem", "nas", "TrueNAS alerts (critical): Device: /dev/sda, Self-Test Log error count increased")
     ]
@@ -1227,6 +1231,125 @@ def test_the_macs_backups_are_read_from_the_nas(nas_tree, nas, tmp_path):
     assert todo == [("todo", "tm-laptop", "its newest Time Machine backup completed 11 d ago")], todo
     assert attention[0]["command"].startswith("on the Mac, Time Machine's settings"), attention
     assert " Macs       tm-laptop backed up 11 d ago, 0.4 / 2.0 TiB, snapshots 20 GiB" in out, out
+
+
+# What an NFSv4 client says of itself, and the files it holds open, which the report never carries.
+NFS_CLIENT_NAME = "Linux NFSv4.2 FAKE-CLIENT-NAME-MUST-NOT-LEAK"
+NFS_OPEN_FILE = "/FAKE-OPEN-FILE-MUST-NOT-LEAK"
+
+
+def seed_details(path, refused=()):
+    """The NAS seed_nas leaves, with something for each of the NAS section's details to say: three ports, one up at
+    40 Gb/s with jumbo frames; nvme3n1 hot, 78 °C of its critical 84.85, and nvme2n1 with three checksum errors; ssh
+    running though the configuration keeps it stopped; the shares mounted by the Proxmox host over NFSv3, and by the
+    worker and an address of no machine of this setup over NFSv4; the NAS's clock 95 s behind; and the methods
+    `refused` refused."""
+    fake = fake_truenas.FakeTrueNAS(path)
+    fake.load()
+    fake.s["interfaces"]["enp7s0"].update(media="40000Mb/s Direct Attach Copper", mtu=9000)
+    for name in ("enp8s0", "enp9s0"):
+        down = {"link": "LINK_STATE_DOWN", "media": "Unknown Twisted Pair"}
+        fake.s["interfaces"][name] = {"ipv4_dhcp": False, "ipv6_auto": False, "aliases": [], "live": [], **down}
+    fake.s["temperatures"]["nvme3n1"] = [78.0, 84.85]
+    persistent = next(p for p in fake.s["pools"] if p["name"] == "persistent")
+    persistent["topology"]["data"][0]["children"][1]["stats"]["checksum_errors"] = 3
+    next(s for s in fake.s["services"] if s["service"] == "ssh").update(state="RUNNING")
+    fake.s["nfs3_clients"] = [{"ip": "192.0.2.20", "export": "/mnt/persistent/nextcloud"}]
+    states = [{"1": {"type": "open", "access": "rw", "filename": NFS_OPEN_FILE}}]
+    fake.s["nfs4_clients"] = [
+        {"id": str(n), "info": {"address": address, "status": "confirmed", "name": NFS_CLIENT_NAME}, "states": states}
+        for n, address in enumerate(["192.0.2.31:812", "198.51.100.7:740"])
+    ]
+    fake.s["clock_offset"] = -95
+    fake.s["refused"] = list(refused)
+    fake.s["mutations"] = 0
+    fake.save()
+
+
+def test_the_nas_sections_details(nas_tree, nas, tmp_path):
+    """The ports, each disk's temperature and errors by pool, who has the NFS shares mounted, a service running though
+    configured stopped, and the NAS's clock, from three more reads in the same login, nothing but reads, and no disk's
+    serial or model, no client's own name and no file it holds open in the report. Then the disks' temperatures and
+    the NFSv4 clients refused: the NAS is read all the same, without them, saying so."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    seed_nas(nas["state"])
+    seed_details(nas["state"])
+    nas["calls"].write_text("")
+    rc, out, err = just_status(nas_tree, state, "nas", **nas_vars(nas))
+    report = report_of(nas_tree)
+    assert rc == report["exit"] == 1, out + err
+    assert "nas ok " in reading(out), out
+    lines = out.splitlines()
+    assert " Network    40 Gb/s · MTU 9000 · 1 of 3 ports up" in lines, out
+    disks = lines.index(" Disks      persistent  nvme1n1 32 · nvme2n1 33 (3 checksum) · nvme3n1 78")
+    assert lines[disks + 1 : disks + 3] == ["            ephemeral   sda 29", "            boot-pool   nvme0n1 39"], out
+    nfs = " NFS        running · 1 share · mounted by the Proxmox host, homeserver-worker-1 and 198.51.100.7"
+    assert nfs in lines and " Services   ssh running, configured stopped" in lines, out
+    keys = [line[:12].strip() for line in lines[lines.index("NAS  truenas · TrueNAS 25.10.7 · up 34 d") + 1 :]]
+    assert [k for k in keys[: keys.index("Alerts") + 1] if k] == [
+        "Network",
+        "Pools",
+        "Disks",
+        "Snapshots",
+        "NFS",
+        "Services",
+        "Alerts",
+    ], out
+    attention = [(a["level"], a["subject"], a["text"]) for a in report["attention"]]
+    assert attention == [
+        ("problem", "nfs", "an NFS share is mounted from 198.51.100.7, which is no machine of this setup"),
+        ("problem", "nas", "ssh is running, though the configuration keeps it stopped"),
+        ("todo", "nas", "the NAS's clock is 95 s behind this machine's"),
+        ("todo", "nvme2n1", "the disk has 3 checksum errors in persistent"),
+        ("todo", "nvme3n1", "the disk is at 78 °C, within 10 °C of its critical temperature of 85 °C"),
+    ], report["attention"]
+    assert report["attention"][1]["command"] == "just deploy truenas"
+    assert report["attention"][2]["command"].startswith("the NAS's NTP servers"), report["attention"]
+    found = report["nas"]
+    assert found["link"] == {"ports": 3, "up": 1, "speeds": ["40 Gb/s"], "mtu": 9000}
+    assert [(d["name"], d["pool"], d["temp"], d["critical"], d["checksum_errors"]) for d in found["disks"]] == [
+        ("nvme1n1", "persistent", 32, 85, 0),
+        ("nvme2n1", "persistent", 33, 85, 3),
+        ("nvme3n1", "persistent", 78, 85, 0),
+        ("sda", "ephemeral", 29, 70, 0),
+        ("nvme0n1", "boot-pool", 39, 85, 0),
+    ]
+    assert found["nfs"]["clients"] == [
+        {"address": "192.0.2.20", "name": "the Proxmox host"},
+        {"address": "192.0.2.31", "name": "homeserver-worker-1"},
+        {"address": "198.51.100.7", "name": ""},
+    ]
+    assert (found["unexpected_clients"], found["unexpected_services"]) == (["198.51.100.7"], ["ssh"])
+    assert found["clock_drift"] == -95 and found["errors"] == []
+    # One login and nothing but reads, the three new ones once each: every disk's temperature with its threshold.
+    logged = [json.loads(line) for line in nas["calls"].read_text().splitlines()]
+    calls = [call["method"] for call in logged]
+    assert calls.count("auth.login_with_api_key") == 1 and set(calls) <= NAS_READS, calls
+    new = [(call["method"], call["params"]) for call in logged if call["method"].startswith(("disk.t", "nfs."))]
+    assert new == [("disk.temperatures", [[], True]), ("nfs.get_nfs3_clients", []), ("nfs.get_nfs4_clients", [])]
+    assert json.loads(nas["state"].read_text())["mutations"] == 0
+    written = (nas_tree / ".cache" / "status" / "report.json").read_text()
+    for secret in (fake_truenas.DISK_SERIAL, fake_truenas.DISK_MODEL, NFS_CLIENT_NAME, NFS_OPEN_FILE):
+        assert secret not in out + err + written, secret
+
+    seed_nas(nas["state"])
+    seed_details(nas["state"], refused=["disk.temperatures", "nfs.get_nfs4_clients"])
+    rc, out, err = just_status(nas_tree, state, "nas", **nas_vars(nas))
+    report = report_of(nas_tree)
+    assert rc == report["exit"] == 1, out + err
+    assert "nas ok " in reading(out), out
+    lines = out.splitlines()
+    assert " Disks      persistent  nvme1n1 · nvme2n1 (3 checksum) · nvme3n1" in lines, out
+    assert " NFS        running · 1 share" in lines, out
+    assert " not read: the disks' temperatures: disk.temperatures: [EPERM] Not authorized" in lines, out
+    assert " not read: the NFS clients: nfs.get_nfs4_clients: [EPERM] Not authorized" in lines, out
+    assert [(a["level"], a["subject"]) for a in report["attention"]] == [
+        ("problem", "nas"),
+        ("todo", "nas"),
+        ("todo", "nvme2n1"),
+    ], report["attention"]
+    assert report["nas"]["nfs"]["clients"] is None and report["nas"]["temperatures_read"] is False
 
 
 def test_a_nas_on_another_release_is_a_thing_to_do(nas_tree, nas, tmp_path):

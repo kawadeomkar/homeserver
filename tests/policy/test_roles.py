@@ -2176,7 +2176,8 @@ def test_status_refuses_a_backup_job_it_cannot_check(tmp_path):
 def test_status_reads_the_nas_as_its_play_reaches_it(tmp_path, local_yml, source):
     """just status reads the NAS through roles/truenas's status entry point, with the NAS play's own connection
     settings (the static address, then the bootstrap one; the pinned certificate), and only with a NAS; it judges each
-    Time Machine share by local.yml's Macs."""
+    Time Machine share by local.yml's Macs, each service by the NAS play's configuration, and each NFS client by the
+    machines local.yml gives addresses."""
     tree = example_tree(tmp_path, local_yml)
     names = "{'status_source': status_source, 'truenas_api_hosts': truenas_api_hosts}"
     found = resolve_on(tree, "truenas", names)
@@ -2203,6 +2204,15 @@ def test_status_reads_the_nas_as_its_play_reaches_it(tmp_path, local_yml, source
         found = resolve_on(tree, "truenas", names, "-e", json.dumps({"timemachine_backups": macs}))
         assert found["macs"] == [{"share": s["name"], "retired": not s["enabled"]} for s in found["shares"]]
         assert [mac["share"] for mac in found["macs"]] == ["tm-laptop", "tm-desk", "tm-old"]
+    # The services as the NAS play keeps them, SMB's as its SMB stage does, without a Mac and with one; and the
+    # machines of this setup by address, by which the report names who has the NFS shares mounted.
+    names = "{'services': status_nas_services, 'truenas': truenas_services, 'known': status_nas_known_clients}"
+    nodes = {"192.0.2.30": "homeserver-cp-1", "192.0.2.31": "homeserver-worker-1"} if source else {}
+    for macs, smb in (([], {"enabled": False, "state": "stopped"}), ([MAC], {"enabled": True, "state": "started"})):
+        found = resolve_on(tree, "truenas", names, "-e", json.dumps({"timemachine_backups": macs}))
+        assert found["services"] == found["truenas"] | {"cifs": smb}, found
+        assert found["services"]["ssh"] == {"enabled": False, "state": "stopped"}, found
+        assert found["known"] == {"192.0.2.20": "the Proxmox host", **nodes}, found
 
 
 @pytest.mark.parametrize(

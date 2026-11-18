@@ -16,8 +16,14 @@ password hashes are stand-ins
 (password_hash), not TrueNAS's, and the SMB shares know the TIMEMACHINE_SHARE purpose alone. The periodic snapshot
 tasks, mail and alert services, alert.list, and the pools' health, capacity and scan follow the TrueNAS API v25.10
 reference (api.truenas.com) rather than a capture, times as the API sends them ({"$date": milliseconds}), and
-mail.config returns the password as set, as the reference documents. Any other method is an
-error, so an unexpected call fails the test.
+mail.config returns the password as set, as the reference documents. The disks follow TrueNAS 25.10.7's middleware
+source: pool.query's topology with the device and disk pool.transform_topology adds to each libzfs vdev
+(plugins/pool_/topology.py), disk.details' used disks by the pool they are in, the boot pool's included
+(plugins/disk_/availability.py), and disk.temperatures' [celsius, critical celsius] for every disk
+(plugins/disk_/temperature.py), with stand-in serials and models; so do the NFS clients (plugins/nfs_/status.py),
+interface.query's link state, MTU and active media (plugins/interface/netif_linux), and system.info's clock, which
+state["clock_offset"] sets apart from this machine's. A method named in state["refused"] is refused as TrueNAS refuses
+a call the key may not make. Any other method is an error, so an unexpected call fails the test.
 
 State lives in a JSON file that is re-read before and written after every call, so a test can
 inspect it, or change it to simulate drift, between runs.
@@ -32,6 +38,7 @@ import hashlib
 import json
 import ssl
 import stat
+import time
 import types
 import uuid
 from pathlib import Path
@@ -43,6 +50,9 @@ API_KEY = "1-fake-api-key-for-tests"
 PRIVATE_KEY = "FAKE-PRIVATE-KEY-MUST-NOT-LEAK"
 # Stands in for the machine's serial number, which system.info returns; just status's report never carries it.
 SYSTEM_SERIAL = "FAKE-SYSTEM-SERIAL-MUST-NOT-LEAK"
+# Stand in for each disk's serial and model, which disk.details returns; just status's report carries neither.
+DISK_SERIAL = "FAKE-DISK-SERIAL-MUST-NOT-LEAK"
+DISK_MODEL = "FAKE-DISK-MODEL-MUST-NOT-LEAK"
 BOOT_POOL = "boot-pool"
 # The user the API key logs in as: a hand-made full administrator that is an SMB login, as on the home NAS.
 API_USER = "api-admin"
@@ -83,13 +93,49 @@ def finished_scrub(end=SCRUBBED + 3 * 3600, errors=0):
     }
 
 
-def topology(vdev, guid):
-    """pool.query's topology: one data vdev, a RAIDZ of three disks or a disk of its own."""
+def partition(disk):
+    """A disk's first partition, which a pool's vdev is: sda1, nvme1n1p1."""
+    return f"{disk}p1" if disk[-1].isdigit() else f"{disk}1"
+
+
+def topology(vdev, guid, disks):
+    """pool.query's topology: one data vdev, a RAIDZ of the pool's disks or a disk of its own. Each disk as libzfs gives
+    it (its name its path's, by partition UUID), with the device and disk pool.transform_topology adds."""
     stats = {"read_errors": 0, "write_errors": 0, "checksum_errors": 0}
-    disk = {"type": "DISK", "status": "ONLINE", "stats": stats, "children": []}
-    data = {"name": f"{vdev.lower()}-0", "type": vdev, "guid": guid, "status": "ONLINE", "stats": stats}
-    data["children"] = [disk | {"name": f"disk{i}", "guid": f"{guid}{i}"} for i in range(3)] if vdev != "DISK" else []
+
+    def disk(name, n):
+        uuid_ = f"{guid}-{n}"
+        return {
+            "name": uuid_,
+            "type": "DISK",
+            "path": f"/dev/disk/by-partuuid/{uuid_}",
+            "guid": f"{guid}{n}",
+            "status": "ONLINE",
+            "stats": dict(stats),
+            "children": [],
+            "device": partition(name),
+            "disk": name,
+            "unavail_disk": None,
+        }
+
+    if vdev == "DISK":
+        data = disk(disks[0], 0)
+    else:
+        data = {"name": f"{vdev.lower()}-0", "type": vdev, "guid": guid, "status": "ONLINE", "stats": dict(stats)}
+        data["children"] = [disk(name, i) for i, name in enumerate(disks)]
     return {"data": [data], "log": [], "cache": [], "spare": [], "special": [], "dedup": []}
+
+
+def topology_disks(topology_):
+    """The disks a pool's topology names, in its order."""
+    kinds = ("data", "special", "dedup", "log", "cache", "spare")
+    out, todo = [], [vdev for kind in kinds for vdev in topology_.get(kind, [])]
+    while todo:
+        vdev = todo.pop(0)
+        if vdev.get("type") == "DISK" and vdev.get("disk"):
+            out.append(vdev["disk"])
+        todo[:0] = vdev.get("children", [])
+    return out
 
 
 class CallError(Exception):
@@ -141,6 +187,7 @@ def initial_state(address):
                 "hostname": "",
                 "children": [],
                 "vdev": "RAIDZ1",
+                "disks": ["nvme1n1", "nvme2n1", "nvme3n1"],
             },
             {
                 "name": "ephemeral",
@@ -149,8 +196,26 @@ def initial_state(address):
                 "hostname": "",
                 "children": ["ephemeral/jellyfin"],
                 "vdev": "DISK",
+                "disks": ["sda"],
             },
         ],
+        # The boot pool's disks, which pool.query leaves out, and the disks in no pool.
+        "boot_disks": ["nvme0n1"],
+        "unused_disks": [],
+        # Each disk's reading and critical temperature, as the kernel's sensors give them; a disk not listed has none.
+        "temperatures": {
+            "nvme0n1": [38.85, 84.85],
+            "nvme1n1": [31.85, 84.85],
+            "nvme2n1": [32.85, 84.85],
+            "nvme3n1": [33.85, 84.85],
+            "sda": [29.0, 70.0],
+        },
+        # The NFS clients: rmtab's NFSv3 entries ({ip, export}) and the kernel's NFSv4 clients ({id, info, states}).
+        "nfs3_clients": [],
+        "nfs4_clients": [],
+        # Seconds the NAS's clock is ahead of this machine's, and the methods it refuses.
+        "clock_offset": 0,
+        "refused": [],
         # Each pool's root dataset's used and available bytes, which pool.dataset.query reports.
         "space": {"persistent": [int(2.2 * TIB), int(4.9 * TIB)], "ephemeral": [int(2.3 * TIB), int(1.3 * TIB)]},
         "uptime_seconds": 2937600.5,
@@ -366,6 +431,8 @@ class FakeTrueNAS:
             "system_serial": SYSTEM_SERIAL,
             "system_product": "FAKE",
             "physmem": 64 * 2**30,
+            # Its clock when it answers, which state["clock_offset"] sets apart from this machine's.
+            "datetime": date(time.time() + self.s.get("clock_offset", 0)),
         }
 
     # ------------------------------------------------------------------ alerts
@@ -392,7 +459,14 @@ class FakeTrueNAS:
             "ipv4_dhcp": cfg["ipv4_dhcp"],
             "ipv6_auto": cfg["ipv6_auto"],
             "aliases": [] if cfg["ipv4_dhcp"] else copy.deepcopy(cfg["aliases"]),
-            "state": {"name": name, "aliases": live, "link_state": "LINK_STATE_UP"},
+            # The link as ethtool reports it on Linux (netif_linux/ethernet_settings.py): "<speed>Mb/s <port>".
+            "state": {
+                "name": name,
+                "aliases": live,
+                "link_state": cfg.get("link", "LINK_STATE_UP"),
+                "mtu": cfg.get("mtu", 1500),
+                "active_media_subtype": cfg.get("media", "1000Mb/s Twisted Pair"),
+            },
         }
 
     def m_interface_query(self, filters=None, options=None):
@@ -516,7 +590,7 @@ class FakeTrueNAS:
                 "free": int((used + available) * 1.05) - used,
                 "fragmentation": "2",
                 "autotrim": prop("off"),
-                "topology": topology(exported.get("vdev", "DISK"), guid),
+                "topology": topology(exported.get("vdev", "DISK"), guid, exported.get("disks") or ["sdz"]),
             }
         )
         for ds in [name, *exported["children"]]:
@@ -586,8 +660,41 @@ class FakeTrueNAS:
         self.mutated()
         return copy.deepcopy(task)
 
+    @staticmethod
+    def disk_entry(name, imported=None, exported=None):
+        """A disk as disk.details lists it, with a stand-in serial and model."""
+        return {
+            "name": name,
+            "devname": name,
+            "identifier": f"{{serial_lunid}}{DISK_SERIAL}-{name}",
+            "serial": f"{DISK_SERIAL}-{name}",
+            "model": DISK_MODEL,
+            "size": 2 * TIB,
+            "type": "SSD",
+            "partitions": [],
+            "duplicate_serial": [],
+            "imported_zpool": imported,
+            "exported_zpool": exported,
+        }
+
     def m_disk_details(self, options=None):
-        return {"used": [], "unused": []}
+        """Each imported pool's disks and the boot pool's are used, by the pool they are in, as an exported pool's are;
+        the rest unused. Always both, as {"type": "BOTH"} asks."""
+        used = [self.disk_entry(d, imported=p["name"]) for p in self.s["pools"] for d in topology_disks(p["topology"])]
+        used += [self.disk_entry(d, imported=BOOT_POOL) for d in self.s.get("boot_disks", [])]
+        used += [self.disk_entry(d, exported=p["name"]) for p in self.s["exported_pools"] for d in p.get("disks", [])]
+        return {"used": used, "unused": [self.disk_entry(d) for d in self.s.get("unused_disks", [])]}
+
+    def m_disk_temperatures(self, names=None, include_thresholds=False):
+        """Every disk's reading, or those named, each [celsius, critical celsius] with thresholds; nulls for a disk the
+        state gives none, as for one without a sensor TrueNAS can read."""
+        details, out = self.m_disk_details(), {}
+        for entry in details["used"] + details["unused"]:
+            if names and entry["name"] not in names:
+                continue
+            temp, critical = [*self.s.get("temperatures", {}).get(entry["name"], []), None, None][:2]
+            out[entry["name"]] = [temp, critical] if include_thresholds else temp
+        return out
 
     # ----------------------------------------------------------- system dataset
     def m_systemdataset_config(self):
@@ -812,6 +919,12 @@ class FakeTrueNAS:
 
     def m_sharing_nfs_query(self, filters=None, options=None):
         return [copy.deepcopy(s) for s in self.s["shares"] if matches(s, filters)]
+
+    def m_nfs_get_nfs3_clients(self, filters=None, options=None):
+        return [copy.deepcopy(c) for c in self.s.get("nfs3_clients", []) if matches(c, filters)]
+
+    def m_nfs_get_nfs4_clients(self, filters=None, options=None):
+        return [copy.deepcopy(c) for c in self.s.get("nfs4_clients", []) if matches(c, filters)]
 
     SHARE_FIELDS = frozenset(
         {
@@ -1420,6 +1533,9 @@ class FakeTrueNAS:
             raise CallError(f"Method {method!r} not found (or not implemented by the fake)", errname="ENOMETHOD")
         self.load()
         try:
+            if method in self.s.get("refused", []):
+                self.log(method, params, None)
+                raise CallError("Not authorized", errname="EPERM")
             result = func(*params)
         finally:
             self.save()

@@ -1472,6 +1472,7 @@ NAS_COMMANDS = {
     "nas": "just deploy truenas",
     "nas_release": "raise truenas_supported_version",
     "nas_network": "commit them on the NAS",
+    "nas_clock": "its NTP servers",
     "time_machine": "look on the Mac",
     "time_machine_quota": "raise quota_gib",
 }
@@ -1491,6 +1492,51 @@ def scan(end="2026-10-12T00:00:00+00:00", state="FINISHED", errors=0, function="
     }
 
 
+# Each pool's disks, by the device names disk.temperatures gives them, and the boot pool's disk, which pool.query
+# leaves out and disk.details names. Each disk's reading and critical temperature as TrueNAS reads them from the
+# kernel's sensors: nvme2n1's 32.5 shows as 33, a half rounded up.
+POOL_DISKS = {"persistent": ["nvme1n1", "nvme2n1", "nvme3n1"], "ephemeral": ["sda"], "boot-pool": ["nvme0n1"]}
+TEMPERATURES = {
+    "nvme0n1": (38.85, 84.85),
+    "nvme1n1": (31.85, 84.85),
+    "nvme2n1": (32.5, 84.85),
+    "nvme3n1": (33.85, 84.85),
+    "sda": (29.0, 70.0),
+}
+SERIAL = "SERIAL-MUST-NOT-LEAK"
+MODEL = "MODEL-MUST-NOT-LEAK"
+
+
+def disk(name, status="ONLINE", read=0, write=0, checksum=0):
+    """A pool's disk as truenas_info's status reads it from pool.query's topology."""
+    return {"name": name, "status": status, "read_errors": read, "write_errors": write, "checksum_errors": checksum}
+
+
+def temperatures(**changed):
+    """Every disk's reading and critical temperature, as truenas_info's status reads disk.temperatures."""
+    readings = TEMPERATURES | changed
+    return {name: {"temp": temp, "critical": critical} for name, (temp, critical) in readings.items()}
+
+
+def disk_details():
+    """disk.details' disks as truenas_info keeps them, each with the serial and model the report never shows."""
+    return [
+        {"name": name, "serial": SERIAL, "model": MODEL, "size": TIB, "imported_zpool": pool, "exported_zpool": None}
+        for pool, names in POOL_DISKS.items()
+        for name in names
+    ]
+
+
+def port(name, up=True, media="40000Mb/s Direct Attach Copper", mtu=1500, kind="PHYSICAL"):
+    """An interface as truenas_info reads it from interface.query; a port that is down has no speed."""
+    link = "LINK_STATE_UP" if up else "LINK_STATE_DOWN"
+    return {"name": name, "aliases": [], "addresses": [], "link_state": link, "type": kind, "mtu": mtu, "media": media}
+
+
+# The home NAS's ports, as seen on it: one of three up, at 40 Gb/s over a direct-attach cable.
+PORTS = [port("enp1s0"), port("enp2s0", up=False, media="Unknown Twisted Pair"), port("enp3s0", False, "")]
+
+
 def pool(name, used, available, layout="raidz1", **more):
     return {
         "name": name,
@@ -1502,6 +1548,7 @@ def pool(name, used, available, layout="raidz1", **more):
         "available": int(available * TIB),
         "scan": scan(),
         "scrub": {"threshold": 35, "enabled": True},
+        "disks": [disk(n) for n in POOL_DISKS.get(name, [])],
         **more,
     }
 
@@ -1545,9 +1592,10 @@ def configured(*shares, retired=()):
     return [{"share": share, "retired": share in retired} for share in shares]
 
 
-def nas_state(pools=None, alerts=(), tasks=None, backups=(), **more):
-    """What truenas_info returns with status, as roles/truenas's status entry point registers it: the disks (with
-    their serials) and the shares beside the health."""
+def nas_state(pools=None, alerts=(), tasks=None, backups=(), health=None, **more):
+    """What truenas_info returns with status, as roles/truenas's status entry point registers it: the ports, the disks
+    (with their serials and models) and the shares beside the health, which `health` changes. The disks' temperatures
+    and the NFS clients read, none of them, and the NAS's clock and this machine's alike."""
     return {
         "changed": False,
         "api_host": "192.0.2.10",
@@ -1555,7 +1603,8 @@ def nas_state(pools=None, alerts=(), tasks=None, backups=(), **more):
         "ready": True,
         "hostname": "truenas",
         "network_pending_changes": False,
-        "disks": [{"name": "sda", "serial": "SERIAL-MUST-NOT-LEAK", "model": "SSD"}],
+        "interfaces": PORTS,
+        "disks": disk_details(),
         "services": {"nfs": {"enable": True, "state": "RUNNING"}, "ssh": {"enable": False, "state": "STOPPED"}},
         "nfs_shares": [{"path": f"/mnt/persistent/{n}", "enabled": True} for n in ("a", "b", "c")]
         + [{"path": "/mnt/ephemeral/off", "enabled": False}],
@@ -1573,15 +1622,34 @@ def nas_state(pools=None, alerts=(), tasks=None, backups=(), **more):
             if tasks is None
             else tasks,
             "time_machine": list(backups),
+            "datetime": iso(NAS_NOW),
+            "read_at": iso(NAS_NOW),
+            "temperatures": temperatures(),
+            "nfs_clients": [],
+            "unread": {},
+            **(health or {}),
         },
         **more,
     }
 
 
-def nas_report(state=None, types=(), release="25.10", configured_macs=(), **found):
-    """The report of the NAS beside a Proxmox host that holds nothing to report, with the Macs configured."""
+# The NAS's services as group_vars/nas gives them (truenas_services, and cifs from truenas_smb_service), and the
+# machines of this setup by address, as group_vars/all/status.yml names them.
+NAS_SERVICES = {
+    "nfs": {"enabled": True, "state": "started"},
+    "ftp": {"enabled": False, "state": "stopped"},
+    "ssh": {"enabled": False, "state": "stopped"},
+    "cifs": {"enabled": False, "state": "stopped"},
+}
+NAS_MACHINES = {"192.0.2.20": "the Proxmox host", "192.0.2.30": "homeserver-cp-1", "192.0.2.31": "homeserver-worker-1"}
+
+
+def nas_report(state=None, types=(), release="25.10", configured_macs=(), services=None, known=None, **found):
+    """The report of the NAS beside a Proxmox host that holds nothing to report, with the Macs configured, and the
+    services and machines of this setup when given."""
+    state = nas_state() if state is None else state
     return fs.report(
-        {"proxmox": {}, "nas": fs.nas(nas_state() if state is None else state, release, configured_macs), **found},
+        {"proxmox": {}, "nas": fs.nas(state, release, configured_macs, services, known), **found},
         NAS_SETUP,
         types,
         now=NAS_NOW,
@@ -1612,8 +1680,10 @@ def test_the_nas_from_truenas_info():
         ("persistent/proxmox/vm", "daily"),
         ("persistent/nextcloud", "hourly"),
     ]
-    assert found["nfs"] == {"enabled": True, "state": "RUNNING", "shares": 3}
-    assert "SERIAL-MUST-NOT-LEAK" not in json.dumps(found)
+    assert found["nfs"] == {"enabled": True, "state": "RUNNING", "shares": 3, "clients": []}
+    assert found["link"] == {"ports": 3, "up": 1, "speeds": ["40 Gb/s"], "mtu": 1500}
+    assert found["clock_drift"] == 0 and found["unexpected_services"] == [] and found["errors"] == []
+    assert SERIAL not in json.dumps(found) and MODEL not in json.dumps(found)
 
 
 @pytest.mark.parametrize(
@@ -2072,6 +2142,329 @@ def test_the_nas_report_is_json():
     model = nas_report()
     assert json.loads(json.dumps(model)) == model
     assert "SERIAL-MUST-NOT-LEAK" not in json.dumps(model)
+
+
+def nas_block(model, color=False):
+    """The NAS section's lines as the report shows them."""
+    return dict(fs.blocks(model, color))["nas"]
+
+
+def test_the_nas_network_and_disks_lines():
+    """The ports up and their speed, then each pool's disks under the pools, the boot pool's after them, each with its
+    reading in whole degrees (nvme2n1's 32.5 shows as 33), and who has the NFS shares mounted: nobody here."""
+    lines = nas_block(nas_report())
+    assert lines[1] == " Network    40 Gb/s · 1 of 3 ports up"
+    disks = lines.index(" Disks      persistent  nvme1n1 32 · nvme2n1 33 · nvme3n1 34")
+    assert lines[disks - 2].startswith(" Pools      persistent  raidz1  online")
+    assert lines[disks + 1 : disks + 3] == ["            ephemeral   sda 29", "            boot-pool   nvme0n1 39"]
+    assert lines[disks + 3].startswith(" Snapshots  ")
+    assert " NFS        running · 3 shares · mounted by nothing" in lines
+
+
+def test_each_disk_by_pool_with_its_temperature_and_no_serial():
+    """Each pool's disks in its topology's order, the boot pool's from disk.details, then a disk in no pool, here one
+    TrueNAS has no reading for; neither serials nor models."""
+    state = nas_state(health={"temperatures": temperatures(sdb=(None, None))})
+    state["disks"].append({"name": "sdb", "serial": SERIAL, "model": MODEL, "imported_zpool": None})
+    found = fs.nas(state, "25.10")
+    assert [(d["name"], d["pool"], d["temp"], d["critical"]) for d in found["disks"]] == [
+        ("nvme1n1", "persistent", 32, 85),
+        ("nvme2n1", "persistent", 33, 85),
+        ("nvme3n1", "persistent", 34, 85),
+        ("sda", "ephemeral", 29, 70),
+        ("nvme0n1", "boot-pool", 39, 85),
+        ("sdb", "", None, None),
+    ]
+    assert found["disks"][0] == {
+        "name": "nvme1n1",
+        "pool": "persistent",
+        "temp": 32,
+        "critical": 85,
+        "status": "ONLINE",
+        "read_errors": 0,
+        "write_errors": 0,
+        "checksum_errors": 0,
+    }
+    assert found["temperatures_read"] is True
+    assert SERIAL not in json.dumps(found) and MODEL not in json.dumps(found)
+    lines = nas_block(nas_report(state))
+    assert "            no pool     sdb —" in lines, lines
+
+
+@pytest.mark.parametrize(
+    ("value", "whole"),
+    [(32.5, 33), (33.5, 34), (31.49, 31), (84.85, 85), (70, 70), (None, None), (True, None), ("40", None)],
+)
+def test_temperatures_show_in_whole_degrees_a_half_rounded_up(value, whole):
+    assert fs.whole_celsius(value) == whole
+
+
+@pytest.mark.parametrize(
+    ("reading", "todo", "style"),
+    [
+        pytest.param(75.0, True, "33", id="exactly-10-below"),
+        pytest.param(74.5, True, "33", id="74.5-shows-as-75"),
+        pytest.param(74.49, False, "", id="11-below"),
+        pytest.param(84.0, True, "33", id="1-below"),
+        pytest.param(84.85, False, "31", id="at-critical"),
+        pytest.param(91.0, False, "31", id="above-critical"),
+    ],
+)
+def test_a_disk_near_its_critical_temperature(reading, todo, style):
+    """Within 10 °C of the disk's own critical temperature, in the whole degrees shown, is a thing to do and yellow; at
+    or above it red and nothing more, since TrueNAS's own alert says so."""
+    model = nas_report(nas_state(health={"temperatures": temperatures(nvme3n1=(reading, 84.85))}))
+    shown = fs.whole_celsius(reading)
+    text = f"the disk is at {shown} °C, within 10 °C of its critical temperature of 85 °C"
+    assert attention(model) == ([("todo", "nvme3n1", text, "")] if todo else [])
+    assert model["exit"] == 0
+    line = next(line for line in nas_block(model, True) if "nvme3n1" in line)
+    assert line.endswith(f"nvme3n1\033[{style}m {shown}\033[0m" if style else f"nvme3n1 {shown}"), line
+
+
+def test_a_disk_without_a_critical_temperature_is_never_hot():
+    model = nas_report(nas_state(health={"temperatures": temperatures(nvme3n1=(91.0, None), sda=(None, 70.0))}))
+    assert model["attention"] == []
+    lines = nas_block(model)
+    assert " Disks      persistent  nvme1n1 32 · nvme2n1 33 · nvme3n1 91" in lines
+    assert "            ephemeral   sda —" in lines
+
+
+def test_a_disks_errors_and_state_beside_its_temperature():
+    """ZFS's error counts on a disk are a thing to do naming its pool, and a state other than ONLINE is shown; the
+    pool's own line is as it was. The line wraps between disks, under the first."""
+    persistent = [disk("nvme1n1"), disk("nvme2n1", read=1, write=2, checksum=3), disk("nvme3n1", "FAULTED", checksum=1)]
+    state = nas_state(
+        pools=[pool("persistent", 2.2, 4.9, disks=persistent), pool("ephemeral", 1.0, 2.6, layout="stripe")],
+        health={"temperatures": temperatures(nvme1n1=(None, None))},
+    )
+    model = nas_report(state)
+    assert attention(model) == [
+        ("todo", "nvme2n1", "the disk has 1 read, 2 write and 3 checksum errors in persistent", ""),
+        ("todo", "nvme3n1", "the disk has 1 checksum error in persistent", ""),
+    ]
+    lines = nas_block(model)
+    disks = lines.index(" Disks      persistent  nvme1n1 — · nvme2n1 33 (1 read, 2 write, 3 checksum)")
+    assert lines[disks + 1] == " " * 24 + "nvme3n1 34 (faulted, 1 checksum)"
+    assert any(line.startswith(" Pools      persistent  raidz1  online") for line in lines)
+    out = "\n".join(nas_block(model, True))
+    assert "\033[33m (1 read, 2 write, 3 checksum)\033[0m" in out and "\033[31m (faulted, 1 checksum)\033[0m" in out
+    assert model["nas"]["disks"][1] == {
+        "name": "nvme2n1",
+        "pool": "persistent",
+        "temp": 33,
+        "critical": 85,
+        "status": "ONLINE",
+        "read_errors": 1,
+        "write_errors": 2,
+        "checksum_errors": 3,
+    }
+
+
+def test_temperatures_not_read_leave_the_disks_without_them():
+    """disk.temperatures refused: the disks are listed without a reading, the reads that failed say so, and the NAS
+    is read all the same."""
+    why = "disk.temperatures: [EPERM] Not authorized"
+    state = nas_state(health={"temperatures": None, "unread": {"temperatures": why}})
+    model = nas_report(state)
+    assert model["exit"] == 0 and model["attention"] == []
+    assert model["nas"]["temperatures_read"] is False and model["nas"]["errors"] == [f"the disks' temperatures: {why}"]
+    assert [d["temp"] for d in model["nas"]["disks"]] == [None] * 5
+    lines = nas_block(model)
+    disks = lines.index(" Disks      persistent  nvme1n1 · nvme2n1 · nvme3n1")
+    assert lines[disks + 1 : disks + 3] == ["            ephemeral   sda", "            boot-pool   nvme0n1"]
+    assert dict(fs.blocks(model))["errors"] == [f" not read: the disks' temperatures: {why}", ""]
+
+
+@pytest.mark.parametrize(
+    ("media", "speed"),
+    [
+        ("40000Mb/s Direct Attach Copper", "40 Gb/s"),
+        ("1000baseT <full-duplex>", "1 Gb/s"),
+        ("2500baseT <full-duplex>", "2.5 Gb/s"),
+        ("100baseTX <full-duplex>", "100 Mb/s"),
+        ("10Gbase-SR", "10 Gb/s"),
+        ("Unknown Twisted Pair", "Unknown Twisted Pair"),
+        ("", "speed unknown"),
+    ],
+)
+def test_a_ports_speed_from_how_truenas_words_it(media, speed):
+    assert fs.link_speed(media) == speed
+
+
+@pytest.mark.parametrize(
+    ("ports", "line"),
+    [
+        pytest.param(PORTS, " Network    40 Gb/s · 1 of 3 ports up", id="one-of-three"),
+        pytest.param(
+            [
+                port("enp1s0", mtu=9000),
+                port("enp2s0", media="1000baseT <full-duplex>", mtu=9000),
+                port("enp3s0", up=False),
+                port("br0", kind="BRIDGE", media=""),
+            ],
+            " Network    40 Gb/s · 1 Gb/s · MTU 9000 · 2 of 3 ports up",
+            id="jumbo-frames-and-a-bridge",
+        ),
+        pytest.param([port("enp1s0", up=False)], " Network    0 of 1 port up", id="none-up"),
+        pytest.param([], None, id="no-interfaces"),
+    ],
+)
+def test_the_network_line(ports, line):
+    """The physical ports alone, each up one's speed, and an MTU other than 1500; display only, never judged."""
+    model = nas_report(nas_state(interfaces=ports))
+    assert model["attention"] == []
+    lines = nas_block(model)
+    assert (lines[1] == line) if line else not any(line.startswith(" Network") for line in lines), lines
+
+
+@pytest.mark.parametrize(
+    ("addresses", "known", "mounted", "unexpected"),
+    [
+        pytest.param([], NAS_MACHINES, "mounted by nothing", [], id="no-client"),
+        pytest.param(
+            ["192.0.2.31", "192.0.2.20"],
+            NAS_MACHINES,
+            "mounted by the Proxmox host and homeserver-worker-1",
+            [],
+            id="this-setups-machines",
+        ),
+        pytest.param(
+            ["192.0.2.20", "192.0.2.99", "::ffff:192.0.2.30"],
+            NAS_MACHINES,
+            "mounted by the Proxmox host, homeserver-cp-1 and 192.0.2.99",
+            ["192.0.2.99"],
+            id="an-unknown-client",
+        ),
+        pytest.param(["192.0.2.99"], {}, "mounted by 192.0.2.99", [], id="no-machine-configured"),
+    ],
+)
+def test_who_has_the_nfs_shares_mounted(addresses, known, mounted, unexpected):
+    """Each client named by the machines of this setup, theirs first; any other address is a problem, unless the
+    configuration names no machine at all."""
+    model = nas_report(nas_state(health={"nfs_clients": addresses}), known=known)
+    assert f" NFS        running · 3 shares · {mounted}" in nas_block(model)
+    assert model["nas"]["unexpected_clients"] == unexpected
+    text = "an NFS share is mounted from {}, which is no machine of this setup"
+    assert attention(model) == [("problem", "nfs", text.format(address), "") for address in unexpected]
+    assert model["exit"] == (1 if unexpected else 0)
+    if unexpected:
+        assert "\033[31m192.0.2.99\033[0m" in "\n".join(nas_block(model, True))
+        assert model["nas"]["nfs"]["clients"] == [
+            {"address": "192.0.2.20", "name": "the Proxmox host"},
+            {"address": "192.0.2.30", "name": "homeserver-cp-1"},
+            {"address": "192.0.2.99", "name": ""},
+        ]
+
+
+def test_nfs_clients_not_read_are_not_shown():
+    why = "nfs.get_nfs4_clients: [EPERM] Not authorized"
+    model = nas_report(nas_state(health={"nfs_clients": None, "unread": {"nfs_clients": why}}), known=NAS_MACHINES)
+    assert model["exit"] == 0 and model["attention"] == [] and model["nas"]["nfs"]["clients"] is None
+    assert " NFS        running · 3 shares" in nas_block(model) and "mounted" not in "\n".join(nas_block(model))
+    assert dict(fs.blocks(model))["errors"] == [f" not read: the NFS clients: {why}", ""]
+
+
+@pytest.mark.parametrize(
+    ("services", "configured", "unexpected"),
+    [
+        pytest.param({"ssh": "RUNNING"}, NAS_SERVICES, ["ssh"], id="ssh-running"),
+        pytest.param({"ssh": "RUNNING", "cifs": "RUNNING"}, NAS_SERVICES, ["ssh", "cifs"], id="ssh-and-smb"),
+        pytest.param({"ssh": "STOPPED"}, NAS_SERVICES, [], id="ssh-stopped"),
+        pytest.param({"nfs": "RUNNING", "snmp": "RUNNING"}, NAS_SERVICES, [], id="started-or-not-configured"),
+        pytest.param({"ssh": "RUNNING"}, None, [], id="no-configuration"),
+    ],
+)
+def test_a_service_that_runs_though_configured_stopped(services, configured, unexpected):
+    state = nas_state(services={name: {"enable": False, "state": s} for name, s in services.items()})
+    model = nas_report(state, services=configured)
+    assert model["nas"]["unexpected_services"] == unexpected
+    text = "{} is running, though the configuration keeps it stopped"
+    assert [a for a in attention(model) if a[1] == "nas"] == [
+        ("problem", "nas", text.format(name), "just deploy truenas") for name in unexpected
+    ]
+    lines = nas_block(model)
+    services_line = [line for line in lines if line.startswith(" Services")]
+    shown = " · ".join(f"{name} running, configured stopped" for name in unexpected)
+    assert services_line == ([f" Services   {shown}"] if unexpected else []), lines
+
+
+@pytest.mark.parametrize(
+    ("drift", "text"),
+    [
+        pytest.param(-95, "the NAS's clock is 95 s behind this machine's", id="95-behind"),
+        pytest.param(-60, "the NAS's clock is 60 s behind this machine's", id="60-behind"),
+        pytest.param(60, "the NAS's clock is 60 s ahead of this machine's", id="60-ahead"),
+        pytest.param(3 * 3600, "the NAS's clock is 3 h ahead of this machine's", id="hours-ahead"),
+        pytest.param(59, None, id="59-ahead"),
+        pytest.param(-59, None, id="59-behind"),
+        pytest.param(0, None, id="in-step"),
+    ],
+)
+def test_the_nas_clock_against_this_machines(drift, text):
+    """A drift of 60 s or more either way is a thing to do, pointing at the NAS's NTP servers; nothing shows below."""
+    model = nas_report(nas_state(health={"datetime": iso(NAS_NOW + drift), "read_at": iso(NAS_NOW)}))
+    assert model["nas"]["clock_drift"] == drift
+    assert attention(model) == ([("todo", "nas", text, "its NTP servers")] if text else [])
+    assert "clock" not in "\n".join(nas_block(model))
+
+
+def test_the_nas_lines_in_order():
+    """Network, pools, disks, snapshots, NFS, SMB, the Macs, the services that run though configured stopped, alerts."""
+    state = macs(backup())
+    state["services"]["ssh"] = {"enable": False, "state": "RUNNING"}
+    configured_services = NAS_SERVICES | {"cifs": {"enabled": True, "state": "started"}}
+    model = nas_report(state, configured_macs=LAPTOP, services=configured_services, known=NAS_MACHINES)
+    lines = nas_block(model)
+    keys = [line[:12].strip() for line in lines[1:] if line[:12].strip()]
+    assert keys == ["Network", "Pools", "Disks", "Snapshots", "NFS", "SMB", "Macs", "Services", "Alerts"], lines
+    assert max(len(line) for line in lines) <= 100
+
+
+def rich_nas():
+    """A NAS whose every new line has something to say: a hot disk, one with errors, a service running though
+    configured stopped, a client that is no machine of this setup, and a clock behind this machine's."""
+    persistent = [disk("nvme1n1"), disk("nvme2n1", checksum=3), disk("nvme3n1")]
+    state = nas_state(
+        pools=[pool("persistent", 2.2, 4.9, disks=persistent), pool("ephemeral", 1.0, 2.6, layout="stripe")],
+        health={
+            "temperatures": temperatures(nvme3n1=(78.0, 84.85)),
+            "nfs_clients": ["192.0.2.20", "192.0.2.99"],
+            "datetime": iso(NAS_NOW - 95),
+            "read_at": iso(NAS_NOW),
+        },
+        alerts=[{"klass": "SMART", "level": "WARNING", "text": "A disk wears out."}],
+    )
+    state["services"]["ssh"] = {"enable": False, "state": "RUNNING"}
+    return fs.nas(state, "25.10", (), NAS_SERVICES, NAS_MACHINES)
+
+
+def unread_nas():
+    """A NAS whose temperatures and NFS clients were refused: the reads that failed instead of what they say."""
+    why = {"temperatures": "disk.temperatures: [EPERM] x", "nfs_clients": "nfs.get_nfs3_clients: [EPERM] x"}
+    state = nas_state(health={"temperatures": None, "nfs_clients": None, "unread": why})
+    return fs.nas(state, "25.10", (), NAS_SERVICES, NAS_MACHINES)
+
+
+@pytest.mark.parametrize("nas_found", [rich_nas(), unread_nas()], ids=["every-new-line", "reads-refused"])
+@pytest.mark.parametrize("every", [(), fs.TYPES], ids=["no-types", "every-type"])
+def test_just_status_shows_the_nas_as_just_status_nas_does(nas_found, every):
+    """just status is the union of its sections: the NAS's block, every new line included, what it needs and the reads
+    that failed are the same whether the NAS is shown alone or with every other section."""
+    found = everything() | {"nas": nas_found}
+    alone, alone_model = blocks_of(found, ["nas"])
+    whole, whole_model = blocks_of(found, list(every))
+    assert alone["nas"] == whole["nas"]
+    items = alone_model["attention"]
+    assert [a for a in whole_model["attention"] if a in items] == items
+    assert alone_model["counts"]["nas"] == whole_model["counts"]["nas"]
+    assert all(line in whole["attention"] for line in alone.get("attention", [])[1:])
+    assert all(line in whole.get("errors", []) for line in alone.get("errors", []))
+    if nas_found["unexpected_services"]:
+        assert {a["subject"] for a in items} == {"nas", "nfs", "nvme2n1", "nvme3n1"}
+        assert alone_model["counts"]["nas"] == {"problem": 2, "todo": 4}
+    else:
+        assert len(alone["errors"]) == 3
 
 
 # ------------------------------------------------------------------------------------------------ backups ---

@@ -39,6 +39,20 @@ status_nas_macs: >-
                             'retired': true if mac.retired | default(false) else false}) -%}
   {%- endfor -%}
   {{ out }}
+# The machines of this setup by address, as local.yml gives them: the Proxmox host and each of the cluster's nodes. The
+# report names who has the NAS's NFS shares mounted by them, and any other address is a problem. The Tailscale subnet
+# router masquerades every tailnet client to the Proxmox host's address, so "the Proxmox host" may be the tailnet too.
+status_nas_known_clients: >-
+  {%- set out = [] -%}
+  {%- set pve = proxmox_address | default('', true) | string | trim -%}
+  {%- if pve -%}
+  {%-   set _ = out.append({'key': pve, 'value': 'the Proxmox host'}) -%}
+  {%- endif -%}
+  {%- set nodes = kubernetes_node_addresses | default({}, true) -%}
+  {%- for node in (nodes | dict2items if nodes is mapping else []) if node.value | default('', true) | string | trim -%}
+  {%-   set _ = out.append({'key': node.value | string | trim, 'value': node.key}) -%}
+  {%- endfor -%}
+  {{ out | items2dict }}
 # The admin pages the report lists: the Proxmox host's, the NAS's, and the cluster's two APIs, on the control plane.
 # The Proxmox host's own page is its Tailscale node's too, which the report also gives at the host's tailnet name.
 status_admin: >-
@@ -73,6 +87,9 @@ status_commands:
     just deploy truenas refuses it until truenas_supported_version (roles/truenas) is raised, once TrueNAS's API
     changes are checked
   nas_network: commit or roll them back on the NAS's Network page; just deploy truenas refuses to run until then
+  nas_clock: >-
+    the NAS's NTP servers, in System, General Settings on the NAS, which truenas_ntp_servers
+    (group_vars/nas/truenas.yml) sets with just deploy truenas
   time_machine: on the Mac, Time Machine's settings and its last backup's error (scripts/runbooks/timemachine.md)
   time_machine_quota: >-
     a larger quota_gib in local.yml and just deploy truenas, or fewer weeks of weekly snapshots
