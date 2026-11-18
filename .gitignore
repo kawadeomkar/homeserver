@@ -14,6 +14,13 @@ inventory
 group_vars/**/local.yml*
 group_vars/**/local.yaml*
 !group_vars/all/local.yml.example
+# The vault: Ansible's secrets, encrypted with .vault_pass, kept in your password manager and in no repository
+# (README.md, The vault). Its committed counterpart, the keys alone, is local.vault.yml.example. Until 2026-10-20
+# the vault was committed as group_vars/all/vault.yml; a path no commit ever held cannot be overwritten by a
+# checkout of an older branch, which git does to an ignored file without asking.
+group_vars/**/local.vault.yml*
+group_vars/**/local.vault.yaml*
+!group_vars/all/local.vault.yml.example
 
 # Hardware notes (addresses, MACs, serials) and Talos's client config, wherever they are written.
 /MACHINES*

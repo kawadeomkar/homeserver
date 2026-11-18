@@ -67,8 +67,8 @@ jobs:
         run: pipx install "poetry==${POETRY_VERSION}"
       - name: Install the locked tooling
         run: make venv PYTHON=python
-      # The real vault password never reaches CI: without .vault_pass, make gives ansible-lint a
-      # placeholder, and the vault's contents go unlinted (tests/policy checks it stays encrypted).
+      # CI has no vault (it is git-ignored) and no .vault_pass: make gives ansible-lint a placeholder
+      # password file, since ansible.cfg names one.
       # -k: report every failing linter, not only the first. The tests run in the test job.
       - name: yamllint, ansible-lint, ruff, module documentation, GitHub config schemas, role references
         run: make -k linters
