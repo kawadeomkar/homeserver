@@ -222,7 +222,7 @@ def _temperatures(answer):
     """disk.temperatures' answer with thresholds, {disk: [celsius, critical celsius]}, as {disk: {temp, critical}}.
     Either is null for a disk whose sensor TrueNAS cannot read (a virtual disk has none)."""
     out = {}
-    for name, value in (answer.items() if isinstance(answer, dict) else ()):
+    for name, value in answer.items() if isinstance(answer, dict) else ():
         reading, critical = [*value, None, None][:2] if isinstance(value, (list, tuple)) else (value, None)
         out[str(name)] = {"temp": _celsius(reading), "critical": _celsius(critical)}
     return out

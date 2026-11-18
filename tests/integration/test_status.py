@@ -1282,7 +1282,7 @@ def test_the_nas_sections_details(nas_tree, nas, tmp_path):
     assert "nas ok " in reading(out), out
     lines = out.splitlines()
     assert " Network    40 Gb/s · MTU 9000 · 1 of 3 ports up" in lines, out
-    disks = lines.index(" Disks      persistent  nvme1n1 32 · nvme2n1 33 (3 checksum) · nvme3n1 78")
+    disks = lines.index(" Disks °C   persistent  nvme1n1 32 · nvme2n1 33 (3 checksum) · nvme3n1 78")
     assert lines[disks + 1 : disks + 3] == ["            ephemeral   sda 29", "            boot-pool   nvme0n1 39"], out
     nfs = " NFS        running · 1 share · mounted by the Proxmox host, homeserver-worker-1 and 198.51.100.7"
     assert nfs in lines and " Services   ssh running, configured stopped" in lines, out
@@ -1290,7 +1290,7 @@ def test_the_nas_sections_details(nas_tree, nas, tmp_path):
     assert [k for k in keys[: keys.index("Alerts") + 1] if k] == [
         "Network",
         "Pools",
-        "Disks",
+        "Disks °C",
         "Snapshots",
         "NFS",
         "Services",

@@ -2154,7 +2154,7 @@ def test_the_nas_network_and_disks_lines():
     reading in whole degrees (nvme2n1's 32.5 shows as 33), and who has the NFS shares mounted: nobody here."""
     lines = nas_block(nas_report())
     assert lines[1] == " Network    40 Gb/s · 1 of 3 ports up"
-    disks = lines.index(" Disks      persistent  nvme1n1 32 · nvme2n1 33 · nvme3n1 34")
+    disks = lines.index(" Disks °C   persistent  nvme1n1 32 · nvme2n1 33 · nvme3n1 34")
     assert lines[disks - 2].startswith(" Pools      persistent  raidz1  online")
     assert lines[disks + 1 : disks + 3] == ["            ephemeral   sda 29", "            boot-pool   nvme0n1 39"]
     assert lines[disks + 3].startswith(" Snapshots  ")
@@ -2226,7 +2226,7 @@ def test_a_disk_without_a_critical_temperature_is_never_hot():
     model = nas_report(nas_state(health={"temperatures": temperatures(nvme3n1=(91.0, None), sda=(None, 70.0))}))
     assert model["attention"] == []
     lines = nas_block(model)
-    assert " Disks      persistent  nvme1n1 32 · nvme2n1 33 · nvme3n1 91" in lines
+    assert " Disks °C   persistent  nvme1n1 32 · nvme2n1 33 · nvme3n1 91" in lines
     assert "            ephemeral   sda —" in lines
 
 
@@ -2244,7 +2244,7 @@ def test_a_disks_errors_and_state_beside_its_temperature():
         ("todo", "nvme3n1", "the disk has 1 checksum error in persistent", ""),
     ]
     lines = nas_block(model)
-    disks = lines.index(" Disks      persistent  nvme1n1 — · nvme2n1 33 (1 read, 2 write, 3 checksum)")
+    disks = lines.index(" Disks °C   persistent  nvme1n1 — · nvme2n1 33 (1 read, 2 write, 3 checksum)")
     assert lines[disks + 1] == " " * 24 + "nvme3n1 34 (faulted, 1 checksum)"
     assert any(line.startswith(" Pools      persistent  raidz1  online") for line in lines)
     out = "\n".join(nas_block(model, True))
@@ -2417,7 +2417,7 @@ def test_the_nas_lines_in_order():
     model = nas_report(state, configured_macs=LAPTOP, services=configured_services, known=NAS_MACHINES)
     lines = nas_block(model)
     keys = [line[:12].strip() for line in lines[1:] if line[:12].strip()]
-    assert keys == ["Network", "Pools", "Disks", "Snapshots", "NFS", "SMB", "Macs", "Services", "Alerts"], lines
+    assert keys == ["Network", "Pools", "Disks °C", "Snapshots", "NFS", "SMB", "Macs", "Services", "Alerts"], lines
     assert max(len(line) for line in lines) <= 100
 
 

@@ -3205,8 +3205,10 @@ def _nas_lines(model):
             line.cell(_sizes(pool["used"], pool["total"]), 15)
         line.add(*_scan_text(pool))
         lines.append(line)
+    # The readings' unit in the key, once: they are whole degrees Celsius.
+    label = "Disks °C" if found.get("temperatures_read") else "Disks"
     for i, (group, members) in enumerate(disks.items()):
-        head = Line().add(" ").cell("Disks" if i == 0 else "", 11, "k")
+        head = Line().add(" ").cell(label if i == 0 else "", 11, "k")
         head.cell(group or "no pool", width, "b" if group else "d")
         lines += _phrases("", [_disk_phrase(d, found.get("temperatures_read")) for d in members], head=head)
     datasets = {}

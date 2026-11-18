@@ -193,22 +193,22 @@ changes never committed, a disk within 10 °C of its own critical temperature, a
 errors (naming its pool and the counts), and the NAS's clock 60 s or more from this machine's either way (with
 `nas_clock`) are things to do.
 
-The section's lines, in order: the header; `Network`, each port that is up by its speed (Mb/s or Gb/s, from `<n>Mb/s`
-or `<n>base…`, else TrueNAS's own words), the MTU when it is not 1500, and how many of the ports (physical interfaces:
-a bridge, VLAN or link aggregation is none) are up, never judged; `Pools`; `Disks`, a line per pool, then the boot
-pool's and a disk in no pool, each disk with its temperature in whole degrees Celsius (a half rounded up), yellow
-within 10 °C of its critical one and red at or above it, `—` for no reading, and in brackets a state other than ONLINE
-(red) and its errors (yellow), as `nvme3n1 33 (3 checksum)`; `Snapshots`; `NFS`, with who has its shares mounted, `by
-the Proxmox host and homeserver-worker-1`, an address no machine has in red, or `mounted by nothing`; `SMB` and `Macs`;
-`Services`, only when one runs that is to be stopped; `Alerts`. A disk at or above its critical temperature is red and
-nothing more: TrueNAS's own alert (Disk Temperature Is Too Hot, critical) is among the alerts already. A pool's own
-line is the same whatever its disks' errors. A read of the temperatures or of the NFS clients that failed leaves them
-out of the section and is listed with the reads that failed; the NAS is read all the same. **Tailnet clients reach the
-LAN masqueraded as the Proxmox host's address** (roles/proxmox_tailscale), so the NAS sees a tailnet client that mounts
-a share as `the Proxmox host`: that name can stand for traffic from the tailnet too, which only the tailnet guard and
-the shares' hosts keep out. With no machine in `status_nas_known_clients`, every client is shown by its address and
-none is judged. Whatever sections are asked for, the NAS's section, what it needs and the reads that failed are the
-same: `just status` shows each section as `just status <section>` does.
+The section's lines, in order: the header; `Network`, each port that is up by its speed (Mb/s or Gb/s, from `<n>Mb/s` or
+`<n>base…`, else TrueNAS's own words), the MTU when it is not 1500, and how many of the ports (physical interfaces: a
+bridge, VLAN or link aggregation is none) are up, never judged; `Pools`; `Disks °C` (`Disks` when the temperatures were
+not read), a line per pool, then the boot pool's and a disk in no pool, each disk with its temperature in whole degrees
+Celsius (a half rounded up), yellow within 10 °C of its critical one and red at or above it, `—` for no reading, and in
+brackets a state other than ONLINE (red) and its errors (yellow), as `nvme3n1 33 (3 checksum)`; `Snapshots`; `NFS`, with
+who has its shares mounted, `by the Proxmox host and homeserver-worker-1`, an address no machine has in red, or `mounted
+by nothing`; `SMB` and `Macs`; `Services`, only when one runs that is to be stopped; `Alerts`. A disk at or above its
+critical temperature is red and nothing more: TrueNAS's own alert (Disk Temperature Is Too Hot, critical) is among the
+alerts already. A pool's own line is the same whatever its disks' errors. A read of the temperatures or of the NFS
+clients that failed leaves them out of the section and is listed with the reads that failed; the NAS is read all the
+same. **Tailnet clients reach the LAN masqueraded as the Proxmox host's address** (roles/proxmox_tailscale), so the NAS
+sees a tailnet client that mounts a share as `the Proxmox host`: that name can stand for traffic from the tailnet too,
+which only the tailnet guard and the shares' hosts keep out. With no machine in `status_nas_known_clients`, every client
+is shown by its address and none is judged. Whatever sections are asked for, the NAS's section, what it needs and the
+reads that failed are the same: `just status` shows each section as `just status <section>` does.
 
 **A Mac's Time Machine backup** is judged by the Macs of `status_nas_macs`, each its share's name and whether it is
 retired, as the configuration says, never the share: TrueNAS disables a pool's shares when the pool is exported, and a
