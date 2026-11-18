@@ -953,7 +953,8 @@ def test_time_machine_gives_each_mac_a_dataset_login_and_share(tmp_path):
         "persistent/timemachine/old",
     ]
     assert {d.get("share_type") for d in got["datasets"]} == {"SMB"}
-    assert got["datasets"][1]["properties"] == {"quota": 2048 * 2**30, "sync": "STANDARD"}
+    assert got["datasets"][1]["properties"] == {"quota": 2048 * 2**30, "refquota": 1536 * 2**30, "sync": "STANDARD"}
+    assert got["datasets"][2]["properties"]["refquota"] == 384 * 2**30
     assert set(got["all_datasets"]) >= {d["name"] for d in got["datasets"]}
     assert [(t["dataset"], t["lifetime_value"], t["lifetime_unit"], t["enabled"]) for t in got["tasks"]] == [
         ("persistent/timemachine/laptop", 8, "WEEK", True),

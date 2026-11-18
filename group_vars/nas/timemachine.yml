@@ -11,15 +11,23 @@ timemachine_dataset_root: "{{ nas_pools.persistent }}/timemachine"
 # The SMB preset (share_type SMB) is applied when a dataset is created, the only moment case-insensitivity can be
 # chosen; Samba would otherwise scan a directory of thousands of band files to match a name. Compression, atime and the
 # record size are inherited from the pool's root: an encrypted disk image does not compress, and its bands are
-# rewritten in place. sync stays STANDARD, as there is no UPS and Time Machine asks for its data on stable storage. The
-# quota, which counts the snapshots, is the backstop; the Mac's own limit, about half of it, is the working one.
+# rewritten in place. sync stays STANDARD, as there is no UPS and Time Machine asks for its data on stable storage.
+# Two limits, as Samba reports the dataset's statvfs: the disk the Mac sees is the refquota, three quarters of quota_gib,
+# which counts the disk image alone. The Mac's own limit, about half of quota_gib, is the working one, and TrueNAS's
+# alert at 80% of the refquota says that limit is missing. The quota bounds the image and its snapshots together,
+# which keep every block a backup overwrites for up to eight weeks: once the image is full, Time Machine writes into
+# the space it thins, and should the snapshots take the rest of the quota, those writes fail inside an image that still
+# shows free space. So that rest is the snapshots' room, `just status` warns at 80% of the quota (TrueNAS skips its own
+# quota alert under a smaller refquota), and the remedy is a larger quota_gib or fewer weekly snapshots, never a
+# smaller limit on the Mac, which frees nothing the snapshots hold.
 truenas_datasets_timemachine: >-
   {%- set out = [] -%}
   {%- if timemachine_present -%}
   {%-   set _ = out.append({'name': timemachine_dataset_root, 'share_type': 'SMB'}) -%}
   {%-   for mac in timemachine_macs -%}
+  {%-     set quota = (mac.quota_gib | int) * 1073741824 -%}
   {%-     set _ = out.append({'name': timemachine_dataset_root ~ '/' ~ mac.name, 'share_type': 'SMB',
-                            'properties': {'quota': (mac.quota_gib | int) * 1073741824, 'sync': 'STANDARD'}}) -%}
+                            'properties': {'quota': quota, 'refquota': quota * 3 // 4, 'sync': 'STANDARD'}}) -%}
   {%-   endfor -%}
   {%- endif -%}
   {{ out }}

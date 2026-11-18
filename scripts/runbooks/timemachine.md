@@ -1,13 +1,13 @@
 # Time Machine backups of the Macs on the NAS
 
-Each Mac listed in `local.yml`'s `timemachine_backups` backs up with Time Machine to a share of its own on the NAS,
-over SMB on the LAN. `just deploy truenas` makes, per Mac, a dataset on the redundant pool
-(`persistent/timemachine/<name>`, with the quota given), a weekly snapshot task kept eight weeks, an SMB-only login
+Each Mac listed in `local.yml`'s `timemachine_backups` backs up with Time Machine to a share of its own on the NAS, over
+SMB on the LAN. `just deploy truenas` makes, per Mac, a dataset on the redundant pool (`persistent/timemachine/<name>`,
+with the quota given and a refquota of three quarters of it), a weekly snapshot task kept eight weeks, an SMB-only login
 `tm-<name>` with the uid given, its directory owned by that login alone (0700), and a Time Machine share `tm-<name>`
-whose own option snapshots the dataset a minute after each completed backup, kept a week. It turns SMB on with the
-Apple extensions and transport encryption required, announces the NAS over mDNS alone, and takes the API key's own
-user out of SMB first: `roles/truenas/README.md` says why each, and refuses to start SMB while an SMB login the role does
-not list exists.
+whose own option snapshots the dataset a minute after each completed backup, kept a week. It turns SMB on with the Apple
+extensions and transport encryption required, announces the NAS over mDNS alone, and takes the API key's own user out of
+SMB first: `roles/truenas/README.md` says why each, and refuses to start SMB while an SMB login the role does not list
+exists.
 
 The Mac encrypts its backup itself, with a password that never leaves it and your password manager, so whoever can
 read the NAS cannot read the backup. The SMB login protects the backup's existence, not its contents.
@@ -25,8 +25,9 @@ and backs up when it is home again.
      - {name: laptop, quota_gib: 2048, uid: 3101}
    ```
 
-   `just init` asks for it with a NAS. The quota counts the snapshots and reserves nothing; give the Mac itself a limit
-   of about half of it (below), so the room between is the snapshots'.
+   `just init` asks for it with a NAS. The quota counts the disk image and its snapshots, and reserves nothing. The
+   Mac sees a disk of three quarters of it, the refquota, which counts the image alone; give the Mac itself a limit of
+   about half the quota (below), and the rest of the quota is the snapshots' room.
 2. **Its SMB password in the vault**, 20 characters or more, long and random (`openssl rand -base64 30`), and in your
    password manager: `just vault`, then
 
@@ -59,7 +60,8 @@ SMB, the login, its directory's owner, the share, and the SMB service enabled an
    it must be erased to gain it.
 3. Set the Mac's own limit, about half the quota, in the same dialog's "maximum space used for backups", or with
    `sudo tmutil setquota <destination id> <GB>` (the id from `tmutil destinationinfo`): 1000 GB for a 2048 GiB quota.
-   Time Machine thins its history there, and the NAS's quota is the backstop.
+   Time Machine thins its history there. Should the image pass 80% of the refquota (1229 GiB for that quota), TrueNAS
+   raises an alert: the Mac's limit is then missing or too high.
 4. Let the first backup finish, then let one hourly backup run by itself: a known failure of macOS 26.4 shows only in
    the backups Time Machine starts on its own (below).
 
@@ -71,9 +73,12 @@ SMB, the login, its directory's owner, the share, and the SMB service enabled an
   within two minutes of each completed backup, and a `weekly-` one each Sunday.
 - **Over the first months**, until the disk image has grown to the Mac's limit and for eight weeks after: the dataset's
   space used by snapshots (`usedbysnapshots`, on its page in TrueNAS) stays well inside the room between the Mac's
-  limit and the quota. Once the image is full, each backup overwrites blocks the snapshots keep for up to eight weeks.
-  If it nears the quota, raise `quota_gib` and `just deploy truenas`, or lower the Mac's limit. TrueNAS's quota alerts
-  come first, and `just status` shows them.
+  limit and the quota. Once the image is full, Time Machine writes each backup into the space it thins, and the
+  snapshots keep every block it overwrites for up to eight weeks. Should they take the rest of the quota, writes fail
+  inside a disk image that still shows free space, which can damage it. If the dataset nears its quota, raise
+  `quota_gib` and `just deploy truenas`, or keep the weekly snapshots fewer weeks (`lifetime_value` in
+  `group_vars/nas/timemachine.yml`, a change to the repo). Lowering the Mac's limit frees nothing the snapshots hold.
+  TrueNAS raises no quota alert for these datasets, since their refquota is smaller, so this check is yours.
 
 ## Rotating the SMB password
 
