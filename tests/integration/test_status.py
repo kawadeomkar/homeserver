@@ -1240,13 +1240,13 @@ NFS_OPEN_FILE = "/FAKE-OPEN-FILE-MUST-NOT-LEAK"
 
 def seed_details(path, refused=()):
     """The NAS seed_nas leaves, with something for each of the NAS section's details to say: three ports, one up at
-    40 Gb/s with jumbo frames; nvme3n1 hot, 78 °C of its critical 84.85, and nvme2n1 with three checksum errors; ssh
+    10 Gb/s with jumbo frames; nvme3n1 hot, 78 °C of its critical 84.85, and nvme2n1 with three checksum errors; ssh
     running though the configuration keeps it stopped; the shares mounted by the Proxmox host over NFSv3, and by the
     worker and an address of no machine of this setup over NFSv4; the NAS's clock 95 s behind; and the methods
     `refused` refused."""
     fake = fake_truenas.FakeTrueNAS(path)
     fake.load()
-    fake.s["interfaces"]["enp7s0"].update(media="40000Mb/s Direct Attach Copper", mtu=9000)
+    fake.s["interfaces"]["enp7s0"].update(media="10000Mb/s Twisted Pair", mtu=9000)
     for name in ("enp8s0", "enp9s0"):
         down = {"link": "LINK_STATE_DOWN", "media": "Unknown Twisted Pair"}
         fake.s["interfaces"][name] = {"ipv4_dhcp": False, "ipv6_auto": False, "aliases": [], "live": [], **down}
@@ -1281,7 +1281,7 @@ def test_the_nas_sections_details(nas_tree, nas, tmp_path):
     assert rc == report["exit"] == 1, out + err
     assert "nas ok " in reading(out), out
     lines = out.splitlines()
-    assert " Network    40 Gb/s · MTU 9000 · 1 of 3 ports up" in lines, out
+    assert " Network    10 Gb/s · MTU 9000 · 1 of 3 ports up" in lines, out
     disks = lines.index(" Disks °C   persistent  nvme1n1 32 · nvme2n1 33 (3 checksum) · nvme3n1 78")
     assert lines[disks + 1 : disks + 3] == ["            ephemeral   sda 29", "            boot-pool   nvme0n1 39"], out
     nfs = " NFS        running · 1 share · mounted by the Proxmox host, homeserver-worker-1 and 198.51.100.7"
@@ -1307,7 +1307,7 @@ def test_the_nas_sections_details(nas_tree, nas, tmp_path):
     assert report["attention"][1]["command"] == "just deploy truenas"
     assert report["attention"][2]["command"].startswith("the NAS's NTP servers"), report["attention"]
     found = report["nas"]
-    assert found["link"] == {"ports": 3, "up": 1, "speeds": ["40 Gb/s"], "mtu": 9000}
+    assert found["link"] == {"ports": 3, "up": 1, "speeds": ["10 Gb/s"], "mtu": 9000}
     assert [(d["name"], d["pool"], d["temp"], d["critical"], d["checksum_errors"]) for d in found["disks"]] == [
         ("nvme1n1", "persistent", 32, 85, 0),
         ("nvme2n1", "persistent", 33, 85, 3),

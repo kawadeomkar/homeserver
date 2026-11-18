@@ -385,7 +385,7 @@ def gather(api, importable, status=False):
                 "addresses": [_address(a) for a in iface["state"]["aliases"]],
                 "link_state": iface["state"].get("link_state"),
                 # PHYSICAL for a port; a bridge, a VLAN or a link aggregation is another. Its MTU, and the speed
-                # its link runs at, as TrueNAS words it (40000Mb/s Direct Attach Copper): never its MAC.
+                # its link runs at, as TrueNAS words it (10000Mb/s Twisted Pair): never its MAC.
                 "type": iface.get("type"),
                 "mtu": iface["state"].get("mtu"),
                 "media": iface["state"].get("active_media_subtype") or "",

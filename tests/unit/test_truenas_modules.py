@@ -229,7 +229,7 @@ class ScriptedAPI:
                     "aliases": [],
                     "link_state": "LINK_STATE_UP",
                     "mtu": 9000,
-                    "active_media_subtype": "40000Mb/s Direct Attach Copper",
+                    "active_media_subtype": "10000Mb/s Twisted Pair",
                     "link_address": LINK_ADDRESS,
                 },
             }
@@ -674,7 +674,7 @@ def test_each_interface_with_its_type_mtu_and_speed_and_never_its_mac():
             "link_state": "LINK_STATE_UP",
             "type": "PHYSICAL",
             "mtu": 9000,
-            "media": "40000Mb/s Direct Attach Copper",
+            "media": "10000Mb/s Twisted Pair",
         }
     ]
     assert LINK_ADDRESS not in repr(result)

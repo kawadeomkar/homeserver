@@ -1187,7 +1187,7 @@ TIME_MACHINE_LATE_DAYS = 10
 DISK_HOT_MARGIN = 10
 # The NAS's clock this many seconds or more from this machine's, either way, is a thing to do.
 CLOCK_DRIFT = 60
-# A port's speed as TrueNAS words its link: 40000Mb/s Direct Attach Copper on Linux, 1000baseT <full-duplex> or
+# A port's speed as TrueNAS words its link: 10000Mb/s Twisted Pair on Linux, 1000baseT <full-duplex> or
 # 10Gbase-SR in its API's examples.
 LINK_SPEED = re.compile(r"(\d+(?:\.\d+)?)\s*([MG])b/s|(\d+)(G?)base", re.I)
 ERROR_COUNTS = ("read_errors", "write_errors", "checksum_errors")
@@ -1251,7 +1251,7 @@ def _time_machine(backups, macs):
 
 
 def link_speed(media):
-    """A port's speed from how TrueNAS words its link: 40 Gb/s from 40000Mb/s Direct Attach Copper, 1 Gb/s from
+    """A port's speed from how TrueNAS words its link: 10 Gb/s from 10000Mb/s Twisted Pair, 1 Gb/s from
     1000baseT <full-duplex>, 2.5 Gb/s from 2500baseT; the words themselves when they hold no speed."""
     text = str(media or "").strip()
     found = LINK_SPEED.search(text)

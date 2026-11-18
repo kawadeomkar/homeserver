@@ -71,7 +71,7 @@ Two entry points:
     (`disk`; a disk that is gone by the one TrueNAS last knew there, `unavail_disk`'s name, else its ZFS guid, never
     the vdev's own name, which is its path's and, on a pool made by hand on a `/dev/disk/by-id` path, would carry the
     disk's model and serial), with its state and ZFS's read, write and checksum error counts; each interface's type,
-    MTU and `active_media_subtype` (`40000Mb/s Direct Attach Copper` on the home NAS; the API's examples give
+    MTU and `active_media_subtype` (`10000Mb/s Twisted Pair`, for example; the API's examples give
     `1000baseT <full-duplex>`), never its MAC; and `system.info`'s `datetime`, beside this machine's clock halfway
     through that call (`read_at`), within half its round trip. The boot pool's disks, which `pool.query` leaves out,
     are `disk.details`' disks whose `imported_zpool` is no pool `pool.query` lists. The entry point tries each address

@@ -1527,13 +1527,13 @@ def disk_details():
     ]
 
 
-def port(name, up=True, media="40000Mb/s Direct Attach Copper", mtu=1500, kind="PHYSICAL"):
+def port(name, up=True, media="10000Mb/s Twisted Pair", mtu=1500, kind="PHYSICAL"):
     """An interface as truenas_info reads it from interface.query; a port that is down has no speed."""
     link = "LINK_STATE_UP" if up else "LINK_STATE_DOWN"
     return {"name": name, "aliases": [], "addresses": [], "link_state": link, "type": kind, "mtu": mtu, "media": media}
 
 
-# The home NAS's ports, as seen on it: one of three up, at 40 Gb/s over a direct-attach cable.
+# Three ports, one of them up at 10 Gb/s.
 PORTS = [port("enp1s0"), port("enp2s0", up=False, media="Unknown Twisted Pair"), port("enp3s0", False, "")]
 
 
@@ -1681,7 +1681,7 @@ def test_the_nas_from_truenas_info():
         ("persistent/nextcloud", "hourly"),
     ]
     assert found["nfs"] == {"enabled": True, "state": "RUNNING", "shares": 3, "clients": []}
-    assert found["link"] == {"ports": 3, "up": 1, "speeds": ["40 Gb/s"], "mtu": 1500}
+    assert found["link"] == {"ports": 3, "up": 1, "speeds": ["10 Gb/s"], "mtu": 1500}
     assert found["clock_drift"] == 0 and found["unexpected_services"] == [] and found["errors"] == []
     assert SERIAL not in json.dumps(found) and MODEL not in json.dumps(found)
 
@@ -2153,7 +2153,7 @@ def test_the_nas_network_and_disks_lines():
     """The ports up and their speed, then each pool's disks under the pools, the boot pool's after them, each with its
     reading in whole degrees (nvme2n1's 32.5 shows as 33), and who has the NFS shares mounted: nobody here."""
     lines = nas_block(nas_report())
-    assert lines[1] == " Network    40 Gb/s · 1 of 3 ports up"
+    assert lines[1] == " Network    10 Gb/s · 1 of 3 ports up"
     disks = lines.index(" Disks °C   persistent  nvme1n1 32 · nvme2n1 33 · nvme3n1 34")
     assert lines[disks - 2].startswith(" Pools      persistent  raidz1  online")
     assert lines[disks + 1 : disks + 3] == ["            ephemeral   sda 29", "            boot-pool   nvme0n1 39"]
@@ -2279,7 +2279,7 @@ def test_temperatures_not_read_leave_the_disks_without_them():
 @pytest.mark.parametrize(
     ("media", "speed"),
     [
-        ("40000Mb/s Direct Attach Copper", "40 Gb/s"),
+        ("10000Mb/s Twisted Pair", "10 Gb/s"),
         ("1000baseT <full-duplex>", "1 Gb/s"),
         ("2500baseT <full-duplex>", "2.5 Gb/s"),
         ("100baseTX <full-duplex>", "100 Mb/s"),
@@ -2295,7 +2295,7 @@ def test_a_ports_speed_from_how_truenas_words_it(media, speed):
 @pytest.mark.parametrize(
     ("ports", "line"),
     [
-        pytest.param(PORTS, " Network    40 Gb/s · 1 of 3 ports up", id="one-of-three"),
+        pytest.param(PORTS, " Network    10 Gb/s · 1 of 3 ports up", id="one-of-three"),
         pytest.param(
             [
                 port("enp1s0", mtu=9000),
@@ -2303,7 +2303,7 @@ def test_a_ports_speed_from_how_truenas_words_it(media, speed):
                 port("enp3s0", up=False),
                 port("br0", kind="BRIDGE", media=""),
             ],
-            " Network    40 Gb/s · 1 Gb/s · MTU 9000 · 2 of 3 ports up",
+            " Network    10 Gb/s · 1 Gb/s · MTU 9000 · 2 of 3 ports up",
             id="jumbo-frames-and-a-bridge",
         ),
         pytest.param([port("enp1s0", up=False)], " Network    0 of 1 port up", id="none-up"),
