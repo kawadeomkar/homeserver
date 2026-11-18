@@ -10,9 +10,11 @@ cluster changed, the apps and their states, the nodes' memory and disks from kub
 exit codes (the report's own, which just exits with: 0 when nothing is wrong, 1 for a problem, 2 for a source that could
 not be read, 3 for a refused run, also on the report's last line), --json, a section the recipe does not have, another
 cluster's kubeconfig, and a host that does not answer at all. With a NAS (local.yml.example's setup), the NAS is read
-through roles/truenas's status entry point against fake_truenas.py: one login, no change, no secret in the report, and a
-NAS that does not answer or presents another certificate is a source not read. The apps' probes ask addresses that never
-answer here, under a domain that never resolves (.invalid), so what they find does not depend on the network.
+through roles/truenas's status entry point against fake_truenas.py: one login, no change, no secret in the report, the
+Macs' Time Machine backups judged by local.yml's Macs from one snapshot read for every enabled share, each Mac's from
+its own dataset, and a NAS that does not answer or presents another certificate is a source not read. The apps' probes
+ask addresses that never answer here, under a domain that never resolves (.invalid), so what they find does not depend
+on the network.
 
 Run: just test idempotence
 """
@@ -962,6 +964,8 @@ def test_tailscale_that_is_not_running_is_a_problem(tree, tmp_path):
     assert "TAILSCALE  subnet router on the Proxmox host · ● not running" in proc.stdout
 
 
+# What just status may call on the NAS, reads alone: roles/truenas's status entry point, truenas_info with its status
+# option, whose one pool.snapshot.query reads the enabled Time Machine shares' snapshots together, by name alone.
 NAS_READS = {
     "auth.login_with_api_key",
     "network.configuration.config",
@@ -1009,34 +1013,44 @@ def seed_nas(path, **more):
     fake.save()
 
 
-def seed_macs(path, last_backup_ago=7200):
-    """Two Macs' Time Machine shares as roles/truenas leaves them, SMB running: laptop's backup 400 GiB of a 2 TiB
-    quota, its snapshots 20 GiB, its newest backup `last_backup_ago` seconds old, and old's share disabled, a retired
-    Mac's."""
+# The Macs local.yml lists for seed_macs' shares: laptop and desk back up, old is retired.
+MACS = [
+    {"name": "laptop", "quota_gib": 2048, "uid": 3101},
+    {"name": "desk", "quota_gib": 1024, "uid": 3102},
+    {"name": "old", "quota_gib": 2048, "uid": 3103, "retired": True},
+]
+
+
+def seed_macs(path, laptop_ago=7200, desk_ago=3600):
+    """MACS' Time Machine shares as roles/truenas leaves them, SMB running: laptop's backup 400 GiB of a 2 TiB quota,
+    its snapshots 20 GiB, its newest backup `laptop_ago` seconds old; desk's 100 GiB of 1 TiB, its snapshots 5 GiB, its
+    newest `desk_ago` seconds old; and old's share disabled, a retired Mac's."""
     fake = fake_truenas.FakeTrueNAS(path)
     fake.load()
     fake.s["network"]["service_announcement"] = {"netbios": False, "mdns": True, "wsd": False}
     fake.s["smb"]["aapl_extensions"] = True
     fake.s["datasets"]["persistent/timemachine"] = fake.new_dataset("persistent/timemachine", {})
-    for name, enabled in (("laptop", True), ("old", False)):
-        dataset = f"persistent/timemachine/{name}"
-        fake.s["datasets"][dataset] = fake.new_dataset(dataset, {"quota": str(2 * 2**40)})
+    for mac in MACS:
+        dataset = f"persistent/timemachine/{mac['name']}"
+        fake.s["datasets"][dataset] = fake.new_dataset(dataset, {"quota": str(mac["quota_gib"] * GIB)})
         fake.m_sharing_smb_create(
             {
-                "name": f"tm-{name}",
+                "name": f"tm-{mac['name']}",
                 "path": f"/mnt/{dataset}",
                 "purpose": "TIMEMACHINE_SHARE",
-                "enabled": enabled,
+                "enabled": not mac.get("retired", False),
                 "options": {"auto_snapshot": True},
             }
         )
-    fake.s["space"]["persistent/timemachine/laptop"] = [400 * 2**30, 1648 * 2**30]
-    fake.s["snapshot_space"] = {"persistent/timemachine/laptop": 20 * 2**30}
+    fake.s["space"]["persistent/timemachine/laptop"] = [400 * GIB, 1648 * GIB]
+    fake.s["space"]["persistent/timemachine/desk"] = [100 * GIB, 924 * GIB]
+    fake.s["snapshot_space"] = {"persistent/timemachine/laptop": 20 * GIB, "persistent/timemachine/desk": 5 * GIB}
     now = int(time.time())
     fake.s["snapshots"] = [
-        f"persistent/timemachine/laptop@aapltm-{now - last_backup_ago}",
-        f"persistent/timemachine/laptop@aapltm-{now - last_backup_ago - 86400}",
+        f"persistent/timemachine/laptop@aapltm-{now - laptop_ago}",
+        f"persistent/timemachine/laptop@aapltm-{now - laptop_ago - 86400}",
         "persistent/timemachine/laptop@weekly-2026-11-15_00-00",
+        f"persistent/timemachine/desk@aapltm-{now - desk_ago}",
         f"persistent/timemachine/old@aapltm-{now - 90 * 86400}",
     ]
     next(s for s in fake.s["services"] if s["service"] == "cifs").update(enable=True, state="RUNNING")
@@ -1158,6 +1172,8 @@ def test_the_nas_is_read_through_its_api(nas_tree, nas, tmp_path):
     # One login, nothing but reads, nothing changed, and no secret anywhere.
     calls = nas_calls(nas)
     assert calls.count("auth.login_with_api_key") == 1 and set(calls) <= NAS_READS, calls
+    # No Time Machine share, so no snapshot is read.
+    assert "pool.snapshot.query" not in calls, calls
     assert json.loads(nas["state"].read_text())["mutations"] == 0
     written = (nas_tree / ".cache" / "status" / "report.json").read_text()
     for secret in (fake_truenas.API_KEY, fake_truenas.SYSTEM_SERIAL, fake_truenas.PRIVATE_KEY):
@@ -1165,36 +1181,52 @@ def test_the_nas_is_read_through_its_api(nas_tree, nas, tmp_path):
 
 
 def test_the_macs_backups_are_read_from_the_nas(nas_tree, nas, tmp_path):
-    """Each Time Machine share's backup, from the share, its dataset and Samba's snapshots, in the same login and with
-    nothing but reads: its use against its quota, its snapshots' share, and its newest backup, a retired Mac's listed
-    and never late; then a backup eleven days old, a thing to do."""
+    """Each Time Machine share's backup, judged by local.yml's Macs, from the share, its dataset and Samba's snapshots,
+    in the same login and with nothing but reads: its use against its quota, its snapshots' share, and its newest
+    backup, from one snapshot read for every enabled share, by name alone; a retired Mac's listed and never late. Then
+    laptop's newest backup eleven days old while desk's is an hour old: laptop's own is late, a thing to do."""
     state = tmp_path / "pve.json"
     seed(state)
     seed_nas(nas["state"])
     seed_macs(nas["state"])
     nas["calls"].write_text("")
-    rc, out, err = just_status(nas_tree, state, "nas", **nas_vars(nas))
+    rc, out, err = just_status(nas_tree, state, "nas", **nas_vars(nas, timemachine_backups=MACS))
     report = report_of(nas_tree)
     assert rc == report["exit"] == 0, out + err
     found = report["nas"]
-    assert found["smb"] == {"enabled": True, "state": "RUNNING", "shares": 1}
-    assert [(b["name"], b["retired"], b["used"], b["quota"], b["snapshots_used"]) for b in found["time_machine"]] == [
-        ("tm-laptop", False, 400 * 2**30, 2 * 2**40, 20 * 2**30),
-        ("tm-old", True, 0, 2 * 2**40, 0),
+    assert found["smb"] == {"enabled": True, "state": "RUNNING", "shares": 2}
+    keys = ("name", "configured", "retired", "enabled", "used", "quota", "snapshots_used")
+    assert [tuple(b[key] for key in keys) for b in found["time_machine"]] == [
+        ("tm-laptop", True, False, True, 400 * GIB, 2 * 2**40, 20 * GIB),
+        ("tm-desk", True, False, True, 100 * GIB, 2**40, 5 * GIB),
+        ("tm-old", True, True, False, 0, 2 * 2**40, 0),
     ]
-    assert " SMB        running · 1 share" in out, out
-    assert " Macs       tm-laptop backed up 2 h ago, 0.4 / 2.0 TiB, snapshots 20 GiB · tm-old retired" in out, out
+    assert found["time_machine"][2]["last_backup"] == "", "a disabled share's time is not read"
+    assert " SMB        running · 2 shares" in out, out
+    macs = (
+        " Macs       tm-laptop backed up 2 h ago, 0.4 / 2.0 TiB, snapshots 20 GiB\n"
+        "            tm-desk backed up 1 h ago, 0.1 / 1.0 TiB, snapshots 5.0 GiB · tm-old retired\n"
+    )
+    assert macs in out, out
     calls = nas_calls(nas)
     assert calls.count("auth.login_with_api_key") == 1 and set(calls) <= NAS_READS, calls
-    assert calls.count("pool.snapshot.query") == 2, calls
+    assert calls.count("sharing.smb.query") == 1, calls
+    # The enabled shares' datasets together, by name alone: TrueNAS's fast path, which reads no property.
+    logged = [json.loads(line) for line in nas["calls"].read_text().splitlines()]
+    queries = [call["params"] for call in logged if call["method"] == "pool.snapshot.query"]
+    datasets = ["persistent/timemachine/laptop", "persistent/timemachine/desk"]
+    assert queries == [[[["dataset", "in", datasets]], {"select": ["name"]}]], queries
     assert json.loads(nas["state"].read_text())["mutations"] == 0
 
     seed_nas(nas["state"])
-    seed_macs(nas["state"], last_backup_ago=11 * 86400 + 600)
-    rc, out, err = just_status(nas_tree, state, "nas", **nas_vars(nas))
+    seed_macs(nas["state"], laptop_ago=11 * 86400 + 600, desk_ago=3600)
+    rc, out, err = just_status(nas_tree, state, "nas", **nas_vars(nas, timemachine_backups=MACS))
     assert rc == 0, out + err
-    todo = [(a["level"], a["subject"], a["text"]) for a in report_of(nas_tree)["attention"]]
+    attention = report_of(nas_tree)["attention"]
+    todo = [(a["level"], a["subject"], a["text"]) for a in attention]
     assert todo == [("todo", "tm-laptop", "its newest Time Machine backup completed 11 d ago")], todo
+    assert attention[0]["command"].startswith("on the Mac, Time Machine's settings"), attention
+    assert " Macs       tm-laptop backed up 11 d ago, 0.4 / 2.0 TiB, snapshots 20 GiB" in out, out
 
 
 def test_a_nas_on_another_release_is_a_thing_to_do(nas_tree, nas, tmp_path):

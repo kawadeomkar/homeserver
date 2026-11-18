@@ -42,13 +42,20 @@ Two entry points:
   - On the NAS (`nas`) it reads nothing itself: the play reads the NAS first, through roles/truenas's `status` entry
     point (`roles/truenas/tasks/status.yml`: `truenas_info` with its `status` option, one login), and the role works
     out what `status_nas_state` says: each pool's health, use, layout and last scrub, TrueNAS's alerts, each snapshot
-    task's last run, the NFS and SMB services and their shares, each Time Machine backup, and whether the NAS runs
-    `status_nas_release`. The `status` option adds `pool.scrub.query`, `alert.list` and `pool.snapshottask.query`
-    to `truenas_info`'s reads, and one `pool.snapshot.query` per Time Machine share (its dataset's `aapltm-`
-    snapshots, by name alone), and picks each pool's health, root-dataset use, layout and last scan, the alerts not
-    dismissed, each snapshot task's last run, and each Time Machine share's dataset use, quota and snapshots' share
-    of it and its newest backup, the time in the newest `aapltm-<epoch>` snapshot Samba takes after each completed
-    one, with the API's times (`{"$date": ms}`) turned into RFC 3339. The entry point tries each address once
+    task's last run, the NFS and SMB services and their shares, each Time Machine backup against the Macs of
+    `status_nas_macs`, and whether the NAS runs `status_nas_release`. The `status` option adds `pool.scrub.query`,
+    `alert.list` and `pool.snapshottask.query` to `truenas_info`'s reads, and one `pool.snapshot.query` for every
+    enabled Time Machine share whose dataset exists, none without one: `[["dataset", "in", [<their datasets>]]]`
+    with `{"select": ["name"]}`, which TrueNAS answers on its fast path (`plugins/zfs_/snapshot.py` at TS-25.10.7),
+    listing those datasets' snapshots by name and reading no property, where any other filter or select reads every
+    snapshot on the NAS with all its properties first. It picks each pool's health, root-dataset use, layout and last
+    scan, the alerts not dismissed, each snapshot task's last run, and each Time Machine share's dataset (whether the
+    NAS has one at its path), its use, quota and snapshots' share of it, and, for an enabled share, its newest backup:
+    the time in the newest `aapltm-<epoch>` snapshot Samba takes after each completed one, split from each snapshot's
+    name on this machine, so that it counts for its own dataset alone. A time more than an hour ahead of this
+    machine's clock is ignored: the NAS's clock was wrong, or the name was made by hand, and it would keep the Mac
+    from ever reading as late (one past the year 9999 would fail the read). The API's times (`{"$date": ms}`) are
+    turned into RFC 3339. The entry point tries each address once
     (`api_connect_wait: 0`) and never fails (`failed_when: false`): a NAS that did not answer, refused the key or
     presented another certificate than the pinned one is reported as a source not read, not a failure, and the key
     goes to no other server. `system.info`'s serial and the disks' serials never reach the report.
@@ -159,13 +166,25 @@ provisioned on it against its size, less `status_storage_headroom_gib` on ZFS, d
 `proxmox_vm_host_headroom_gib`), and provisioned beyond that is a thing to do.
 
 **The NAS**: a pool not ONLINE or not healthy, 90% full, or whose last scrub found errors, a snapshot task in ERROR,
-an alert at ERROR or worse, NFS or SMB not running while it has shares, a Time Machine backup 90% of its quota, and
-TrueNAS not ready are problems; a pool 80% full, a scrub more than eight days past its task's threshold, a pool no
-scrub task scrubs, a WARNING alert, a release other than `status_nas_release`, interface changes never committed, a
-Time Machine backup 80% of its quota, one whose newest backup is ten days old or more, and one with no completed
-backup yet are things to do. A late backup is never a problem, since a laptop travels; a disabled Time Machine share
-is a retired Mac's, listed as retired and never late or full. The report's `Macs` line shows each backup's age, use
-against its quota and what its snapshots hold, which the first months after a Mac's backup fills up are watched for.
+an alert at ERROR or worse, NFS or SMB not running while it has shares, and TrueNAS not ready are problems; a pool 80%
+full, a scrub more than eight days past its task's threshold, a pool no scrub task scrubs, a WARNING alert, a release
+other than `status_nas_release`, and interface changes never committed are things to do.
+
+**A Mac's Time Machine backup** is judged by the Macs of `status_nas_macs`, each its share's name and whether it is
+retired, as the configuration says, never the share: TrueNAS disables a pool's shares when the pool is exported, and a
+share can be turned off by hand, while the Mac goes on wanting its backups. For a Mac that backs up, a disabled share
+or a missing dataset is a problem, since the Mac cannot back up (with `status_commands`' `nas`), and so is a backup at
+90% of its quota or more: should the snapshots fill the quota, writes fail inside a disk image that still shows free
+space. A backup at 80% of its quota or more (`time_machine_quota`), one whose newest backup is ten days old or more
+and one with no completed backup yet (`time_machine`), and a Mac the NAS has no share for yet (`nas`) are things to do.
+A late backup is never a problem, since a laptop travels, and a disabled share's backup is neither late nor never
+completed: the problem says why, and its time is not read. A retired Mac's share and a share no Mac names are listed
+and never judged. TrueNAS raises no quota alert of its own for a dataset whose refquota is smaller than its quota, as
+each Mac's is in this repository, so this is the one warning that the snapshots are filling their room. The report's
+`Macs` line shows each backup's age, its use against its quota, in yellow from 80% and red from 90% as a pool's bar is,
+and what its snapshots hold, which the first months after a Mac's backup fills up are watched for. A retired Mac's
+share reads `retired`, a Mac's share the NAS does not have `no share yet`, one without its dataset `dataset missing`, a
+disabled one `share disabled` in place of its age, and a share no Mac names `not configured`, its name in cyan.
 
 Memory is Proxmox's view, the host's, for a VM that is no cluster node: with ballooning off, as on every VM here, PVE 9
 shows the host's PSS, every page the guest has touched, and the text marks it. A node's memory and disks are the
@@ -202,6 +221,7 @@ its mount in `status_cluster_volumes`.
 | `status_cluster_snapshot_dir` | `""` | The directory of the etcd snapshots, each `<anything>-<UTC time>.db`; empty shows none |
 | `status_nas_state` | `{}` | What `truenas_info` returned with its `status` option, or its failure |
 | `status_nas_release` | `""` | The TrueNAS release (major.minor) the NAS's configuration is written for; empty compares none |
+| `status_nas_macs` | `[]` | The Macs that back up to the NAS with Time Machine, each `{share, retired}`, which each Time Machine share is judged by; empty judges none |
 | `status_tailscale_state` | `{}` | The Proxmox host's Tailscale, as roles/proxmox_tailscale's `status` entry point records it; empty when it is off |
 | `status_parallel` | `8` | How many reads run at once on a host |
 | `status_timeout` | `30` | Seconds each read may take |
@@ -214,22 +234,25 @@ its mount in `status_cluster_volumes`.
 | `status_probe_apps` | `true` | Whether each host's play asks the addresses of the apps it found from this machine |
 | `status_probe_timeout` | `5` | Seconds each lookup and request may take |
 | `status_admin` | `[]` | report: the admin pages it lists, each `{name, url}`; `tailscale_node: true` marks the page the Proxmox host serves itself |
-| `status_commands` | `{}` | report: the commands it suggests, by purpose (`upgrade`, `reboot`, `resume` with `{names}`, `talos_upgrade`, `credentials`, `allowlist`, `secrets`, `nas`, `nas_release`, `nas_network`, `backup`, `backup_target`, `etcd_snapshot`, `tailscale`, `tailscale_login`, `split_dns`) |
+| `status_commands` | `{}` | report: the commands it suggests, by purpose (`upgrade`, `reboot`, `resume` with `{names}`, `talos_upgrade`, `credentials`, `allowlist`, `secrets`, `nas`, `nas_release`, `nas_network`, `time_machine`, `time_machine_quota`, `backup`, `backup_target`, `etcd_snapshot`, `tailscale`, `tailscale_login`, `split_dns`) |
 
 ## In this repository
 
 This repository's `status.yml` reads the Proxmox host (and its Tailscale), the cluster and the NAS at once (`strategy:
 free`), then reports, with `group_vars/all/status.yml` (the VMs this repo makes, the same the nightly backup covers; the
-admin pages; the commands), `group_vars/proxmox/status.yml` (the installer's storage, its headroom, Debian's reboot
-flag, the nightly backup job roles/proxmox_backup keeps, the Tailscale state roles/proxmox_tailscale read),
-`group_vars/kubernetes/status.yml` (the credentials roles/talos writes in `talos_config_dir`, the apps as
-roles/app_scale finds them, the worker's user volumes, the settings roles/flux_bootstrap keeps, Alertmanager's pod, the
-pins, where roles/talos keeps the etcd snapshots) and `group_vars/nas/status.yml` (what roles/truenas's `status` entry
-point read, and `truenas_supported_version`, the release that role is written for, in scope through `status.yml`'s
-import of it). `status_source` is `proxmox` on the Proxmox host, `cluster` on `homeserver-k8s` and `nas` on `truenas`,
-the last two empty without a cluster or a NAS. `status_vms` is the same list of VMIDs as `vm_backup_vmids` (the
-cluster's nodes, Home Assistant's, and `local.yml`'s `vm_backup_extra_vmids`), which
-`test_status_reports_on_the_vms_the_backup_covers` (`tests/policy/test_roles.py`) checks in each setup.
+Macs `local.yml`'s `timemachine_backups` backs up to the NAS, as `status_nas_macs`; the admin pages; the commands),
+`group_vars/proxmox/status.yml` (the installer's storage, its headroom, Debian's reboot flag, the nightly backup job
+roles/proxmox_backup keeps, the Tailscale state roles/proxmox_tailscale read), `group_vars/kubernetes/status.yml` (the
+credentials roles/talos writes in `talos_config_dir`, the apps as roles/app_scale finds them, the worker's user
+volumes, the settings roles/flux_bootstrap keeps, Alertmanager's pod, the pins, where roles/talos keeps the etcd
+snapshots) and `group_vars/nas/status.yml` (what roles/truenas's `status` entry point read, and
+`truenas_supported_version`, the release that role is written for, in scope through `status.yml`'s import of it).
+`status_source` is `proxmox` on the Proxmox host, `cluster` on `homeserver-k8s` and `nas` on `truenas`, the last two
+empty without a cluster or a NAS. `status_vms` is the same list of VMIDs as `vm_backup_vmids` (the cluster's nodes, Home
+Assistant's, and `local.yml`'s `vm_backup_extra_vmids`), which `test_status_reports_on_the_vms_the_backup_covers`
+(`tests/policy/test_roles.py`) checks in each setup. Each of `status_nas_macs` is a Mac by the share `tm-<name>` that
+`group_vars/nas/timemachine.yml` hands the NAS for it, retired as `local.yml` says, which
+`test_status_reads_the_nas_as_its_play_reaches_it` checks against the shares the NAS is handed.
 
 Its plays: the first, on localhost, says what the report is of in `status_settings` (the setup, the sections, when it
 was read, the admin pages, the commands, the reading play's hosts by the report's label for each), tagged `always`,
@@ -280,27 +303,48 @@ Without the filter, the sections are shown at the end, and the callback says so 
 - `tests/unit/test_status_filters.py`: the filter (parsing, report and text are pure functions), with the shapes
   captured on 2026-10-21 from a Proxmox VE 9.2 host and the Talos cluster on it (the cluster's from the NUC), written
   out with made-up names, addresses and sizes. `test_each_section_depends_only_on_its_sources` removes every other
-  source in turn and compares each section, which is what lets the callback print it early.
+  source in turn and compares each section, which is what lets the callback print it early. The Time Machine tests
+  judge each share by the Macs configured: a retired Mac's share listed whatever its state, an active Mac's disabled
+  share and missing dataset problems, a Mac without a share a thing to do, and a share no Mac names listed and never
+  judged, nearly full and never backed up (`test_each_share_is_judged_by_the_macs_configured`); each threshold at its
+  edge, exactly 80% and 90% of the quota and exactly ten days a thing to do or a problem, 79.9%, nine days and 23 hours
+  and no quota at all nothing; and the `Macs` line's colours, plain, yellow and red as a pool's bar.
+- `tests/unit/test_truenas_modules.py`: `truenas_info`'s `status` read, against a scripted API that records each
+  call's parameters and answers alike whatever they filter on: `sharing.smb.query` once, one `pool.snapshot.query`
+  with exactly the fast path's filter and select, for the enabled Time Machine shares on a dataset, and none without
+  one (`test_no_snapshot_is_read_without_an_enabled_time_machine_share_on_a_dataset`); each backup's time from its own
+  dataset's snapshots, though another Mac's is newer, a disabled share's never read, a time in 2100 or in the year
+  10000 ignored, and a share whose path names no dataset said so, without sizes
+  (`test_each_time_machine_backup_is_its_own_datasets_newest`).
 - `tests/unit/test_status_callback.py`: the callback's `Progress`, which is pure: the sections in order whatever host
   answers first, the lines below them, and that what it prints in the end is the report play's own text.
 - `tests/unit/test_status_read.py`: the read list, every form allowed and others refused, and the parallel runs.
 - `tests/unit/test_status_probe.py`: the probe, against servers in the test's process.
 - `tests/policy/test_roles.py`: `test_status_reads_only_through_status_read` keeps every other task of the role to a
-  short list of modules, delegated to localhost alone, and the report entry point's writes to `status_report_file`.
+  short list of modules, delegated to localhost alone, and the report entry point's writes to `status_report_file`;
+  `test_status_reads_the_nas_as_its_play_reaches_it`, that `status_nas_macs` names the shares the NAS is handed for
+  `local.yml`'s Macs, retired as it says.
 - `tests/integration/test_status.py` runs the real `status.yml`, callback and `just status` in a scratch tree against
   the fake Proxmox host, the fake cluster and, in `local.yml.example`'s setup, `fake_truenas.py` (`fake_kubectl.py`
   lists the kinds the role reads, makes pods up from the Deployments and answers kubelet's statistics and amtool,
   `fake_talos.py` answers `git ls-remote`), with HOME and the credentials the test's own. It checks the exit codes,
   `--json`, another cluster's kubeconfig, a stopped cluster, a host that refuses the connection, probes that get no
   answer, a NAS that does not answer or presents another certificate, one login to the NAS with nothing but reads and
-  no secret in the report, a failed and a not yet made backup with the reason from the run's log (`fake_pve.backup_run`
-  seeds runs as vzdump leaves them), the host's Tailscale through `fake_tailscale.py` (after `fake_pve_bin` on PATH: a
-  served and an unapproved route, `tailscaled` down, and no other device's or the tailnet's name in the report), each
-  of the four setups' sections and attention list against what it should have, and that no fake's state changes. It
-  also runs `just status` on a pseudo-terminal, replays what it wrote through `tests/vt.py`'s terminal and compares the
-  result with the piped report, with no frame wrapped and no sequence a terminal would not know.
-- The fake NAS's alerts, scans, topology and root-dataset space follow TrueNAS 25.10's API reference, not a capture
-  (the home NAS's key was not at hand).
+  no secret in the report, the Macs' Time Machine backups judged by `timemachine_backups` (`sharing.smb.query` once,
+  one `pool.snapshot.query` whose parameters the fake's call log shows, none without a Time Machine share, a retired
+  Mac's share listed, and laptop's backup late while desk's is an hour old: each Mac's time from its own dataset), a
+  failed and a not yet made backup with the reason from the run's log (`fake_pve.backup_run` seeds runs as vzdump
+  leaves them), the host's Tailscale through `fake_tailscale.py` (after `fake_pve_bin` on PATH: a served and an
+  unapproved route, `tailscaled` down, and no other device's or the tailnet's name in the report), each of the four
+  setups' sections and attention list against what it should have, and that no fake's state changes. It also runs
+  `just status` on a pseudo-terminal, replays what it wrote through `tests/vt.py`'s terminal and compares the result
+  with the piped report, with no frame wrapped and no sequence a terminal would not know.
+- The fake NAS's alerts, scans and topology follow TrueNAS 25.10's API reference, not a capture (the home NAS's key was
+  not at hand). It reports the used and available space of any dataset its state's `space` names, and what a dataset's
+  snapshots hold from `snapshot_space`. It answers `pool.snapshot.query` from the snapshot names in its state, with the
+  `=`, `^` and `in` filters, and follows TrueNAS's fast path as `plugins/zfs_/snapshot.py` has it at TS-25.10.7: a
+  select of `name` alone, filtered on name, pool or dataset alone, reads no property, so its entries have none, and
+  asked nothing more than that select and `=` or `in` on pool or dataset, it returns libzfs's entries whole.
 
 ## Example
 

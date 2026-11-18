@@ -2117,7 +2117,8 @@ def test_status_refuses_a_backup_job_it_cannot_check(tmp_path):
 @pytest.mark.parametrize(("local_yml", "source"), [(None, "nas"), (PROXMOX_ONLY_LOCAL_YML, "")])
 def test_status_reads_the_nas_as_its_play_reaches_it(tmp_path, local_yml, source):
     """just status reads the NAS through roles/truenas's status entry point, with the NAS play's own connection
-    settings (the static address, then the bootstrap one; the pinned certificate), and only with a NAS."""
+    settings (the static address, then the bootstrap one; the pinned certificate), and only with a NAS; it judges each
+    Time Machine share by local.yml's Macs."""
     tree = example_tree(tmp_path, local_yml)
     names = "{'status_source': status_source, 'truenas_api_hosts': truenas_api_hosts}"
     found = resolve_on(tree, "truenas", names)
@@ -2136,6 +2137,14 @@ def test_status_reads_the_nas_as_its_play_reaches_it(tmp_path, local_yml, source
     nas_vars = yaml.safe_load((ROOT / "group_vars" / "nas" / "status.yml").read_text())
     assert "truenas_status" in nas_vars["status_nas_state"]
     assert "truenas_supported_version" in nas_vars["status_nas_release"]
+    if source:
+        # Each Mac by the share the NAS is handed for it, and retired as local.yml says, which the NAS knows only as a
+        # disabled share.
+        macs = [MAC, {**MAC, "name": "desk", "uid": 3102}, {**MAC, "name": "old", "uid": 3103, "retired": True}]
+        names = "{'macs': status_nas_macs, 'shares': truenas_smb_shares}"
+        found = resolve_on(tree, "truenas", names, "-e", json.dumps({"timemachine_backups": macs}))
+        assert found["macs"] == [{"share": s["name"], "retired": not s["enabled"]} for s in found["shares"]]
+        assert [mac["share"] for mac in found["macs"]] == ["tm-laptop", "tm-desk", "tm-old"]
 
 
 @pytest.mark.parametrize(

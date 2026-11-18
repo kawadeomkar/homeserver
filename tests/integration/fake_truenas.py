@@ -304,6 +304,9 @@ def matches(item, filters):
         elif op == "^":
             if not str(item.get(field) or "").startswith(value):
                 return False
+        elif op == "in":
+            if item.get(field) not in value:
+                return False
         else:
             raise CallError(f"filter operator {op!r} not supported by the fake")
     return True
@@ -959,25 +962,33 @@ class FakeTrueNAS:
                 ds[key] = {"parsed": value, "rawvalue": str(value), "value": f"{value / TIB:.2f}T", "source": "NONE"}
         return out
 
-    # The snapshots the fake holds, by dataset: names alone, as "<dataset>@<name>", in state["snapshots"].
+    # The snapshots the fake holds, by dataset: names alone, as "<dataset>@<name>", in state["snapshots"]. As
+    # zfs.snapshot.query does at TS-25.10.7 (plugins/zfs_/snapshot.py): a select of name alone, filtered on name, pool
+    # or dataset alone, is its fast path, which lists the snapshots without reading a property, so its entries have no
+    # properties; asked nothing more than that select and = or in on pool or dataset, it returns them whole, the select
+    # never applied. Any other query reads every snapshot with its properties, then filters and selects.
     def m_pool_snapshot_query(self, filters=None, options=None):
+        filters, options = filters or [], options or {}
+        fast = options.get("select") == ["name"] and {f[0] for f in filters} <= {"name", "pool", "dataset"}
+        whole = fast and len(options) == 1 and all(f[0] in ("pool", "dataset") and f[1] in ("=", "in") for f in filters)
         out = []
         for full in self.s.get("snapshots", []):
             dataset, name = full.split("@", 1)
             snap = {
-                "id": full,
+                "pool": dataset.split("/")[0],
                 "name": full,
+                "type": "SNAPSHOT",
                 "snapshot_name": name,
                 "dataset": dataset,
-                "pool": dataset.split("/")[0],
-                "type": "SNAPSHOT",
+                "id": full,
                 "createtxg": "1",
-                "properties": {},
             }
+            if not fast:
+                snap["properties"] = {}
             if matches(snap, filters):
                 out.append(snap)
-        select = (options or {}).get("select")
-        return [{key: snap[key] for key in select if key in snap} for snap in out] if select else out
+        select = options.get("select")
+        return [{key: snap[key] for key in select if key in snap} for snap in out] if select and not whole else out
 
     def m_pool_dataset_create(self, data):
         data = dict(data)

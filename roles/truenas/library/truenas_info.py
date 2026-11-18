@@ -11,8 +11,13 @@ description:
   - Makes no changes. C(pool.import_find) is a job, but it only scans disks.
   - With O(status), also reports what just status shows, in the same login - each pool's health, capacity, layout
     and last scrub, TrueNAS's alerts that are not dismissed, each periodic snapshot task's last run, the uptime, and
-    each Time Machine share's backup - its dataset's use against its quota, what its snapshots hold, and when the
-    newest backup completed, the time in the newest C(aapltm-<epoch>) snapshot Samba takes after each one.
+    each Time Machine share's backup - its dataset's use against its quota, what its snapshots hold, and, for an
+    enabled share, when the newest backup completed, the time in the newest C(aapltm-<epoch>) snapshot Samba takes
+    after each one.
+  - The backups' times come from one C(pool.snapshot.query) for every enabled Time Machine share whose dataset
+    exists, and none without one - filtered on C(dataset) with C(in) and selecting C(name) alone, which TrueNAS
+    answers by listing those datasets' snapshots by name, reading no property; any other filter or select reads every
+    snapshot on the NAS with every property first.
   - Without O(status), also reports which local users are SMB logins and which user the API key logs in as, by name
     alone, for the role's check that no SMB login it does not list exists when it starts SMB.
   - Runs on the controller and needs the websocket-client Python package there.
@@ -79,6 +84,9 @@ status:
     - The NAS's health. Times are RFC 3339 in UTC, sizes bytes. A pool's C(used) and C(available) are its root
       dataset's, what its datasets can still take, parity left out; C(scan) is its last scrub or resilver, and
       C(scrub) the task that scrubs it, if any. Only alerts that are not dismissed are listed.
+    - A Time Machine share's C(dataset) is the one its path names, and C(dataset_found) false, its sizes null, when
+      the NAS has none there. Its C(last_backup) is null for a disabled share, which is not read, and when no
+      C(aapltm-) snapshot holds a time; a time more than an hour ahead of the controller's clock is ignored.
   type: dict
   returned: success and O(status)
   sample:
@@ -94,8 +102,9 @@ status:
          month: "*", dow: "*"}, lifetime_value: 1, lifetime_unit: DAY, state: FINISHED,
          last_run: "2026-10-21T21:00:01+00:00", error: ""}
     time_machine:
-      - {name: tm-laptop, dataset: persistent/timemachine/laptop, enabled: true, used: 412316860416,
-         quota: 2199023255552, snapshots_used: 21474836480, last_backup: "2026-11-17T20:14:05+00:00"}
+      - {name: tm-laptop, dataset: persistent/timemachine/laptop, dataset_found: true, enabled: true,
+         used: 412316860416, quota: 2199023255552, snapshots_used: 21474836480,
+         last_backup: "2026-11-17T20:14:05+00:00"}
 """
 
 import re
@@ -109,6 +118,11 @@ from ansible.module_utils.truenas_api import (
     open_client,
     pick,
 )
+
+# Samba's snapshot after each completed Time Machine backup, named after the time it completed (vfs_tmprotect).
+BACKUP_SNAPSHOT = re.compile(r"aapltm-(\d+)")
+# Seconds a time in one's name may be ahead of this machine's clock: the NAS's clock and this one's never agree exactly.
+FUTURE_SLACK = 3600
 
 
 def _address(alias):
@@ -141,30 +155,53 @@ def _layout(topology):
     return ", ".join("stripe" if kind == "disk" else kind for kind in kinds)
 
 
-def time_machine(api, share, datasets):
-    """A Time Machine share's backup: its dataset's use, quota and snapshots' share of it, and when the newest backup
-    completed, which the newest of the aapltm-<epoch> snapshots Samba takes after each one says."""
-    dataset = str(share.get("path") or "").removeprefix("/mnt/")
-    found = datasets.get(dataset) or {}
-    snapshots = api.call(
-        "pool.snapshot.query",
-        [["dataset", "=", dataset], ["snapshot_name", "^", "aapltm-"]],
-        {"select": ["snapshot_name"]},
-    )
-    epochs = [int(m.group(1)) for s in snapshots if (m := re.fullmatch(r"aapltm-(\d+)", str(s.get("snapshot_name"))))]
-    return {
-        **pick(share, ["name", "enabled"]),
-        "dataset": dataset,
-        "used": _bytes(found.get("used")),
-        "quota": _bytes(found.get("quota")),
-        "snapshots_used": _bytes(found.get("usedbysnapshots")),
-        "last_backup": _date(max(epochs)) if epochs else None,
-    }
+def _share_dataset(share):
+    return str(share.get("path") or "").removeprefix("/mnt/")
+
+
+def time_machine(api, shares, datasets):
+    """Each Time Machine share's backup: its dataset's use, quota and snapshots' share of it, and, for an enabled share,
+    when the newest backup completed, which the newest of the aapltm-<epoch> snapshots Samba takes after each one says.
+
+    One pool.snapshot.query for every enabled share whose dataset exists, and none without one. A select of name alone,
+    filtered on dataset alone, is TrueNAS's fast path (zfs.snapshot.query, TS-25.10.7): it lists the snapshots of those
+    datasets alone and reads no property, where any other select or filter reads every snapshot on the NAS with every
+    property, then filters. Each name, <dataset>@<snapshot>, is split here, so a snapshot counts for its own dataset
+    alone, and for none it was not asked about. A time more than FUTURE_SLACK ahead of this machine's clock is no
+    backup's: the NAS's clock was wrong, or the name was made by hand. Taken as the newest it would keep the Mac from
+    ever reading as late, and one past the year 9999 is a time datetime cannot hold."""
+    shares = [s for s in shares if s.get("purpose") == "TIMEMACHINE_SHARE"]
+    enabled = [_share_dataset(s) for s in shares if s.get("enabled", True)]
+    read = list(dict.fromkeys(dataset for dataset in enabled if dataset in datasets))
+    newest = {}
+    if read:
+        latest = time.time() + FUTURE_SLACK
+        for snapshot in api.call("pool.snapshot.query", [["dataset", "in", read]], {"select": ["name"]}):
+            dataset, _, name = str(snapshot.get("name") or "").partition("@")
+            backup = BACKUP_SNAPSHOT.fullmatch(name)
+            if dataset in read and backup and int(backup.group(1)) <= latest:
+                newest[dataset] = max(newest.get(dataset, 0), int(backup.group(1)))
+    out = []
+    for share in shares:
+        dataset = _share_dataset(share)
+        found = datasets.get(dataset)
+        out.append(
+            {
+                **pick(share, ["name", "enabled"]),
+                "dataset": dataset,
+                "dataset_found": found is not None,
+                "used": _bytes((found or {}).get("used")),
+                "quota": _bytes((found or {}).get("quota")),
+                "snapshots_used": _bytes((found or {}).get("usedbysnapshots")),
+                "last_backup": _date(newest[dataset]) if dataset in newest else None,
+            }
+        )
+    return out
 
 
 def health(api, info, pools, datasets, smb_shares=()):
-    """What just status shows of the NAS, from what gather read and three more calls, and one per Time Machine
-    share."""
+    """What just status shows of the NAS, from what gather read and three more calls, and one for the Time Machine
+    shares' snapshots."""
     roots = {d.get("id"): d for d in datasets if "/" not in str(d.get("id"))}
     by_id = {d.get("id"): d for d in datasets}
     scrubs = {s.get("pool_name"): pick(s, ["threshold", "enabled"]) for s in api.call("pool.scrub.query")}
@@ -208,9 +245,7 @@ def health(api, info, pools, datasets, smb_shares=()):
             }
             for t in api.call("pool.snapshottask.query")
         ],
-        "time_machine": [
-            time_machine(api, share, by_id) for share in smb_shares if share.get("purpose") == "TIMEMACHINE_SHARE"
-        ],
+        "time_machine": time_machine(api, smb_shares, by_id),
     }
 
 

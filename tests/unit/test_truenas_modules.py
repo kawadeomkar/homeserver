@@ -145,6 +145,33 @@ def size(value):
     return {"parsed": value, "rawvalue": str(value), "value": "x", "source": "NONE"}
 
 
+def snapshot(name):
+    """pool.snapshot.query's entry for <dataset>@<snapshot> on TrueNAS's fast path (a select of name alone, filtered on
+    dataset): libzfs's entry whole, without properties (zfs.snapshot.query, TS-25.10.7)."""
+    parent, snapshot_name = name.split("@")
+    return {
+        "pool": parent.split("/")[0],
+        "name": name,
+        "type": "SNAPSHOT",
+        "snapshot_name": snapshot_name,
+        "dataset": parent,
+        "id": name,
+        "createtxg": "1",
+    }
+
+
+def time_machine_share(share_id, mac, enabled=True):
+    """A Mac's Time Machine share as sharing.smb.query returns it, at its dataset under persistent/timemachine."""
+    return {
+        "id": share_id,
+        "name": f"tm-{mac}",
+        "path": f"/mnt/persistent/timemachine/{mac}",
+        "purpose": "TIMEMACHINE_SHARE",
+        "enabled": enabled,
+        "options": {"auto_snapshot": True},
+    }
+
+
 class ScriptedAPI:
     """Answers each method as TrueNAS 25.10's reference documents it, times as {"$date": milliseconds}."""
 
@@ -204,9 +231,9 @@ class ScriptedAPI:
         ],
         # Samba's snapshots after each completed backup; a weekly one is no backup's.
         "pool.snapshot.query": [
-            {"snapshot_name": "aapltm-1791763200"},
-            {"snapshot_name": "aapltm-1792497600"},
-            {"snapshot_name": "weekly-2026-10-18_00-00"},
+            snapshot("persistent/timemachine/laptop@aapltm-1791763200"),
+            snapshot("persistent/timemachine/laptop@aapltm-1792497600"),
+            snapshot("persistent/timemachine/laptop@weekly-2026-10-18_00-00"),
         ],
         "service.query": [{"service": "nfs", "enable": True, "state": "RUNNING"}],
         "systemdataset.config": {"pool": "boot-pool", "pool_set": True},
@@ -271,9 +298,12 @@ class ScriptedAPI:
 
     def __init__(self):
         self.calls = []
+        # Each call with its parameters; the answers do not depend on them.
+        self.sent = []
 
     def call(self, method, *params):
         self.calls.append(method)
+        self.sent.append((method, params))
         return self.ANSWERS[method]
 
 
@@ -350,6 +380,7 @@ def test_status_reports_the_nas_health_in_the_same_login():
                 "name": "tm-laptop",
                 "enabled": True,
                 "dataset": "persistent/timemachine/laptop",
+                "dataset_found": True,
                 "used": 400 * 2**30,
                 "quota": 2 * TIB,
                 "snapshots_used": 20 * 2**30,
@@ -359,9 +390,124 @@ def test_status_reports_the_nas_health_in_the_same_login():
     }
     assert SERIAL not in repr(result["status"])
     assert api.calls.count("system.info") == 1 and api.calls.count("pool.query") == 1
+    # The shares are read once, for the shares and the Time Machine backups alike.
+    assert api.calls.count("sharing.smb.query") == 1
     assert not {"user.query", "auth.me"} & set(api.calls) and "smb_users" not in result
-    # One snapshot read per Time Machine share, none for another share.
-    assert api.calls.count("pool.snapshot.query") == 1
+    # One snapshot read, for the Time Machine share's dataset alone and by name alone: TrueNAS's fast path.
+    assert [params for method, params in api.sent if method == "pool.snapshot.query"] == [
+        ([["dataset", "in", ["persistent/timemachine/laptop"]]], {"select": ["name"]})
+    ]
+
+
+class MacsAPI(ScriptedAPI):
+    """Four Macs' Time Machine shares beside another share: laptop's and desk's enabled, old's disabled, and gone's
+    enabled at a path where the NAS has no dataset. ScriptedAPI answers every query alike, whatever it filters on, so
+    every dataset's snapshots come back: each counts for its own dataset alone, and for none that was not asked."""
+
+    ANSWERS: ClassVar[dict] = ScriptedAPI.ANSWERS | {
+        "pool.dataset.query": [
+            *ScriptedAPI.ANSWERS["pool.dataset.query"],
+            {
+                "id": "persistent/timemachine/desk",
+                "used": size(100 * 2**30),
+                "quota": size(TIB),
+                "usedbysnapshots": size(5 * 2**30),
+            },
+            {
+                "id": "persistent/timemachine/old",
+                "used": size(300 * 2**30),
+                "quota": size(2 * TIB),
+                "usedbysnapshots": size(0),
+            },
+        ],
+        "sharing.smb.query": [
+            *ScriptedAPI.ANSWERS["sharing.smb.query"],
+            time_machine_share(3, "desk"),
+            time_machine_share(4, "old", enabled=False),
+            time_machine_share(5, "gone"),
+        ],
+        "pool.snapshot.query": [
+            *ScriptedAPI.ANSWERS["pool.snapshot.query"],
+            # Laptop's, in 2100 and in the year 10000: no backup's, though each is its newest.
+            snapshot("persistent/timemachine/laptop@aapltm-4102444800"),
+            snapshot("persistent/timemachine/laptop@aapltm-253402300800"),
+            # Desk's, newer than laptop's newest.
+            snapshot("persistent/timemachine/desk@aapltm-1792540800"),
+            # The disabled share's, which was not asked for.
+            snapshot("persistent/timemachine/old@aapltm-1792540800"),
+        ],
+    }
+
+
+def test_each_time_machine_backup_is_its_own_datasets_newest():
+    """One snapshot read for every enabled share whose dataset exists; each backup's time from its own dataset's
+    snapshots, a time ahead of now or past what datetime holds ignored; none for a disabled share; and a share whose
+    dataset is missing says so, without sizes."""
+    api = MacsAPI()
+    result = info.gather(api, importable=False, status=True)
+    laptop, desk, old, gone = (f"persistent/timemachine/{mac}" for mac in ("laptop", "desk", "old", "gone"))
+    assert [params for method, params in api.sent if method == "pool.snapshot.query"] == [
+        ([["dataset", "in", [laptop, desk]]], {"select": ["name"]})
+    ]
+    assert result["status"]["time_machine"] == [
+        {
+            "name": "tm-laptop",
+            "enabled": True,
+            "dataset": laptop,
+            "dataset_found": True,
+            "used": 400 * 2**30,
+            "quota": 2 * TIB,
+            "snapshots_used": 20 * 2**30,
+            "last_backup": "2026-10-20T12:00:00+00:00",
+        },
+        {
+            "name": "tm-desk",
+            "enabled": True,
+            "dataset": desk,
+            "dataset_found": True,
+            "used": 100 * 2**30,
+            "quota": TIB,
+            "snapshots_used": 5 * 2**30,
+            "last_backup": "2026-10-21T00:00:00+00:00",
+        },
+        {
+            "name": "tm-old",
+            "enabled": False,
+            "dataset": old,
+            "dataset_found": True,
+            "used": 300 * 2**30,
+            "quota": 2 * TIB,
+            "snapshots_used": 0,
+            "last_backup": None,
+        },
+        {
+            "name": "tm-gone",
+            "enabled": True,
+            "dataset": gone,
+            "dataset_found": False,
+            "used": None,
+            "quota": None,
+            "snapshots_used": None,
+            "last_backup": None,
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    "shares",
+    [
+        pytest.param([], id="no-share"),
+        pytest.param([time_machine_share(1, "laptop", enabled=False)], id="disabled"),
+        pytest.param([time_machine_share(5, "gone")], id="no-dataset"),
+    ],
+)
+def test_no_snapshot_is_read_without_an_enabled_time_machine_share_on_a_dataset(shares):
+    """TrueNAS takes an empty list of datasets for every pool, so no read is made with none to ask for."""
+    api = ScriptedAPI()
+    api.ANSWERS = ScriptedAPI.ANSWERS | {"sharing.smb.query": shares}
+    result = info.gather(api, importable=False, status=True)
+    assert "pool.snapshot.query" not in api.calls
+    assert [b["last_backup"] for b in result["status"]["time_machine"]] == [None] * len(shares)
 
 
 def test_without_status_nothing_more_is_asked():

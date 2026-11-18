@@ -3,13 +3,14 @@
 The role's tasks read each host through status_read and pass the results here: status_proxmox for the Proxmox host (with
 status_backup_failed_runs naming the failed backup runs whose logs are read next), status_cluster for the cluster (with
 status_credentials for its credentials' expiry, read under no_log), status_nas for what truenas_info read of the NAS
-with its status option; the Proxmox host's Tailscale comes as roles/proxmox_tailscale's status entry point recorded it,
-and the report adds what this machine's own Tailscale says of the tailnet's split DNS. The report play asks the apps'
-addresses (status_probe_targets, then the module status_probe), passes what every host found and what the probes saw to
-status_report, then the report to status_text. Everything here is pure: it runs on the controller, never connects
-anywhere, and is unit-tested in tests/unit/test_status_filters.py, with the shapes captured from Proxmox VE 9.2 hosts
-and from the cluster on one, the NAS's as TrueNAS 25.10's API reference documents them (and seen since on a real NAS),
-and Tailscale's from 1.104.2 on a Proxmox host and 1.102.4 on a Mac.
+with its status option, beside the Macs the configuration backs up to it; the Proxmox host's Tailscale comes as
+roles/proxmox_tailscale's status entry point recorded it, and the report adds what this machine's own Tailscale says of
+the tailnet's split DNS. The report play asks the apps' addresses (status_probe_targets, then the module status_probe),
+passes what every host found and what the probes saw to status_report, then the report to status_text. Everything here
+is pure: it runs on the controller, never connects anywhere, and is unit-tested in tests/unit/test_status_filters.py,
+with the shapes captured from Proxmox VE 9.2 hosts and from the cluster on one, the NAS's as TrueNAS 25.10's API
+reference documents them (and seen since on a real NAS), and Tailscale's from 1.104.2 on a Proxmox host and 1.102.4 on
+a Mac.
 
 The report is a mapping that just status --json prints as it is: every source's findings, the attention list
 (problems, things to do, and sources that could not be read, each with the command that deals with it), and the exit
@@ -1178,7 +1179,7 @@ NAS_ALERT_TODO = ("WARNING",)
 FIRST_SENTENCE = re.compile(r"(.+?[.!?])\s+(?=[A-Z])", re.S)
 # Days past a scrub task's threshold before its pool counts as overdue: the task runs weekly, then waits for that.
 SCRUB_GRACE_DAYS = 8
-# A Time Machine backup older than this is a thing to do, never a problem: a laptop travels.
+# A Time Machine backup whose newest is this many days old or more is a thing to do, never a problem: a laptop travels.
 TIME_MACHINE_LATE_DAYS = 10
 
 
@@ -1208,11 +1209,43 @@ def _nas_unread(state):
     return message
 
 
-def nas(state, release=""):
+def _time_machine(backups, macs):
+    """Each Time Machine share's backup, judged by `macs`, the Macs the configuration has ({share, retired}): first a
+    configured Mac's, in their order, a Mac whose share the NAS does not have included, then each share no Mac names.
+    Whether a Mac is retired is the configuration's word, never the share's: TrueNAS disables a pool's shares when it
+    is exported, and a share can be turned off by hand, while the Mac goes on wanting its backups."""
+    configured = {}
+    for mac in macs or []:
+        if isinstance(mac, dict) and mac.get("share"):
+            configured[str(mac["share"])] = bool(mac.get("retired"))
+
+    def entry(name, backup):
+        # `backup` is empty for a configured Mac's share the NAS does not have.
+        return {
+            "name": name,
+            "dataset": str(backup.get("dataset") or ""),
+            "configured": name in configured,
+            "retired": configured.get(name, False),
+            "share_found": bool(backup),
+            "enabled": bool(backup and backup.get("enabled", True)),
+            "dataset_found": bool(backup and backup.get("dataset_found", True)),
+            "used": backup.get("used") or 0,
+            "quota": backup.get("quota") or 0,
+            "snapshots_used": backup.get("snapshots_used") or 0,
+            "last_backup": backup.get("last_backup") or "",
+        }
+
+    found = {str(b.get("name") or ""): b for b in backups or [] if isinstance(b, dict)}
+    mine = [entry(name, found.pop(name, {})) for name in configured]
+    return mine + [entry(name, backup) for name, backup in found.items()]
+
+
+def nas(state, release="", macs=()):
     """What the NAS says, from truenas_info with its status option (roles/truenas's status entry point): each pool's
     health, capacity and last scrub, TrueNAS's alerts, each periodic snapshot task's last run, the NFS and SMB services,
-    each Time Machine backup, and the release it runs against `release`, the one its role is written for. A NAS that
-    did not answer, refused the key or presented another certificate than the pinned one is {"unread": why}."""
+    each Time Machine backup against `macs`, the Macs the configuration has, each {share, retired}, and the release it
+    runs against `release`, the one its role is written for. A NAS that did not answer, refused the key or presented
+    another certificate than the pinned one is {"unread": why}."""
     state = state if isinstance(state, dict) else {}
     health = state.get("status")
     if not state.get("api_host") or not isinstance(health, dict):
@@ -1279,19 +1312,7 @@ def nas(state, release=""):
             "state": str(smb.get("state") or ""),
             "shares": sum(1 for share in state.get("smb_shares") or [] if share.get("enabled", True)),
         },
-        # A disabled share is a retired Mac's: listed, never late.
-        "time_machine": [
-            {
-                "name": str(b.get("name") or ""),
-                "dataset": str(b.get("dataset") or ""),
-                "retired": not b.get("enabled", True),
-                "used": b.get("used") or 0,
-                "quota": b.get("quota") or 0,
-                "snapshots_used": b.get("snapshots_used") or 0,
-                "last_backup": b.get("last_backup") or "",
-            }
-            for b in health.get("time_machine") or []
-        ],
+        "time_machine": _time_machine(health.get("time_machine"), macs),
     }
 
 
@@ -1862,23 +1883,43 @@ def _nas_attention(found, commands):
         text = f"the SMB service is {smb.get('state', '').lower() or 'not running'}, so its {count} share"
         text += f"{'s are' if count != 1 else ' is'} not served"
         out.append(_item("problem", "smb", text, commands.get("nas", "")))
+    # A Mac the configuration does not name, and a retired one, are only listed.
     for backup in found.get("time_machine") or []:
-        if backup["retired"]:
+        if not backup["configured"] or backup["retired"]:
             continue
-        name = backup["name"]
+        name, deploy = backup["name"], commands.get("nas", "")
+        if not backup["share_found"]:
+            out.append(_item("todo", name, "the NAS has no Time Machine share of this name yet", deploy))
+            continue
+        if not backup["enabled"]:
+            out.append(_item("problem", name, "its Time Machine share is disabled, so the Mac cannot back up", deploy))
+        if not backup["dataset_found"]:
+            text = f"its dataset {backup['dataset']} is missing, so the Mac cannot back up"
+            out.append(_item("problem", name, text, deploy))
+            continue
         fraction = backup["used"] / backup["quota"] if backup["quota"] else 0
         if fraction >= STORAGE_TODO:
             text = (
                 f"its Time Machine backup is {fraction:.0%} of its quota: {_sizes(backup['used'], backup['quota'])}, "
-                f"its snapshots {_size(backup['snapshots_used'])}"
+                f"its snapshots {_sizes(backup['snapshots_used'])}"
             )
-            out.append(_item("problem" if fraction >= STORAGE_PROBLEM else "todo", name, text))
+            level = "problem" if fraction >= STORAGE_PROBLEM else "todo"
+            out.append(_item(level, name, text, commands.get("time_machine_quota", "")))
+        if not backup["enabled"]:
+            # Its backups stopped with its share, which is said above, and a disabled share's time is never read.
+            continue
         if not backup["last_backup"]:
-            out.append(_item("todo", name, "no Time Machine backup to it has completed yet"))
-        elif backup.get("ago") is not None and backup["ago"] // DAY >= TIME_MACHINE_LATE_DAYS:
+            text = "no Time Machine backup to it has completed yet"
+            out.append(_item("todo", name, text, commands.get("time_machine", "")))
+        elif _late(backup):
             text = f"its newest Time Machine backup completed {backup['ago'] // DAY} d ago"
-            out.append(_item("todo", name, text))
+            out.append(_item("todo", name, text, commands.get("time_machine", "")))
     return out
+
+
+def _late(backup):
+    """Whether a Time Machine backup's newest is TIME_MACHINE_LATE_DAYS old or more."""
+    return backup.get("ago") is not None and backup["ago"] // DAY >= TIME_MACHINE_LATE_DAYS
 
 
 def _network_of(address, networks):
@@ -2172,9 +2213,9 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
     empty means every one. `probes` is what status_probe saw, `found`'s own probes when not given, `admin` the admin
     pages ({name, url, and tailscale_node for the page the Proxmox host serves itself}) to list, `commands` the
     commands to suggest by purpose (upgrade, resume with {names}, talos_upgrade, credentials, allowlist, secrets, nas,
-    nas_release, nas_network, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns), `now`
-    seconds since the epoch, `tailnet_dns` what tailscale dns status --json said on this machine, if it runs
-    Tailscale, `found`'s own when not given."""
+    nas_release, nas_network, time_machine, time_machine_quota, backup, backup_target, etcd_snapshot, tailscale,
+    tailscale_login, split_dns), `now` seconds since the epoch, `tailnet_dns` what tailscale dns status --json said on
+    this machine, if it runs Tailscale, `found`'s own when not given."""
     shown, setup, commands = types_shown(types), dict(setup or {}), dict(commands or {})
     needed = sources(types)
     found = found or {}
@@ -2889,16 +2930,12 @@ def _since(seconds):
     return "?" if seconds is None else f"{_ago(seconds)} ago"
 
 
-def _sizes(used, total):
-    """Used and total bytes as "2.2 / 7.1 TiB", or in GiB below a TiB."""
-    if total >= 2**40:
-        return f"{used / 2**40:.1f} / {total / 2**40:.1f} TiB"
-    return f"{_gib(used)} / {_gib(total)} GiB"
-
-
-def _size(used):
-    """Bytes as "1.2 TiB", or in GiB below a TiB."""
-    return f"{used / 2**40:.1f} TiB" if used >= 2**40 else f"{_gib(used)} GiB"
+def _sizes(used, total=None):
+    """Used and total bytes as "2.2 / 7.1 TiB", or in GiB below a TiB; without a total, used alone, as "1.2 TiB"."""
+    values = [used] if total is None else [used, total]
+    if values[-1] >= 2**40:
+        return " / ".join(f"{value / 2**40:.1f}" for value in values) + " TiB"
+    return " / ".join(_gib(value) for value in values) + " GiB"
 
 
 def _scan_text(pool):
@@ -2975,14 +3012,28 @@ def _nas_lines(model):
         )
     backups = []
     for backup in found.get("time_machine") or []:
-        if backup["retired"]:
-            backups.append([(backup["name"], "b"), (" retired", "d")])
+        name = backup["name"]
+        if not backup["configured"]:
+            backups.append([(name, "c"), (" not configured", "d")])
             continue
-        when = f" backed up {_since(backup.get('ago'))}" if backup["last_backup"] else " no backup yet"
-        late = not backup["last_backup"] or (backup.get("ago") or 0) // DAY >= TIME_MACHINE_LATE_DAYS
-        size = _sizes(backup["used"], backup["quota"]) if backup["quota"] else _size(backup["used"])
-        snapshots = _size(backup["snapshots_used"])
-        backups.append([(backup["name"], "b"), (when, "y" if late else "d"), (f", {size}, snapshots {snapshots}", "")])
+        if backup["retired"]:
+            backups.append([(name, "b"), (" retired", "d")])
+            continue
+        if not backup["share_found"] or not backup["dataset_found"]:
+            fault = (" no share yet", "y") if not backup["share_found"] else (" dataset missing", "r")
+            backups.append([(name, "b"), fault])
+            continue
+        if not backup["enabled"]:
+            when = (" share disabled", "r")
+        elif backup["last_backup"]:
+            when = (f" backed up {_since(backup.get('ago'))}", "y" if _late(backup) else "d")
+        else:
+            when = (" no backup yet", "y")
+        # Its use coloured as a pool's bar is once nearly full: yellow from 80% of its quota, red from 90%.
+        fraction = backup["used"] / backup["quota"] if backup["quota"] else 0
+        full = screen.fullness(fraction, STORAGE_TODO, STORAGE_PROBLEM) if fraction >= STORAGE_TODO else ""
+        size = (_sizes(backup["used"], backup["quota"] or None), full)
+        backups.append([(name, "b"), when, (", ", ""), size, (f", snapshots {_sizes(backup['snapshots_used'])}", "")])
     if backups:
         lines += _phrases("Macs", backups)
     alerts = found.get("alerts") or []

@@ -1472,6 +1472,8 @@ NAS_COMMANDS = {
     "nas": "just deploy truenas",
     "nas_release": "raise truenas_supported_version",
     "nas_network": "commit them on the NAS",
+    "time_machine": "look on the Mac",
+    "time_machine_quota": "raise quota_gib",
 }
 HOURLY = {"minute": "0", "hour": "*", "dom": "*", "month": "*", "dow": "*"}
 DAILY = {"minute": "0", "hour": "0", "dom": "*", "month": "*", "dow": "*"}
@@ -1524,11 +1526,23 @@ def backup(name="tm-laptop", used=400, quota=2048, snapshots=20, last_backup="20
         "name": name,
         "enabled": enabled,
         "dataset": f"persistent/timemachine/{name.removeprefix('tm-')}",
+        "dataset_found": True,
         "used": used * 2**30,
         "quota": quota * 2**30,
         "snapshots_used": snapshots * 2**30,
         "last_backup": last_backup,
     }
+
+
+def no_dataset(name="tm-laptop"):
+    """A Time Machine share whose path names no dataset, as truenas_info's status reads it: no sizes, and no time."""
+    sizes = {"used": None, "quota": None, "snapshots_used": None}
+    return backup(name, last_backup=None) | {"dataset_found": False, **sizes}
+
+
+def configured(*shares, retired=()):
+    """The Macs the configuration has, as status_nas_macs gives them: each by its share, and whether it is retired."""
+    return [{"share": share, "retired": share in retired} for share in shares]
 
 
 def nas_state(pools=None, alerts=(), tasks=None, backups=(), **more):
@@ -1564,10 +1578,10 @@ def nas_state(pools=None, alerts=(), tasks=None, backups=(), **more):
     }
 
 
-def nas_report(state=None, types=(), release="25.10", **found):
-    """The report of the NAS beside a Proxmox host that holds nothing to report."""
+def nas_report(state=None, types=(), release="25.10", configured_macs=(), **found):
+    """The report of the NAS beside a Proxmox host that holds nothing to report, with the Macs configured."""
     return fs.report(
-        {"proxmox": {}, "nas": fs.nas(nas_state() if state is None else state, release), **found},
+        {"proxmox": {}, "nas": fs.nas(nas_state() if state is None else state, release, configured_macs), **found},
         NAS_SETUP,
         types,
         now=NAS_NOW,
@@ -1854,14 +1868,21 @@ def macs(*backups, smb="RUNNING"):
     return nas_state(backups=backups, services=services, smb_shares=shares)
 
 
+# laptop, a Mac that backs up, as the configuration has it.
+LAPTOP = configured("tm-laptop")
+
+
 def test_a_backup_in_good_order_asks_for_nothing_and_shows_on_a_line():
-    model = nas_report(macs(backup(), backup("tm-old", last_backup="2026-08-01T00:00:00+00:00", enabled=False)))
+    """A retired Mac is the configuration's: its share is disabled, and the module reads no time for it."""
+    old = backup("tm-old", last_backup=None, enabled=False)
+    model = nas_report(macs(backup(), old), configured_macs=configured("tm-laptop", "tm-old", retired=["tm-old"]))
     assert model["attention"] == [] and model["exit"] == 0
     found = model["nas"]
     assert found["smb"] == {"enabled": True, "state": "RUNNING", "shares": 1}
-    assert [(b["name"], b["retired"], b["ago"]) for b in found["time_machine"]] == [
-        ("tm-laptop", False, 2 * 3600),
-        ("tm-old", True, NAS_NOW - 1785542400),
+    keys = ("name", "configured", "retired", "share_found", "enabled", "dataset_found", "ago")
+    assert [tuple(b[key] for key in keys) for b in found["time_machine"]] == [
+        ("tm-laptop", True, False, True, True, True, 2 * 3600),
+        ("tm-old", True, True, True, False, True, None),
     ]
     out = fs.text(model, False)
     assert " SMB        running · 1 share" in out, out
@@ -1887,9 +1908,19 @@ def test_without_smb_shares_the_report_has_no_smb_or_macs_line():
                 "todo",
                 "tm-laptop",
                 "its Time Machine backup is 83% of its quota: 1.7 / 2.0 TiB, its snapshots 20 GiB",
-                "",
+                "raise quota_gib",
             ),
             id="quota-80",
+        ),
+        pytest.param(
+            macs(backup(used=800, quota=1000)),
+            (
+                "todo",
+                "tm-laptop",
+                "its Time Machine backup is 80% of its quota: 800 / 1000 GiB, its snapshots 20 GiB",
+                "raise quota_gib",
+            ),
+            id="quota-exactly-80",
         ),
         pytest.param(
             macs(backup(used=1900, snapshots=900)),
@@ -1897,31 +1928,144 @@ def test_without_smb_shares_the_report_has_no_smb_or_macs_line():
                 "problem",
                 "tm-laptop",
                 "its Time Machine backup is 93% of its quota: 1.9 / 2.0 TiB, its snapshots 900 GiB",
-                "",
+                "raise quota_gib",
             ),
             id="quota-90",
         ),
         pytest.param(
+            macs(backup(used=900, quota=1000)),
+            (
+                "problem",
+                "tm-laptop",
+                "its Time Machine backup is 90% of its quota: 900 / 1000 GiB, its snapshots 20 GiB",
+                "raise quota_gib",
+            ),
+            id="quota-exactly-90",
+        ),
+        pytest.param(
             macs(backup(last_backup="2026-10-10T00:00:00+00:00")),
-            ("todo", "tm-laptop", "its newest Time Machine backup completed 11 d ago", ""),
+            ("todo", "tm-laptop", "its newest Time Machine backup completed 11 d ago", "look on the Mac"),
             id="late",
         ),
         pytest.param(
+            macs(backup(last_backup="2026-10-11T00:00:00+00:00")),
+            ("todo", "tm-laptop", "its newest Time Machine backup completed 10 d ago", "look on the Mac"),
+            id="late-exactly-10-days",
+        ),
+        pytest.param(
             macs(backup(last_backup=None)),
-            ("todo", "tm-laptop", "no Time Machine backup to it has completed yet", ""),
+            ("todo", "tm-laptop", "no Time Machine backup to it has completed yet", "look on the Mac"),
             id="none-yet",
+        ),
+        pytest.param(
+            macs(backup(enabled=False, last_backup=None)),
+            (
+                "problem",
+                "tm-laptop",
+                "its Time Machine share is disabled, so the Mac cannot back up",
+                "just deploy truenas",
+            ),
+            id="share-disabled",
+        ),
+        pytest.param(
+            macs(),
+            ("todo", "tm-laptop", "the NAS has no Time Machine share of this name yet", "just deploy truenas"),
+            id="no-share",
+        ),
+        pytest.param(
+            macs(no_dataset()),
+            (
+                "problem",
+                "tm-laptop",
+                "its dataset persistent/timemachine/laptop is missing, so the Mac cannot back up",
+                "just deploy truenas",
+            ),
+            id="no-dataset",
         ),
     ],
 )
 def test_what_a_backup_needs(state, expected):
-    model = nas_report(state)
+    """laptop is a Mac the configuration has, not retired."""
+    model = nas_report(state, configured_macs=LAPTOP)
     assert attention(model) == [expected]
     assert model["exit"] == (1 if expected[0] == "problem" else 0)
 
 
-def test_a_retired_macs_backup_is_never_late_or_full():
-    retired = backup(used=2000, last_backup="2026-01-01T00:00:00+00:00", enabled=False)
-    assert nas_report(macs(retired, smb="STOPPED"))["attention"] == []
+@pytest.mark.parametrize(
+    ("given", "line"),
+    [
+        pytest.param(
+            {"used": 799, "quota": 1000},
+            "tm-laptop backed up 2 h ago, 799 / 1000 GiB, snapshots 20 GiB",
+            id="quota-under-80",
+        ),
+        pytest.param(
+            {"last_backup": "2026-10-11T01:00:00+00:00"},
+            "tm-laptop backed up 9 d ago, 0.4 / 2.0 TiB, snapshots 20 GiB",
+            id="9-days-23-hours",
+        ),
+        pytest.param({"quota": 0}, "tm-laptop backed up 2 h ago, 400 GiB, snapshots 20 GiB", id="no-quota"),
+    ],
+)
+def test_a_backup_short_of_each_threshold_asks_for_nothing(given, line):
+    model = nas_report(macs(backup(**given)), configured_macs=LAPTOP)
+    assert model["attention"] == [] and model["exit"] == 0
+    assert f" Macs       {line}" in fs.text(model, False)
+
+
+@pytest.mark.parametrize(("used", "style"), [(400, ""), (1700, "33"), (1900, "31")])
+def test_the_macs_line_colours_a_backup_as_the_pools_line_colours_a_pool(used, style):
+    """Plain below 80% of its quota, yellow from it and red from 90%, as screen.fullness colours a pool's bar."""
+    out = fs.text(nas_report(macs(backup(used=used)), configured_macs=LAPTOP), True)
+    size = f"{used / 1024:.1f} / 2.0 TiB"
+    assert (f"\033[{style}m{size}\033[0m" if style else f", {size}, snapshots 20 GiB") in out, out
+
+
+def test_each_share_is_judged_by_the_macs_configured():
+    """Retired is the configuration's word, never the share's: an active Mac's disabled share is a problem, its
+    missing dataset another, and a Mac without a share yet a thing to do; a retired Mac's share, and a share no Mac
+    names, nearly full and never backed up, are listed and ask for nothing. Configured Macs first, in their order."""
+    state = macs(
+        backup(),
+        backup("tm-desk", enabled=False, last_backup=None),
+        no_dataset("tm-gone"),
+        backup("tm-old", enabled=False, last_backup=None),
+        backup("tm-spare", used=2000, last_backup=None),
+    )
+    mine = configured("tm-laptop", "tm-desk", "tm-gone", "tm-studio", "tm-old", retired=["tm-old"])
+    model = nas_report(state, configured_macs=mine)
+    assert [(b["name"], b["configured"], b["retired"], b["share_found"]) for b in model["nas"]["time_machine"]] == [
+        ("tm-laptop", True, False, True),
+        ("tm-desk", True, False, True),
+        ("tm-gone", True, False, True),
+        ("tm-studio", True, False, False),
+        ("tm-old", True, True, True),
+        ("tm-spare", False, False, True),
+    ]
+    assert attention(model) == [
+        ("problem", "tm-desk", "its Time Machine share is disabled, so the Mac cannot back up", "just deploy truenas"),
+        (
+            "problem",
+            "tm-gone",
+            "its dataset persistent/timemachine/gone is missing, so the Mac cannot back up",
+            "just deploy truenas",
+        ),
+        ("todo", "tm-studio", "the NAS has no Time Machine share of this name yet", "just deploy truenas"),
+    ]
+    lines = fs.text(model, False).splitlines()
+    first = lines.index(" Macs       tm-laptop backed up 2 h ago, 0.4 / 2.0 TiB, snapshots 20 GiB")
+    assert lines[first + 1 : first + 3] == [
+        "            tm-desk share disabled, 0.4 / 2.0 TiB, snapshots 20 GiB · tm-gone dataset missing",
+        "            tm-studio no share yet · tm-old retired · tm-spare not configured",
+    ]
+
+
+@pytest.mark.parametrize("enabled", [False, True], ids=["share-disabled", "share-enabled"])
+def test_a_retired_mac_is_never_late_or_full_whatever_its_share(enabled):
+    retired = backup(used=2000, last_backup="2026-01-01T00:00:00+00:00", enabled=enabled)
+    model = nas_report(macs(retired), configured_macs=configured("tm-laptop", retired=["tm-laptop"]))
+    assert model["attention"] == [] and model["exit"] == 0
+    assert " Macs       tm-laptop retired" in fs.text(model, False)
 
 
 def test_the_nas_report_is_json():
