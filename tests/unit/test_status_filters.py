@@ -216,7 +216,7 @@ def results(**more):
 
 def found(**more):
     return fs.proxmox(
-        {"unread": "", "node": "pve", "results": results(**more)},
+        {"unread": "", "node": "pve", "address": "192.0.2.20", "results": results(**more)},
         VMS,
         ["local-lvm"],
         16,
@@ -514,7 +514,7 @@ def test_the_text_says_what_matters():
     assert attention > next(i for i, line in enumerate(lines) if line.startswith("STORAGE"))
     assert lines[attention - 1] == "" and lines[-2] == "" and lines[-1].startswith("exit 0 · ")
     assert "→ qm reboot 301" in out and "→ just deploy proxmox" in out
-    assert "VMS  pve · Proxmox VE 9.2.21 · kernel 7.0.14-22-pve · up 13 d" in out
+    assert "VMS  pve · Proxmox VE 9.2.21 at 192.0.2.20 · kernel 7.0.14-22-pve · up 13 d" in out
     assert "/mnt/data 4.9 / 30" in out and "Home Assistant OS 18.3" in out
     # Every other VM follows this setup's, a diamond for its dot.
     assert " 9000  ◇ ubuntu-template      template" in out
@@ -1793,7 +1793,7 @@ def test_the_nas_text():
     out = fs.text(nas_report(state), False)
     lines = out.splitlines()
     assert max(len(line) for line in lines) <= 100, out
-    assert "NAS  truenas · TrueNAS 25.10.7 · up 34 d" in out
+    assert "NAS  truenas · TrueNAS 25.10.7 at 192.0.2.10 · up 34 d" in out
     persistent = next(line for line in lines if " persistent " in line and "%" in line)
     assert persistent.startswith(" Pools      persistent  raidz1  online   ████░░░░░░░░  31%  2.2 / 7.1 TiB  "), out
     assert persistent.endswith("scrub 9 d ago, 0 errors"), out

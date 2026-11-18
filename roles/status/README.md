@@ -7,8 +7,9 @@ Two entry points:
 
 - **main** reads the host the play runs on, as `status_source` names it, and leaves what it found in the fact
   `status_found`.
-  - On the Proxmox host (`proxmox`): the host itself (version, kernel, uptime, CPU over the last day, memory, root
-    filesystem), each of `status_vms` (state, uptime, CPU over the last day, memory, settings waiting for a restart,
+  - On the Proxmox host (`proxmox`): the host itself (version, the address it is reached at, kernel, uptime, CPU over
+    the last day, memory, root filesystem), each of `status_vms` (state, uptime, CPU over the last day, memory,
+    settings waiting for a restart,
     and, where its guest agent reports them, its filesystems, OS and address), every other VM as Proxmox sees it
     (state, uptime, CPU now and over the last day, memory, its boot disk's size: another project's, or made by hand,
     drawn with a diamond for its dot and never a problem),
@@ -41,8 +42,9 @@ Two entry points:
     say why, and are a thing to do already.
   - On the NAS (`nas`) it reads nothing itself: the play reads the NAS first, through roles/truenas's `status` entry
     point (`roles/truenas/tasks/status.yml`: `truenas_info` with its `status` option, one login), and the role works
-    out what `status_nas_state` says: each pool's health, use, layout and last scrub, TrueNAS's alerts, each snapshot
-    task's last run, the NFS service and its shares, and whether the NAS runs `status_nas_release`. The `status`
+    out what `status_nas_state` says: the address that answered, of the ones the NAS is tried at, each pool's
+    health, use, layout and last scrub, TrueNAS's alerts, each snapshot task's last run, the NFS service and its
+    shares, and whether the NAS runs `status_nas_release`. The `status`
     option adds `pool.scrub.query`, `alert.list` and `pool.snapshottask.query` to `truenas_info`'s reads and picks
     each pool's health, root-dataset use, layout and last scan, the alerts not dismissed and each snapshot task's
     last run, with the API's times (`{"$date": ms}`) turned into RFC 3339. The entry point tries each address once

@@ -628,7 +628,8 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
     # The NAS's host reads nothing without a NAS, so the line leaves it out.
     assert " nas " not in line and "NAS  " not in out, out
     assert "TASK [" not in out and "PLAY RECAP" not in out and "\033[" not in out, out
-    assert "VMS  pve · Proxmox VE 9.2.2-1 · kernel 7.0.2-6-pve" in out
+    # The address the host is reached at sits beside its release: here local.yml's proxmox_address.
+    assert re.search(r"VMS  pve · Proxmox VE 9\.2\.2-1 at \S+ · kernel 7\.0\.2-6-pve", out), out
     assert " 9000  ◇ ubuntu-template      template" in out
     assert " 9001  ◆ another-project      1 h 0 m   10%  ▁▁▁▁▁▁▁▁▁▁▁▁   2.0 / 4.0   —" in out
     assert " ◆ ◇ not this repo's: another project's, or made by hand; shown, never a problem or a thing to do" in out
@@ -1114,7 +1115,7 @@ def test_the_nas_is_read_through_its_api(nas_tree, nas, tmp_path):
     assert [(a["level"], a["subject"], a["text"]) for a in report["attention"] if a["subject"] == "nas"] == [
         ("problem", "nas", "TrueNAS alerts (critical): Device: /dev/sda, Self-Test Log error count increased")
     ]
-    assert "NAS  truenas · TrueNAS 25.10.7 · up 34 d" in out, out
+    assert "NAS  truenas · TrueNAS 25.10.7 at 127.0.0.1 · up 34 d" in out, out
     assert " persistent  raidz1  online   ████░░░░░░░░  31%  2.2 / 7.1 TiB  scrub 3 d ago, 0 errors" in out, out
     assert " Snapshots  nextcloud hourly 1 h ago" in out and " NFS        running · 1 share" in out, out
     assert "TrueNAS https://192.0.2.10" in " ".join(out.split()), out

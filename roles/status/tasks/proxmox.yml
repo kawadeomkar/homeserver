@@ -146,7 +146,7 @@
 - name: proxmox | Work out what the host says
   ansible.builtin.set_fact:
     status_proxmox_found: >-
-      {{ {'unread': _unread, 'node': status_proxmox_node_name,
+      {{ {'unread': _unread, 'node': status_proxmox_node_name, 'address': ansible_host | default('') | string,
           'results': status_proxmox_first.results | default({}) | combine(status_proxmox_reads.results | default({}),
                                                                          status_proxmox_logs.results | default({}))}
          | status_proxmox(status_vms, status_budget_storages, status_storage_headroom_gib,

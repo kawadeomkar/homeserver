@@ -214,7 +214,8 @@ def _other_vm(entry, results):
 def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file="", backup_jobs=()):
     """What the Proxmox host's reads say, as the report needs it.
 
-    `found` is {unread, node, results}: why the host could not be read at all (else ""), the node's name, and
+    `found` is {unread, node, address, results}: why the host could not be read at all (else ""), the node's name, the
+    address it was reached at, and
     status_read's results by name (resources, hostname, node, rrd-node, rrd-<vmid>, pending-<vmid>, fsinfo-<vmid>,
     osinfo-<vmid>, network-<vmid>, content-<storage>, updates, reboot, and for the backups backup-jobs,
     backup-tasks, backups-<storage>, schedule-<job> and log-<upid>). `vms` is this repo's VMs, each {vmid, name,
@@ -346,6 +347,7 @@ def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file="", back
     return {
         "unread": "",
         "node": node,
+        "address": str(found.get("address") or ""),
         "version": version.split("/")[1] if version.count("/") >= 1 else version,
         "kernel": str((status.get("current-kernel") or {}).get("release") or ""),
         "host": host,
@@ -2514,9 +2516,11 @@ def _cut(text, room):
 def _vm_lines(found):
     lines = []
     host = found["host"]
+    # The address it was reached at beside the release, as just check truenas's connect line says the NAS's.
+    at = f" at {found['address']}" if found.get("address") else ""
     facts = [
         found["node"],
-        f"Proxmox VE {found['version']}" if found["version"] else "",
+        f"Proxmox VE {found['version']}{at}" if found["version"] else found.get("address", ""),
         f"kernel {found['kernel']}" if found["kernel"] else "",
         f"up {_uptime(host['uptime'])}",
     ]
@@ -2868,7 +2872,9 @@ def _nas_lines(model):
     found = model.get("nas") or {}
     if not found or found.get("unread"):
         return [Line().add("NAS", "h").add("  ").add("not read", "d")]
-    facts = [found["name"], f"TrueNAS {found['version']}" if found["version"] else ""]
+    # The address that answered, of the ones the NAS is tried at, beside the release.
+    at = f" at {found['address']}" if found.get("address") else ""
+    facts = [found["name"], f"TrueNAS {found['version']}{at}" if found["version"] else found.get("address", "")]
     facts.append(f"up {_uptime(found['uptime'])}" if found.get("uptime") is not None else "")
     lines = [Line().add("NAS", "h").add("  ").add(" · ".join(f for f in facts if f), "d")]
     pools = found.get("pools") or []
