@@ -546,6 +546,9 @@ def extra_vars(tree, local=True, cluster=True, **more):
             "status_probe_apps": False,
             **(CLUSTER_VARS if cluster else {}),
             **(APIS[tree.parent].vars() if tree.parent in APIS else {}),
+            # No kept upgrade answer unless a test asks: the fake's packages change between runs, the files of this
+            # machine that group_vars' paths name do not.
+            "status_upgrades_state_paths": [],
             **more,
         }
     )
@@ -823,6 +826,50 @@ def test_the_token_goes_only_to_the_nodes_own_certificate(tree, tmp_path, api_ce
     assert unread["text"].endswith(f"serves another certificate than {other}'s: no token sent")
     assert unread["command"] == ""
     assert api_calls(tmp_path) == []
+
+
+def test_the_upgrade_simulation_is_kept_while_nothing_it_depends_on_changes(tree, tmp_path):
+    """The first run simulates and keeps the answer with its key, on this machine alone; the next is answered from it
+    without running apt-get, the same report; a changed package list makes it simulate again, and the run after that
+    is answered from the new answer. A run that reads no upgrades, or whose simulation fails, leaves the kept answer as
+    it was."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    lists = tmp_path / "lists"
+    lists.mkdir()
+    (lists / "pve_Packages").write_text("Package: pve-manager\n")
+    keyed = {"status_upgrades_state_paths": [str(lists)]}
+    runs = lambda: json.loads(state.read_text())["apt_get_runs"]  # noqa: E731
+    before = runs()
+    rc, out, err = just_status(tree, state, **keyed)
+    assert rc == 0 and runs() == before + 1, out + err
+    kept = tree / ".cache" / "status" / "upgrades.json"
+    assert stat.S_IMODE(kept.stat().st_mode) == 0o600 and set(json.loads(kept.read_text())) == {"key", "stdout"}
+    upgrades = report_of(tree)["proxmox"]["upgrades"]
+
+    rc, out, err = just_status(tree, state, **keyed)
+    assert rc == 0 and runs() == before + 1, out + err
+    assert report_of(tree)["proxmox"]["upgrades"] == upgrades
+
+    (lists / "pve_Packages").write_text("Package: pve-manager\nVersion: 9.2.28\n")
+    rc, out, err = just_status(tree, state, **keyed)
+    assert rc == 0 and runs() == before + 2, out + err
+    rc, out, err = just_status(tree, state, **keyed)
+    assert rc == 0 and runs() == before + 2, out + err
+
+    written, at = kept.read_bytes(), kept.stat().st_mtime_ns
+    rc, out, err = just_status(tree, state, "storage", **keyed)
+    assert rc == 0 and runs() == before + 2, out + err
+    assert (kept.read_bytes(), kept.stat().st_mtime_ns) == (written, at)
+
+    # dpkg killed mid-upgrade: its journal changes the key, the simulation refuses, the report says so (a read that
+    # failed, as on main, not a problem), and the kept answer is neither used nor replaced.
+    (lists / "pve_Packages").write_text("Package: pve-manager\nVersion: 9.2.29\n")
+    fake_pve.store(state, json.loads(state.read_text()) | {"dpkg_interrupted": True})
+    rc, out, err = just_status(tree, state, **keyed)
+    assert rc == 0 and runs() == before + 3, out + err
+    assert "not read: the pending upgrades: E: dpkg was interrupted" in out
+    assert (kept.read_bytes(), kept.stat().st_mtime_ns) == (written, at)
 
 
 def test_a_node_named_in_advance_reads_the_same(tree, tmp_path):

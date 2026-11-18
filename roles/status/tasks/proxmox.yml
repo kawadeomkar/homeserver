@@ -52,17 +52,18 @@
   when: "'proxmox' in status_reads"
 
 # The day's history of every VM running on the node, this setup's and any other, and of each of this setup's VMs; the
-# pending changes of each of this setup's; the guest agent's filesystems and OS of those whose agent reports them (Home
-# Assistant's; Talos's lists no filesystem), and the address of one that serves an app without a URL of its own; the
-# upgrades apt would make, from the lists as last refreshed (a simulation, which is quick, where the API's own list
-# takes four seconds); whether an upgrade asked for a reboot; and the backups: the host's jobs (each with its next run),
-# the latest backup runs, running ones among them, and when each job's schedule fires next, twice, which gives its
-# period without reading the calendar format here. With them, the token's own privileges, which say whether it may
-# read all of that: a token that may not is reported, never taken for an empty host. All of them through Proxmox's
-# API with the token (status_read's api), each a few milliseconds where pvesh starts Proxmox's Perl API afresh, but
-# two: a storage's disks (each budgeted storage's) and its backups (each of this setup's jobs' storages), which
-# Proxmox lists only to a token that may change them (VM.Config.Disk, VM.Backup), so they stay pvesh's, as root, in
-# the same pass.
+# pending changes of each of this setup's; the guest agent's filesystems and OS of those whose agent reports them
+# (Home Assistant's; Talos's lists no filesystem), and the address of one that serves an app without a URL of its own;
+# the upgrades apt would make, from the lists as last refreshed (a simulation, which is quick, where the API's own
+# list takes four seconds), answered from the last answer while dpkg's status and journal, the lists and apt's
+# configuration are as they were (status_upgrades_state_paths), a key of their files' metadata; whether an upgrade
+# asked for a reboot; and the backups: the host's jobs (each with its next run), the latest backup runs, running ones
+# among them, and when each job's schedule fires next, twice, which gives its period without reading the calendar
+# format here. With them, the token's own privileges, which say whether it may read all of that: a token that may not
+# is reported, never taken for an empty host. All of them through Proxmox's API with the token (status_read's api),
+# each a few milliseconds where pvesh starts Proxmox's Perl API afresh, but two: a storage's disks (each budgeted
+# storage's) and its backups (each of this setup's jobs' storages), which Proxmox lists only to a token that may
+# change them (VM.Config.Disk, VM.Backup), so they stay pvesh's, as root, in the same pass.
 - name: proxmox | Read the host, its storages and its VMs, at once
   status_read:
     commands: "{{ _commands }}"
@@ -71,6 +72,11 @@
     api_token_id: "{{ status_proxmox_token_id }}"
     api_token_secret: "{{ status_proxmox_token_secret }}"
     api_cert_files: "{{ status_proxmox_api_cert_files }}"
+    upgrades_state_paths: "{{ status_upgrades_state_paths if status_upgrades_kept_file | length > 0 else [] }}"
+    upgrades_kept: >-
+      {{ lookup('ansible.builtin.file', status_upgrades_kept_file, errors='ignore') | default('', true)
+         | status_upgrades_kept if status_upgrades_kept_file | length > 0 else {} }}
+    upgrades_host: "{{ status_proxmox_node_name }}"
     parallel: "{{ status_parallel }}"
     timeout: "{{ status_timeout }}"
   register: status_proxmox_reads
@@ -134,6 +140,12 @@
       {%-   endfor -%}
       {%- endif -%}
       {{ c }}
+
+# The simulation's answer and its key, for the report play to keep: only a fresh one, since a kept one is kept already.
+- name: proxmox | Say what the upgrade simulation answered
+  ansible.builtin.set_fact:
+    status_upgrades_fresh: "{{ status_proxmox_reads.results.updates | default(none) | status_upgrades_to_keep }}"
+  when: status_upgrades_kept_file | length > 0
 
 # Which VMs a failed backup run failed, and why, is only in its log: read those of the newest few that failed.
 - name: proxmox | Read the logs of the backup runs that failed

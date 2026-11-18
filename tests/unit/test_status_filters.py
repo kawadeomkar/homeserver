@@ -295,6 +295,23 @@ def test_this_setups_vms_and_every_other():
     assert [vm["vmid"] for vm in found(resources=ok([*RESOURCES, elsewhere]))["others"]] == [9000, 9001]
 
 
+def test_the_upgrade_simulations_kept_answer():
+    """Read back from its file, or nothing for a file that is missing, cut short or of another shape; kept only when it
+    ran afresh, worked, and has a key."""
+    kept = {"key": "k1", "stdout": "Inst pve-manager"}
+    assert fs.upgrades_kept(json.dumps(kept | {"extra": 1})) == kept
+    for text in ("", "{", "[]", json.dumps({"key": "k1"}), json.dumps({"key": 1, "stdout": "x"})):
+        assert fs.upgrades_kept(text) == {}
+    assert fs.upgrades_to_keep({"rc": 0, "stdout": "Inst pve-manager", "key": "k1"}) == kept
+    for result in (
+        {"rc": 0, "stdout": "Inst x", "key": "k1", "kept": True},
+        {"rc": 100, "stdout": "", "key": "k1"},
+        {"rc": 0, "stdout": "Inst x"},
+        None,
+    ):
+        assert fs.upgrades_to_keep(result) == {}
+
+
 def test_whose_history_is_read():
     # Every running VM's: this setup's and any other, never a template's or a stopped one's, nor another node's.
     elsewhere = vm_entry(9002, "on-another-node") | {"node": "pve2"}

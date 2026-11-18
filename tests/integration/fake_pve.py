@@ -78,7 +78,8 @@ DEBIAN_FRONTEND=noninteractive it fails, as the real one would stop to ask. Its 
 simulation's `Inst <package> [<old>] (<new> ...)`, without the old version for a new package, and dpkg's
 `Unpacking <package> (<new>) over (<old>) ...`, without `over` for a new one. With the state's `dpkg_fails` set,
 dist-upgrade unpacks everything and then fails as dpkg does when a package's script fails, with apt's error and
-exit status 100.
+exit status 100. With `dpkg_interrupted` set, dist-upgrade, a simulation too, refuses at once as apt does after a dpkg
+run was killed, with exit status 100.
 
 `apt-get install` installs from Debian's own repository (`DEBIAN`), which apt knows whatever $FAKE_PVE_SOURCES_DIR
 holds, as a real host's debian.sources is always there, and from the package lists; it needs -y and
@@ -1237,6 +1238,13 @@ def apt_get(state, args):
         packages["lists"] = dict(packages["repository"]) if offered else {}
         print("Reading package lists...")
     elif verbs == ["dist-upgrade"]:
+        if state.get("dpkg_interrupted"):
+            print(
+                "E: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem.",
+                file=sys.stderr,
+            )
+            save(state)
+            sys.exit(100)
         simulate = "-s" in flags
         if not simulate and ("-y" not in flags or os.environ.get("DEBIAN_FRONTEND") != "noninteractive"):
             fail("fake apt-get: dist-upgrade would stop to ask: it needs -y and DEBIAN_FRONTEND=noninteractive")

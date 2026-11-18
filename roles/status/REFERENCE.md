@@ -20,7 +20,7 @@ Description: Read the homeserver's machines without changing them, and report wh
 
 **Description**: 
 - Reads the host the play runs on, as status_source names it, and leaves what it found in the fact status_found for the report entry point. Every command goes through the role's module status_read, which runs them at once and refuses any that is not on its read list.
-- On the Proxmox host (proxmox) it reads the host, its storages and the VMs of status_vms; every other VM is shown as Proxmox sees it, and never judged. It reads them through Proxmox's API on the host's own loopback, with the API token status_proxmox_token_id and status_proxmox_token_secret, sent only on a connection serving the node's own certificate, but for a storage's VM disks and its backups, which Proxmox lists only to a token that may change them (pvesh, as root). Without a token the host is not read.
+- On the Proxmox host (proxmox) it reads the host, its storages and the VMs of status_vms; every other VM is shown as Proxmox sees it, and never judged. It reads them through Proxmox's API on the host's own loopback, with the API token status_proxmox_token_id and status_proxmox_token_secret, sent only on a connection serving the node's own certificate, but for a storage's VM disks and its backups, which Proxmox lists only to a token that may change them (pvesh, as root). Without a token the host is not read. The upgrade simulation is answered from status_upgrades_kept_file while nothing under status_upgrades_state_paths has changed.
 - For the cluster (cluster), on this machine, it reads the nodes, the apps (each Ingress's Service, then the Deployment it selects, and every Deployment a Flux Kustomization under status_cluster_apps_path applies), Flux, the certificates, the nodes' kubelet statistics, Alertmanager's alerts, etcd's state and the newest commit of the branch Flux syncs. It reads the credentials under no_log, keeping only the server the kubeconfig names and when each client certificate expires, and reports another cluster's credentials rather than use them. It never reads a Secret. With status_tailnet_dns, it also reads where this machine's Tailscale sends the apps' domain, in the same pass.
 - For the NAS (nas) it reads nothing itself, and works out what status_nas_state says, the result of truenas_info with its status option, which roles/truenas's status entry point reads in one login - the pools' health, capacity and last scrub, TrueNAS's alerts, the snapshot tasks' last runs, the NFS service.
 - Unless status_probe_apps is off, asks from this machine the addresses of the apps it found (the cluster's, and an app on a VM of its own) with the role's module status_probe, checking no certificate and sending no credentials.
@@ -384,6 +384,28 @@ Description: Read the homeserver's machines without changing them, and report wh
   
   
 
+  - **status_upgrades_kept_file**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+    - **Description**: 
+   - The file on this machine that keeps the Proxmox host's upgrade simulation's last answer and its key, which answers the next run while the key is the same; empty keeps none, and the simulation always runs.
+  
+  
+  
+  
+
+  - **status_upgrades_state_paths**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+    - **Description**: 
+   - The files and directories on the Proxmox host whose names, sizes, times and inodes key the simulation's answer (dpkg's status and journal, the package lists, apt's configuration), through symbolic links.
+  
+  
+  
+  
+
   - **status_parallel**
     - **Required**: false
     - **Type**: int
@@ -512,6 +534,7 @@ Description: Read the homeserver's machines without changing them, and report wh
 
 **Description**: 
 - Puts together what each host of status_hosts found (its status_found), ranks what needs attention, writes the report to status_report_file as JSON, mode 0600, and shows it as text, unless status_quiet.
+- Keeps the Proxmox host's upgrade simulation's fresh answer and its key in status_upgrades_kept_file, mode 0600, which the main entry point hands back to the host on the next run.
 - Writes the report in a dry run too, since just status runs as one and takes its exit code from the file.
 - What each host found includes what its apps' addresses answered, which the main entry point asks.
 
@@ -555,6 +578,17 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Default**: 
   
     - **Description**: Where the report is written, as JSON; empty writes none.
+  
+  
+  
+
+  - **status_upgrades_kept_file**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+    - **Description**: 
+   - The file on this machine, an absolute path, that keeps the upgrade simulation's fresh answer and key, as the main entry point reads it; empty keeps none.
+  
   
   
   
@@ -669,18 +703,20 @@ Description: Read the homeserver's machines without changing them, and report wh
 | [status_nas_state](defaults/main.yml#L73)   | dict | `{}` |    
 | [status_nas_release](defaults/main.yml#L74)   | str |  |    
 | [status_tailscale_state](defaults/main.yml#L76)   | dict | `{}` |    
-| [status_parallel](defaults/main.yml#L78)   | NoneType | `None` |    
-| [status_timeout](defaults/main.yml#L79)   | int | `30` |    
-| [status_hosts](defaults/main.yml#L82)   | list | `[]` |    
-| [status_report_file](defaults/main.yml#L83)   | str |  |    
-| [status_color](defaults/main.yml#L84)   | bool | `False` |    
-| [status_quiet](defaults/main.yml#L85)   | bool | `False` |    
-| [status_read_at](defaults/main.yml#L88)   | str |  |    
-| [status_now](defaults/main.yml#L89)   | int | `0` |    
-| [status_probe_apps](defaults/main.yml#L92)   | bool | `True` |    
-| [status_probe_timeout](defaults/main.yml#L93)   | int | `5` |    
-| [status_admin](defaults/main.yml#L96)   | list | `[]` |    
-| [status_commands](defaults/main.yml#L105)   | dict | `{}` |    
+| [status_upgrades_kept_file](defaults/main.yml#L80)   | str |  |    
+| [status_upgrades_state_paths](defaults/main.yml#L81)   | list | `[]` |    
+| [status_parallel](defaults/main.yml#L83)   | NoneType | `None` |    
+| [status_timeout](defaults/main.yml#L84)   | int | `30` |    
+| [status_hosts](defaults/main.yml#L87)   | list | `[]` |    
+| [status_report_file](defaults/main.yml#L88)   | str |  |    
+| [status_color](defaults/main.yml#L89)   | bool | `False` |    
+| [status_quiet](defaults/main.yml#L90)   | bool | `False` |    
+| [status_read_at](defaults/main.yml#L93)   | str |  |    
+| [status_now](defaults/main.yml#L94)   | int | `0` |    
+| [status_probe_apps](defaults/main.yml#L97)   | bool | `True` |    
+| [status_probe_timeout](defaults/main.yml#L98)   | int | `5` |    
+| [status_admin](defaults/main.yml#L101)   | list | `[]` |    
+| [status_commands](defaults/main.yml#L110)   | dict | `{}` |    
 
 
 
@@ -718,6 +754,7 @@ Description: Read the homeserver's machines without changing them, and report wh
 | proxmox ¦ Read the node's name and which VMs run | status_read | True |
 | proxmox ¦ Use the node's name | ansible.builtin.set_fact | True |
 | proxmox ¦ Read the host, its storages and its VMs, at once | status_read | True |
+| proxmox ¦ Say what the upgrade simulation answered | ansible.builtin.set_fact | True |
 | proxmox ¦ Read the logs of the backup runs that failed | status_read | True |
 | proxmox ¦ Work out what the host says | ansible.builtin.set_fact | False |
 | proxmox ¦ Ask Home Assistant's address | status_probe | True |
@@ -731,6 +768,7 @@ Description: Read the homeserver's machines without changing them, and report wh
 | report ¦ Rank what needs attention | ansible.builtin.set_fact | False |
 | report ¦ Write the report as JSON | status_write_json | True |
 | report ¦ Show the report | ansible.builtin.debug | True |
+| report ¦ Keep the upgrade simulation's answer | status_write_json | True |
 
 
 ## Task Flow Graphs
@@ -802,11 +840,12 @@ classDef rescue stroke:#665352,stroke-width:2px;
   proxmox___Say_what_its_Tailscale_says0-->|Task| proxmox___Read_the_node_s_name_and_which_VMs_run1[proxmox   read the node s name and which vms run<br>When: **proxmox  in status reads and   commands   length <br>  api   length    0**]:::task
   proxmox___Read_the_node_s_name_and_which_VMs_run1-->|Task| proxmox___Use_the_node_s_name2[proxmox   use the node s name<br>When: **proxmox  in status reads**]:::task
   proxmox___Use_the_node_s_name2-->|Task| proxmox___Read_the_host__its_storages_and_its_VMs__at_once3[proxmox   read the host  its storages and its vms <br>at once<br>When: **proxmox  in status reads and not  status proxmox<br>first unreachable   default false   and   commands<br>  length    api   length    0**]:::task
-  proxmox___Read_the_host__its_storages_and_its_VMs__at_once3-->|Task| proxmox___Read_the_logs_of_the_backup_runs_that_failed4[proxmox   read the logs of the backup runs that<br>failed<br>When: **runs   length   0**]:::task
-  proxmox___Read_the_logs_of_the_backup_runs_that_failed4-->|Task| proxmox___Work_out_what_the_host_says5[proxmox   work out what the host says]:::task
-  proxmox___Work_out_what_the_host_says5-->|Task| proxmox___Ask_Home_Assistant_s_address6[proxmox   ask home assistant s address<br>When: **status probe apps and  targets   length   0**]:::task
-  proxmox___Ask_Home_Assistant_s_address6-->|Task| proxmox___Say_what_the_host_says7[proxmox   say what the host says]:::task
-  proxmox___Say_what_the_host_says7-->End
+  proxmox___Read_the_host__its_storages_and_its_VMs__at_once3-->|Task| proxmox___Say_what_the_upgrade_simulation_answered4[proxmox   say what the upgrade simulation answered<br>When: **status upgrades kept file   length   0**]:::task
+  proxmox___Say_what_the_upgrade_simulation_answered4-->|Task| proxmox___Read_the_logs_of_the_backup_runs_that_failed5[proxmox   read the logs of the backup runs that<br>failed<br>When: **runs   length   0**]:::task
+  proxmox___Read_the_logs_of_the_backup_runs_that_failed5-->|Task| proxmox___Work_out_what_the_host_says6[proxmox   work out what the host says]:::task
+  proxmox___Work_out_what_the_host_says6-->|Task| proxmox___Ask_Home_Assistant_s_address7[proxmox   ask home assistant s address<br>When: **status probe apps and  targets   length   0**]:::task
+  proxmox___Ask_Home_Assistant_s_address7-->|Task| proxmox___Say_what_the_host_says8[proxmox   say what the host says]:::task
+  proxmox___Say_what_the_host_says8-->End
 ```
 
 
@@ -828,7 +867,8 @@ classDef rescue stroke:#665352,stroke-width:2px;
   report___Put_the_findings_together0-->|Task| report___Rank_what_needs_attention1[report   rank what needs attention]:::task
   report___Rank_what_needs_attention1-->|Task| report___Write_the_report_as_JSON2[report   write the report as json<br>When: **status report file   length   0**]:::task
   report___Write_the_report_as_JSON2-->|Task| report___Show_the_report3[report   show the report<br>When: **not status quiet**]:::task
-  report___Show_the_report3-->End
+  report___Show_the_report3-->|Task| report___Keep_the_upgrade_simulation_s_answer4[report   keep the upgrade simulation s answer<br>When: **status upgrades kept file   length   0 and  kept  <br>length   0**]:::task
+  report___Keep_the_upgrade_simulation_s_answer4-->End
 ```
 
 

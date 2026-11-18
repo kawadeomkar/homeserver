@@ -1926,6 +1926,13 @@ def test_status_refuses_a_backup_job_it_cannot_check(tmp_path):
     assert rc != 0 and "status_backup_jobs must each have an id, a schedule and a storage." in out, out[-3000:]
 
 
+def test_status_refuses_a_kept_upgrade_answer_at_a_relative_path(tmp_path):
+    """A relative path would make the lookup search the role's files/ and the report's write fail: refused first."""
+    kept = json.dumps({"status_upgrades_kept_file": ".cache/status/upgrades.json"})
+    rc, out = argspec_pass(example_tree(tmp_path), "status.yml", *CLUSTER_ARGS, "-e", kept)
+    assert rc != 0 and "status_upgrades_kept_file must be an absolute path, or empty." in out, out[-3000:]
+
+
 @pytest.mark.parametrize(("local_yml", "source"), [(None, "nas"), (PROXMOX_ONLY_LOCAL_YML, "")])
 def test_status_reads_the_nas_as_its_play_reaches_it(tmp_path, local_yml, source):
     """just status reads the NAS through roles/truenas's status entry point, with the NAS play's own connection
@@ -2109,7 +2116,8 @@ TASK_KEYWORDS = {
 
 def test_status_reads_only_through_status_read():
     """No task of roles/status runs a command, or anything that could change a host, but through status_read, whose
-    read list refuses everything else; it writes only its own report, on the controller."""
+    read list refuses everything else; it writes only its own report and the upgrade simulation's kept answer, on the
+    controller."""
     allowed = {
         "status_read",
         # The report entry point's questions to the apps, from this machine: a GET each, no certificate checked.
@@ -2138,9 +2146,10 @@ def test_status_reads_only_through_status_read():
     assert delegated == {"localhost"}
     report = yaml.safe_load((ROOT / "roles" / "status" / "tasks" / "report.yml").read_text())
     writes = [t for t in tasks_in(report) if "status_write_json" in t]
-    assert writes and all(t["status_write_json"]["path"] == "{{ status_report_file }}" for t in writes), (
-        "the report entry point writes elsewhere"
-    )
+    assert [t["status_write_json"]["path"] for t in writes] == [
+        "{{ status_report_file }}",
+        "{{ status_upgrades_kept_file }}",
+    ], "the report entry point writes elsewhere"
     used_elsewhere = {f.name for f in (ROOT / "roles" / "status" / "tasks").glob("*.yml") if f.name != "report.yml"}
     assert not any(
         "status_write_json" in task

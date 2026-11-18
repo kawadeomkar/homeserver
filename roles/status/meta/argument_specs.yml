@@ -10,7 +10,9 @@ argument_specs:
         shown as Proxmox sees it, and never judged. It reads them through Proxmox's API on the host's own loopback,
         with the API token status_proxmox_token_id and status_proxmox_token_secret, sent only on a connection
         serving the node's own certificate, but for a storage's VM disks and its backups, which Proxmox lists only
-        to a token that may change them (pvesh, as root). Without a token the host is not read.
+        to a token that may change them (pvesh, as root). Without a token the host is not read. The upgrade
+        simulation is answered from status_upgrades_kept_file while nothing under status_upgrades_state_paths has
+        changed.
       - For the cluster (cluster), on this machine, it reads the nodes, the apps (each Ingress's Service, then the
         Deployment it selects, and every Deployment a Flux Kustomization under status_cluster_apps_path applies),
         Flux, the certificates, the nodes' kubelet statistics, Alertmanager's alerts, etcd's state and the newest
@@ -239,6 +241,19 @@ argument_specs:
         description: >-
           The Proxmox host's Tailscale, as roles/proxmox_tailscale's status entry point records it in
           proxmox_tailscale_status_state; empty when it is off.
+      status_upgrades_kept_file:
+        type: str
+        default: ""
+        description:
+          - The file on this machine that keeps the Proxmox host's upgrade simulation's last answer and its key, which
+            answers the next run while the key is the same; empty keeps none, and the simulation always runs.
+      status_upgrades_state_paths:
+        type: list
+        elements: str
+        default: []
+        description:
+          - The files and directories on the Proxmox host whose names, sizes, times and inodes key the simulation's
+            answer (dpkg's status and journal, the package lists, apt's configuration), through symbolic links.
       status_parallel:
         type: int
         default: null
@@ -302,6 +317,8 @@ argument_specs:
     description:
       - Puts together what each host of status_hosts found (its status_found), ranks what needs attention, writes
         the report to status_report_file as JSON, mode 0600, and shows it as text, unless status_quiet.
+      - Keeps the Proxmox host's upgrade simulation's fresh answer and its key in status_upgrades_kept_file, mode
+        0600, which the main entry point hands back to the host on the next run.
       - Writes the report in a dry run too, since just status runs as one and takes its exit code from the file.
       - What each host found includes what its apps' addresses answered, which the main entry point asks.
     options:
@@ -323,6 +340,12 @@ argument_specs:
         type: str
         default: ""
         description: Where the report is written, as JSON; empty writes none.
+      status_upgrades_kept_file:
+        type: str
+        default: ""
+        description:
+          - The file on this machine, an absolute path, that keeps the upgrade simulation's fresh answer and key, as
+            the main entry point reads it; empty keeps none.
       status_color:
         type: bool
         default: false

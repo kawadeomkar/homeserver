@@ -74,6 +74,11 @@ status_nas_state: {}
 status_nas_release: ""
 # The Proxmox host's Tailscale: what roles/proxmox_tailscale's status entry point recorded, {} when it is off.
 status_tailscale_state: {}
+# The Proxmox host's upgrade simulation kept: the file on this machine that keeps its last answer (an absolute path;
+# empty keeps none, and it always runs), and the files and directories on the host whose names, sizes, times and
+# inodes key it.
+status_upgrades_kept_file: ""
+status_upgrades_state_paths: []
 # How many reads run at once on a host, and the seconds each may take; null runs one per CPU, 8 at most.
 status_parallel: null
 status_timeout: 30

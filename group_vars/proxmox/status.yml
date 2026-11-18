@@ -2,8 +2,9 @@
 # just status on the Proxmox host (roles/status's main entry point): read as the Proxmox host, through its API with
 # the project's token (group_vars/proxmox/connection.yml), its installer's storage shown against the disk budget
 # roles/proxmox_vm keeps (vm_storage_installer, group_vars/all/storage.yml, and the same headroom,
-# group_vars/proxmox/vms.yml), Debian's flag for a pending reboot, which roles/proxmox_apt writes when an upgrade asks
-# for one, qemu-server's pid files, which say at once which VMs run, the nightly backup job roles/proxmox_backup keeps
+# group_vars/proxmox/vms.yml), the upgrades apt would make, kept while dpkg and apt's files are as they were (below),
+# Debian's flag for a pending reboot, which roles/proxmox_apt writes when an upgrade asks for one, qemu-server's pid
+# files, which say at once which VMs run, the nightly backup job roles/proxmox_backup keeps
 # (group_vars/proxmox/backup.yml): none without a NAS and without vm_backup_storage, which the report says, and
 # Tailscale as roles/proxmox_tailscale keeps it (group_vars/proxmox/tailscale.yml).
 status_source: proxmox
@@ -17,6 +18,19 @@ status_proxmox_api_url: https://127.0.0.1:8006/api2/json
 status_proxmox_token_id: "{{ proxmox_token.id }}"
 status_proxmox_token_secret: "{{ proxmox_token.secret }}"
 status_proxmox_api_cert_files: [/etc/pve/local/pveproxy-ssl.pem, /etc/pve/local/pve-ssl.pem]
+# What apt's simulated upgrade depends on: dpkg's status (installed versions, holds) and its journal, the package
+# lists, and apt's own configuration (sources, pins, apt.conf.d). The journal (updates/) holds what a dpkg run did
+# before its next checkpoint folds it into status, and is empty after every clean run: a dpkg killed mid-upgrade can
+# leave status as it was, and the simulation then refuses ("dpkg was interrupted"), which the kept answer must not
+# hide. arch lists the foreign architectures apt reads. While their files' names, sizes and times are as they were,
+# the last answer stands (status.yml keeps it); Proxmox's daily pve-daily-update refreshes the lists, so about one run
+# a day simulates. Not /var/lib/apt/extended_states, which only says which packages apt installed by itself.
+status_upgrades_state_paths:
+  - /var/lib/dpkg/status
+  - /var/lib/dpkg/updates
+  - /var/lib/dpkg/arch
+  - /var/lib/apt/lists
+  - /etc/apt
 status_backup_jobs: "{{ proxmox_backup_jobs }}"
 # Tailscale, when local.yml turns it on: status.yml reads it first, through roles/proxmox_tailscale's read-only status
 # entry point, which records it in proxmox_tailscale_status_state; {} when it is off.

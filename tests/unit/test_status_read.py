@@ -7,6 +7,7 @@ really running at the same time.
 
 import importlib.util
 import json
+import os
 import socket
 import ssl
 import sys
@@ -261,6 +262,9 @@ class _Module:
             "api_token_id": "",
             "api_token_secret": "",
             "api_cert_files": [],
+            "upgrades_state_paths": [],
+            "upgrades_kept": {},
+            "upgrades_host": "",
             **params,
         }
         self.ended = None
@@ -541,3 +545,160 @@ def test_an_api_nothing_answers_names_pveproxy(api):
     results = status_read.run_all({}, 1, 10, reads={"all": ["/cluster/resources"]}, api=settings(api, api_url=url))
     assert results["all"]["error"] == f"pveproxy does not answer at 127.0.0.1:{port} (connection refused)"
     assert results["all"]["unanswered"] is True and "token" not in results["all"]
+
+
+# ------------------------------------------------------------------------------------- the kept simulation ---
+
+
+def key(paths, host="pve", argv=None):
+    return status_read.upgrades_key(paths, host, argv or status_read.SIMULATION)
+
+
+def test_the_simulations_key_follows_the_files_it_depends_on(tmp_path):
+    """Each file's name, size and times: a file added, grown or touched gives another key; reading them changes
+    nothing, and a path that does not exist is part of the key too."""
+    lists, status = tmp_path / "lists", tmp_path / "status"
+    lists.mkdir()
+    (lists / "a_Packages").write_text("Package: pve-manager\n")
+    status.write_text("Package: pve-manager\nVersion: 9.2.27\n")
+    paths = [str(status), str(lists), str(tmp_path / "no-such")]
+    first = key(paths)
+    assert first == key(paths)
+    (lists / "b_Packages").write_text("Package: qemu-server\n")
+    grown = key(paths)
+    assert grown != first
+    os.utime(status, ns=(1, 1))
+    touched = key(paths)
+    assert touched != grown
+    (tmp_path / "no-such").write_text("")
+    assert key(paths) != touched
+
+
+def test_the_key_names_the_host_and_the_command(tmp_path):
+    """An answer kept for one host, or for another simulation, never stands for another: a kept file copied between
+    checkouts, or a command changed in group_vars, runs the simulation again."""
+    (tmp_path / "status").write_text("Package: x\n")
+    paths = [str(tmp_path / "status")]
+    assert key(paths, "pve") != key(paths, "nuc")
+    assert key(paths) != key(paths, argv=["apt-get", "-q", "-s", "upgrade"])
+
+
+def test_a_file_rewritten_with_its_old_time_gives_another_key(tmp_path):
+    """A restore or `cp -p` keeps the modification time and the size: the change time and inode still move."""
+    status = tmp_path / "status"
+    status.write_text("Package: x\nVersion: 1\n")
+    before = os.stat(status)
+    first = key([str(status)])
+    time.sleep(0.01)
+    replacement = tmp_path / "status.new"
+    replacement.write_text("Package: x\nVersion: 2\n")
+    os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+    os.replace(replacement, status)
+    assert os.stat(status).st_mtime_ns == before.st_mtime_ns and os.stat(status).st_size == before.st_size
+    assert key([str(status)]) != first
+
+
+def test_dpkgs_journal_is_part_of_the_key(tmp_path):
+    """dpkg writes what it has done to updates/ before it folds it into status: a package half-installed changes the
+    key as soon as its journal entry lands, not only at the next fold."""
+    dpkg = tmp_path / "dpkg"
+    (dpkg / "updates").mkdir(parents=True)
+    (dpkg / "status").write_text("Package: x\n")
+    paths = [str(dpkg / "status"), str(dpkg / "updates")]
+    first = key(paths)
+    (dpkg / "updates" / "0000").write_text("Package: x\nStatus: install ok unpacked\n")
+    assert key(paths) != first
+
+
+def test_the_key_follows_symbolic_links_to_what_they_name(tmp_path):
+    """/etc/apt's sources are often links: the file or directory a link names is keyed, so a change behind the link
+    gives another key, and a directory linked into itself is walked once."""
+    real = tmp_path / "real"
+    (real / "sources.list.d").mkdir(parents=True)
+    (real / "sources.list.d" / "pve.sources").write_text("Types: deb\n")
+    (real / "trusted.gpg").write_text("key\n")
+    apt = tmp_path / "apt"
+    apt.mkdir()
+    (apt / "sources.list.d").symlink_to(real / "sources.list.d")
+    (apt / "trusted.gpg").symlink_to(real / "trusted.gpg")
+    (apt / "loop").symlink_to(apt)
+    (apt / "dangling").symlink_to(tmp_path / "gone")
+    first = key([str(apt)])
+    (real / "sources.list.d" / "pve.sources").write_text("Types: deb\nSuites: trixie\n")
+    behind_directory = key([str(apt)])
+    assert behind_directory != first
+    (real / "trusted.gpg").write_text("another key\n")
+    assert key([str(apt)]) != behind_directory
+
+
+def test_a_file_name_that_is_not_utf8_is_keyed_like_any_other(tmp_path):
+    """A list whose name holds bytes outside UTF-8 still gives a key, and a change to it another."""
+    lists = tmp_path / "lists"
+    lists.mkdir()
+    odd = os.path.join(os.fsencode(lists), b"mirror\xff_Packages")
+    try:
+        with open(odd, "wb") as f:
+            f.write(b"Package: x\n")
+    except OSError:
+        pytest.skip("this file system refuses names that are not UTF-8")
+    first = key([str(lists)])
+    with open(odd, "ab") as f:
+        f.write(b"Version: 2\n")
+    assert key([str(lists)]) != first
+
+
+def test_the_simulation_is_answered_from_the_kept_answer_while_its_key_holds(tmp_path, monkeypatch):
+    ran = []
+    monkeypatch.setattr(
+        status_read, "run_one", lambda argv, timeout: ran.append(argv) or {"rc": 0, "stdout": "Inst x", "error": ""}
+    )
+    (tmp_path / "status").write_text("Package: x\n")
+    paths = [str(tmp_path / "status")]
+    sim = status_read.SIMULATION
+    fresh = status_read.simulate(sim, 30, paths, {}, "pve")
+    assert fresh["stdout"] == "Inst x" and fresh["key"] == key(paths) and "kept" not in fresh
+    kept = status_read.simulate(sim, 30, paths, {"key": fresh["key"], "stdout": "Inst kept"}, "pve")
+    assert (kept["rc"], kept["stdout"], kept["kept"], kept["key"]) == (0, "Inst kept", True, fresh["key"])
+    assert len(ran) == 1
+    # Another key, an answer of another shape, another host, or no paths: the simulation runs.
+    assert "kept" not in status_read.simulate(sim, 30, paths, {"key": "other", "stdout": "x"}, "pve")
+    assert "kept" not in status_read.simulate(sim, 30, paths, {"key": fresh["key"]}, "pve")
+    assert "kept" not in status_read.simulate(sim, 30, paths, {"key": fresh["key"], "stdout": "x"}, "nuc")
+    assert "key" not in status_read.simulate(sim, 30, [], {"key": fresh["key"], "stdout": "x"}, "pve")
+    assert len(ran) == 5
+
+
+def test_a_key_that_cannot_be_made_only_means_the_simulation_runs(tmp_path, monkeypatch):
+    monkeypatch.setattr(status_read, "run_one", lambda argv, timeout: {"rc": 0, "stdout": "Inst x", "error": ""})
+    monkeypatch.setattr(status_read, "upgrades_key", lambda *a: 1 / 0)
+    result = status_read.simulate(status_read.SIMULATION, 30, [str(tmp_path)], {"key": "k", "stdout": "x"}, "pve")
+    assert result == {"rc": 0, "stdout": "Inst x", "error": ""}
+
+
+def test_only_the_simulation_is_ever_answered_from_the_kept_answer(tmp_path):
+    (tmp_path / "status").write_text("Package: x\n")
+    paths = [str(tmp_path / "status")]
+    kept = {"key": key(paths), "stdout": "kept"}
+    results = status_read.run_all(
+        {"updates": status_read.SIMULATION, "node": ["hostname", "-s"]},
+        2,
+        10,
+        state_paths=paths,
+        kept=kept,
+        host="pve",
+    )
+    assert results["updates"]["kept"] is True and results["updates"]["stdout"] == "kept"
+    assert "kept" not in results["node"] and "key" not in results["node"]
+
+
+def test_main_passes_the_kept_answer_and_the_host_on(monkeypatch):
+    seen = []
+    monkeypatch.setattr(status_read, "run_all", lambda *a, **k: seen.append(a) or {})
+    state, _ = run_main(
+        monkeypatch,
+        commands={"updates": status_read.SIMULATION},
+        upgrades_state_paths=["/var/lib/dpkg/status"],
+        upgrades_kept={"key": "k", "stdout": "x"},
+        upgrades_host="pve",
+    )
+    assert state == "ok" and seen[0][-3:] == (["/var/lib/dpkg/status"], {"key": "k", "stdout": "x"}, "pve")

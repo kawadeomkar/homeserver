@@ -172,6 +172,27 @@ def upgrades(text):
     return out
 
 
+def upgrades_kept(text):
+    """The upgrade simulation's kept answer, {key, stdout}, from the file that keeps it; {} for none, or for one that is
+    not that shape (a file cut short, or from an older run), which then simply simulates again."""
+    try:
+        kept = json.loads(text) if text else {}
+    except ValueError:
+        return {}
+    if isinstance(kept, dict) and isinstance(kept.get("key"), str) and isinstance(kept.get("stdout"), str):
+        return {"key": kept["key"], "stdout": kept["stdout"]}
+    return {}
+
+
+def upgrades_to_keep(result):
+    """What to keep of the simulation's result: its answer and key when it ran afresh and worked; {} when it came from
+    the kept answer already, failed, or was keyed by nothing."""
+    result = result if isinstance(result, dict) else {}
+    if result.get("rc") != 0 or result.get("kept") or not result.get("key"):
+        return {}
+    return {"key": result["key"], "stdout": result.get("stdout") or ""}
+
+
 # What the Proxmox API token must hold for the host's lists, by the path Proxmox checks each on ({node}, the node's
 # name). Without them /cluster/resources still answers, but leaves out what the token may not see: a VM without
 # VM.Audit, a storage without Datastore.Audit, the node's figures without Sys.Audit (PVE/API2/Cluster.pm), which would
@@ -3080,6 +3101,8 @@ class FilterModule:
         return {
             "status_proxmox": proxmox,
             "status_running_vms": running_vms,
+            "status_upgrades_kept": upgrades_kept,
+            "status_upgrades_to_keep": upgrades_to_keep,
             "status_backup_failed_runs": backup_failed_runs,
             "status_cluster": cluster,
             "status_nas": nas,

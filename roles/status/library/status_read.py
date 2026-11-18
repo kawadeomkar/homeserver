@@ -22,6 +22,11 @@ description:
   - Before it sends the token on a connection, it compares the certificate the API serves with the first one in the
     first of O(api_cert_files) that exists, the node's own, and sends nothing to any other. It checks no chain of
     trust, so neither Proxmox's CA nor a pin that goes stale when Proxmox issues the certificate again is needed.
+  - Given O(upgrades_state_paths), it answers C(apt-get -q -s dist-upgrade) from O(upgrades_kept) when nothing
+    the simulation's answer depends on has changed since, by a key of the host, the command and the files under
+    those paths (dpkg's status and journal, the package lists, apt's configuration) by name, size, times and inode,
+    a few milliseconds where the simulation takes one to two seconds. The key goes back with a fresh answer, for the
+    caller to keep.
   - Never changes anything, so a dry run runs the commands too.
   - A command or read that fails or times out is reported, not a failure of the task; the caller decides what it
     means.
@@ -67,6 +72,24 @@ options:
     default: ""
   api_token_secret:
     description: The API token's secret. Empty, no API read is made, and each says so.
+    type: str
+    default: ""
+  upgrades_state_paths:
+    description:
+      - The files and directories whose names, sizes, times and inodes C(apt-get -q -s dist-upgrade)'s answer is
+        keyed by, a directory walked through its symbolic links. Empty, the simulation always runs and no key is
+        returned.
+    type: list
+    elements: str
+    default: []
+  upgrades_kept:
+    description:
+      - The simulation's answer as last kept, C({key, stdout}), which answers it while the key is the same.
+    type: dict
+    default: {}
+  upgrades_host:
+    description:
+      - The host the kept answer belongs to, part of its key; empty takes this machine's hostname.
     type: str
     default: ""
   api_cert_files:
@@ -128,6 +151,8 @@ results:
       out, or an API read that was not made or not answered with its data, and C(error) then says why.
     - A failed API read that is the token's also carries C(token), one of missing, refused or forbidden, and one
       whose API did not answer at all (nothing listening) carries C(unanswered).
+    - The simulation's also carries C(key), with O(upgrades_state_paths), and C(kept) when its answer came from
+      O(upgrades_kept).
   type: dict
   returned: always
   sample:
@@ -139,6 +164,7 @@ import http.client
 import json
 import os
 import re
+import socket
 import ssl
 import subprocess
 import threading
@@ -356,12 +382,75 @@ def run_one(argv, timeout):
     }
 
 
-def run_all(commands, parallel, timeout, timeouts=None, reads=None, api=None):
+# The simulation whose answer can be kept: what apt would upgrade, from the lists as last refreshed.
+SIMULATION = ["apt-get", "-q", "-s", "dist-upgrade"]
+# Raised whenever what the key covers changes, so an answer kept under the old key never stands for the new one.
+KEY_FORMAT = 2
+
+
+def upgrades_key(paths, host, argv):
+    """What the simulation's answer depends on, as a digest: the key's format, the host and the command, then each file
+    under `paths`, a directory walked through its symbolic links (each directory once), by its name, size,
+    modification and change times and inode, the file a link points at taken for the link. Metadata alone, under a
+    millisecond for dpkg's status and journal, the lists and /etc/apt on a Proxmox host, which the simulation itself
+    leaves as they are; the change time and inode catch a file rewritten with its old modification time, as a restore
+    or `cp -p` leaves it. Names are hashed as bytes, so a file whose name is not UTF-8 is keyed like any other."""
+    digest = hashlib.sha256(f"{KEY_FORMAT}\n{host}\n{' '.join(argv)}\n".encode())
+
+    def add(path):
+        try:
+            info = os.stat(path)
+        except OSError:
+            try:
+                info = os.lstat(path)
+            except OSError:
+                digest.update(os.fsencode(path) + b" -\n")
+                return
+        line = f" {info.st_size} {info.st_mtime_ns} {info.st_ctime_ns} {info.st_ino}\n"
+        digest.update(os.fsencode(path) + line.encode())
+
+    for top in paths:
+        if not os.path.isdir(top):
+            add(top)
+            continue
+        seen = set()
+        for folder, names, files in os.walk(top, followlinks=True):
+            here = os.stat(folder)
+            if (here.st_dev, here.st_ino) in seen:
+                names[:] = []
+                continue
+            seen.add((here.st_dev, here.st_ino))
+            names.sort()
+            for name in sorted(files):
+                add(os.path.join(folder, name))
+    return digest.hexdigest()
+
+
+def simulate(argv, timeout, state_paths, kept, host):
+    """The simulation's result, its kept answer while nothing it depends on has changed, with the key to keep it by.
+    A key that cannot be made (a file that vanishes mid-walk, say) only means the simulation runs, unkept."""
+    if not state_paths:
+        return run_one(argv, timeout)
+    try:
+        key = upgrades_key(state_paths, host or socket.gethostname(), argv)
+    except Exception:  # noqa: BLE001 - the kept answer is only ever a shortcut
+        return run_one(argv, timeout)
+    if isinstance(kept, dict) and kept.get("key") == key and isinstance(kept.get("stdout"), str):
+        return {"rc": 0, "stdout": kept["stdout"], "stderr": "", "seconds": 0.0, "error": "", "kept": True, "key": key}
+    return run_one(argv, timeout) | {"key": key}
+
+
+def run_all(commands, parallel, timeout, timeouts=None, reads=None, api=None, state_paths=(), kept=None, host=""):
     """Every command's and API read's result by name, at most `parallel` at a time, each command within its own of
-    `timeouts` or else `timeout`."""
+    `timeouts` or else `timeout`; the simulation answered from `kept` while its key holds."""
     timeouts = timeouts or {}
     with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:
-        futures = {name: pool.submit(run_one, argv, timeouts.get(name, timeout)) for name, argv in commands.items()}
+        futures = {
+            name: pool.submit(simulate, argv, timeouts.get(name, timeout), state_paths, kept, host)
+            if argv == SIMULATION
+            else pool.submit(run_one, argv, timeouts.get(name, timeout))
+            for name, argv in commands.items()
+        }
         futures |= {name: pool.submit(api_read, parts, api, timeout) for name, parts in (reads or {}).items()}
         return {name: future.result() for name, future in futures.items()}
 
@@ -413,6 +502,9 @@ def main():
             api_token_id=dict(type="str", default=""),
             api_token_secret=dict(type="str", default="", no_log=True),
             api_cert_files=dict(type="list", elements="str", default=[]),
+            upgrades_state_paths=dict(type="list", elements="str", default=[]),
+            upgrades_kept=dict(type="dict", default={}),
+            upgrades_host=dict(type="str", default=""),
         ),
         supports_check_mode=True,
     )
@@ -446,7 +538,17 @@ def main():
     if parallel < 1 or module.params["timeout"] < 1 or any(s < 1 for s in timeouts.values()):
         module.fail_json(msg="parallel, timeout and timeouts must be at least 1.")
     api = api_settings(module.params) if reads else None
-    results = run_all(commands, parallel, module.params["timeout"], timeouts, reads, api)
+    results = run_all(
+        commands,
+        parallel,
+        module.params["timeout"],
+        timeouts,
+        reads,
+        api,
+        module.params["upgrades_state_paths"],
+        module.params["upgrades_kept"],
+        module.params["upgrades_host"],
+    )
     module.exit_json(changed=False, results=results)
 
 
