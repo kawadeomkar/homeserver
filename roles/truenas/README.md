@@ -223,7 +223,7 @@ so a rebuild matches, and the system dataset stays on the boot pool, off the sin
 | `ephemeral/frigate` | with a cluster: camera recordings | `sync=disabled`, 1M records, quota 500G |
 | `ephemeral/jellyfin` | with a cluster: the media library, from before this repo | `create_only`: properties and NFSv4 ACLs left alone |
 | `persistent/timemachine` | with a Mac: the Macs' Time Machine backups' parent | SMB preset |
-| `persistent/timemachine/<name>` | each Mac's backup (`timemachine_backups`) | SMB preset, `sync=standard`, quota `quota_gib` |
+| `persistent/timemachine/<name>` | each Mac's backup (`timemachine_backups`) | SMB preset, `sync=standard`, quota `quota_gib`, refquota three quarters of it |
 
 - The persistent VMs keep synchronous writes synchronous. Their quota counts their snapshots, so a disk that fills
   never fills the pool under the backups, which share it; a thin qcow2 disk only grows.
@@ -256,21 +256,26 @@ unprivileged process on a client can speak NFS. The VM and backup shares go to t
 (`kubernetes_nas_datasets`, `group_vars/all/kubernetes.yml`) to the worker alone, all with root mapped to root: each
 app's pod makes its own mount point uid 1000.
 
-**Time Machine.** Each Mac in `local.yml`'s `timemachine_backups` (`{name, quota_gib, uid}`, optionally `retired`)
-gets, from `group_vars/nas/timemachine.yml`, a dataset under `persistent/timemachine` made with the SMB preset (the only
-moment case-insensitivity can be chosen) with its quota and `sync=standard`, a weekly snapshot task kept eight weeks, an
-SMB-only login `tm-<name>` with its pinned uid and the vault's password (`vault_timemachine_passwords`), its directory
-owned by that login alone with the preset's template ACL stripped, and a Time Machine share `tm-<name>` with
-`auto_snapshot` (Samba snapshots the dataset after each completed backup and keeps a week) and a volume id derived from
-the Mac's name, so a rebuilt NAS announces the volume the Mac knows. With a Mac, SMB requires transport encryption and
-has the Apple extensions on, SMB1, NTLMv1, multichannel and the master-browser election off; the NAS announces itself
-over mDNS alone; the API key's own user is taken out of SMB; and the SMB stage starts the service, which the services
-stage keeps stopped otherwise. The Mac's own Time Machine limit, about half the quota, is the working limit and the
-quota the backstop. A retired Mac keeps its dataset and snapshots, its login closed (out of SMB, locked, no password),
-its share and task disabled; with no Mac left backing up, SMB stops. `group_vars/all/timemachine.yml`'s
-`timemachine_settings_error`, which `truenas.yml` asserts first, refuses a bad name, quota or uid, a uid or name given
-twice, an active Mac without a password of 20 characters, and a password for a Mac not listed; `nas_section_error`
-refuses the setting without a NAS. The Mac's side is by hand: `scripts/runbooks/timemachine.md`.
+**Time Machine.** Each Mac in `local.yml`'s `timemachine_backups` (`{name, quota_gib, uid}`, optionally `retired`) gets,
+from `group_vars/nas/timemachine.yml`, a dataset under `persistent/timemachine` made with the SMB preset (the only
+moment case-insensitivity can be chosen) with its quota, a refquota of three quarters of it and `sync=standard`, a
+weekly snapshot task kept eight weeks, an SMB-only login `tm-<name>` with its pinned uid and the vault's password
+(`vault_timemachine_passwords`), its directory owned by that login alone with the preset's template ACL stripped, and a
+Time Machine share `tm-<name>` with `auto_snapshot` (Samba snapshots the dataset after each completed backup and keeps a
+week) and a volume id derived from the Mac's name, so a rebuilt NAS announces the volume the Mac knows. With a Mac, SMB
+requires transport encryption and has the Apple extensions on, SMB1, NTLMv1, multichannel and the master-browser
+election off; the NAS announces itself over mDNS alone; the API key's own user is taken out of SMB; and the SMB stage
+starts the service, which the services stage keeps stopped otherwise. The Mac's own Time Machine limit, about half the
+quota, is the working limit. The refquota counts the disk image alone and is the disk the Mac sees; the quota counts the
+image and its snapshots, whose room is the rest. Should the snapshots fill it, writes fail inside an image that still
+shows free space, and a smaller limit on the Mac frees nothing they hold: `group_vars/nas/timemachine.yml` says why, and
+the runbook what to do. Samba reports the dataset's own statvfs here: its ZFS space hook (`zfs_core:zfs_space_enabled`)
+is off by default and TrueNAS never sets it. A retired Mac keeps its dataset and snapshots, its login closed (out of
+SMB, locked, no password), its share and task disabled; with no Mac left backing up, SMB stops.
+`group_vars/all/timemachine.yml`'s `timemachine_settings_error`, which `truenas.yml` asserts first, refuses a bad name,
+quota or uid, a uid or name given twice, an active Mac without a password of 20 characters, and a password for a Mac not
+listed; `nas_section_error` refuses the setting without a NAS. The Mac's side is by hand:
+`scripts/runbooks/timemachine.md`.
 
 **Alerts.** When `local.yml` names a mail server, the NAS mails warnings and worse (a degraded pool, a pool filling
 up, a failed snapshot task) to `truenas_alert_email`, the password from the vault's `vault_truenas_mail_password`.
