@@ -6,11 +6,13 @@ where a non-idempotent role would trip over it: creating a dataset, share, NTP s
 task that exists, importing a pool that is imported, POSIX ACLs without aclmode DISCARD,
 non-consecutive name servers, a snapshot task for a dataset that does not exist. The SMB service, users, SMB shares
 and directory permissions follow TrueNAS 25.10.7's middleware source (plugins/smb.py, plugins/account.py,
-plugins/filesystem_/acl.py, api/v25_10_5), with its refusals: an SMB share update's purpose without its options or
-its options without its purpose, a Time Machine share without the Apple extensions or mDNS, an SMB user without a
-password, SMB turned on without the password, a built-in user's SMB changed, a directory with an ACL changed without
-stripacl. It is stricter than TrueNAS in one place: an update whose Time Machine options name no vuid gets a new one,
-as the API's description says, where 25.10.7 keeps the old. Users' password hashes are stand-ins
+plugins/filesystem_/acl.py, api/v25_10_5), with its refusals: an SMB share update's options without its purpose, a
+Time Machine share without the Apple extensions or mDNS, an SMB user without a password, SMB turned on without the
+password, a built-in user's SMB changed, a directory with an ACL changed without stripacl, a mode outside 001 to 777.
+It is stricter than TrueNAS in two places: an update's purpose without its options is refused, where 25.10.7 fills the
+options in from their defaults (normalize_legacy_fields), which would quietly reset them; and an update whose Time
+Machine options name no vuid gets a new one, as the API's description says, where 25.10.7 keeps the old. Users'
+password hashes are stand-ins
 (password_hash), not TrueNAS's, and the SMB shares know the TIMEMACHINE_SHARE purpose alone. The periodic snapshot
 tasks, mail and alert services, alert.list, and the pools' health, capacity and scan follow the TrueNAS API v25.10
 reference (api.truenas.com) rather than a capture, times as the API sends them ({"$date": milliseconds}), and
@@ -1085,9 +1087,6 @@ class FakeTrueNAS:
         select = (options or {}).get("select")
         return [{key: obj[key] for key in select if key in obj} for obj in found] if select else found
 
-    def m_user_shell_choices(self, group_ids=None):
-        return {shell: shell.rsplit("/", 1)[1] for shell in SHELLS}
-
     def m_auth_me(self):
         user = next(u for u in self.s["users"] if u["username"] == API_USER)
         return {
@@ -1223,7 +1222,8 @@ class FakeTrueNAS:
         unknown = set(data) - self.SMB_SHARE_FIELDS
         if unknown:
             raise CallError(f"{where}: Extra inputs are not permitted: {sorted(unknown)}")
-        # api/v25_10_5/smb.py, parse_nested: the two go together or not at all.
+        # api/v25_10_5/smb.py refuses options without purpose. Purpose without options it fills in from their defaults
+        # (normalize_legacy_fields); the fake refuses that too, so no test passes on an update that would reset them.
         if "purpose" in data and "options" not in data:
             raise CallError(f"{where}: Value error, You must set `options` if you set `purpose`.")
         if "options" in data and "purpose" not in data:
@@ -1361,7 +1361,13 @@ class FakeTrueNAS:
                 "permission."
             )
         if data.get("mode") is not None:
-            entry["mode"] = int(data["mode"], 8)
+            # UnixPerm (api/base/types/filesystem.py) takes 000 to 777, and setperm refuses 000.
+            mode = int(data["mode"], 8)
+            if mode & 0o777 != mode:
+                raise CallError("filesystem.setperm.mode: Value error, Please supply a value between 000 and 777")
+            if mode == 0:
+                raise CallError("filesystem.setperm.mode: Empty permissions are not permitted.")
+            entry["mode"] = mode
         entry["acl"] = False
         self.s["paths"][path] = entry
         self.mutated()

@@ -466,6 +466,16 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
   
   
 
+  - **truenas_smb_closed_users**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: Local logins taken out of SMB by name and otherwise left alone; never created.
+  
+  
+  
+
   - **truenas_permissions**
     - **Required**: false
     - **Type**: list
@@ -490,22 +500,12 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
     
   
 
-  - **truenas_smb_share_defaults**
+  - **truenas_smb_service**
     - **Required**: false
     - **Type**: dict
-    - **Default**: {}
+    - **Default**: none
   
-    - **Description**: Fields laid under every SMB share.
-  
-  
-  
-
-  - **truenas_smb_services**
-    - **Required**: false
-    - **Type**: dict
-    - **Default**: {}
-  
-    - **Description**: Service name to {enabled, state}, applied at the end of the SMB stage after its login check. Never also in truenas_services.
+    - **Description**: The SMB service (cifs) as {enabled, state}, applied as the SMB stage's last step, after its login check when it is to run. Null leaves it alone; the services stage refuses cifs.
   
   
   
@@ -690,14 +690,14 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 | [truenas_user_passwords](defaults/main.yml#L102)   | dict | `{}` |    
 | [truenas_users_reset](defaults/main.yml#L105)   | list | `[]` |    
 | [truenas_api_user_smb](defaults/main.yml#L107)   | NoneType | `None` |    
-| [truenas_permissions](defaults/main.yml#L109)   | list | `[]` |    
-| [truenas_smb_shares](defaults/main.yml#L112)   | list | `[]` |    
-| [truenas_smb_share_defaults](defaults/main.yml#L114)   | dict | `{}` |    
-| [truenas_smb_services](defaults/main.yml#L117)   | dict | `{}` |    
-| [truenas_mail](defaults/main.yml#L122)   | dict | `{}` |    
-| [truenas_mail_password](defaults/main.yml#L124)   | str |  |    
-| [truenas_alert_services](defaults/main.yml#L127)   | list | `[]` |    
-| [truenas_services](defaults/main.yml#L132)   | dict | `{}` |    
+| [truenas_smb_closed_users](defaults/main.yml#L110)   | list | `[]` |    
+| [truenas_permissions](defaults/main.yml#L112)   | list | `[]` |    
+| [truenas_smb_shares](defaults/main.yml#L115)   | list | `[]` |    
+| [truenas_smb_service](defaults/main.yml#L118)   | NoneType | `None` |    
+| [truenas_mail](defaults/main.yml#L123)   | dict | `{}` |    
+| [truenas_mail_password](defaults/main.yml#L125)   | str |  |    
+| [truenas_alert_services](defaults/main.yml#L128)   | list | `[]` |    
+| [truenas_services](defaults/main.yml#L133)   | dict | `{}` |    
 
 
 
@@ -779,12 +779,14 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 
 | Name | Module | Has Conditions |
 | ---- | ------ | -------------- |
+| smb ¦ Configure SMB | block | False |
 | smb ¦ Refuse an SMB login the role does not list | ansible.builtin.assert | True |
 | smb ¦ Apply the SMB service settings | truenas_config | True |
 | smb ¦ Create or correct the users | truenas_user | True |
 | smb ¦ Give each share's directory its owner | truenas_permission | True |
 | smb ¦ Create or update the SMB shares | truenas_resource | True |
-| smb ¦ Start the SMB service | truenas_service | True |
+| smb ¦ Refuse an SMB login the role does not list, as the logins now stand | ansible.builtin.assert | True |
+| smb ¦ Start or stop the SMB service | truenas_service | True |
 
 #### File: tasks/snapshots.yml
 
@@ -814,7 +816,8 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 | validate ¦ Refuse to send the API key to an unproven server | ansible.builtin.assert | False |
 | validate ¦ Check a static address has what it needs | ansible.builtin.assert | True |
 | validate ¦ Refuse an NFS share open to every host | ansible.builtin.assert | False |
-| validate ¦ Refuse a service both the SMB stage and the services stage set | ansible.builtin.assert | False |
+| validate ¦ Refuse the SMB service among the services stage's | ansible.builtin.assert | False |
+| validate ¦ Refuse a truenas_api_user_smb that is not false or null | ansible.builtin.assert | False |
 
 
 ## Task Flow Graphs
@@ -1009,13 +1012,16 @@ classDef importRole stroke:#699ba7,stroke-width:2px;
 classDef includeVars stroke:#8e44ad,stroke-width:2px;
 classDef rescue stroke:#665352,stroke-width:2px;
 
-  Start-->|Task| smb___Refuse_an_SMB_login_the_role_does_not_list0[smb   refuse an smb login the role does not list<br>When: **truenas smb shares   length   0 or truenas smb<br>services   length   0**]:::task
+  Start-->|Block Start| smb___Configure_SMB0_block_start_0[[smb   configure smb]]:::block
+  smb___Configure_SMB0_block_start_0-->|Task| smb___Refuse_an_SMB_login_the_role_does_not_list0[smb   refuse an smb login the role does not list<br>When: **starts**]:::task
   smb___Refuse_an_SMB_login_the_role_does_not_list0-->|Task| smb___Apply_the_SMB_service_settings1[smb   apply the smb service settings<br>When: **truenas smb settings   length   0**]:::task
-  smb___Apply_the_SMB_service_settings1-->|Task| smb___Create_or_correct_the_users2[smb   create or correct the users<br>When: **truenas users   length   0 or truenas api user smb<br>is not none**]:::task
+  smb___Apply_the_SMB_service_settings1-->|Task| smb___Create_or_correct_the_users2[smb   create or correct the users<br>When: **starts or truenas users   length   0 or truenas<br>smb closed users   length   0 or truenas api user<br>smb is not none**]:::task
   smb___Create_or_correct_the_users2-->|Task| smb___Give_each_share_s_directory_its_owner3[smb   give each share s directory its owner<br>When: **truenas permissions   length   0**]:::task
   smb___Give_each_share_s_directory_its_owner3-->|Task| smb___Create_or_update_the_SMB_shares4[smb   create or update the smb shares<br>When: **truenas smb shares   length   0**]:::task
-  smb___Create_or_update_the_SMB_shares4-->|Task| smb___Start_the_SMB_service5[smb   start the smb service<br>When: **truenas smb services   length   0**]:::task
-  smb___Start_the_SMB_service5-->End
+  smb___Create_or_update_the_SMB_shares4-->|Task| smb___Refuse_an_SMB_login_the_role_does_not_list__as_the_logins_now_stand5[smb   refuse an smb login the role does not list <br>as the logins now stand<br>When: **starts**]:::task
+  smb___Refuse_an_SMB_login_the_role_does_not_list__as_the_logins_now_stand5-->|Task| smb___Start_or_stop_the_SMB_service6[smb   start or stop the smb service<br>When: **truenas smb service is not none**]:::task
+  smb___Start_or_stop_the_SMB_service6-.->|End of Block| smb___Configure_SMB0_block_start_0
+  smb___Start_or_stop_the_SMB_service6-->End
 ```
 
 
@@ -1096,8 +1102,9 @@ classDef rescue stroke:#665352,stroke-width:2px;
   validate___Check_the_connection_settings0-->|Task| validate___Refuse_to_send_the_API_key_to_an_unproven_server1[validate   refuse to send the api key to an<br>unproven server]:::task
   validate___Refuse_to_send_the_API_key_to_an_unproven_server1-->|Task| validate___Check_a_static_address_has_what_it_needs2[validate   check a static address has what it<br>needs<br>When: **truenas network mode     static**]:::task
   validate___Check_a_static_address_has_what_it_needs2-->|Task| validate___Refuse_an_NFS_share_open_to_every_host3[validate   refuse an nfs share open to every host]:::task
-  validate___Refuse_an_NFS_share_open_to_every_host3-->|Task| validate___Refuse_a_service_both_the_SMB_stage_and_the_services_stage_set4[validate   refuse a service both the smb stage and<br>the services stage set]:::task
-  validate___Refuse_a_service_both_the_SMB_stage_and_the_services_stage_set4-->End
+  validate___Refuse_an_NFS_share_open_to_every_host3-->|Task| validate___Refuse_the_SMB_service_among_the_services_stage_s4[validate   refuse the smb service among the<br>services stage s]:::task
+  validate___Refuse_the_SMB_service_among_the_services_stage_s4-->|Task| validate___Refuse_a_truenas_api_user_smb_that_is_not_false_or_null5[validate   refuse a truenas api user smb that is<br>not false or null]:::task
+  validate___Refuse_a_truenas_api_user_smb_that_is_not_false_or_null5-->End
 ```
 
 

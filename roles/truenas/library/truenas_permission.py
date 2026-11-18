@@ -8,17 +8,25 @@ description:
   - For each entry of O(entries), reads the directory with C(filesystem.stat) and, when its owner, group or mode
     differs, or it carries an ACL beyond its mode, sets all three with C(filesystem.setperm), the ACL stripped.
   - The directory alone, never what is below it, so that files a client wrote keep their own.
-  - In check mode a directory that does not exist yet, such as a dataset the same run would create, is reported as
-    one that would be set.
+  - In check mode a directory that does not exist yet is reported as one that would be set when O(created_paths)
+    names it, the mount point of a dataset the same run creates; any other is refused, as a mistyped path.
+  - A failure part-way returns what was already done in C(actions).
   - Takes a list so a play logs in once for all of them; TrueNAS rate-limits logins.
 options:
   entries:
     description:
       - The directories, each with C(path) (under C(/mnt), and not a pool's own root), C(user), C(group) and
-        C(mode), an octal string such as C("700").
+        C(mode), an octal string from C("001") to C("777") such as C("700"). A number is refused, since YAML reads an
+        unquoted C(0770) as the decimal 504.
     type: list
     elements: dict
     required: true
+  created_paths:
+    description:
+      - The mount points of the datasets the same run creates, which a dry run cannot stat yet.
+    type: list
+    elements: str
+    default: []
 attributes:
   check_mode:
     support: full
@@ -46,17 +54,29 @@ from ansible.module_utils.truenas_api import (
 FIELDS = ("path", "user", "group", "mode")
 
 
+class Refused(Exception):
+    """A directory the module will not set, found after connecting."""
+
+
 def entry_problems(entries):
+    """What is wrong with the entries, found before connecting, so a dry run refuses them too."""
     problems = []
     for entry in entries:
         missing = [field for field in FIELDS if not entry.get(field)]
         if missing:
             problems.append(f"{entry.get('path') or entry}: needs {', '.join(missing)}")
             continue
+        path = str(entry["path"])
         if set(entry) - set(FIELDS):
-            problems.append(f"{entry['path']}: unknown field(s) {sorted(set(entry) - set(FIELDS))}")
-        if not re.fullmatch(r"[0-7]{3,4}", str(entry["mode"])):
-            problems.append(f'{entry["path"]}: mode {entry["mode"]!r} is not an octal mode such as "700"')
+            problems.append(f"{path}: unknown field(s) {sorted(set(entry) - set(FIELDS))}")
+        # TrueNAS's setperm refuses a path outside a pool and a pool's own root (_common_perm_path_validate).
+        if not re.fullmatch(r"/mnt/[^/]+/[^/].*", path) or "/." in path or path.endswith("/"):
+            problems.append(f"{path}: not a directory inside a pool, such as /mnt/<pool>/<dataset>")
+        # A number is refused: YAML reads an unquoted 0770 as the decimal 504. TrueNAS's UnixPerm takes 000 to 777,
+        # and setperm refuses 000.
+        mode = entry["mode"]
+        if not isinstance(mode, str) or not re.fullmatch(r"0?[0-7]{3}", mode) or int(mode, 8) == 0:
+            problems.append(f'{path}: mode {mode!r} is not an octal string from "001" to "777", such as "700"')
     return problems
 
 
@@ -74,15 +94,19 @@ def wanted(entry):
     return {"user": entry["user"], "group": entry["group"], "mode": f"{int(str(entry['mode']), 8):03o}", "acl": False}
 
 
-def ensure(api, module, entry):
+def ensure(api, module, entry, created_paths=()):
     """Set one directory's owner, group and mode. Returns (action or None, before, after)."""
     want = wanted(entry)
     try:
         found = api.call("filesystem.stat", entry["path"])
     except TrueNASCallError as exc:
-        # A dataset this run creates does not exist yet in a dry run.
+        # A dataset this run creates does not exist yet in a dry run; any other missing path is a mistake.
         if module.check_mode and "ENOENT" in str(exc):
-            return "set", {}, want
+            if entry["path"] in created_paths:
+                return "set", {}, want
+            raise Refused(
+                f"{entry['path']}: no such directory, and no dataset this run creates is mounted there"
+            ) from exc
         raise
     have = current(found)
     if have == want:
@@ -92,14 +116,17 @@ def ensure(api, module, entry):
         api.job("filesystem.setperm", {"path": entry["path"], **payload, "options": {"stripacl": True}})
         have_now = current(api.call("filesystem.stat", entry["path"]))
         if have_now != want:
-            module.fail_json(msg=f"{entry['path']}: filesystem.setperm was accepted but it now has {have_now}")
+            raise Refused(f"{entry['path']}: filesystem.setperm was accepted but it now has {have_now}")
     changed = sorted(key for key in want if have[key] != want[key])
     return "set " + ",".join(changed), have, want
 
 
 def main():
     spec = api_argument_spec()
-    spec.update(entries=dict(type="list", elements="dict", required=True))
+    spec.update(
+        entries=dict(type="list", elements="dict", required=True),
+        created_paths=dict(type="list", elements="str", default=[]),
+    )
     module = AnsibleModule(argument_spec=spec, supports_check_mode=True)
     problems = entry_problems(module.params["entries"])
     if problems:
@@ -111,11 +138,11 @@ def main():
         try:
             for entry in module.params["entries"]:
                 path = entry["path"]
-                action, before[path], after[path] = ensure(api, module, entry)
+                action, before[path], after[path] = ensure(api, module, entry, module.params["created_paths"])
                 if action:
                     actions[path] = action
-        except TrueNASError as exc:
-            module.fail_json(msg=str(exc), actions=actions)
+        except (TrueNASError, Refused) as exc:
+            module.fail_json(msg=str(exc), changed=bool(actions), actions=actions)
     module.exit_json(changed=bool(actions), actions=actions, diff={"before": before, "after": after})
 
 

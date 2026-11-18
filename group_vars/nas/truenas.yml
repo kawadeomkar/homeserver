@@ -175,9 +175,10 @@ truenas_alert_services: >-
      [{'name': 'Email', 'attributes': {'type': 'Mail', 'email': truenas_alert_email}, 'level': 'WARNING', 'enabled': true}] }}
 
 # ------------------------------------------------------------------ services ---
+# The SMB service is the SMB stage's alone (roles/truenas/README.md), kept stopped while nothing here shares over SMB.
+truenas_smb_service: {enabled: false, state: stopped}
 truenas_services:
   nfs: {enabled: true, state: started}
-  cifs: {enabled: false, state: stopped}
   ftp: {enabled: false, state: stopped}
   iscsitarget: {enabled: false, state: stopped}
   nvmet: {enabled: false, state: stopped}
