@@ -39,3 +39,16 @@
     label: "{{ item.path }}"
   vars:
     _share: "{{ truenas_nfs_share_defaults | combine(item) }}"
+
+# The SMB stage starts its own services after its login check; the services stage, which runs under its own tag
+# without that check, must not start them too.
+- name: validate | Refuse a service both the SMB stage and the services stage set
+  ansible.builtin.assert:
+    that: _both | length == 0
+    fail_msg: >-
+      {{ _both | join(', ') }} {{ 'is' if _both | length == 1 else 'are' }} in both truenas_smb_services and
+      truenas_services. The SMB stage starts a service only after it has checked that no SMB login it does not list
+      exists; name each service in one of the two.
+    quiet: true
+  vars:
+    _both: "{{ truenas_smb_services | list | intersect(truenas_services | list) }}"

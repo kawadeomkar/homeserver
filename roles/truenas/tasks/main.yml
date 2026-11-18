@@ -1,7 +1,7 @@
 ---
 # Each stage has its own tag, so one stage can be checked or applied at a time:
 #   truenas_network, truenas_pools, truenas_system, truenas_datasets, truenas_snapshots, truenas_nfs,
-#   truenas_alerts, truenas_services
+#   truenas_smb, truenas_alerts, truenas_services
 # Validation and the read-only connection (also tagged truenas_info) run under every tag.
 # A stage whose configuration is empty does nothing.
 
@@ -25,9 +25,11 @@
       api_host: "{{ truenas_api_host | default('') }}"
     truenas_dataset: *truenas_api
     truenas_interface: *truenas_api
+    truenas_permission: *truenas_api
     truenas_pool: *truenas_api
     truenas_resource: *truenas_api
     truenas_service: *truenas_api
+    truenas_user: *truenas_api
   block:
     - name: Connect and report the NAS's state
       ansible.builtin.import_tasks: connect.yml
@@ -56,6 +58,10 @@
     - name: NFS settings and shares
       ansible.builtin.import_tasks: nfs.yml
       tags: [truenas_nfs]
+
+    - name: SMB settings, logins and shares, and the SMB service
+      ansible.builtin.import_tasks: smb.yml
+      tags: [truenas_smb]
 
     - name: Mail and alerts
       ansible.builtin.import_tasks: alerts.yml

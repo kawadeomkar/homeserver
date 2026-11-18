@@ -11,6 +11,8 @@ description:
   - Makes no changes. C(pool.import_find) is a job, but it only scans disks.
   - With O(status), also reports what just status shows, in the same login - each pool's health, capacity, layout
     and last scrub, TrueNAS's alerts that are not dismissed, each periodic snapshot task's last run, and the uptime.
+  - Without O(status), also reports which local users are SMB logins and which user the API key logs in as, by name
+    alone, for the role's check that no SMB login it does not list exists when it starts SMB.
   - Runs on the controller and needs the websocket-client Python package there.
 options:
   api_hosts:
@@ -55,6 +57,21 @@ version:
   description: TrueNAS version without the product prefix, for example C(25.10.7).
   type: str
   returned: success
+smb_shares:
+  description: The SMB shares, by name, with their path, purpose and whether they are enabled.
+  type: list
+  elements: dict
+  returned: success
+  sample: [{name: tm-laptop, path: /mnt/persistent/timemachine/laptop, purpose: TIMEMACHINE_SHARE, enabled: true}]
+smb_users:
+  description: The names of the local users that are SMB logins, TrueNAS's own built-in users left out.
+  type: list
+  elements: str
+  returned: success and not O(status)
+api_user:
+  description: The name of the user the API key logs in as.
+  type: str
+  returned: success and not O(status)
 status:
   description:
     - The NAS's health. Times are RFC 3339 in UTC, sizes bytes. A pool's C(used) and C(available) are its root
@@ -210,7 +227,13 @@ def gather(api, importable, status=False):
             pick(s, ["id", "path", "hosts", "networks", "enabled", "ro", "maproot_user", "maproot_group"])
             for s in api.call("sharing.nfs.query")
         ],
+        "smb_shares": [pick(s, ["name", "path", "purpose", "enabled"]) for s in api.call("sharing.smb.query")],
     }
+    if not status:
+        # Names alone: user.query also holds each user's password hashes, which select leaves out.
+        smb = [["local", "=", True], ["builtin", "=", False], ["smb", "=", True]]
+        result["smb_users"] = [u["username"] for u in api.call("user.query", smb, {"select": ["username"]})]
+        result["api_user"] = (api.call("auth.me") or {}).get("pw_name")
     if importable:
         result["importable_pools"] = api.job("pool.import_find")
     if status:

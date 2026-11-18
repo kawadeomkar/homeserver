@@ -8,8 +8,8 @@ description:
   - For each entry of O(entries), finds the one item whose O(key) fields are equal with
     C(<namespace>.query), then creates it, updates the other fields that differ, or deletes it.
     Fails if more than one item matches.
-  - Used for C(sharing.nfs) (key C(path)), C(system.ntpserver) (key C(address)) and C(alertservice) (key
-    C(name), with O(update_whole)).
+  - Used for C(sharing.nfs) (key C(path)), C(system.ntpserver) (key C(address)), C(alertservice) (key
+    C(name), with O(update_whole)) and C(sharing.smb) (key C(name), with O(update_together)).
   - Lists of plain values (an NFS share's C(hosts), say) are compared ignoring order.
   - Takes a list so a play logs in once for all of them; TrueNAS rate-limits logins.
 options:
@@ -42,6 +42,17 @@ options:
         TrueNAS 25.10, which refuses an update without its name and attributes.
     type: bool
     default: false
+  update_together:
+    description:
+      - Fields that go to C(<namespace>.update) as a group. When any of them differs, all of them are sent, a nested
+        object as the current one with the wanted keys laid over it; when none differs, none is sent.
+      - For C(sharing.smb), whose update refuses C(purpose) without C(options) and C(options) without C(purpose).
+        Laying the wanted options over the current ones keeps what the entry does not give, such as the Time Machine
+        volume's C(vuid), as it is.
+      - Cannot be combined with O(update_whole).
+    type: list
+    elements: str
+    default: []
 attributes:
   check_mode:
     support: full
@@ -65,7 +76,21 @@ from ansible.module_utils.truenas_api import (
 )
 
 
-def ensure(api, module, namespace, match, data, state, update_whole=False):
+def grouped(item, data, changes, together):
+    """The update's fields: those that differ, and with any field of the group the whole group, a nested object as
+    the current one with the wanted keys laid over it."""
+    if not set(changes) & set(together):
+        return changes
+    group = {}
+    for key in together:
+        if key not in data:
+            continue
+        have, want = item.get(key), data[key]
+        group[key] = {**have, **want} if isinstance(have, dict) and isinstance(want, dict) else want
+    return {**changes, **group}
+
+
+def ensure(api, module, namespace, match, data, state, update_whole=False, update_together=()):
     """Bring one item to the wanted state. Returns (action or None, before, after)."""
     found = api.call(f"{namespace}.query", [[k, "=", v] for k, v in match.items()])
     if len(found) > 1:
@@ -90,7 +115,8 @@ def ensure(api, module, namespace, match, data, state, update_whole=False):
     if not changes:
         return None, before, before
     if not module.check_mode:
-        api.call(f"{namespace}.update", item["id"], {**match, **data} if update_whole else changes)
+        payload = {**match, **data} if update_whole else grouped(item, data, changes, update_together)
+        api.call(f"{namespace}.update", item["id"], payload)
     return "update", before, {**before, **data}
 
 
@@ -103,11 +129,14 @@ def main():
         defaults=dict(type="dict", default={}),
         state=dict(type="str", choices=["present", "absent"], default="present"),
         update_whole=dict(type="bool", default=False),
+        update_together=dict(type="list", elements="str", default=[]),
     )
     module = AnsibleModule(argument_spec=spec, supports_check_mode=True)
     p = module.params
     if not p["key"]:
         module.fail_json(msg="key must name at least one field")
+    if p["update_whole"] and p["update_together"]:
+        module.fail_json(msg="update_whole sends every field already: give it or update_together, not both")
     p["entries"] = [{**p["defaults"], **entry} for entry in p["entries"]]
     for entry in p["entries"]:
         missing = [k for k in p["key"] if k not in entry]
@@ -123,7 +152,7 @@ def main():
                 data = {k: v for k, v in entry.items() if k not in match}
                 label = " ".join(str(v) for v in match.values())
                 action, before[label], after[label] = ensure(
-                    api, module, p["namespace"], match, data, p["state"], p["update_whole"]
+                    api, module, p["namespace"], match, data, p["state"], p["update_whole"], p["update_together"]
                 )
                 if action:
                     actions[label] = action

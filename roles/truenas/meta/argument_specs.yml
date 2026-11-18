@@ -8,11 +8,13 @@ argument_specs:
       - Stages, each under its own tag - truenas_network (network settings, static address),
         truenas_pools (import or create, auto-trim, scrub), truenas_system (general settings, NTP),
         truenas_datasets, truenas_snapshots (periodic snapshot tasks), truenas_nfs (service settings,
-        shares), truenas_alerts (outgoing mail, alert services), truenas_services.
+        shares), truenas_smb (service settings, users, directory owners, shares, then the SMB service itself),
+        truenas_alerts (outgoing mail, alert services), truenas_services.
       - The defaults change nothing. Every stage acts only on what its variables declare, and an
         empty list or dict (or a null value) leaves that part of the NAS alone.
-      - Never destroys, wipes, exports or upgrades a pool, never deletes a dataset, and refuses an
-        NFS share without a host or network restriction.
+      - Never destroys, wipes, exports or upgrades a pool, never deletes a dataset or a user, refuses an
+        NFS share without a host or network restriction, and refuses to start SMB while a local SMB login it does
+        not list exists.
     options:
       truenas_api_hosts: &truenas_api_hosts
         type: list
@@ -167,6 +169,52 @@ argument_specs:
         type: dict
         default: {}
         description: Fields laid under every share.
+      truenas_smb_settings:
+        type: dict
+        default: {}
+        description: Fields for smb.update, e.g. aapl_extensions and encryption.
+      truenas_users:
+        type: list
+        elements: dict
+        default: []
+        description: >-
+          Local users, each with username and smb, and optionally uid, full_name, shell, home, locked and
+          password_disabled. Created when missing, corrected otherwise, never deleted.
+      truenas_user_passwords:
+        type: dict
+        default: {}
+        no_log: true
+        description: >-
+          Username to password, set when a user is created and after that only when truenas_users_reset names it.
+          Never compared, never printed.
+      truenas_users_reset:
+        type: list
+        elements: str
+        default: []
+        description: Users whose password is set again from truenas_user_passwords on this run.
+      truenas_api_user_smb:
+        type: bool
+        description: false takes the user the API key logs in as out of SMB. Unset or null leaves it alone.
+      truenas_permissions:
+        type: list
+        elements: dict
+        default: []
+        description: Directories, each with path, user, group and mode, given those with no ACL beyond them; never recursive.
+      truenas_smb_shares:
+        type: list
+        elements: dict
+        default: []
+        description: SMB shares, each with name, which identifies it, and the fields of sharing.smb.create. Never deleted.
+      truenas_smb_share_defaults:
+        type: dict
+        default: {}
+        description: Fields laid under every SMB share.
+      truenas_smb_services:
+        type: dict
+        default: {}
+        description: >-
+          Service name to {enabled, state}, applied at the end of the SMB stage after its login check. Never also in
+          truenas_services.
       truenas_mail:
         type: dict
         default: {}

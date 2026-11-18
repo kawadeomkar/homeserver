@@ -20,9 +20,9 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 
 **Description**: 
 - Runs on the controller and talks to the NAS's JSON-RPC WebSocket API with an API key; nothing goes over SSH.
-- Stages, each under its own tag - truenas_network (network settings, static address), truenas_pools (import or create, auto-trim, scrub), truenas_system (general settings, NTP), truenas_datasets, truenas_snapshots (periodic snapshot tasks), truenas_nfs (service settings, shares), truenas_alerts (outgoing mail, alert services), truenas_services.
+- Stages, each under its own tag - truenas_network (network settings, static address), truenas_pools (import or create, auto-trim, scrub), truenas_system (general settings, NTP), truenas_datasets, truenas_snapshots (periodic snapshot tasks), truenas_nfs (service settings, shares), truenas_smb (service settings, users, directory owners, shares, then the SMB service itself), truenas_alerts (outgoing mail, alert services), truenas_services.
 - The defaults change nothing. Every stage acts only on what its variables declare, and an empty list or dict (or a null value) leaves that part of the NAS alone.
-- Never destroys, wipes, exports or upgrades a pool, never deletes a dataset, and refuses an NFS share without a host or network restriction.
+- Never destroys, wipes, exports or upgrades a pool, never deletes a dataset or a user, refuses an NFS share without a host or network restriction, and refuses to start SMB while a local SMB login it does not list exists.
 
 
 **Options**:
@@ -414,6 +414,102 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
   
   
 
+  - **truenas_smb_settings**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: Fields for smb.update, e.g. aapl_extensions and encryption.
+  
+  
+  
+
+  - **truenas_users**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: Local users, each with username and smb, and optionally uid, full_name, shell, home, locked and password_disabled. Created when missing, corrected otherwise, never deleted.
+  
+  
+  
+    
+  
+
+  - **truenas_user_passwords**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: Username to password, set when a user is created and after that only when truenas_users_reset names it. Never compared, never printed.
+  
+  
+  
+
+  - **truenas_users_reset**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: Users whose password is set again from truenas_user_passwords on this run.
+  
+  
+  
+
+  - **truenas_api_user_smb**
+    - **Required**: false
+    - **Type**: bool
+    - **Default**: none
+  
+    - **Description**: false takes the user the API key logs in as out of SMB. Unset or null leaves it alone.
+  
+  
+  
+
+  - **truenas_permissions**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: Directories, each with path, user, group and mode, given those with no ACL beyond them; never recursive.
+  
+  
+  
+    
+  
+
+  - **truenas_smb_shares**
+    - **Required**: false
+    - **Type**: list
+    - **Default**: []
+  
+    - **Description**: SMB shares, each with name, which identifies it, and the fields of sharing.smb.create. Never deleted.
+  
+  
+  
+    
+  
+
+  - **truenas_smb_share_defaults**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: Fields laid under every SMB share.
+  
+  
+  
+
+  - **truenas_smb_services**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: Service name to {enabled, state}, applied at the end of the SMB stage after its login check. Never also in truenas_services.
+  
+  
+  
+
   - **truenas_mail**
     - **Required**: false
     - **Type**: dict
@@ -589,10 +685,19 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 | [truenas_nfs_settings](defaults/main.yml#L87)   | dict | `{}` |    
 | [truenas_nfs_shares](defaults/main.yml#L90)   | list | `[]` |    
 | [truenas_nfs_share_defaults](defaults/main.yml#L92)   | dict | `{}` |    
-| [truenas_mail](defaults/main.yml#L97)   | dict | `{}` |    
-| [truenas_mail_password](defaults/main.yml#L99)   | str |  |    
-| [truenas_alert_services](defaults/main.yml#L102)   | list | `[]` |    
-| [truenas_services](defaults/main.yml#L106)   | dict | `{}` |    
+| [truenas_smb_settings](defaults/main.yml#L96)   | dict | `{}` |    
+| [truenas_users](defaults/main.yml#L99)   | list | `[]` |    
+| [truenas_user_passwords](defaults/main.yml#L102)   | dict | `{}` |    
+| [truenas_users_reset](defaults/main.yml#L105)   | list | `[]` |    
+| [truenas_api_user_smb](defaults/main.yml#L107)   | NoneType | `None` |    
+| [truenas_permissions](defaults/main.yml#L109)   | list | `[]` |    
+| [truenas_smb_shares](defaults/main.yml#L112)   | list | `[]` |    
+| [truenas_smb_share_defaults](defaults/main.yml#L114)   | dict | `{}` |    
+| [truenas_smb_services](defaults/main.yml#L117)   | dict | `{}` |    
+| [truenas_mail](defaults/main.yml#L122)   | dict | `{}` |    
+| [truenas_mail_password](defaults/main.yml#L124)   | str |  |    
+| [truenas_alert_services](defaults/main.yml#L127)   | list | `[]` |    
+| [truenas_services](defaults/main.yml#L132)   | dict | `{}` |    
 
 
 
@@ -637,6 +742,7 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 | Datasets | ansible.builtin.import_tasks | False |  |
 | Periodic snapshots | ansible.builtin.import_tasks | False |  |
 | NFS settings and shares | ansible.builtin.import_tasks | False |  |
+| SMB settings, logins and shares, and the SMB service | ansible.builtin.import_tasks | False |  |
 | Mail and alerts | ansible.builtin.import_tasks | False |  |
 | Services | ansible.builtin.import_tasks | False |  |
 
@@ -669,6 +775,17 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 | ---- | ------ | -------------- |
 | services ¦ Enable, disable, start or stop services | truenas_service | True |
 
+#### File: tasks/smb.yml
+
+| Name | Module | Has Conditions |
+| ---- | ------ | -------------- |
+| smb ¦ Refuse an SMB login the role does not list | ansible.builtin.assert | True |
+| smb ¦ Apply the SMB service settings | truenas_config | True |
+| smb ¦ Create or correct the users | truenas_user | True |
+| smb ¦ Give each share's directory its owner | truenas_permission | True |
+| smb ¦ Create or update the SMB shares | truenas_resource | True |
+| smb ¦ Start the SMB service | truenas_service | True |
+
 #### File: tasks/snapshots.yml
 
 | Name | Module | Has Conditions |
@@ -697,6 +814,7 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 | validate ¦ Refuse to send the API key to an unproven server | ansible.builtin.assert | False |
 | validate ¦ Check a static address has what it needs | ansible.builtin.assert | True |
 | validate ¦ Refuse an NFS share open to every host | ansible.builtin.assert | False |
+| validate ¦ Refuse a service both the SMB stage and the services stage set | ansible.builtin.assert | False |
 
 
 ## Task Flow Graphs
@@ -788,10 +906,11 @@ classDef rescue stroke:#665352,stroke-width:2px;
   System_settings_system_yml_3-->|Import task| Datasets_datasets_yml_4[/datasets<br>import_task: datasets yml/]:::importTasks
   Datasets_datasets_yml_4-->|Import task| Periodic_snapshots_snapshots_yml_5[/periodic snapshots<br>import_task: snapshots yml/]:::importTasks
   Periodic_snapshots_snapshots_yml_5-->|Import task| NFS_settings_and_shares_nfs_yml_6[/nfs settings and shares<br>import_task: nfs yml/]:::importTasks
-  NFS_settings_and_shares_nfs_yml_6-->|Import task| Mail_and_alerts_alerts_yml_7[/mail and alerts<br>import_task: alerts yml/]:::importTasks
-  Mail_and_alerts_alerts_yml_7-->|Import task| Services_services_yml_8[/services<br>import_task: services yml/]:::importTasks
-  Services_services_yml_8-.->|End of Block| Configure_the_NAS_through_its_API1_block_start_0
-  Services_services_yml_8-->End
+  NFS_settings_and_shares_nfs_yml_6-->|Import task| SMB_settings__logins_and_shares__and_the_SMB_service_smb_yml_7[/smb settings  logins and shares  and the smb<br>service<br>import_task: smb yml/]:::importTasks
+  SMB_settings__logins_and_shares__and_the_SMB_service_smb_yml_7-->|Import task| Mail_and_alerts_alerts_yml_8[/mail and alerts<br>import_task: alerts yml/]:::importTasks
+  Mail_and_alerts_alerts_yml_8-->|Import task| Services_services_yml_9[/services<br>import_task: services yml/]:::importTasks
+  Services_services_yml_9-.->|End of Block| Configure_the_NAS_through_its_API1_block_start_0
+  Services_services_yml_9-->End
 ```
 
 
@@ -876,6 +995,30 @@ classDef rescue stroke:#665352,stroke-width:2px;
 ```
 
 
+### Graph for smb.yml
+
+```mermaid
+flowchart TD
+Start
+classDef block stroke:#3498db,stroke-width:2px;
+classDef task stroke:#4b76bb,stroke-width:2px;
+classDef includeTasks stroke:#16a085,stroke-width:2px;
+classDef importTasks stroke:#34495e,stroke-width:2px;
+classDef includeRole stroke:#2980b9,stroke-width:2px;
+classDef importRole stroke:#699ba7,stroke-width:2px;
+classDef includeVars stroke:#8e44ad,stroke-width:2px;
+classDef rescue stroke:#665352,stroke-width:2px;
+
+  Start-->|Task| smb___Refuse_an_SMB_login_the_role_does_not_list0[smb   refuse an smb login the role does not list<br>When: **truenas smb shares   length   0 or truenas smb<br>services   length   0**]:::task
+  smb___Refuse_an_SMB_login_the_role_does_not_list0-->|Task| smb___Apply_the_SMB_service_settings1[smb   apply the smb service settings<br>When: **truenas smb settings   length   0**]:::task
+  smb___Apply_the_SMB_service_settings1-->|Task| smb___Create_or_correct_the_users2[smb   create or correct the users<br>When: **truenas users   length   0 or truenas api user smb<br>is not none**]:::task
+  smb___Create_or_correct_the_users2-->|Task| smb___Give_each_share_s_directory_its_owner3[smb   give each share s directory its owner<br>When: **truenas permissions   length   0**]:::task
+  smb___Give_each_share_s_directory_its_owner3-->|Task| smb___Create_or_update_the_SMB_shares4[smb   create or update the smb shares<br>When: **truenas smb shares   length   0**]:::task
+  smb___Create_or_update_the_SMB_shares4-->|Task| smb___Start_the_SMB_service5[smb   start the smb service<br>When: **truenas smb services   length   0**]:::task
+  smb___Start_the_SMB_service5-->End
+```
+
+
 ### Graph for snapshots.yml
 
 ```mermaid
@@ -953,7 +1096,8 @@ classDef rescue stroke:#665352,stroke-width:2px;
   validate___Check_the_connection_settings0-->|Task| validate___Refuse_to_send_the_API_key_to_an_unproven_server1[validate   refuse to send the api key to an<br>unproven server]:::task
   validate___Refuse_to_send_the_API_key_to_an_unproven_server1-->|Task| validate___Check_a_static_address_has_what_it_needs2[validate   check a static address has what it<br>needs<br>When: **truenas network mode     static**]:::task
   validate___Check_a_static_address_has_what_it_needs2-->|Task| validate___Refuse_an_NFS_share_open_to_every_host3[validate   refuse an nfs share open to every host]:::task
-  validate___Refuse_an_NFS_share_open_to_every_host3-->End
+  validate___Refuse_an_NFS_share_open_to_every_host3-->|Task| validate___Refuse_a_service_both_the_SMB_stage_and_the_services_stage_set4[validate   refuse a service both the smb stage and<br>the services stage set]:::task
+  validate___Refuse_a_service_both_the_SMB_stage_and_the_services_stage_set4-->End
 ```
 
 

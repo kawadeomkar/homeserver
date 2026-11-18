@@ -1,0 +1,56 @@
+---
+# roles/truenas's SMB stage with variables of its own, pointed at fake_truenas.py: a Time Machine share for one Mac on
+# a pool the run imports, as a user of the role would write it. Connection, passwords and any variation come from the
+# test as extra vars, which win over these.
+- name: Share a Time Machine backup from the fake NAS
+  hosts: nas
+  gather_facts: false
+  vars:
+    truenas_network_settings:
+      service_announcement: {netbios: false, mdns: true, wsd: false}
+    truenas_pools:
+      - name: persistent
+    truenas_datasets:
+      - name: persistent/timemachine
+        share_type: SMB
+      - name: persistent/timemachine/laptop
+        share_type: SMB
+        properties: {quota: 2T, sync: STANDARD}
+    truenas_snapshot_tasks:
+      - dataset: persistent/timemachine/laptop
+        naming_schema: weekly-%Y-%m-%d_%H-%M
+        lifetime_value: 8
+        lifetime_unit: WEEK
+        allow_empty: true
+        recursive: false
+        enabled: true
+        schedule: {minute: "00", hour: "00", dom: "*", month: "*", dow: "7"}
+    truenas_smb_settings:
+      aapl_extensions: true
+      encryption: REQUIRED
+      enable_smb1: false
+      ntlmv1_auth: false
+      multichannel: false
+      localmaster: false
+    truenas_users:
+      - username: tm-laptop
+        uid: 3101
+        full_name: Time Machine, laptop
+        smb: true
+        shell: /usr/sbin/nologin
+        locked: false
+        password_disabled: false
+    truenas_user_passwords: {tm-laptop: "{{ tm_password }}"}
+    truenas_api_user_smb: false
+    truenas_permissions:
+      - {path: /mnt/persistent/timemachine/laptop, user: tm-laptop, group: tm-laptop, mode: "700"}
+    truenas_smb_shares:
+      - name: tm-laptop
+        path: /mnt/persistent/timemachine/laptop
+        purpose: TIMEMACHINE_SHARE
+        enabled: true
+        options: {auto_snapshot: true, auto_dataset_creation: false, timemachine_quota: 0}
+    truenas_smb_services:
+      cifs: {enabled: true, state: started}
+  roles:
+    - role: truenas

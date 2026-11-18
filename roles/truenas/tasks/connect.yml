@@ -35,15 +35,17 @@
     msg: >-
       {{ ['TrueNAS ' ~ truenas_state.version ~ ' at ' ~ truenas_state.api_host ~ ': pools '
           ~ (truenas_state.pools | map(attribute='name') | join(', ') or 'none') ~ '; '
-          ~ truenas_state.datasets | length ~ ' datasets; ' ~ truenas_state.nfs_shares | length ~ ' NFS shares; running '
-          ~ (_running | join(', ') or 'no service')]
+          ~ truenas_state.datasets | length ~ ' datasets; ' ~ truenas_state.nfs_shares | length ~ ' NFS shares; '
+          ~ truenas_state.smb_shares | length ~ ' SMB shares; running ' ~ (_running | join(', ') or 'no service')]
          + (['pools that can be imported: ' ~ truenas_state.importable_pools | map(attribute='name') | join(', ')]
             if truenas_state.importable_pools else [])
          + ['system dataset: ' ~ (truenas_state.system_dataset.pool | default('?'))
             ~ ('' if truenas_state.system_dataset.pool_set | default(true) else ' (unset)'),
             'interface ' ~ (_interface.name | default('?')) ~ ': ' ~ (_interface.addresses | default([]) | join(', ')),
             'datasets: ' ~ truenas_state.datasets | join(', '),
-            'NFS shares: ' ~ truenas_state.nfs_shares | map(attribute='path') | join(', ')] }}
+            'NFS shares: ' ~ truenas_state.nfs_shares | map(attribute='path') | join(', ')]
+         + (['SMB shares: ' ~ truenas_state.smb_shares | map(attribute='name') | join(', ')]
+            if truenas_state.smb_shares else []) }}
   vars:
     _interface: "{{ truenas_state.interfaces | selectattr('name', 'eq', truenas_state.websocket_interface) | first | default({}) }}"
     _running: "{{ truenas_state.services | dict2items | selectattr('value.state', 'eq', 'RUNNING') | map(attribute='key') | list }}"

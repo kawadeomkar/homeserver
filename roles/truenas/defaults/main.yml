@@ -91,6 +91,31 @@ truenas_nfs_shares: []
 # Fields laid under every share; a share's own value wins.
 truenas_nfs_share_defaults: {}
 
+# ------------------------------------------------------------------------- SMB ---
+# Fields for smb.update, e.g. {aapl_extensions: true, encryption: REQUIRED}.
+truenas_smb_settings: {}
+# Local users, each with username and smb (TrueNAS makes a new user an SMB login unless told), and optionally uid,
+# full_name, shell, home, locked and password_disabled. Created when missing, corrected otherwise, never deleted.
+truenas_users: []
+# Username -> password: set when a user is created, and after that only when truenas_users_reset names it (or TrueNAS
+# needs it again, when smb is turned on). Never compared, never printed.
+truenas_user_passwords: {}
+# Users whose password is set again from truenas_user_passwords on this run: a one-run switch for a rotation, e.g.
+# -e '{"truenas_users_reset": ["tm-laptop"]}'.
+truenas_users_reset: []
+# false takes the user the API key logs in as out of SMB; null leaves it alone.
+truenas_api_user_smb: null
+# Directories given an owner, group and mode with no ACL beyond them, each {path, user, group, mode}; never recursive.
+truenas_permissions: []
+# SMB shares, each with name (which identifies it) and the fields of sharing.smb.create: path, purpose, options, ...
+# None is ever deleted.
+truenas_smb_shares: []
+# Fields laid under every SMB share; a share's own value wins.
+truenas_smb_share_defaults: {}
+# Service name -> {enabled, state}, like truenas_services, applied at the end of the SMB stage, after its check that no
+# SMB login the role does not list exists. Name SMB here, never in truenas_services, which would start it unchecked.
+truenas_smb_services: {}
+
 # ---------------------------------------------------------------------- alerts ---
 # Fields for mail.update, e.g. {outgoingserver: smtp.example.org, port: 587, security: TLS, smtp: true,
 # user: nas, fromemail: nas@example.org}; empty leaves the mail settings alone.
@@ -102,5 +127,6 @@ truenas_mail_password: ""
 truenas_alert_services: []
 
 # -------------------------------------------------------------------- services ---
-# Service name -> {enabled: bool, state: started|stopped}. Applied last, after the shares exist.
+# Service name -> {enabled: bool, state: started|stopped}. Applied last, after the shares exist. The SMB service is
+# truenas_smb_services', and the role refuses a service named in both.
 truenas_services: {}

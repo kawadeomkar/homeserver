@@ -118,7 +118,7 @@ just status                       # what runs and what needs doing, read without
 runs every type and names each failure at the end, rather than stopping at the first.
 
 Each TrueNAS stage can be run on its own with `--tags truenas_network`, `truenas_pools`, `truenas_system`,
-`truenas_datasets`, `truenas_snapshots`, `truenas_nfs`, `truenas_alerts` or `truenas_services`. Always run the check first: the idempotence tests use
+`truenas_datasets`, `truenas_snapshots`, `truenas_nfs`, `truenas_smb`, `truenas_alerts` or `truenas_services`. Always run the check first: the idempotence tests use
 fakes, which cannot prove the real machines behave the same. Every `just deploy proxmox` also refreshes the package
 lists and upgrades the Proxmox host, and says when an upgrade of the kernel, its firmware, the CPU's microcode or dbus
 waits for a reboot, which is then done by hand.

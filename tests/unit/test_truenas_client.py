@@ -3,8 +3,8 @@
 The idempotence suite runs every module against tests/integration/fake_truenas.py, which always answers. Here
 websocket.create_connection is replaced by a scripted NAS, and the clock by one whose sleep() returns at once,
 to cover the client's retries and error handling, a failed job, and the interface commit's refusal, rollback
-and check-in. It also shows that truenas_config never returns the UI certificate's private key, which no test
-that only reads Ansible's output can see.
+and check-in. It also shows that truenas_config never returns the UI certificate's private key, and truenas_user
+no password or password hash, which no test that only reads Ansible's output can see.
 """
 
 import importlib.util
@@ -31,6 +31,7 @@ def load(name, path):
 api = load("ansible.module_utils.truenas_api", ROLE / "module_utils" / "truenas_api.py")
 interface = load("truenas_interface", ROLE / "library" / "truenas_interface.py")
 config = load("truenas_config", ROLE / "library" / "truenas_config.py")
+user = load("truenas_user", ROLE / "library" / "truenas_user.py")
 
 NAS = "nas.invalid"
 
@@ -471,3 +472,151 @@ class TestConfigNeverReturnsASecretSetting:
         result = run(config, MAIL_ARGS)
         assert result["failed"] and "these fields did not take: ['pass']" in result["msg"]
         assert PASSWORD not in json.dumps(result) and "FAKE-ROTATED-PASSWORD" not in json.dumps(result)
+
+
+# user.query returns each user's password hashes, and user.create and user.update echo the password they were given
+# (TrueNAS 25.10.7's plugins/account.py). truenas_user asks for named fields alone, but a NAS that ignored select is
+# scripted here: neither a hash nor a password may come back in the result.
+SMB_PASSWORD = "FAKE-SMB-PASSWORD"
+HASHES = {"unixhash": "$6$FAKE-UNIX-HASH", "smbhash": "FAKE-NT-HASH", "password_history": ["FAKE-OLD-HASH"]}
+LOGIN = {
+    "id": 7,
+    "uid": 3101,
+    "username": "tm-laptop",
+    "full_name": "tm-laptop",
+    "smb": True,
+    "shell": "/usr/sbin/nologin",
+    "home": "/var/empty",
+    "locked": False,
+    "password_disabled": False,
+    "builtin": False,
+    "immutable": False,
+    **HASHES,
+}
+USER_ARGS = {
+    "api_host": NAS,
+    "api_key": "a-key",
+    "validate_certs": True,
+    "users": [{"username": "tm-laptop", "uid": 3101, "smb": True, "shell": "/usr/sbin/nologin"}],
+    "passwords": {"tm-laptop": SMB_PASSWORD},
+}
+
+
+def no_secret(result):
+    text = json.dumps(result)
+    return SMB_PASSWORD not in text and not [value for value in HASHES.values() if str(value).strip("[]'") in text]
+
+
+class TestUserNeverReturnsAPassword:
+    @pytest.mark.parametrize("check_mode", [True, False], ids=["check", "apply"])
+    def test_a_new_user_gets_its_password_and_group_and_returns_neither(self, nas, run, check_mode):
+        fake = nas(
+            {
+                "auth.login_with_api_key": True,
+                "user.query": [[]],
+                "user.create": {**LOGIN, "password": SMB_PASSWORD},
+            }
+        )
+        result = run(user, USER_ARGS, check_mode=check_mode)
+        assert not result.get("failed"), result
+        assert result["changed"] and result["actions"] == {"tm-laptop": "create"}
+        assert result["diff"]["after"]["tm-laptop"]["password"] == "<secret, changed>"
+        sent = fake.called("user.create")
+        assert sent == (
+            []
+            if check_mode
+            else [
+                [
+                    {
+                        "username": "tm-laptop",
+                        "full_name": "tm-laptop",
+                        "smb": True,
+                        "shell": "/usr/sbin/nologin",
+                        "group_create": True,
+                        "uid": 3101,
+                        "password": SMB_PASSWORD,
+                    }
+                ]
+            ]
+        )
+        assert fake.called("user.query")[0][1] == {"select": user.SELECT}
+        assert no_secret(result)
+
+    def test_an_existing_user_is_left_alone_and_its_hashes_never_returned(self, nas, run):
+        fake = nas({"auth.login_with_api_key": True, "user.query": [[LOGIN]]})
+        result = run(user, USER_ARGS)
+        assert not result.get("failed"), result
+        assert not result["changed"] and fake.called("user.update") == []
+        assert no_secret(result)
+
+    def test_a_reset_sends_the_password_and_never_returns_it(self, nas, run):
+        fake = nas({"auth.login_with_api_key": True, "user.query": [[LOGIN]], "user.update": LOGIN})
+        result = run(user, {**USER_ARGS, "reset_users": ["tm-laptop"]})
+        assert result["changed"] and result["actions"] == {"tm-laptop": "reset password"}
+        assert fake.called("user.update") == [[7, {"password": SMB_PASSWORD}]]
+        assert no_secret(result)
+
+    def test_smb_turned_on_sends_the_password_with_it(self, nas, run):
+        closed = {**LOGIN, "smb": False, "locked": True, "password_disabled": True}
+        fake = nas({"auth.login_with_api_key": True, "user.query": [[closed]], "user.update": LOGIN})
+        args = {**USER_ARGS, "users": [{**USER_ARGS["users"][0], "locked": False, "password_disabled": False}]}
+        result = run(user, args)
+        assert result["actions"] == {"tm-laptop": "update locked,password_disabled,smb, password"}
+        sent = fake.called("user.update")
+        assert sent == [[7, {"smb": True, "locked": False, "password_disabled": False, "password": SMB_PASSWORD}]]
+        assert no_secret(result)
+
+    def test_a_closed_login_needs_no_password(self, nas, run):
+        fake = nas({"auth.login_with_api_key": True, "user.query": [[LOGIN]], "user.update": LOGIN})
+        closed = {**USER_ARGS["users"][0], "smb": False, "locked": True, "password_disabled": True}
+        result = run(user, {**USER_ARGS, "users": [closed], "passwords": {}})
+        assert not result.get("failed"), result
+        assert fake.called("user.update") == [[7, {"smb": False, "locked": True, "password_disabled": True}]]
+
+    def test_the_api_keys_user_is_taken_out_of_smb(self, nas, run):
+        admin = {**LOGIN, "id": 4, "uid": 3000, "username": "api-admin"}
+        fake = nas(
+            {
+                "auth.login_with_api_key": True,
+                "auth.me": {"pw_name": "api-admin", "two_factor_config": {"provisioning_uri": "otpauth://SECRET"}},
+                "user.query": [[admin]],
+                "user.update": admin,
+            }
+        )
+        result = run(user, {**USER_ARGS, "users": [], "api_user_smb": False})
+        assert result["actions"] == {"api-admin": "update smb"}
+        assert fake.called("user.update") == [[4, {"smb": False}]]
+        assert no_secret(result) and "otpauth" not in json.dumps(result)
+
+    @pytest.mark.parametrize(
+        ("found", "message"),
+        [
+            ({**LOGIN, "uid": 3005}, "exists with uid 3005, not 3101"),
+            ({**LOGIN, "immutable": True}, "is one of TrueNAS's own users"),
+        ],
+    )
+    def test_a_user_it_cannot_manage_is_refused(self, nas, run, found, message):
+        fake = nas({"auth.login_with_api_key": True, "user.query": [[found]]})
+        result = run(user, USER_ARGS)
+        assert result["failed"] and message in result["msg"], result
+        assert fake.called("user.update") == [] and no_secret(result)
+
+    @pytest.mark.parametrize(
+        ("changed", "message"),
+        [
+            ({"users": [{"username": "tm-laptop"}]}, "smb must be true or false"),
+            ({"passwords": {}}, "no password in passwords"),
+            (
+                {"users": [{"username": "tm-laptop", "smb": True, "password_disabled": True}]},
+                "cannot have password_disabled",
+            ),
+            ({"reset_users": ["someone"]}, "someone: in reset_users, but not one of the users"),
+            ({"api_user_smb": True}, "only false is supported"),
+            ({"users": [{"username": "tm-laptop", "smb": True, "groups": [545]}]}, "unknown field(s) ['groups']"),
+        ],
+    )
+    def test_options_are_checked_before_connecting(self, nas, run, changed, message):
+        fake = nas({"auth.login_with_api_key": True})
+        result = run(user, {**USER_ARGS, **changed})
+        assert result["failed"] and message in result["msg"], result
+        assert fake.calls == [], "the NAS was asked something"

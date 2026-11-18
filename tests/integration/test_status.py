@@ -978,6 +978,7 @@ NAS_READS = {
     "service.query",
     "systemdataset.config",
     "sharing.nfs.query",
+    "sharing.smb.query",
     "pool.scrub.query",
     "alert.list",
     "pool.snapshottask.query",

@@ -138,6 +138,7 @@ def test_a_listening_port_counts_as_an_address_in_use():
 info = load("truenas_info", ROLE / "library" / "truenas_info.py")
 TIB = 2**40
 SERIAL = "SERIAL-MUST-NOT-LEAK"
+HASH = "HASH-MUST-NOT-LEAK"
 
 
 def size(value):
@@ -198,6 +199,19 @@ class ScriptedAPI:
         "service.query": [{"service": "nfs", "enable": True, "state": "RUNNING"}],
         "systemdataset.config": {"pool": "boot-pool", "pool_set": True},
         "sharing.nfs.query": [],
+        "sharing.smb.query": [
+            {
+                "id": 1,
+                "name": "tm-laptop",
+                "path": "/mnt/persistent/timemachine/laptop",
+                "purpose": "TIMEMACHINE_SHARE",
+                "enabled": True,
+                "options": {"vuid": "d12aafdc-a7ac-4e3c-8bbd-6001f7f19819"},
+            }
+        ],
+        # As a NAS that ignored select would answer: the module keeps the names alone.
+        "user.query": [{"username": "api-admin", "smbhash": HASH, "unixhash": f"$6${HASH}"}],
+        "auth.me": {"pw_name": "api-admin", "pw_uid": 3000, "two_factor_config": {"secret_configured": False}},
         "pool.scrub.query": [{"id": 1, "pool": 1, "pool_name": "persistent", "threshold": 35, "enabled": True}],
         "alert.list": [
             {
@@ -321,6 +335,7 @@ def test_status_reports_the_nas_health_in_the_same_login():
     }
     assert SERIAL not in repr(result["status"])
     assert api.calls.count("system.info") == 1 and api.calls.count("pool.query") == 1
+    assert not {"user.query", "auth.me"} & set(api.calls) and "smb_users" not in result
 
 
 def test_without_status_nothing_more_is_asked():
@@ -328,6 +343,16 @@ def test_without_status_nothing_more_is_asked():
     result = info.gather(api, importable=False)
     assert "status" not in result
     assert not {"alert.list", "pool.snapshottask.query", "pool.scrub.query"} & set(api.calls)
+    assert result["smb_shares"] == [
+        {
+            "name": "tm-laptop",
+            "path": "/mnt/persistent/timemachine/laptop",
+            "purpose": "TIMEMACHINE_SHARE",
+            "enabled": True,
+        }
+    ]
+    assert (result["smb_users"], result["api_user"]) == (["api-admin"], "api-admin")
+    assert HASH not in repr(result)
     assert result["hostname"] == "truenas" and result["datasets"] == [
         d["id"] for d in api.ANSWERS["pool.dataset.query"]
     ]
@@ -345,3 +370,68 @@ def test_without_status_nothing_more_is_asked():
 )
 def test_api_times_become_rfc_3339(value, expected):
     assert info._date(value) == expected
+
+
+resource = load("truenas_resource", ROLE / "library" / "truenas_resource.py")
+permission = load("truenas_permission", ROLE / "library" / "truenas_permission.py")
+
+
+class TestUpdateTogether:
+    """sharing.smb.update refuses purpose without options and options without purpose (TrueNAS 25.10.7's
+    parse_nested): the two go to an update together, or not at all."""
+
+    SHARE: ClassVar[dict] = {
+        "id": 1,
+        "purpose": "TIMEMACHINE_SHARE",
+        "enabled": False,
+        "options": {"vuid": "d12aafdc", "auto_snapshot": True, "timemachine_quota": 0},
+    }
+    TOGETHER = ("purpose", "options")
+
+    def updates(self, data):
+        return resource.grouped(self.SHARE, data, api.differences(self.SHARE, data), self.TOGETHER)
+
+    def test_another_field_alone_sends_neither(self):
+        data = {"purpose": "TIMEMACHINE_SHARE", "enabled": True, "options": {"auto_snapshot": True}}
+        assert self.updates(data) == {"enabled": True}
+
+    def test_an_option_sends_the_purpose_and_keeps_what_the_entry_does_not_give(self):
+        data = {"purpose": "TIMEMACHINE_SHARE", "options": {"auto_snapshot": False}}
+        assert self.updates(data) == {
+            "purpose": "TIMEMACHINE_SHARE",
+            "options": {"vuid": "d12aafdc", "auto_snapshot": False, "timemachine_quota": 0},
+        }
+
+    def test_the_purpose_sends_the_options_as_they_are(self):
+        data = {"purpose": "LEGACY_SHARE", "options": {"auto_snapshot": True}}
+        assert self.updates(data) == {"purpose": "LEGACY_SHARE", "options": self.SHARE["options"]}
+
+    def test_nothing_differs_nothing_is_sent(self):
+        assert self.updates({"purpose": "TIMEMACHINE_SHARE", "options": {"auto_snapshot": True}}) == {}
+
+
+class TestPermissions:
+    def stat(self, mode, acl=False, user="tm-laptop", group="tm-laptop"):
+        return {"mode": mode, "acl": acl, "user": user, "group": group, "uid": 3101, "gid": 3101}
+
+    def test_a_directory_compares_by_its_permission_bits(self):
+        entry = {"path": "/mnt/p/tm", "user": "tm-laptop", "group": "tm-laptop", "mode": "700"}
+        assert permission.current(self.stat(0o40700)) == permission.wanted(entry)
+        assert permission.wanted({**entry, "mode": "0700"}) == permission.wanted(entry)
+
+    def test_an_acl_beyond_the_mode_is_a_difference(self):
+        entry = {"path": "/mnt/p/tm", "user": "tm-laptop", "group": "tm-laptop", "mode": "700"}
+        assert permission.current(self.stat(0o40700, acl=True)) != permission.wanted(entry)
+        assert permission.current(self.stat(0o40770)) != permission.wanted(entry)
+        assert permission.current(self.stat(0o40700, user="root")) != permission.wanted(entry)
+
+    @pytest.mark.parametrize(
+        ("entry", "problem"),
+        [
+            ({"path": "/mnt/p/tm", "user": "u", "group": "g"}, "needs mode"),
+            ({"path": "/mnt/p/tm", "user": "u", "group": "g", "mode": "rwx"}, "is not an octal mode"),
+            ({"path": "/mnt/p/tm", "user": "u", "group": "g", "mode": "700", "recursive": True}, "unknown field"),
+        ],
+    )
+    def test_entries_are_checked_before_connecting(self, entry, problem):
+        assert problem in "; ".join(permission.entry_problems([entry]))
