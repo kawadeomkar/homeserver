@@ -66,8 +66,11 @@ A second entry point, `status` (`tasks_from: status`), is what `just status` run
 `status` option, which adds each pool's health, capacity, layout and last scrub, TrueNAS's alerts that are not
 dismissed, each snapshot task's last run, the uptime, and each Time Machine share's backup (its dataset's use, quota
 and snapshots' share, and its newest `aapltm-<epoch>` snapshot) to what it reads (`pool.scrub.query`, `alert.list`,
-`pool.snapshottask.query` and a `pool.snapshot.query` per Time Machine share, times turned from the API's
-`{"$date": <milliseconds>}` into RFC 3339), in the same login.
+`pool.snapshottask.query`, and one `pool.snapshot.query` for every enabled Time Machine share whose dataset exists,
+`[["dataset", "in", [...]]]` with `select: ["name"]`, TrueNAS's fast path, which reads no property per snapshot, and
+none without such a share; times turned from the API's `{"$date": <milliseconds>}` into RFC 3339), in the same login.
+A share's `dataset_found` is false when its path names no dataset, and an `aapltm-` time more than an hour ahead of
+the controller's clock is ignored.
 It changes nothing, tries each address once (`api_connect_wait: 0`), and never fails: a NAS that does not answer,
 refuses the key or presents another certificate than the pinned one leaves `truenas_status` without an `api_host`, with
 why in its `msg`, and the key goes to no other server. `roles/status` reports what it says.
