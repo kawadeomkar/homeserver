@@ -126,7 +126,7 @@ say who owns a storage and what it is for, never the backend (`roles/truenas/REA
 What is easy to break wherever the change is; `docs/` (gitignored) holds the audits behind them.
 
 - **Every change to the NAS goes through `roles/truenas`.** No UI clicks, ad-hoc API calls or SSH; a fresh install plus
-  one run must rebuild it. Read-only API queries are fine.
+  one run must rebuild it. Read-only queries are fine; deleting and rolling back, which it never does, only by runbook.
 - **Flux holds cluster-admin, so merge rights on `main` are the cluster's admin boundary.** It applies whatever the
   synced branch holds. Whoever can merge to `main` controls the cluster, which is why `flux_sync_url` has no default and
   a fork syncs its own repository; another branch is unprotected, so syncing one takes `flux_sync_ref_unprotected: true`

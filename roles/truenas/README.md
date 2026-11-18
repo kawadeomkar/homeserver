@@ -127,7 +127,8 @@ truenas_services:
 The design facts a change most often breaks:
 
 - **Every change to the NAS goes through this role.** No UI clicks, ad-hoc API calls or SSH: a fresh install plus one
-  run must rebuild it. Read-only API queries are fine.
+  run must rebuild it. Read-only API queries are fine. What the role never does, deleting and rolling back data, is
+  done by hand only where a runbook says how: `scripts/runbooks/teardown.md` and `scripts/runbooks/timemachine.md`.
 - **TrueNAS rate-limits logins** to 20 per minute from one client address, counted in fixed 60-second windows, and
   each module run logs in once. The modules therefore take whole lists (every dataset, every service) rather than
   being looped over, so a full run logs in about 16 times, and the client waits out the window when it is hit
@@ -209,14 +210,14 @@ The design facts a change most often breaks:
 
 ## This repo's NAS
 
-`truenas.yml` runs the role on the `nas` host. `group_vars/nas/connection.yml` says how it is reached (the key from
-the vault's `vault_truenas_api_key`; the static address, then `truenas_bootstrap_address`), `group_vars/nas/truenas.yml`
+`truenas.yml` runs the role on the `nas` host. `group_vars/nas/connection.yml` says how it is reached (the key from the
+vault's `vault_truenas_api_key`; the static address, then `truenas_bootstrap_address`), `group_vars/nas/truenas.yml`
 holds the NAS's configuration, and `group_vars/all/storage.yml` the VM storage layout, which the Proxmox play reads too,
-so a share and the storage that mounts it cannot drift apart. Addresses, the certificate pin and the pools' disk
-serials are `local.yml`'s. The play's pre-tasks, tagged `always`, refuse `nas_section_error` and
-`kubernetes_settings_error`, and when `local.yml` gives the NAS neither address they say so and end the host before
-the role runs (`always`, since `meta` tasks honour tags; the `debug` that says why is what gives the host a recap
-line). SSH stays off on the NAS, as does every sharing service but NFS, and SMB while no Mac backs up to it (below).
+so a share and the storage that mounts it cannot drift apart. Addresses, the certificate pin and the pools' disk serials
+are `local.yml`'s. The play's pre-tasks, tagged `always`, refuse `nas_section_error`, `kubernetes_settings_error` and
+`timemachine_settings_error`, and when `local.yml` gives the NAS neither address they say so and end the host before the
+role runs (`always`, since `meta` tasks honour tags; the `debug` that says why is what gives the host a recap line). SSH
+stays off on the NAS, as does every sharing service but NFS, and SMB while no Mac backs up to it (below).
 
 **Pools.** The two pools are named by class, never by hardware (`nas_pools` in `group_vars/all/storage.yml`;
 `local.yml` can name them otherwise with `truenas_pool_persistent` and `truenas_pool_ephemeral`): `persistent` is
@@ -276,21 +277,25 @@ from `group_vars/nas/timemachine.yml`, a dataset under `persistent/timemachine` 
 moment case-insensitivity can be chosen) with its quota, a refquota of three quarters of it and `sync=standard`, a
 weekly snapshot task kept eight weeks, an SMB-only login `tm-<name>` with its pinned uid and the vault's password
 (`vault_timemachine_passwords`), its directory owned by that login alone with the preset's template ACL stripped, and a
-Time Machine share `tm-<name>` with `auto_snapshot` (Samba snapshots the dataset after each completed backup and keeps a
-week) and a volume id derived from the Mac's name, so a rebuilt NAS announces the volume the Mac knows. With a Mac, SMB
-requires transport encryption and has the Apple extensions on, SMB1, NTLMv1, multichannel and the master-browser
-election off; the NAS announces itself over mDNS alone; the API key's own user is taken out of SMB; and the SMB stage
-starts the service, which the services stage keeps stopped otherwise. The Mac's own Time Machine limit, about half the
-quota, is the working limit. The refquota counts the disk image alone and is the disk the Mac sees; the quota counts the
-image and its snapshots, whose room is the rest. Should the snapshots fill it, writes fail inside an image that still
-shows free space, and a smaller limit on the Mac frees nothing they hold: `group_vars/nas/timemachine.yml` says why, and
-the runbook what to do. Samba reports the dataset's own statvfs here: its ZFS space hook (`zfs_core:zfs_space_enabled`)
-is off by default and TrueNAS never sets it. A retired Mac keeps its dataset and snapshots, its login closed (out of
-SMB, locked, no password), its share and task disabled; with no Mac left backing up, SMB stops.
-`group_vars/all/timemachine.yml`'s `timemachine_settings_error`, which `truenas.yml` asserts first, refuses a bad name,
-quota or uid, a uid or name given twice, an active Mac without a password of 20 characters, and a password for a Mac not
-listed; `nas_section_error` refuses the setting without a NAS. The Mac's side is by hand:
-`scripts/runbooks/timemachine.md`.
+Time Machine share `tm-<name>` with `auto_snapshot` (Samba snapshots the dataset after completed backups and deletes
+them after a week when the Mac next connects) and a volume id derived from the Mac's name, so a rebuilt NAS announces
+the volume the Mac knows. With a Mac, SMB requires transport encryption and has the Apple extensions on, SMB1, NTLMv1,
+multichannel and the master-browser election off, and its auxiliary parameters and admin group pinned to TrueNAS's
+defaults, since either set by hand would undo the rest; each share refuses the Proxmox host's address, which every
+tailnet client reaches the LAN as; the NAS announces itself over mDNS alone; the API key's own user is taken out of SMB;
+and the SMB stage starts the service, which the services stage keeps stopped otherwise. The Mac's own Time Machine
+limit, about half the quota, is the working limit. The refquota counts the disk image alone and is the disk the Mac
+sees; the quota counts the image and its snapshots, whose room is the rest. Should the snapshots fill it, writes fail
+inside an image that still shows free space, and a smaller limit on the Mac frees nothing they hold:
+`group_vars/nas/timemachine.yml` says why, and the runbook what to do. Samba reports the dataset's own statvfs here: its
+ZFS space hook (`zfs_core:zfs_space_enabled`) is off by default and TrueNAS never sets it. A retired Mac keeps its
+dataset and snapshots, its login closed (out of SMB, locked, its password disabled), its share and task disabled; with
+no Mac left backing up, the SMB stage stops SMB, and no login check stands in the way of that.
+`group_vars/all/timemachine.yml`'s `timemachine_settings_error`, which `truenas.yml` asserts before the role runs,
+refuses a bad name, quota or uid, a uid or name given twice, a key an entry does not have (a misspelt `retired`), an
+active Mac without a password of 20 characters, a password for a Mac not listed, a vault key that is no Mac's name,
+which it does not print since it may be a password typed as a key, and `timemachine_present` given with `-e`;
+`nas_section_error` refuses the setting without a NAS. The Mac's side is by hand: `scripts/runbooks/timemachine.md`.
 
 **Alerts.** When `local.yml` names a mail server, the NAS mails warnings and worse (a degraded pool, a pool filling
 up, a failed snapshot task) to `truenas_alert_email`, the password from the vault's `vault_truenas_mail_password`.

@@ -369,6 +369,7 @@ PARSERS = {
     "pool_name": _pool_name,
     "fingerprint": _fingerprint,
     "username": _username,
+    "usernames": _list_of(_username),
     "text": _text,
     "path": _path,
     "usb": _usb,
@@ -399,29 +400,6 @@ OPTIONAL_DISKS = ("media_disk_gib",)
 
 S = Setting
 SETTINGS: tuple[Setting, ...] = (
-    # -------------------------------------------------------------------------------------------- Time Machine ---
-    S(
-        "timemachine_backups",
-        "timemachine",
-        "macs",
-        "The Macs that back up to the NAS: each one's name, its dataset's quota in GiB and its login's uid",
-        need="required",
-        help="Each gets a dataset, an SMB share and a login, all named tm-<name> (scripts/runbooks/timemachine.md). "
-        "The quota counts the snapshots: give the Mac itself a limit of about half of it. The uid is the login's, "
-        "which a rebuilt NAS gives it again. A Mac retired by hand (retired: true) keeps its entry.",
-    ),
-    S(
-        "vault_timemachine_passwords",
-        "timemachine",
-        "mac_passwords",
-        "Each Mac's SMB password, 20 characters or more",
-        need="required",
-        secret=True,
-        after="timemachine_backups",
-        help="Long and random (openssl rand -base64 30), kept in your password manager and the Mac's keychain. Not the "
-        "backup's own encryption password, which never leaves the Mac. Changing one here is not enough: just deploy "
-        'truenas with -e \'{"truenas_users_reset": ["tm-<name>"]}\' sends it.',
-    ),
     # ------------------------------------------------------------------------------------------------- Proxmox ---
     S(
         "proxmox_address",
@@ -557,6 +535,39 @@ SETTINGS: tuple[Setting, ...] = (
         popular=True,
     ),
     S("truenas_alert_email", "nas", "email", "Where the alerts go", after="truenas_mail_server", need="recommended"),
+    # -------------------------------------------------------------------------------------------- Time Machine ---
+    S(
+        "timemachine_backups",
+        "timemachine",
+        "macs",
+        "The Macs that back up to the NAS: each one's name, its dataset's quota in GiB and its login's uid",
+        need="required",
+        help="Each gets a dataset, an SMB share and a login, all named tm-<name> (scripts/runbooks/timemachine.md). "
+        "The quota counts the snapshots: give the Mac itself a limit of about half of it. The uid is the login's, "
+        "which a rebuilt NAS gives it again. A Mac retired by hand (retired: true) keeps its entry.",
+    ),
+    S(
+        "vault_timemachine_passwords",
+        "timemachine",
+        "mac_passwords",
+        "Each Mac's SMB password, 20 characters or more",
+        need="required",
+        secret=True,
+        after="timemachine_backups",
+        help="Long and random (openssl rand -base64 30 | pbcopy, which prints nothing, or your password manager's "
+        "generator), kept in your password manager and the Mac's keychain. Not the backup's own encryption password, "
+        "which never leaves the Mac. Changing one here is not enough: scripts/runbooks/timemachine.md says how to send "
+        "a new one.",
+    ),
+    S(
+        "truenas_smb_closed_users",
+        "timemachine",
+        "usernames",
+        "Logins on the NAS to take out of SMB, such as one made by hand that the deploy names",
+        after="timemachine_backups",
+        help="While a Mac backs up, just deploy truenas refuses an SMB login it does not know, which could log in over "
+        "SMB. Each login named here is taken out of SMB and otherwise left as it is (scripts/runbooks/timemachine.md).",
+    ),
     # -------------------------------------------------------------------------------------------------- Router ---
     S(
         "opnsense_address",

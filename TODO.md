@@ -50,6 +50,15 @@ audit of the tree before the cluster was built.
 The NAS was reinstalled on TrueNAS Community Edition and is configured only through Ansible:
 `roles/truenas` (`truenas.yml`) and, on the Proxmox side, `roles/proxmox_storage` (`proxmox.yml`).
 
+- [ ] Back the Macs up to the NAS with Time Machine (`scripts/runbooks/timemachine.md`), in order:
+      1. First, a backup of each Mac to its local disk, with the charger connected.
+      2. Each Mac in `local.yml`'s `timemachine_backups` and its SMB password in the vault, then
+         `just check truenas`, and `just deploy truenas` twice; the second changes nothing.
+      3. The Mac's own steps in the runbook: the disk added with encryption on, its limit, the first backup on
+         Ethernet, then one automatic backup.
+      4. Over the first months, the snapshots' share of each Mac's quota (`just status nas`).
+- [ ] A local disk of 1 TB or more for each Mac, as Time Machine's second destination beside the NAS
+
 - [ ] Recreate the home NAS's redundant pool under its class name, `persistent`. It is still called by its
       old hardware name, so until then `local.yml` must set `truenas_pool_persistent` to that name, or every
       run looks for a pool called `persistent` and stops. Do it together with the storage-id move under

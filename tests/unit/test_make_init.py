@@ -520,7 +520,8 @@ def test_the_macs_are_asked_with_a_nas_and_their_passwords_go_to_the_vault(repo)
     assert laptop not in console.text and studio not in console.text and "too-short" not in console.text
     assert "each Mac's own steps" in console.out[-1]
 
-    # A Mac retired by hand keeps its entry and wants no password; clearing the passwords leaves {} in the vault.
+    # A Mac retired by hand keeps its entry and wants no password; "-" clears laptop's, and the retired Mac's stays in
+    # the vault, which the runbook says it may leave once retired.
     path = repo / "group_vars/all/local.yml"
     path.write_text(path.read_text().replace("name: studio", "name: studio, retired: true"))
     console = Scripted({"vault_timemachine_passwords/laptop": "-"})
@@ -534,6 +535,18 @@ def test_time_machine_is_not_asked_without_a_nas(repo):
     console = Scripted(first_run_answers())
     init_run(repo, console)
     assert "switch:timemachine" not in console.topics and "timemachine_backups" not in local(repo)
+
+
+def test_macs_left_after_the_nas_is_turned_off_are_deleted_by_default(repo):
+    # Without a NAS every playbook refuses them, so Enter deletes them rather than keeping a setup none accepts.
+    init_run(repo, Scripted(first_run_answers()))
+    path = repo / "group_vars/all/local.yml"
+    path.write_text(path.read_text() + "timemachine_backups:\n  - {name: laptop, quota_gib: 2048, uid: 3101}\n")
+    console = Scripted(first_run_answers())
+    init_run(repo, console)
+    assert "switch:timemachine" not in console.topics and "clear:timemachine" in console.topics
+    assert "Without the TrueNAS NAS the playbooks refuse them." in "\n".join(console.out), console.out[-5:]
+    assert "timemachine_backups" not in local(repo)
 
 
 @pytest.mark.parametrize("routes", [True, False], ids=["subnet-router", "host-only"])

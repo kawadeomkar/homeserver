@@ -71,6 +71,10 @@ truenas_pool_disks:
 # its password can then leave the vault.
 # timemachine_backups:
 #   - {name: laptop, quota_gib: 2048, uid: 3101}
+# An SMB login made on the NAS by hand stops just deploy truenas while a Mac
+# backs up, since it could log in over SMB; each login named here is taken out
+# of SMB and otherwise left alone.
+# truenas_smb_closed_users: [someone]
 
 # ------------------------------------------------------------------ Proxmox ---
 # The Proxmox host: reached over root SSH, and the only host allowed to mount

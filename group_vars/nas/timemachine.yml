@@ -2,8 +2,8 @@
 # Time Machine on the NAS, from local.yml's timemachine_backups (group_vars/all/timemachine.yml): for each Mac a dataset,
 # a weekly snapshot task, an SMB-only login, its directory's owner and a Time Machine share, all tm-<name> or <name>, and
 # the SMB service, which roles/truenas's SMB stage starts after checking that no SMB login it does not list exists.
-# Everything here is empty without a Mac, so the stage does nothing. group_vars/nas/truenas.yml takes the datasets, the
-# snapshot tasks and the announcements in, and keeps the SMB service stopped while there is no Mac to back up.
+# Everything here is empty without a Mac, so the stage does nothing but keep the SMB service stopped.
+# group_vars/nas/truenas.yml takes the datasets, the snapshot tasks and the announcements in.
 
 # The Macs' datasets sit under one of their own on the redundant pool: a backup's history cannot be re-created.
 timemachine_dataset_root: "{{ nas_pools.persistent }}/timemachine"
@@ -32,9 +32,9 @@ truenas_datasets_timemachine: >-
   {%- endif -%}
   {{ out }}
 
-# A weekly snapshot of each Mac's dataset, kept eight weeks, beside the ones Samba takes after every completed backup and
-# keeps a week (the share's auto_snapshot): damage can go unnoticed for longer, since Time Machine verifies a network
-# backup only now and then. Disabled for a retired Mac, so its snapshots are neither taken nor expired.
+# A weekly snapshot of each Mac's dataset, kept eight weeks, beside the ones Samba takes after completed backups (the
+# share's auto_snapshot, below): damage can go unnoticed for longer, since Time Machine verifies a network backup only
+# now and then. Disabled for a retired Mac, so its snapshots are neither taken nor expired.
 truenas_snapshot_tasks_timemachine: >-
   {%- set out = [] -%}
   {%- for mac in timemachine_macs -%}
@@ -48,10 +48,13 @@ truenas_snapshot_tasks_timemachine: >-
 # The SMB service with a Mac. aapl_extensions is required for a Time Machine share. Transport encryption is required,
 # which makes signing mandatory too: the LAN is flat, and signing stops a relayed or tampered session. SMB1 and NTLMv1
 # stay off; multichannel stays off (one network path, and the setting a reported smbfs kernel panic suspected); no
-# master-browser election, which serves Windows clients.
+# master-browser election, which serves Windows clients. Two settings are pinned to TrueNAS's defaults, since either
+# set by hand would undo the rest unseen: auxiliary parameters (smb_options) come after encryption and NTLM in
+# smb.conf, and a group in admin_group gets Samba's override of every file's permissions, every Mac's backup included.
 truenas_smb_settings: >-
   {{ {'aapl_extensions': true, 'encryption': 'REQUIRED', 'enable_smb1': false, 'ntlmv1_auth': false,
-      'multichannel': false, 'localmaster': false} if timemachine_present else {} }}
+      'multichannel': false, 'localmaster': false, 'smb_options': '', 'admin_group': none}
+     if timemachine_present else {} }}
 
 # A login per Mac, for SMB alone: no shell, no home. Its uid is pinned, so a reinstalled NAS that imports the pool gives
 # the files back to the same number. A retired Mac's login is closed: out of SMB, locked, without a password.
@@ -64,7 +67,7 @@ truenas_users: >-
                             'password_disabled': retired}) -%}
   {%- endfor -%}
   {{ out }}
-# Set when a login is made, and after that only with -e '{"truenas_users_reset": ["tm-<name>"]}'.
+# Set when a login is made, and after that only when reset (scripts/runbooks/timemachine.md, rotating the password).
 truenas_user_passwords: >-
   {%- set out = [] -%}
   {%- for mac in timemachine_active -%}
@@ -85,11 +88,16 @@ truenas_permissions: >-
   {%- endfor -%}
   {{ out }}
 
-# A Time Machine share per Mac. auto_snapshot has Samba snapshot the dataset a minute after each completed backup
-# (aapltm-<epoch>, kept 7 days). No dataset made by Samba at the first connection (auto_dataset_creation), and no size
-# the share reports (timemachine_quota): the Mac sets its own limit. The vuid names the volume in the share's Bonjour
-# record, and TrueNAS would make a random one: it is derived from the Mac's name instead (a UUID5), so a share a rebuilt
-# NAS makes again is the volume the Mac knows. A retired Mac's share is disabled.
+# A Time Machine share per Mac. auto_snapshot has Samba's tmprotect snapshot the dataset a minute after a completed
+# backup (aapltm-<epoch>), but not within 15 minutes of its last one, and delete its snapshots older than a week when a
+# connection first opens the backup's history, as long as more than three newer remain: a Mac that stays connected for
+# days keeps more, and TrueNAS alerts at 512 snapshots of a share. No auxiliary parameter can change this on a Time
+# Machine share. No dataset made by Samba at the first connection (auto_dataset_creation), and no size the share
+# reports (timemachine_quota): the refquota and the Mac's own limit set it. The vuid names the volume in the share's
+# Bonjour record, and TrueNAS would make a random one: it is derived from the Mac's name instead (a UUID5), so a share
+# a rebuilt NAS makes again is the volume the Mac knows. SMB from the Proxmox host is refused (hostsdeny): every
+# tailnet client reaches the LAN as that address, and only the tailnet guard would stop it otherwise; when the router
+# takes over Tailscale, its address goes here instead. A retired Mac's share is disabled.
 truenas_smb_shares: >-
   {%- set out = [] -%}
   {%- for mac in timemachine_macs -%}
@@ -98,11 +106,13 @@ truenas_smb_shares: >-
                             'purpose': 'TIMEMACHINE_SHARE', 'comment': 'Time Machine, ' ~ mac.name,
                             'enabled': not (mac.retired | default(false)),
                             'options': {'auto_snapshot': true, 'auto_dataset_creation': false,
-                                        'timemachine_quota': 0,
+                                        'timemachine_quota': 0, 'hostsdeny': [proxmox_address],
                                         'vuid': ('homeserver-timemachine-' ~ mac.name) | to_uuid}}) -%}
   {%- endfor -%}
   {{ out }}
 
-# The SMB service, the SMB stage's alone: started while a Mac backs up, stopped otherwise.
+# The SMB service, the SMB stage's alone: started while a Mac backs up, after the stage's check that no SMB login it
+# does not list exists, and stopped otherwise, with no Mac or every Mac retired, which no check stands in the way of.
+# A login made by hand that the check names goes in local.yml's truenas_smb_closed_users, read by the role directly.
 truenas_smb_service: >-
   {{ {'enabled': true, 'state': 'started'} if timemachine_active else {'enabled': false, 'state': 'stopped'} }}
