@@ -195,6 +195,18 @@ class ScriptedAPI:
             {"id": "persistent", "used": size(2 * TIB), "available": size(5 * TIB)},
             {"id": "persistent/nextcloud", "used": size(TIB), "available": size(5 * TIB)},
             {"id": "ephemeral", "used": size(TIB), "available": size(TIB)},
+            {
+                "id": "persistent/timemachine/laptop",
+                "used": size(400 * 2**30),
+                "quota": size(2 * TIB),
+                "usedbysnapshots": size(20 * 2**30),
+            },
+        ],
+        # Samba's snapshots after each completed backup; a weekly one is no backup's.
+        "pool.snapshot.query": [
+            {"snapshot_name": "aapltm-1791763200"},
+            {"snapshot_name": "aapltm-1792497600"},
+            {"snapshot_name": "weekly-2026-10-18_00-00"},
         ],
         "service.query": [{"service": "nfs", "enable": True, "state": "RUNNING"}],
         "systemdataset.config": {"pool": "boot-pool", "pool_set": True},
@@ -207,7 +219,8 @@ class ScriptedAPI:
                 "purpose": "TIMEMACHINE_SHARE",
                 "enabled": True,
                 "options": {"vuid": "d12aafdc-a7ac-4e3c-8bbd-6001f7f19819"},
-            }
+            },
+            {"id": 2, "name": "files", "path": "/mnt/persistent/files", "purpose": "DEFAULT_SHARE", "enabled": True},
         ],
         # As a NAS that ignored select would answer: the module keeps the names alone.
         "user.query": [{"username": "api-admin", "smbhash": HASH, "unixhash": f"$6${HASH}"}],
@@ -332,25 +345,37 @@ def test_status_reports_the_nas_health_in_the_same_login():
                 "error": "",
             },
         ],
+        "time_machine": [
+            {
+                "name": "tm-laptop",
+                "enabled": True,
+                "dataset": "persistent/timemachine/laptop",
+                "used": 400 * 2**30,
+                "quota": 2 * TIB,
+                "snapshots_used": 20 * 2**30,
+                "last_backup": "2026-10-20T12:00:00+00:00",
+            }
+        ],
     }
     assert SERIAL not in repr(result["status"])
     assert api.calls.count("system.info") == 1 and api.calls.count("pool.query") == 1
     assert not {"user.query", "auth.me"} & set(api.calls) and "smb_users" not in result
+    # One snapshot read per Time Machine share, none for another share.
+    assert api.calls.count("pool.snapshot.query") == 1
 
 
 def test_without_status_nothing_more_is_asked():
     api = ScriptedAPI()
     result = info.gather(api, importable=False)
     assert "status" not in result
-    assert not {"alert.list", "pool.snapshottask.query", "pool.scrub.query"} & set(api.calls)
-    assert result["smb_shares"] == [
-        {
-            "name": "tm-laptop",
-            "path": "/mnt/persistent/timemachine/laptop",
-            "purpose": "TIMEMACHINE_SHARE",
-            "enabled": True,
-        }
-    ]
+    assert not {"alert.list", "pool.snapshottask.query", "pool.scrub.query", "pool.snapshot.query"} & set(api.calls)
+    assert [share["name"] for share in result["smb_shares"]] == ["tm-laptop", "files"]
+    assert result["smb_shares"][0] == {
+        "name": "tm-laptop",
+        "path": "/mnt/persistent/timemachine/laptop",
+        "purpose": "TIMEMACHINE_SHARE",
+        "enabled": True,
+    }
     assert (result["smb_users"], result["api_user"]) == (["api-admin"], "api-admin")
     assert HASH not in repr(result)
     assert result["hostname"] == "truenas" and result["datasets"] == [

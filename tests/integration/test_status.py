@@ -982,6 +982,7 @@ NAS_READS = {
     "pool.scrub.query",
     "alert.list",
     "pool.snapshottask.query",
+    "pool.snapshot.query",
 }
 
 
@@ -1004,6 +1005,41 @@ def seed_nas(path, **more):
     fake.s["snapshot_tasks"][-1]["state"] = {"state": "FINISHED", "datetime": fake_truenas.date(time.time() - 3700)}
     next(s for s in fake.s["services"] if s["service"] == "nfs").update(enable=True, state="RUNNING")
     fake.s.update(more)
+    fake.s["mutations"] = 0
+    fake.save()
+
+
+def seed_macs(path, last_backup_ago=7200):
+    """Two Macs' Time Machine shares as roles/truenas leaves them, SMB running: laptop's backup 400 GiB of a 2 TiB
+    quota, its snapshots 20 GiB, its newest backup `last_backup_ago` seconds old, and old's share disabled, a retired
+    Mac's."""
+    fake = fake_truenas.FakeTrueNAS(path)
+    fake.load()
+    fake.s["network"]["service_announcement"] = {"netbios": False, "mdns": True, "wsd": False}
+    fake.s["smb"]["aapl_extensions"] = True
+    fake.s["datasets"]["persistent/timemachine"] = fake.new_dataset("persistent/timemachine", {})
+    for name, enabled in (("laptop", True), ("old", False)):
+        dataset = f"persistent/timemachine/{name}"
+        fake.s["datasets"][dataset] = fake.new_dataset(dataset, {"quota": str(2 * 2**40)})
+        fake.m_sharing_smb_create(
+            {
+                "name": f"tm-{name}",
+                "path": f"/mnt/{dataset}",
+                "purpose": "TIMEMACHINE_SHARE",
+                "enabled": enabled,
+                "options": {"auto_snapshot": True},
+            }
+        )
+    fake.s["space"]["persistent/timemachine/laptop"] = [400 * 2**30, 1648 * 2**30]
+    fake.s["snapshot_space"] = {"persistent/timemachine/laptop": 20 * 2**30}
+    now = int(time.time())
+    fake.s["snapshots"] = [
+        f"persistent/timemachine/laptop@aapltm-{now - last_backup_ago}",
+        f"persistent/timemachine/laptop@aapltm-{now - last_backup_ago - 86400}",
+        "persistent/timemachine/laptop@weekly-2026-11-15_00-00",
+        f"persistent/timemachine/old@aapltm-{now - 90 * 86400}",
+    ]
+    next(s for s in fake.s["services"] if s["service"] == "cifs").update(enable=True, state="RUNNING")
     fake.s["mutations"] = 0
     fake.save()
 
@@ -1126,6 +1162,39 @@ def test_the_nas_is_read_through_its_api(nas_tree, nas, tmp_path):
     written = (nas_tree / ".cache" / "status" / "report.json").read_text()
     for secret in (fake_truenas.API_KEY, fake_truenas.SYSTEM_SERIAL, fake_truenas.PRIVATE_KEY):
         assert secret not in out + err + written, secret
+
+
+def test_the_macs_backups_are_read_from_the_nas(nas_tree, nas, tmp_path):
+    """Each Time Machine share's backup, from the share, its dataset and Samba's snapshots, in the same login and with
+    nothing but reads: its use against its quota, its snapshots' share, and its newest backup, a retired Mac's listed
+    and never late; then a backup eleven days old, a thing to do."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    seed_nas(nas["state"])
+    seed_macs(nas["state"])
+    nas["calls"].write_text("")
+    rc, out, err = just_status(nas_tree, state, "nas", **nas_vars(nas))
+    report = report_of(nas_tree)
+    assert rc == report["exit"] == 0, out + err
+    found = report["nas"]
+    assert found["smb"] == {"enabled": True, "state": "RUNNING", "shares": 1}
+    assert [(b["name"], b["retired"], b["used"], b["quota"], b["snapshots_used"]) for b in found["time_machine"]] == [
+        ("tm-laptop", False, 400 * 2**30, 2 * 2**40, 20 * 2**30),
+        ("tm-old", True, 0, 2 * 2**40, 0),
+    ]
+    assert " SMB        running · 1 share" in out, out
+    assert " Macs       tm-laptop backed up 2 h ago, 0.4 / 2.0 TiB, snapshots 20 GiB · tm-old retired" in out, out
+    calls = nas_calls(nas)
+    assert calls.count("auth.login_with_api_key") == 1 and set(calls) <= NAS_READS, calls
+    assert calls.count("pool.snapshot.query") == 2, calls
+    assert json.loads(nas["state"].read_text())["mutations"] == 0
+
+    seed_nas(nas["state"])
+    seed_macs(nas["state"], last_backup_ago=11 * 86400 + 600)
+    rc, out, err = just_status(nas_tree, state, "nas", **nas_vars(nas))
+    assert rc == 0, out + err
+    todo = [(a["level"], a["subject"], a["text"]) for a in report_of(nas_tree)["attention"]]
+    assert todo == [("todo", "tm-laptop", "its newest Time Machine backup completed 11 d ago")], todo
 
 
 def test_a_nas_on_another_release_is_a_thing_to_do(nas_tree, nas, tmp_path):

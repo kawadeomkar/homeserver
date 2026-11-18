@@ -1518,7 +1518,20 @@ def task(dataset, schedule, state="FINISHED", last_run="2026-10-20T23:00:02+00:0
     }
 
 
-def nas_state(pools=None, alerts=(), tasks=None, **more):
+def backup(name="tm-laptop", used=400, quota=2048, snapshots=20, last_backup="2026-10-20T22:00:00+00:00", enabled=True):
+    """A Time Machine share's backup as truenas_info's status reads it, sizes in GiB."""
+    return {
+        "name": name,
+        "enabled": enabled,
+        "dataset": f"persistent/timemachine/{name.removeprefix('tm-')}",
+        "used": used * 2**30,
+        "quota": quota * 2**30,
+        "snapshots_used": snapshots * 2**30,
+        "last_backup": last_backup,
+    }
+
+
+def nas_state(pools=None, alerts=(), tasks=None, backups=(), **more):
     """What truenas_info returns with status, as roles/truenas's status entry point registers it: the disks (with
     their serials) and the shares beside the health."""
     return {
@@ -1545,6 +1558,7 @@ def nas_state(pools=None, alerts=(), tasks=None, **more):
             ]
             if tasks is None
             else tasks,
+            "time_machine": list(backups),
         },
         **more,
     }
@@ -1831,6 +1845,83 @@ def test_a_notice_shows_its_first_sentence_and_a_warning_its_whole_text():
     assert lines[alerts + 2] == " " * 22 + "following devices are not healthy"
     assert not any("Upgrading pools" in line for line in lines)
     assert model["nas"]["alerts"][0]["text"] == notice + advice, "the JSON keeps the whole text"
+
+
+def macs(*backups, smb="RUNNING"):
+    """The NAS with Time Machine backups, each one's share, and the SMB service."""
+    services = {"nfs": {"enable": True, "state": "RUNNING"}, "cifs": {"enable": smb == "RUNNING", "state": smb}}
+    shares = [{"name": b["name"], "purpose": "TIMEMACHINE_SHARE", "enabled": b["enabled"]} for b in backups]
+    return nas_state(backups=backups, services=services, smb_shares=shares)
+
+
+def test_a_backup_in_good_order_asks_for_nothing_and_shows_on_a_line():
+    model = nas_report(macs(backup(), backup("tm-old", last_backup="2026-08-01T00:00:00+00:00", enabled=False)))
+    assert model["attention"] == [] and model["exit"] == 0
+    found = model["nas"]
+    assert found["smb"] == {"enabled": True, "state": "RUNNING", "shares": 1}
+    assert [(b["name"], b["retired"], b["ago"]) for b in found["time_machine"]] == [
+        ("tm-laptop", False, 2 * 3600),
+        ("tm-old", True, NAS_NOW - 1785542400),
+    ]
+    out = fs.text(model, False)
+    assert " SMB        running · 1 share" in out, out
+    assert " Macs       tm-laptop backed up 2 h ago, 0.4 / 2.0 TiB, snapshots 20 GiB · tm-old retired" in out, out
+
+
+def test_without_smb_shares_the_report_has_no_smb_or_macs_line():
+    out = fs.text(nas_report(), False)
+    assert " SMB " not in out and " Macs " not in out
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        pytest.param(
+            macs(backup(), smb="STOPPED"),
+            ("problem", "smb", "the SMB service is stopped, so its 1 share is not served", "just deploy truenas"),
+            id="smb-stopped",
+        ),
+        pytest.param(
+            macs(backup(used=1700)),
+            (
+                "todo",
+                "tm-laptop",
+                "its Time Machine backup is 83% of its quota: 1.7 / 2.0 TiB, its snapshots 20 GiB",
+                "",
+            ),
+            id="quota-80",
+        ),
+        pytest.param(
+            macs(backup(used=1900, snapshots=900)),
+            (
+                "problem",
+                "tm-laptop",
+                "its Time Machine backup is 93% of its quota: 1.9 / 2.0 TiB, its snapshots 900 GiB",
+                "",
+            ),
+            id="quota-90",
+        ),
+        pytest.param(
+            macs(backup(last_backup="2026-10-10T00:00:00+00:00")),
+            ("todo", "tm-laptop", "its newest Time Machine backup completed 11 d ago", ""),
+            id="late",
+        ),
+        pytest.param(
+            macs(backup(last_backup=None)),
+            ("todo", "tm-laptop", "no Time Machine backup to it has completed yet", ""),
+            id="none-yet",
+        ),
+    ],
+)
+def test_what_a_backup_needs(state, expected):
+    model = nas_report(state)
+    assert attention(model) == [expected]
+    assert model["exit"] == (1 if expected[0] == "problem" else 0)
+
+
+def test_a_retired_macs_backup_is_never_late_or_full():
+    retired = backup(used=2000, last_backup="2026-01-01T00:00:00+00:00", enabled=False)
+    assert nas_report(macs(retired, smb="STOPPED"))["attention"] == []
 
 
 def test_the_nas_report_is_json():

@@ -42,10 +42,13 @@ Two entry points:
   - On the NAS (`nas`) it reads nothing itself: the play reads the NAS first, through roles/truenas's `status` entry
     point (`roles/truenas/tasks/status.yml`: `truenas_info` with its `status` option, one login), and the role works
     out what `status_nas_state` says: each pool's health, use, layout and last scrub, TrueNAS's alerts, each snapshot
-    task's last run, the NFS service and its shares, and whether the NAS runs `status_nas_release`. The `status`
-    option adds `pool.scrub.query`, `alert.list` and `pool.snapshottask.query` to `truenas_info`'s reads and picks
-    each pool's health, root-dataset use, layout and last scan, the alerts not dismissed and each snapshot task's
-    last run, with the API's times (`{"$date": ms}`) turned into RFC 3339. The entry point tries each address once
+    task's last run, the NFS and SMB services and their shares, each Time Machine backup, and whether the NAS runs
+    `status_nas_release`. The `status` option adds `pool.scrub.query`, `alert.list` and `pool.snapshottask.query`
+    to `truenas_info`'s reads, and one `pool.snapshot.query` per Time Machine share (its dataset's `aapltm-`
+    snapshots, by name alone), and picks each pool's health, root-dataset use, layout and last scan, the alerts not
+    dismissed, each snapshot task's last run, and each Time Machine share's dataset use, quota and snapshots' share
+    of it and its newest backup, the time in the newest `aapltm-<epoch>` snapshot Samba takes after each completed
+    one, with the API's times (`{"$date": ms}`) turned into RFC 3339. The entry point tries each address once
     (`api_connect_wait: 0`) and never fails (`failed_when: false`): a NAS that did not answer, refused the key or
     presented another certificate than the pinned one is reported as a source not read, not a failure, and the key
     goes to no other server. `system.info`'s serial and the disks' serials never reach the report.
@@ -156,9 +159,13 @@ provisioned on it against its size, less `status_storage_headroom_gib` on ZFS, d
 `proxmox_vm_host_headroom_gib`), and provisioned beyond that is a thing to do.
 
 **The NAS**: a pool not ONLINE or not healthy, 90% full, or whose last scrub found errors, a snapshot task in ERROR,
-an alert at ERROR or worse, NFS not running while it has shares, and TrueNAS not ready are problems; a pool 80% full,
-a scrub more than eight days past its task's threshold, a pool no scrub task scrubs, a WARNING alert, a release other
-than `status_nas_release`, and interface changes never committed are things to do.
+an alert at ERROR or worse, NFS or SMB not running while it has shares, a Time Machine backup 90% of its quota, and
+TrueNAS not ready are problems; a pool 80% full, a scrub more than eight days past its task's threshold, a pool no
+scrub task scrubs, a WARNING alert, a release other than `status_nas_release`, interface changes never committed, a
+Time Machine backup 80% of its quota, one whose newest backup is ten days old or more, and one with no completed
+backup yet are things to do. A late backup is never a problem, since a laptop travels; a disabled Time Machine share
+is a retired Mac's, listed as retired and never late or full. The report's `Macs` line shows each backup's age, use
+against its quota and what its snapshots hold, which the first months after a Mac's backup fills up are watched for.
 
 Memory is Proxmox's view, the host's, for a VM that is no cluster node: with ballooning off, as on every VM here, PVE 9
 shows the host's PSS, every page the guest has touched, and the text marks it. A node's memory and disks are the

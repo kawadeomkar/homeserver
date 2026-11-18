@@ -10,7 +10,9 @@ description:
     address it was installed with.
   - Makes no changes. C(pool.import_find) is a job, but it only scans disks.
   - With O(status), also reports what just status shows, in the same login - each pool's health, capacity, layout
-    and last scrub, TrueNAS's alerts that are not dismissed, each periodic snapshot task's last run, and the uptime.
+    and last scrub, TrueNAS's alerts that are not dismissed, each periodic snapshot task's last run, the uptime, and
+    each Time Machine share's backup - its dataset's use against its quota, what its snapshots hold, and when the
+    newest backup completed, the time in the newest C(aapltm-<epoch>) snapshot Samba takes after each one.
   - Without O(status), also reports which local users are SMB logins and which user the API key logs in as, by name
     alone, for the role's check that no SMB login it does not list exists when it starts SMB.
   - Runs on the controller and needs the websocket-client Python package there.
@@ -91,8 +93,12 @@ status:
       - {id: 1, dataset: persistent/proxmox/vm, enabled: true, schedule: {minute: "0", hour: "*", dom: "*",
          month: "*", dow: "*"}, lifetime_value: 1, lifetime_unit: DAY, state: FINISHED,
          last_run: "2026-10-21T21:00:01+00:00", error: ""}
+    time_machine:
+      - {name: tm-laptop, dataset: persistent/timemachine/laptop, enabled: true, used: 412316860416,
+         quota: 2199023255552, snapshots_used: 21474836480, last_backup: "2026-11-17T20:14:05+00:00"}
 """
 
+import re
 import time
 from datetime import UTC, datetime
 
@@ -135,9 +141,32 @@ def _layout(topology):
     return ", ".join("stripe" if kind == "disk" else kind for kind in kinds)
 
 
-def health(api, info, pools, datasets):
-    """What just status shows of the NAS, from what gather read and three more calls."""
+def time_machine(api, share, datasets):
+    """A Time Machine share's backup: its dataset's use, quota and snapshots' share of it, and when the newest backup
+    completed, which the newest of the aapltm-<epoch> snapshots Samba takes after each one says."""
+    dataset = str(share.get("path") or "").removeprefix("/mnt/")
+    found = datasets.get(dataset) or {}
+    snapshots = api.call(
+        "pool.snapshot.query",
+        [["dataset", "=", dataset], ["snapshot_name", "^", "aapltm-"]],
+        {"select": ["snapshot_name"]},
+    )
+    epochs = [int(m.group(1)) for s in snapshots if (m := re.fullmatch(r"aapltm-(\d+)", str(s.get("snapshot_name"))))]
+    return {
+        **pick(share, ["name", "enabled"]),
+        "dataset": dataset,
+        "used": _bytes(found.get("used")),
+        "quota": _bytes(found.get("quota")),
+        "snapshots_used": _bytes(found.get("usedbysnapshots")),
+        "last_backup": _date(max(epochs)) if epochs else None,
+    }
+
+
+def health(api, info, pools, datasets, smb_shares=()):
+    """What just status shows of the NAS, from what gather read and three more calls, and one per Time Machine
+    share."""
     roots = {d.get("id"): d for d in datasets if "/" not in str(d.get("id"))}
+    by_id = {d.get("id"): d for d in datasets}
     scrubs = {s.get("pool_name"): pick(s, ["threshold", "enabled"]) for s in api.call("pool.scrub.query")}
     scan_fields = ["function", "state", "percentage", "errors"]
     return {
@@ -179,6 +208,9 @@ def health(api, info, pools, datasets):
             }
             for t in api.call("pool.snapshottask.query")
         ],
+        "time_machine": [
+            time_machine(api, share, by_id) for share in smb_shares if share.get("purpose") == "TIMEMACHINE_SHARE"
+        ],
     }
 
 
@@ -188,6 +220,7 @@ def gather(api, importable, status=False):
     info = api.call("system.info")
     pools = api.call("pool.query")
     datasets = api.call("pool.dataset.query", [], {"extra": {"flat": True}})
+    smb_shares = api.call("sharing.smb.query")
     result = {
         "version": api.call("system.version").removeprefix("TrueNAS-"),
         "ready": api.call("system.ready"),
@@ -227,7 +260,7 @@ def gather(api, importable, status=False):
             pick(s, ["id", "path", "hosts", "networks", "enabled", "ro", "maproot_user", "maproot_group"])
             for s in api.call("sharing.nfs.query")
         ],
-        "smb_shares": [pick(s, ["name", "path", "purpose", "enabled"]) for s in api.call("sharing.smb.query")],
+        "smb_shares": [pick(s, ["name", "path", "purpose", "enabled"]) for s in smb_shares],
     }
     if not status:
         # Names alone: user.query also holds each user's password hashes, which select leaves out.
@@ -237,7 +270,7 @@ def gather(api, importable, status=False):
     if importable:
         result["importable_pools"] = api.job("pool.import_find")
     if status:
-        result["status"] = health(api, info, pools, datasets)
+        result["status"] = health(api, info, pools, datasets, smb_shares)
     return result
 
 

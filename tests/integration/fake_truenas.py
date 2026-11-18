@@ -297,10 +297,14 @@ def initial_groups():
 
 def matches(item, filters):
     for field, op, value in filters or []:
-        if op != "=":
+        if op == "=":
+            if item.get(field) != value:
+                return False
+        elif op == "^":
+            if not str(item.get(field) or "").startswith(value):
+                return False
+        else:
             raise CallError(f"filter operator {op!r} not supported by the fake")
-        if item.get(field) != value:
-            return False
     return True
 
 
@@ -944,17 +948,35 @@ class FakeTrueNAS:
 
     def m_pool_dataset_query(self, filters=None, options=None):
         out = [copy.deepcopy(d) for d in self.s["datasets"].values() if matches(d, filters)]
-        # A pool's root dataset reports its space, as every dataset does on the real NAS.
+        # A dataset in "space" reports its used and available bytes, as every dataset does on the real NAS, and one in
+        # "snapshot_space" what its snapshots hold.
         for ds in out:
-            if "/" not in ds["id"] and ds["id"] in self.s.get("space", {}):
-                for key, value in zip(("used", "available"), self.s["space"][ds["id"]], strict=True):
-                    ds[key] = {
-                        "parsed": value,
-                        "rawvalue": str(value),
-                        "value": f"{value / TIB:.2f}T",
-                        "source": "NONE",
-                    }
+            sizes = dict(zip(("used", "available"), self.s.get("space", {}).get(ds["id"], ()), strict=False))
+            if ds["id"] in self.s.get("snapshot_space", {}):
+                sizes["usedbysnapshots"] = self.s["snapshot_space"][ds["id"]]
+            for key, value in sizes.items():
+                ds[key] = {"parsed": value, "rawvalue": str(value), "value": f"{value / TIB:.2f}T", "source": "NONE"}
         return out
+
+    # The snapshots the fake holds, by dataset: names alone, as "<dataset>@<name>", in state["snapshots"].
+    def m_pool_snapshot_query(self, filters=None, options=None):
+        out = []
+        for full in self.s.get("snapshots", []):
+            dataset, name = full.split("@", 1)
+            snap = {
+                "id": full,
+                "name": full,
+                "snapshot_name": name,
+                "dataset": dataset,
+                "pool": dataset.split("/")[0],
+                "type": "SNAPSHOT",
+                "createtxg": "1",
+                "properties": {},
+            }
+            if matches(snap, filters):
+                out.append(snap)
+        select = (options or {}).get("select")
+        return [{key: snap[key] for key in select if key in snap} for snap in out] if select else out
 
     def m_pool_dataset_create(self, data):
         data = dict(data)

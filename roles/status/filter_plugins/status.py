@@ -1178,6 +1178,8 @@ NAS_ALERT_TODO = ("WARNING",)
 FIRST_SENTENCE = re.compile(r"(.+?[.!?])\s+(?=[A-Z])", re.S)
 # Days past a scrub task's threshold before its pool counts as overdue: the task runs weekly, then waits for that.
 SCRUB_GRACE_DAYS = 8
+# A Time Machine backup older than this is a thing to do, never a problem: a laptop travels.
+TIME_MACHINE_LATE_DAYS = 10
 
 
 def _plain_text(text):
@@ -1208,9 +1210,9 @@ def _nas_unread(state):
 
 def nas(state, release=""):
     """What the NAS says, from truenas_info with its status option (roles/truenas's status entry point): each pool's
-    health, capacity and last scrub, TrueNAS's alerts, each periodic snapshot task's last run, the NFS service, and
-    the release it runs against `release`, the one its role is written for. A NAS that did not answer, refused the
-    key or presented another certificate than the pinned one is {"unread": why}."""
+    health, capacity and last scrub, TrueNAS's alerts, each periodic snapshot task's last run, the NFS and SMB services,
+    each Time Machine backup, and the release it runs against `release`, the one its role is written for. A NAS that
+    did not answer, refused the key or presented another certificate than the pinned one is {"unread": why}."""
     state = state if isinstance(state, dict) else {}
     health = state.get("status")
     if not state.get("api_host") or not isinstance(health, dict):
@@ -1237,6 +1239,7 @@ def nas(state, release=""):
             }
         )
     nfs = (state.get("services") or {}).get("nfs") or {}
+    smb = (state.get("services") or {}).get("cifs") or {}
     return {
         "name": str(state.get("hostname") or ""),
         "address": str(state["api_host"]),
@@ -1271,6 +1274,24 @@ def nas(state, release=""):
             "state": str(nfs.get("state") or ""),
             "shares": sum(1 for share in state.get("nfs_shares") or [] if share.get("enabled", True)),
         },
+        "smb": {
+            "enabled": bool(smb.get("enable")),
+            "state": str(smb.get("state") or ""),
+            "shares": sum(1 for share in state.get("smb_shares") or [] if share.get("enabled", True)),
+        },
+        # A disabled share is a retired Mac's: listed, never late.
+        "time_machine": [
+            {
+                "name": str(b.get("name") or ""),
+                "dataset": str(b.get("dataset") or ""),
+                "retired": not b.get("enabled", True),
+                "used": b.get("used") or 0,
+                "quota": b.get("quota") or 0,
+                "snapshots_used": b.get("snapshots_used") or 0,
+                "last_backup": b.get("last_backup") or "",
+            }
+            for b in health.get("time_machine") or []
+        ],
     }
 
 
@@ -1785,7 +1806,8 @@ def _nas_model(found, now):
         scan = pool.get("scan") or {}
         pools.append(pool | {"scanned_ago": age(scan.get("end_time")) if scan.get("state") == "FINISHED" else None})
     snapshots = [t | {"ago": age(t["last_run"])} for t in found.get("snapshots") or []]
-    return found | {"pools": pools, "snapshots": snapshots}
+    backups = [b | {"ago": age(b["last_backup"])} for b in found.get("time_machine") or []]
+    return found | {"pools": pools, "snapshots": snapshots, "time_machine": backups}
 
 
 def _nas_attention(found, commands):
@@ -1834,6 +1856,28 @@ def _nas_attention(found, commands):
         text = f"the NFS service is {nfs.get('state', '').lower() or 'not running'}, so its {count} share"
         text += f"{'s are' if count != 1 else ' is'} not served"
         out.append(_item("problem", "nfs", text, commands.get("nas", "")))
+    smb = found.get("smb") or {}
+    if smb.get("shares") and smb.get("state") != "RUNNING":
+        count = smb["shares"]
+        text = f"the SMB service is {smb.get('state', '').lower() or 'not running'}, so its {count} share"
+        text += f"{'s are' if count != 1 else ' is'} not served"
+        out.append(_item("problem", "smb", text, commands.get("nas", "")))
+    for backup in found.get("time_machine") or []:
+        if backup["retired"]:
+            continue
+        name = backup["name"]
+        fraction = backup["used"] / backup["quota"] if backup["quota"] else 0
+        if fraction >= STORAGE_TODO:
+            text = (
+                f"its Time Machine backup is {fraction:.0%} of its quota: {_sizes(backup['used'], backup['quota'])}, "
+                f"its snapshots {_size(backup['snapshots_used'])}"
+            )
+            out.append(_item("problem" if fraction >= STORAGE_PROBLEM else "todo", name, text))
+        if not backup["last_backup"]:
+            out.append(_item("todo", name, "no Time Machine backup to it has completed yet"))
+        elif backup.get("ago") is not None and backup["ago"] // DAY >= TIME_MACHINE_LATE_DAYS:
+            text = f"its newest Time Machine backup completed {backup['ago'] // DAY} d ago"
+            out.append(_item("todo", name, text))
     return out
 
 
@@ -2852,6 +2896,11 @@ def _sizes(used, total):
     return f"{_gib(used)} / {_gib(total)} GiB"
 
 
+def _size(used):
+    """Bytes as "1.2 TiB", or in GiB below a TiB."""
+    return f"{used / 2**40:.1f} TiB" if used >= 2**40 else f"{_gib(used)} GiB"
+
+
 def _scan_text(pool):
     scan = pool.get("scan") or {}
     doing = {"SCRUB": "scrubbing", "RESILVER": "resilvering"}.get(scan.get("function"), "scanning")
@@ -2914,6 +2963,28 @@ def _nas_lines(model):
             [(f"{count} share{'s' if count != 1 else ''}", "")],
         ],
     )
+    smb = found.get("smb") or {}
+    if smb.get("shares") or smb.get("state") == "RUNNING":
+        running, count = smb.get("state") == "RUNNING", smb.get("shares") or 0
+        lines += _phrases(
+            "SMB",
+            [
+                [((smb.get("state") or "unknown").lower(), "g" if running else "r" if count else "d")],
+                [(f"{count} share{'s' if count != 1 else ''}", "")],
+            ],
+        )
+    backups = []
+    for backup in found.get("time_machine") or []:
+        if backup["retired"]:
+            backups.append([(backup["name"], "b"), (" retired", "d")])
+            continue
+        when = f" backed up {_since(backup.get('ago'))}" if backup["last_backup"] else " no backup yet"
+        late = not backup["last_backup"] or (backup.get("ago") or 0) // DAY >= TIME_MACHINE_LATE_DAYS
+        size = _sizes(backup["used"], backup["quota"]) if backup["quota"] else _size(backup["used"])
+        snapshots = _size(backup["snapshots_used"])
+        backups.append([(backup["name"], "b"), (when, "y" if late else "d"), (f", {size}, snapshots {snapshots}", "")])
+    if backups:
+        lines += _phrases("Macs", backups)
     alerts = found.get("alerts") or []
     if not alerts:
         lines += _phrases("Alerts", [[("none", "d")]])

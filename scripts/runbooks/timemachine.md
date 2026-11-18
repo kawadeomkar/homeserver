@@ -67,13 +67,15 @@ SMB, the login, its directory's owner, the share, and the SMB service enabled an
 
 - On the Mac: `tmutil destinationinfo` names the destination; `tmutil listbackups` lists the backups; bring one file
   back through Time Machine's own window.
+- `just status nas` shows each Mac's backup on its `Macs` line: when the newest completed, its use against its quota,
+  and what its snapshots hold. A backup ten days old or more is a thing to do, and so is one never completed.
 - On the NAS, read-only: the dataset's snapshots (Datasets, the Mac's dataset, Snapshots) show an `aapltm-<epoch>`
   within two minutes of each completed backup, and a `weekly-` one each Sunday.
 - **Over the first months**, until the disk image has grown to the Mac's limit and for eight weeks after: the dataset's
-  space used by snapshots (`usedbysnapshots`, on its page in TrueNAS) stays well inside the room between the Mac's
-  limit and the quota. Once the image is full, each backup overwrites blocks the snapshots keep for up to eight weeks.
-  If it nears the quota, raise `quota_gib` and `just deploy truenas`, or lower the Mac's limit. TrueNAS's quota alerts
-  come first, and `just status` shows them.
+  space used by snapshots (`usedbysnapshots`: `just status nas`, or the dataset's page) stays well inside the room
+  between the Mac's limit and the quota. Once the image is full, each backup overwrites blocks the snapshots keep for
+  up to eight weeks. If it nears the quota, raise `quota_gib` and `just deploy truenas`, or lower the Mac's limit.
+  TrueNAS's quota alerts come first, and `just status` shows them, and its own at 80% of the quota.
 
 ## Rotating the SMB password
 
