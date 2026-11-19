@@ -2,6 +2,8 @@
 
 import importlib.util
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import ClassVar
 
@@ -139,6 +141,32 @@ info = load("truenas_info", ROLE / "library" / "truenas_info.py")
 TIB = 2**40
 SERIAL = "SERIAL-MUST-NOT-LEAK"
 HASH = "HASH-MUST-NOT-LEAK"
+# What TrueNAS answers beside what just status keeps, none of which it may return: a disk's model, a vdev's own name
+# (its path's, which on a pool made by hand on a by-id path carries the disk's serial), a port's MAC, and an NFSv4
+# client's name for itself and the files it holds open.
+MODEL = "MODEL-MUST-NOT-LEAK"
+VDEV_NAME = "VDEV-NAME-MUST-NOT-LEAK"
+LINK_ADDRESS = "LINK-ADDRESS-MUST-NOT-LEAK"
+CLIENT_NAME = "Linux NFSv4.2 CLIENT-NAME-MUST-NOT-LEAK"
+OPEN_FILE = "/OPEN-FILE-MUST-NOT-LEAK"
+
+
+def disk_vdev(disk, status="ONLINE", guid="1", unavail_disk=None, **errors):
+    """A disk in pool.query's topology as libzfs gives it, with the device and disk TrueNAS works out from its path
+    (none for a disk that is gone, which unavail_disk then names, a disk.query entry)."""
+    stats = {"read_errors": 0, "write_errors": 0, "checksum_errors": 0, "ops": [0] * 7, "bytes": [0] * 7} | errors
+    return {
+        "name": VDEV_NAME,
+        "type": "DISK",
+        "path": f"/dev/disk/by-partuuid/{guid}",
+        "guid": guid,
+        "status": status,
+        "stats": stats,
+        "children": [],
+        "device": f"{disk}p1" if disk else None,
+        "disk": disk,
+        "unavail_disk": unavail_disk,
+    }
 
 
 def size(value):
@@ -204,7 +232,34 @@ class ScriptedAPI:
                     "errors": 2,
                     "bytes_processed": TIB,
                 },
-                "topology": {"data": [{"type": "RAIDZ1", "children": [{"type": "DISK", "serial": SERIAL}]}]},
+                # A disk with checksum errors, one gone that TrueNAS knows, one gone it does not, and a cache disk.
+                "topology": {
+                    "data": [
+                        {
+                            "name": "raidz1-0",
+                            "type": "RAIDZ1",
+                            "guid": "10",
+                            "status": "DEGRADED",
+                            "stats": {"read_errors": 0, "write_errors": 0, "checksum_errors": 0},
+                            "children": [
+                                disk_vdev("nvme1n1", guid="11", checksum_errors=3),
+                                disk_vdev(
+                                    None,
+                                    "UNAVAIL",
+                                    "12",
+                                    {"name": "nvme2n1", "serial": SERIAL, "model": MODEL},
+                                    read_errors=2,
+                                ),
+                                disk_vdev(None, "REMOVED", "4242"),
+                            ],
+                        }
+                    ],
+                    "cache": [disk_vdev("nvme4n1", guid="14")],
+                    "log": [],
+                    "spare": [],
+                    "special": [],
+                    "dedup": [],
+                },
             },
             {
                 "id": 2,
@@ -215,7 +270,7 @@ class ScriptedAPI:
                 "path": "/mnt/ephemeral",
                 "autotrim": {"rawvalue": "on"},
                 "scan": None,
-                "topology": {"data": [{"type": "DISK"}]},
+                "topology": {"data": [disk_vdev("sda", guid="2")]},
             },
         ],
         "pool.dataset.query": [
@@ -294,6 +349,30 @@ class ScriptedAPI:
                 "state": {"state": "PENDING"},
             },
         ],
+        # With thresholds, each [celsius, critical celsius] (plugins/disk_/temperature.py at TS-25.10.7); a disk with no
+        # sensor TrueNAS can read has nulls, and an older answer a bare null.
+        "disk.temperatures": {"nvme0n1": [45.0, 80.85], "nvme1n1": [36.0, 80.85], "sda": [None, None], "vda": None},
+        # rmtab's entries, one per export (plugins/nfs_/status.py at TS-25.10.7)...
+        "nfs.get_nfs3_clients": [
+            {"ip": "192.0.2.20", "export": "/mnt/persistent/proxmox/vm"},
+            {"ip": "192.0.2.20", "export": "/mnt/persistent/proxmox/backup"},
+        ],
+        # ...and the kernel's NFSv4 clients, an address with its port, IPv6 in brackets, and one whose info went away.
+        "nfs.get_nfs4_clients": [
+            {
+                "id": "4",
+                "info": {
+                    "clientid": 6273260596088110000,
+                    "address": "192.0.2.31:739",
+                    "status": "confirmed",
+                    "name": CLIENT_NAME,
+                    "Implementation name": CLIENT_NAME,
+                },
+                "states": [{"1": {"type": "open", "access": "rw", "filename": OPEN_FILE}}],
+            },
+            {"id": "5", "info": {"address": "[2001:db8::5]:801", "status": "courtesy"}, "states": []},
+            {"id": "6", "info": {}, "states": []},
+        ],
     }
 
     def __init__(self):
@@ -307,9 +386,41 @@ class ScriptedAPI:
         return self.ANSWERS[method]
 
 
+class StatusAPI(ScriptedAPI):
+    """ScriptedAPI, with what just status also reads of two answers the role reads as well: the NAS's clock in
+    system.info, and in interface.query a port's type, MTU and link, beside its MAC, which nothing may return."""
+
+    ANSWERS: ClassVar[dict] = ScriptedAPI.ANSWERS | {
+        "system.info": ScriptedAPI.ANSWERS["system.info"] | {"datetime": {"$date": 1792540800000}},
+        "interface.query": [
+            {
+                "id": "eno1",
+                "name": "eno1",
+                "type": "PHYSICAL",
+                "aliases": [],
+                "ipv4_dhcp": False,
+                "ipv6_auto": False,
+                "state": {
+                    "name": "eno1",
+                    "aliases": [],
+                    "link_state": "LINK_STATE_UP",
+                    "mtu": 1500,
+                    "active_media_subtype": "2500Mb/s Twisted Pair",
+                    "link_address": LINK_ADDRESS,
+                },
+            }
+        ],
+    }
+
+
 def test_status_reports_the_nas_health_in_the_same_login():
-    api = ScriptedAPI()
+    api = StatusAPI()
+    before = time.time()
     result = info.gather(api, importable=False, status=True)
+    after = time.time()
+    # This machine's clock when the NAS read its own, which the report compares: during the read.
+    read_at = datetime.fromisoformat(result["status"].pop("read_at")).timestamp()
+    assert before - 0.001 <= read_at <= after + 0.001
     assert result["status"] == {
         "uptime_seconds": 86400.5,
         "pools": [
@@ -330,6 +441,13 @@ def test_status_reports_the_nas_health_in_the_same_login():
                     "end_time": "2026-10-12T00:00:00+00:00",
                 },
                 "scrub": {"threshold": 35, "enabled": True},
+                # The data disks in order, then the cache's; a gone disk by the one TrueNAS knew there, else its guid.
+                "disks": [
+                    {"name": "nvme1n1", "status": "ONLINE", "read_errors": 0, "write_errors": 0, "checksum_errors": 3},
+                    {"name": "nvme2n1", "status": "UNAVAIL", "read_errors": 2, "write_errors": 0, "checksum_errors": 0},
+                    {"name": "4242", "status": "REMOVED", "read_errors": 0, "write_errors": 0, "checksum_errors": 0},
+                    {"name": "nvme4n1", "status": "ONLINE", "read_errors": 0, "write_errors": 0, "checksum_errors": 0},
+                ],
             },
             {
                 "name": "ephemeral",
@@ -341,6 +459,9 @@ def test_status_reports_the_nas_health_in_the_same_login():
                 "available": TIB,
                 "scan": None,
                 "scrub": None,
+                "disks": [
+                    {"name": "sda", "status": "ONLINE", "read_errors": 0, "write_errors": 0, "checksum_errors": 0}
+                ],
             },
         ],
         "alerts": [
@@ -387,9 +508,24 @@ def test_status_reports_the_nas_health_in_the_same_login():
                 "last_backup": "2026-10-20T12:00:00+00:00",
             }
         ],
+        "datetime": "2026-10-21T00:00:00+00:00",
+        "temperatures": {
+            "nvme0n1": {"temp": 45.0, "critical": 80.85},
+            "nvme1n1": {"temp": 36.0, "critical": 80.85},
+            "sda": {"temp": None, "critical": None},
+            "vda": {"temp": None, "critical": None},
+        },
+        # Each address once, without its port: nothing else of an NFSv4 client's entry.
+        "nfs_clients": ["192.0.2.20", "192.0.2.31", "2001:db8::5"],
+        "unread": {},
     }
-    assert SERIAL not in repr(result["status"])
+    for secret in (SERIAL, MODEL, VDEV_NAME, LINK_ADDRESS, CLIENT_NAME, OPEN_FILE):
+        assert secret not in repr(result["status"]), secret
     assert api.calls.count("system.info") == 1 and api.calls.count("pool.query") == 1
+    # The reads that may fail on their own come last, the temperatures of every disk with their thresholds.
+    assert api.calls[-3:] == ["disk.temperatures", "nfs.get_nfs3_clients", "nfs.get_nfs4_clients"]
+    assert [params for method, params in api.sent if method == "disk.temperatures"] == [([], True)]
+    assert [params for method, params in api.sent if method.startswith("nfs.")] == [(), ()]
     # The shares are read once, for the shares and the Time Machine backups alike.
     assert api.calls.count("sharing.smb.query") == 1
     assert not {"user.query", "auth.me"} & set(api.calls) and "smb_users" not in result
@@ -514,7 +650,9 @@ def test_without_status_nothing_more_is_asked():
     api = ScriptedAPI()
     result = info.gather(api, importable=False)
     assert "status" not in result
-    assert not {"alert.list", "pool.snapshottask.query", "pool.scrub.query", "pool.snapshot.query"} & set(api.calls)
+    status_reads = {"alert.list", "pool.snapshottask.query", "pool.scrub.query", "pool.snapshot.query"}
+    status_reads |= {"disk.temperatures", "nfs.get_nfs3_clients", "nfs.get_nfs4_clients"}
+    assert not status_reads & set(api.calls)
     assert [share["name"] for share in result["smb_shares"]] == ["tm-laptop", "files"]
     assert result["smb_shares"][0] == {
         "name": "tm-laptop",
@@ -527,6 +665,95 @@ def test_without_status_nothing_more_is_asked():
     assert result["hostname"] == "truenas" and result["datasets"] == [
         d["id"] for d in api.ANSWERS["pool.dataset.query"]
     ]
+
+
+def test_each_interface_with_its_type_mtu_and_speed_and_never_its_mac():
+    result = info.gather(StatusAPI(), importable=False, status=True)
+    assert result["interfaces"] == [
+        {
+            "name": "eno1",
+            "ipv4_dhcp": False,
+            "ipv6_auto": False,
+            "aliases": [],
+            "addresses": [],
+            "link_state": "LINK_STATE_UP",
+            "type": "PHYSICAL",
+            "mtu": 1500,
+            "media": "2500Mb/s Twisted Pair",
+        }
+    ]
+    assert LINK_ADDRESS not in repr(result)
+
+
+class RefusingAPI(ScriptedAPI):
+    """ScriptedAPI, refusing the methods it is given as TrueNAS refuses a call the key may not make."""
+
+    def __init__(self, *refused):
+        super().__init__()
+        self.refused = refused
+
+    def call(self, method, *params):
+        if method in self.refused:
+            self.calls.append(method)
+            raise api.TrueNASCallError(f"{method}: [EPERM] Not authorized")
+        return super().call(method, *params)
+
+
+@pytest.mark.parametrize(
+    ("refused", "temperatures", "clients", "unread", "asked"),
+    [
+        pytest.param(
+            ["disk.temperatures"],
+            False,
+            True,
+            {"temperatures": "disk.temperatures: [EPERM] Not authorized"},
+            ["disk.temperatures", "nfs.get_nfs3_clients", "nfs.get_nfs4_clients"],
+            id="temperatures",
+        ),
+        pytest.param(
+            ["nfs.get_nfs3_clients"],
+            True,
+            False,
+            {"nfs_clients": "nfs.get_nfs3_clients: [EPERM] Not authorized"},
+            ["disk.temperatures", "nfs.get_nfs3_clients"],
+            id="nfsv3-clients",
+        ),
+        pytest.param(
+            ["nfs.get_nfs4_clients"],
+            True,
+            False,
+            {"nfs_clients": "nfs.get_nfs4_clients: [EPERM] Not authorized"},
+            ["disk.temperatures", "nfs.get_nfs3_clients", "nfs.get_nfs4_clients"],
+            id="nfsv4-clients",
+        ),
+    ],
+)
+def test_a_read_that_fails_on_its_own_leaves_its_part_out(refused, temperatures, clients, unread, asked):
+    """The temperatures or the NFS clients refused: that part null, why in unread, and the NAS read all the same, the
+    rest of what it says whole."""
+    api = RefusingAPI(*refused)
+    status = info.gather(api, importable=False, status=True)["status"]
+    whole = info.gather(ScriptedAPI(), importable=False, status=True)["status"]
+    assert (status["temperatures"] is not None, status["nfs_clients"] is not None) == (temperatures, clients)
+    assert status["unread"] == unread
+    assert [m for m in api.calls if m.startswith(("disk.temperatures", "nfs."))] == asked
+    for key in ("pools", "alerts", "snapshot_tasks", "time_machine", "datetime"):
+        assert status[key] == whole[key], key
+
+
+@pytest.mark.parametrize(
+    ("address", "expected"),
+    [
+        ("192.0.2.20:739", "192.0.2.20"),
+        ("[2001:db8::5]:801", "2001:db8::5"),
+        ("192.0.2.20", "192.0.2.20"),
+        ("2001:db8::5", "2001:db8::5"),
+        ("", ""),
+        (None, ""),
+    ],
+)
+def test_an_nfs4_clients_address_without_its_port(address, expected):
+    assert info._client_address(address) == expected
 
 
 @pytest.mark.parametrize(

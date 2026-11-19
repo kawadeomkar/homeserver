@@ -22,7 +22,7 @@ Description: Read the homeserver's machines without changing them, and report wh
 - Reads the host the play runs on, as status_source names it, and leaves what it found in the fact status_found for the report entry point. Every command goes through the role's module status_read, which runs them at once and refuses any that is not on its read list.
 - On the Proxmox host (proxmox) it reads the host, its storages and the VMs of status_vms; every other VM is shown as Proxmox sees it, and never judged.
 - For the cluster (cluster), on this machine, it reads the nodes, the apps (each Ingress's Service, then the Deployment it selects, and every Deployment a Flux Kustomization under status_cluster_apps_path applies), Flux, the certificates, the nodes' kubelet statistics, Alertmanager's alerts, etcd's state and the newest commit of the branch Flux syncs. It reads the credentials under no_log, keeping only the server the kubeconfig names and when each client certificate expires, and reports another cluster's credentials rather than use them. It never reads a Secret.
-- For the NAS (nas) it reads nothing itself, and works out what status_nas_state says, the result of truenas_info with its status option, which roles/truenas's status entry point reads in one login - the pools' health, capacity and last scrub, TrueNAS's alerts, the snapshot tasks' last runs, the NFS and SMB services, and each Time Machine backup, judged by the Macs of status_nas_macs.
+- For the NAS (nas) it reads nothing itself, and works out what status_nas_state says, the result of truenas_info with its status option, which roles/truenas's status entry point reads in one login - the ports, the pools' health, capacity and last scrub, each disk's temperature, state and errors, TrueNAS's alerts, the snapshot tasks' last runs, the NFS and SMB services, who has the NFS shares mounted, named by status_nas_known_clients, the services that run though status_nas_services keeps them stopped, the NAS's clock against this machine's, and each Time Machine backup, judged by the Macs of status_nas_macs.
 - Unless status_probe_apps is off, asks from this machine the addresses of the apps it found (the cluster's, and an app on a VM of its own) with the role's module status_probe, checking no certificate and sending no credentials.
 - Reads only the sources the sections of status_types need (the filter status_host_reads); on the Proxmox host it says what its Tailscale says first, in the fact status_early.
 - A host that does not answer is recorded as such, not a failure, so the report can say so.
@@ -322,6 +322,26 @@ Description: Read the homeserver's machines without changing them, and report wh
     
   
 
+  - **status_nas_services**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: The NAS's services as its configuration keeps them, {name: {enabled, state}} as roles/truenas takes them: one that runs while it is to be stopped is a problem. Empty judges none.
+  
+  
+  
+
+  - **status_nas_known_clients**
+    - **Required**: false
+    - **Type**: dict
+    - **Default**: {}
+  
+    - **Description**: The machines of this setup, {address: name}, by which the report names who has the NAS's NFS shares mounted: any other address is a problem. Empty judges none, and each client is shown by its address.
+  
+  
+  
+
   - **status_tailscale_state**
     - **Required**: false
     - **Type**: dict
@@ -449,7 +469,7 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Type**: dict
     - **Default**: {}
   
-    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, time_machine, time_machine_quota, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns. One left out is suggested by text alone.
+    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, nas_clock, time_machine, time_machine_quota, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns. One left out is suggested by text alone.
   
   
   
@@ -564,7 +584,7 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Type**: dict
     - **Default**: {}
   
-    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, time_machine, time_machine_quota, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns. One left out is suggested by text alone.
+    - **Description**: The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials, allowlist, secrets, nas, nas_release, nas_network, nas_clock, time_machine, time_machine_quota, backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns. One left out is suggested by text alone.
   
   
   
@@ -611,19 +631,21 @@ Description: Read the homeserver's machines without changing them, and report wh
 | [status_nas_state](defaults/main.yml#L60)   | dict | `{}` |    
 | [status_nas_release](defaults/main.yml#L61)   | str |  |    
 | [status_nas_macs](defaults/main.yml#L65)   | list | `[]` |    
-| [status_tailscale_state](defaults/main.yml#L67)   | dict | `{}` |    
-| [status_parallel](defaults/main.yml#L69)   | int | `8` |    
-| [status_timeout](defaults/main.yml#L70)   | int | `30` |    
-| [status_hosts](defaults/main.yml#L73)   | list | `[]` |    
-| [status_report_file](defaults/main.yml#L74)   | str |  |    
-| [status_color](defaults/main.yml#L75)   | bool | `False` |    
-| [status_quiet](defaults/main.yml#L76)   | bool | `False` |    
-| [status_read_at](defaults/main.yml#L79)   | str |  |    
-| [status_now](defaults/main.yml#L80)   | int | `0` |    
-| [status_probe_apps](defaults/main.yml#L83)   | bool | `True` |    
-| [status_probe_timeout](defaults/main.yml#L84)   | int | `5` |    
-| [status_admin](defaults/main.yml#L87)   | list | `[]` |    
-| [status_commands](defaults/main.yml#L96)   | dict | `{}` |    
+| [status_nas_services](defaults/main.yml#L68)   | dict | `{}` |    
+| [status_nas_known_clients](defaults/main.yml#L71)   | dict | `{}` |    
+| [status_tailscale_state](defaults/main.yml#L73)   | dict | `{}` |    
+| [status_parallel](defaults/main.yml#L75)   | int | `8` |    
+| [status_timeout](defaults/main.yml#L76)   | int | `30` |    
+| [status_hosts](defaults/main.yml#L79)   | list | `[]` |    
+| [status_report_file](defaults/main.yml#L80)   | str |  |    
+| [status_color](defaults/main.yml#L81)   | bool | `False` |    
+| [status_quiet](defaults/main.yml#L82)   | bool | `False` |    
+| [status_read_at](defaults/main.yml#L85)   | str |  |    
+| [status_now](defaults/main.yml#L86)   | int | `0` |    
+| [status_probe_apps](defaults/main.yml#L89)   | bool | `True` |    
+| [status_probe_timeout](defaults/main.yml#L90)   | int | `5` |    
+| [status_admin](defaults/main.yml#L93)   | list | `[]` |    
+| [status_commands](defaults/main.yml#L102)   | dict | `{}` |    
 
 
 

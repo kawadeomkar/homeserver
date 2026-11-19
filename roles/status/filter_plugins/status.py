@@ -25,6 +25,7 @@ import html
 import importlib.util
 import ipaddress
 import json
+import math
 import re
 import sys
 from datetime import UTC, datetime
@@ -1181,6 +1182,15 @@ FIRST_SENTENCE = re.compile(r"(.+?[.!?])\s+(?=[A-Z])", re.S)
 SCRUB_GRACE_DAYS = 8
 # A Time Machine backup whose newest is this many days old or more is a thing to do, never a problem: a laptop travels.
 TIME_MACHINE_LATE_DAYS = 10
+# A disk this many degrees Celsius below its own critical temperature, or nearer, is a thing to do. At or above it,
+# TrueNAS's own alert (Disk Temperature Is Too Hot, critical) is among the alerts already.
+DISK_HOT_MARGIN = 10
+# The NAS's clock this many seconds or more from this machine's, either way, is a thing to do.
+CLOCK_DRIFT = 60
+# A port's speed as TrueNAS words its link: 10000Mb/s Twisted Pair on Linux, 1000baseT <full-duplex> or
+# 10Gbase-SR in its API's examples.
+LINK_SPEED = re.compile(r"(\d+(?:\.\d+)?)\s*([MG])b/s|(\d+)(G?)base", re.I)
+ERROR_COUNTS = ("read_errors", "write_errors", "checksum_errors")
 
 
 def _plain_text(text):
@@ -1240,12 +1250,136 @@ def _time_machine(backups, macs):
     return mine + [entry(name, backup) for name, backup in found.items()]
 
 
-def nas(state, release="", macs=()):
-    """What the NAS says, from truenas_info with its status option (roles/truenas's status entry point): each pool's
-    health, capacity and last scrub, TrueNAS's alerts, each periodic snapshot task's last run, the NFS and SMB services,
-    each Time Machine backup against `macs`, the Macs the configuration has, each {share, retired}, and the release it
-    runs against `release`, the one its role is written for. A NAS that did not answer, refused the key or presented
-    another certificate than the pinned one is {"unread": why}."""
+def link_speed(media):
+    """A port's speed from how TrueNAS words its link: 10 Gb/s from 10000Mb/s Twisted Pair, 1 Gb/s from
+    1000baseT <full-duplex>, 2.5 Gb/s from 2500baseT; the words themselves when they hold no speed."""
+    text = str(media or "").strip()
+    found = LINK_SPEED.search(text)
+    if not found:
+        return text or "speed unknown"
+    if found.group(1):
+        mbit = float(found.group(1)) * (1000 if found.group(2).upper() == "G" else 1)
+    else:
+        mbit = float(found.group(3)) * (1000 if found.group(4) else 1)
+    return f"{mbit / 1000:g} Gb/s" if mbit >= 1000 else f"{mbit:g} Mb/s"
+
+
+def _link(interfaces):
+    """The NAS's ports, its physical interfaces (a bridge, a VLAN or a link aggregation is none): how many there are,
+    how many are up, each up one's speed, and the largest MTU among those, None with none up."""
+    ports = [i for i in interfaces or [] if isinstance(i, dict) and str(i.get("type") or "PHYSICAL") == "PHYSICAL"]
+    up = [p for p in ports if p.get("link_state") == "LINK_STATE_UP"]
+    mtus = [p["mtu"] for p in up if isinstance(p.get("mtu"), int) and not isinstance(p["mtu"], bool)]
+    return {
+        "ports": len(ports),
+        "up": len(up),
+        "speeds": [link_speed(p.get("media")) for p in up],
+        "mtu": max(mtus) if mtus else None,
+    }
+
+
+def whole_celsius(value):
+    """Degrees Celsius as the report shows them: whole, a half rounded up; None for no reading."""
+    return math.floor(value + 0.5) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _natural(name):
+    """A device name's sort key, nvme2n1 before nvme10n1."""
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", name)]
+
+
+def _nas_disks(state, health):
+    """Every disk, grouped by pool: each pool's in its topology's order (truenas_info's status read), then the boot
+    pool's, which pool.query leaves out and disk.details names (imported_zpool), then each disk in no imported pool;
+    each with its reading and critical temperature in whole degrees Celsius (None where TrueNAS has none), its state
+    and ZFS's error counts (none for the boot pool's, which are not read). disk.details also holds each disk's serial
+    and model, which are never kept. Also whether the temperatures were read at all."""
+    temperatures = health.get("temperatures")
+    read = isinstance(temperatures, dict)
+    temperatures = temperatures if read else {}
+    out, seen = [], set()
+
+    def add(name, pool, vdev):
+        if not name or name in seen:
+            return
+        seen.add(name)
+        reading = temperatures.get(name) if isinstance(temperatures.get(name), dict) else {}
+        out.append(
+            {
+                "name": name,
+                "pool": pool,
+                "temp": whole_celsius(reading.get("temp")),
+                "critical": whole_celsius(reading.get("critical")),
+                "status": str(vdev.get("status") or ""),
+                **{key: vdev.get(key) or 0 for key in ERROR_COUNTS},
+            }
+        )
+
+    pools = [p for p in health.get("pools") or [] if isinstance(p, dict)]
+    for pool in pools:
+        for disk in pool.get("disks") or []:
+            if isinstance(disk, dict):
+                add(str(disk.get("name") or ""), str(pool.get("name") or ""), disk)
+    imported = {str(p.get("name") or "") for p in pools}
+    details = [d for d in state.get("disks") or [] if isinstance(d, dict) and d.get("name")]
+    boot = [(str(d["imported_zpool"]), str(d["name"])) for d in details if d.get("imported_zpool")]
+    for pool, name in sorted(boot, key=lambda disk: (disk[0], _natural(disk[1]))):
+        if pool not in imported:
+            add(name, pool, {})
+    in_pools = {name for _, name in boot}
+    rest = ({str(d["name"]) for d in details} | {str(name) for name in temperatures}) - seen - in_pools
+    for name in sorted(rest, key=_natural):
+        add(name, "", {})
+    return out, read
+
+
+def _address_key(address):
+    """An address as one compares: 192.0.2.20 also for ::ffff:192.0.2.20; the text itself when it is none."""
+    try:
+        ip = ipaddress.ip_address(str(address).strip())
+    except ValueError:
+        return str(address).strip()
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return str(mapped or ip)
+
+
+def _nfs_clients(addresses, known):
+    """Who has the NFS shares mounted: each address named by `known` ({address: name}, the machines of this setup),
+    first in its order, then every other, named by none. None when they were not read."""
+    if not isinstance(addresses, list):
+        return None
+    names = {_address_key(address): str(name) for address, name in (known or {}).items()}
+    order = list(names)
+    clients = [{"address": a, "name": names.get(a, "")} for a in dict.fromkeys(_address_key(a) for a in addresses)]
+    return sorted(clients, key=lambda c: order.index(c["address"]) if c["name"] else len(order))
+
+
+def _unexpected_clients(clients, known):
+    """The NFS clients that are no machine of this setup; none when the configuration names no machine."""
+    return [c["address"] for c in clients or [] if not c["name"]] if known else []
+
+
+def _unexpected_services(services, configured):
+    """The services that run though the configuration keeps them stopped: `configured` is {name: {enabled, state}},
+    as roles/truenas takes them."""
+    out = []
+    for name, wanted in (configured or {}).items():
+        running = str(((services or {}).get(name) or {}).get("state") or "") == "RUNNING"
+        if isinstance(wanted, dict) and str(wanted.get("state") or "") == "stopped" and running:
+            out.append(str(name))
+    return out
+
+
+def nas(state, release="", macs=(), services=None, clients=None):
+    """What the NAS says, from truenas_info with its status option (roles/truenas's status entry point): its ports,
+    each pool's health, capacity and last scrub, each disk's temperature, state and errors, TrueNAS's alerts, each
+    periodic snapshot task's last run, the NFS and SMB services, who has the NFS shares mounted, each Time Machine
+    backup against `macs`, the Macs the configuration has, each {share, retired}, the release it runs against
+    `release`, the one its role is written for, the services that run against `services`, the configuration's
+    ({name: {enabled, state}}), and its clock against this machine's. `clients` names the machines of this setup by
+    address, which the NFS clients are named by. A NAS that did not answer, refused the key or presented another
+    certificate than the pinned one is {"unread": why}; a read of the disks' temperatures or of the NFS clients that
+    failed leaves that part out, and says why in `errors`."""
     state = state if isinstance(state, dict) else {}
     health = state.get("status")
     if not state.get("api_host") or not isinstance(health, dict):
@@ -1273,6 +1407,14 @@ def nas(state, release="", macs=()):
         )
     nfs = (state.get("services") or {}).get("nfs") or {}
     smb = (state.get("services") or {}).get("cifs") or {}
+    disks, temperatures_read = _nas_disks(state, health)
+    unread = health.get("unread") if isinstance(health.get("unread"), dict) else {}
+    errors = [f"the disks' temperatures: {unread['temperatures']}"] if unread.get("temperatures") else []
+    errors += [f"the NFS clients: {unread['nfs_clients']}"] if unread.get("nfs_clients") else []
+    # Seconds the NAS's clock is ahead of this machine's, behind when negative; truenas_info read this machine's
+    # halfway through the call that read the NAS's.
+    nas_clock, here = _when(health.get("datetime")), _when(health.get("read_at"))
+    nfs_clients = _nfs_clients(health.get("nfs_clients"), clients)
     return {
         "name": str(state.get("hostname") or ""),
         "address": str(state["api_host"]),
@@ -1281,7 +1423,11 @@ def nas(state, release="", macs=()):
         "ready": bool(state.get("ready")),
         "pending_network": bool(state.get("network_pending_changes")),
         "uptime": health.get("uptime_seconds"),
+        "clock_drift": round(nas_clock - here) if nas_clock is not None and here is not None else None,
+        "link": _link(state.get("interfaces")),
         "pools": pools,
+        "disks": disks,
+        "temperatures_read": temperatures_read,
         "alerts": [
             {
                 "level": str(a.get("level") or "").upper(),
@@ -1306,13 +1452,17 @@ def nas(state, release="", macs=()):
             "enabled": bool(nfs.get("enable")),
             "state": str(nfs.get("state") or ""),
             "shares": sum(1 for share in state.get("nfs_shares") or [] if share.get("enabled", True)),
+            "clients": nfs_clients,
         },
+        "unexpected_clients": _unexpected_clients(nfs_clients, clients),
         "smb": {
             "enabled": bool(smb.get("enable")),
             "state": str(smb.get("state") or ""),
             "shares": sum(1 for share in state.get("smb_shares") or [] if share.get("enabled", True)),
         },
+        "unexpected_services": _unexpected_services(state.get("services"), services),
         "time_machine": _time_machine(health.get("time_machine"), macs),
+        "errors": errors,
     }
 
 
@@ -1842,6 +1992,10 @@ def _nas_attention(found, commands):
     if found.get("pending_network"):
         text = "TrueNAS holds interface changes that were never committed"
         out.append(_item("todo", "nas", text, commands.get("nas_network", "")))
+    drift = found.get("clock_drift")
+    if drift is not None and abs(drift) >= CLOCK_DRIFT:
+        text = f"the NAS's clock is {_drift_text(abs(drift))} {'behind' if drift < 0 else 'ahead of'} this machine's"
+        out.append(_item("todo", "nas", text, commands.get("nas_clock", "")))
     for pool in found.get("pools") or []:
         name = pool["name"]
         if not pool["healthy"] or pool["status"] != "ONLINE":
@@ -1863,6 +2017,17 @@ def _nas_attention(found, commands):
             if days > scrub["threshold"] + SCRUB_GRACE_DAYS:
                 text = f"its last scrub was {days} d ago, though its task scrubs every {scrub['threshold']} d"
                 out.append(_item("todo", name, text))
+    for disk in found.get("disks") or []:
+        name, temp, critical = disk["name"], disk.get("temp"), disk.get("critical")
+        # At or above its critical temperature, TrueNAS's own alert says so among the alerts.
+        if _hot(disk) and temp < critical:
+            text = f"the disk is at {temp} °C, within {DISK_HOT_MARGIN} °C of its critical temperature"
+            out.append(_item("todo", name, f"{text} of {critical} °C"))
+        counts = _error_counts(disk)
+        if counts:
+            total = sum(disk.get(key) or 0 for key in ERROR_COUNTS)
+            text = f"the disk has {and_list(counts)} error{'s' if total != 1 else ''} in {disk['pool'] or 'no pool'}"
+            out.append(_item("todo", name, text))
     for task in found.get("snapshots") or []:
         if task["enabled"] and task["state"] == "ERROR":
             text = f"the {task['every']} snapshots of {task['dataset']} failed: {task['error'] or 'no reason given'}"
@@ -1877,12 +2042,18 @@ def _nas_attention(found, commands):
         text = f"the NFS service is {nfs.get('state', '').lower() or 'not running'}, so its {count} share"
         text += f"{'s are' if count != 1 else ' is'} not served"
         out.append(_item("problem", "nfs", text, commands.get("nas", "")))
+    for address in found.get("unexpected_clients") or []:
+        text = f"an NFS share is mounted from {address}, which is no machine of this setup"
+        out.append(_item("problem", "nfs", text))
     smb = found.get("smb") or {}
     if smb.get("shares") and smb.get("state") != "RUNNING":
         count = smb["shares"]
         text = f"the SMB service is {smb.get('state', '').lower() or 'not running'}, so its {count} share"
         text += f"{'s are' if count != 1 else ' is'} not served"
         out.append(_item("problem", "smb", text, commands.get("nas", "")))
+    for service in found.get("unexpected_services") or []:
+        text = f"{service} is running, though the configuration keeps it stopped"
+        out.append(_item("problem", "nas", text, commands.get("nas", "")))
     # A Mac the configuration does not name, and a retired one, are only listed.
     for backup in found.get("time_machine") or []:
         if not backup["configured"] or backup["retired"]:
@@ -1920,6 +2091,23 @@ def _nas_attention(found, commands):
 def _late(backup):
     """Whether a Time Machine backup's newest is TIME_MACHINE_LATE_DAYS old or more."""
     return backup.get("ago") is not None and backup["ago"] // DAY >= TIME_MACHINE_LATE_DAYS
+
+
+def _hot(disk):
+    """Whether a disk reads DISK_HOT_MARGIN degrees below its own critical temperature or nearer, or above it, in the
+    whole degrees the report shows."""
+    temp, critical = disk.get("temp"), disk.get("critical")
+    return temp is not None and critical is not None and temp >= critical - DISK_HOT_MARGIN
+
+
+def _error_counts(disk):
+    """A disk's errors as the report words them: 1 read, 2 write, 3 checksum; none that are 0."""
+    return [f"{disk[key]} {key.split('_')[0]}" for key in ERROR_COUNTS if disk.get(key)]
+
+
+def _drift_text(seconds):
+    """How far apart two clocks are: in seconds under ten minutes, as an age above."""
+    return f"{seconds} s" if seconds < 600 else _ago(seconds)
 
 
 def _network_of(address, networks):
@@ -2213,9 +2401,9 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
     empty means every one. `probes` is what status_probe saw, `found`'s own probes when not given, `admin` the admin
     pages ({name, url, and tailscale_node for the page the Proxmox host serves itself}) to list, `commands` the
     commands to suggest by purpose (upgrade, resume with {names}, talos_upgrade, credentials, allowlist, secrets, nas,
-    nas_release, nas_network, time_machine, time_machine_quota, backup, backup_target, etcd_snapshot, tailscale,
-    tailscale_login, split_dns), `now` seconds since the epoch, `tailnet_dns` what tailscale dns status --json said on
-    this machine, if it runs Tailscale, `found`'s own when not given."""
+    nas_release, nas_network, nas_clock, time_machine, time_machine_quota, backup, backup_target, etcd_snapshot,
+    tailscale, tailscale_login, split_dns), `now` seconds since the epoch, `tailnet_dns` what tailscale dns status
+    --json said on this machine, if it runs Tailscale, `found`'s own when not given."""
     shown, setup, commands = types_shown(types), dict(setup or {}), dict(commands or {})
     needed = sources(types)
     found = found or {}
@@ -2354,13 +2542,15 @@ def _uptime(seconds):
     return f"{minutes} m"
 
 
-def _phrases(key, phrases, indent=1, width=11):
-    """A key and its phrases (each a list of (text, style)), joined by " · " and wrapped between phrases."""
-    lines = [Line().add(" " * indent).cell(key, width, "k")]
+def _phrases(key, phrases, indent=1, width=11, head=None):
+    """A key and its phrases (each a list of (text, style)), joined by " · " and wrapped between phrases. `head`, a
+    line begun elsewhere, takes the key's place, and the lines after it are indented as far as it reaches."""
+    lines = [head if head is not None else Line().add(" " * indent).cell(key, width, "k")]
+    hang = len(head) if head is not None else indent + width
     for i, phrase in enumerate(p for p in phrases if p):
         size = sum(len(t) for t, _ in phrase)
         if i and len(lines[-1]) + 3 + size > WIDTH:
-            lines.append(Line().add(" " * (indent + width)))
+            lines.append(Line().add(" " * hang))
         elif i:
             lines[-1].add(" · ", "d")
         for text, style in phrase:
@@ -2950,6 +3140,38 @@ def _scan_text(pool):
     return text, "r" if errors else "d"
 
 
+def _disk_phrase(disk, temperatures):
+    """A disk on its pool's Disks line: its name, its temperature when they were read (yellow within DISK_HOT_MARGIN
+    of its critical one, red at or above it, — for no reading), and, in brackets, a state other than ONLINE (red) and
+    ZFS's errors (yellow): nvme3n1 33 (3 checksum)."""
+    phrase = [(disk["name"], "")]
+    temp, critical = disk.get("temp"), disk.get("critical")
+    if temperatures and temp is None:
+        phrase.append((" —", "d"))
+    elif temperatures:
+        phrase.append((f" {temp}", ("r" if temp >= critical else "y") if _hot(disk) else ""))
+    status = disk.get("status") or ""
+    faults = ([status.lower()] if status and status != "ONLINE" else []) + _error_counts(disk)
+    if faults:
+        phrase.append((f" ({', '.join(faults)})", "r" if status and status != "ONLINE" else "y"))
+    return phrase
+
+
+def _mounted_by(clients, unexpected):
+    """Who has the NFS shares mounted, a machine of this setup by its name and any other by its address, in red when
+    it is `unexpected`; nothing when they were not read."""
+    if clients is None:
+        return []
+    if not clients:
+        return [("mounted by nothing", "d")]
+    phrase = [("mounted by ", "")]
+    for i, client in enumerate(clients):
+        if i:
+            phrase.append((" and " if i == len(clients) - 1 else ", ", ""))
+        phrase.append((client["name"] or client["address"], "r" if client["address"] in unexpected else ""))
+    return phrase
+
+
 def _nas_lines(model):
     found = model.get("nas") or {}
     if not found or found.get("unread"):
@@ -2957,8 +3179,19 @@ def _nas_lines(model):
     facts = [found["name"], f"TrueNAS {found['version']}" if found["version"] else ""]
     facts.append(f"up {_uptime(found['uptime'])}" if found.get("uptime") is not None else "")
     lines = [Line().add("NAS", "h").add("  ").add(" · ".join(f for f in facts if f), "d")]
+    link = found.get("link") or {}
+    if link.get("ports"):
+        phrases = [[(speed, "")] for speed in link.get("speeds") or []]
+        if link.get("mtu") not in (None, 1500):
+            phrases.append([(f"MTU {link['mtu']}", "")])
+        ports = f"{link['up']} of {link['ports']} port{'s' if link['ports'] != 1 else ''} up"
+        lines += _phrases("Network", [*phrases, [(ports, "d" if link["up"] else "r")]])
     pools = found.get("pools") or []
-    width = max([len(p["name"]) for p in pools] + [10]) + 2
+    disks = {}
+    for disk in found.get("disks") or []:
+        disks.setdefault(disk["pool"], []).append(disk)
+    # The pools' names and the disks' groups line up in one column: the boot pool's, and "no pool".
+    width = max([len(p["name"]) for p in pools] + [len(group or "no pool") for group in disks] + [10]) + 2
     for i, pool in enumerate(pools):
         line = Line().add(" ").cell("Pools" if i == 0 else "", 11, "k").cell(pool["name"], width, "b")
         line.cell(pool["layout"], 8, "d")
@@ -2972,6 +3205,12 @@ def _nas_lines(model):
             line.cell(_sizes(pool["used"], pool["total"]), 15)
         line.add(*_scan_text(pool))
         lines.append(line)
+    # The readings' unit in the key, once: they are whole degrees Celsius.
+    label = "Disks °C" if found.get("temperatures_read") else "Disks"
+    for i, (group, members) in enumerate(disks.items()):
+        head = Line().add(" ").cell(label if i == 0 else "", 11, "k")
+        head.cell(group or "no pool", width, "b" if group else "d")
+        lines += _phrases("", [_disk_phrase(d, found.get("temperatures_read")) for d in members], head=head)
     datasets = {}
     for task in found.get("snapshots") or []:
         datasets.setdefault(task["dataset"], []).append(task)
@@ -2998,6 +3237,7 @@ def _nas_lines(model):
         [
             [((nfs.get("state") or "unknown").lower(), "g" if running else "r" if count else "d")],
             [(f"{count} share{'s' if count != 1 else ''}", "")],
+            _mounted_by(nfs.get("clients"), found.get("unexpected_clients") or []),
         ],
     )
     smb = found.get("smb") or {}
@@ -3036,6 +3276,10 @@ def _nas_lines(model):
         backups.append([(name, "b"), when, (", ", ""), size, (f", snapshots {_sizes(backup['snapshots_used'])}", "")])
     if backups:
         lines += _phrases("Macs", backups)
+    unexpected = found.get("unexpected_services") or []
+    if unexpected:
+        services = [[(service, "b"), (" running", "r"), (", configured stopped", "d")] for service in unexpected]
+        lines += _phrases("Services", services)
     alerts = found.get("alerts") or []
     if not alerts:
         lines += _phrases("Alerts", [[("none", "d")]])
@@ -3087,7 +3331,8 @@ def blocks(model, color=False):
     for name in TYPES:
         if name in types and sections[name]:
             out.append((name, [*sections[name](model), Line()]))
-    errors = _error_lines((prox.get("errors") or []) + (clu.get("errors") or []))
+    nas_errors = ((model.get("nas") or {}).get("errors") or []) if "nas" in types else []
+    errors = _error_lines((prox.get("errors") or []) + (clu.get("errors") or []) + nas_errors)
     if errors:
         out.append(("errors", errors))
     if model["attention"]:

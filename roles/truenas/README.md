@@ -70,7 +70,13 @@ and snapshots' share, and its newest `aapltm-<epoch>` snapshot) to what it reads
 `[["dataset", "in", [...]]]` with `select: ["name"]`, TrueNAS's fast path, which reads no property per snapshot, and
 none without such a share; times turned from the API's `{"$date": <milliseconds>}` into RFC 3339), in the same login.
 A share's `dataset_found` is false when its path names no dataset, and an `aapltm-` time more than an hour ahead of
-the controller's clock is ignored.
+the controller's clock is ignored. It also keeps each pool's disks from `pool.query`'s topology, by device name, with
+their state and ZFS's error counts, each interface's type, MTU and link speed (never its MAC), and `system.info`'s
+clock beside the controller's, and reads last, each of which may fail without failing the read (its part then null,
+and why in `unread`): every disk's temperature and critical temperature (`disk.temperatures` with `[]` and `true`,
+from the kernel's sensors, which TrueNAS keeps five minutes), and the addresses that have the NFS shares mounted
+(`nfs.get_nfs3_clients` and `nfs.get_nfs4_clients`, their ports and everything else left out). No disk's serial or
+model is in what it reports.
 It changes nothing, tries each address once (`api_connect_wait: 0`), and never fails: a NAS that does not answer,
 refuses the key or presents another certificate than the pinned one leaves `truenas_status` without an `api_host`, with
 why in its `msg`, and the key goes to no other server. `roles/status` reports what it says.
@@ -351,7 +357,8 @@ The fake always answers, so `tests/unit/test_truenas_client.py` covers in proces
 that never waits, what it never does: TrueNAS refusing a login or a call, rate-limiting logins, dropping the
 connection, failing or never finishing a job, and refusing an interface commit, which must discard the saved change,
 or never seeing the check-in, after which TrueNAS rolls the address back by itself. `tests/integration/test_status.py`
-reads the NAS through the `status` entry point: one login, nothing changed, no secret in the report. The fake cannot
+reads the NAS through the `status` entry point: one login, nothing changed, no secret in the report, and the disks'
+temperatures and the NFS clients refused (the fake's `refused`) without the NAS going unread. The fake cannot
 prove the real NAS behaves the same, so run `just check truenas` against it first.
 
 ## Reference
