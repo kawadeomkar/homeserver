@@ -439,22 +439,23 @@ Without the filter, the sections are shown at the end, and the callback says so 
   answer, a NAS that does not answer or presents another certificate, one login to the NAS with nothing but reads and no
   secret in the report, the Macs' Time Machine backups judged by `timemachine_backups` (`sharing.smb.query` once, one
   `pool.snapshot.query` whose parameters the fake's call log shows, none without a Time Machine share, a retired Mac's
-  share listed, and laptop's backup late while desk's is an hour old: each Mac's time from its own dataset), a the NAS
+  share listed, and laptop's backup late while desk's is an hour old: each Mac's time from its own dataset), the NAS
   section's details (`test_the_nas_sections_details`: the `Network`, `Disks`, `NFS` and `Services` lines exactly and in
   order after the header, matched whether or not it gives the address the NAS answered at, a hot disk, one with checksum
   errors and its pool's problem naming them, ssh running, two NFSv4 clients behind the Proxmox host's address, an NFS
   client of no machine of this setup and one gone quiet, courtesy, which no longer counts, and the clock 95 s behind,
-  the three new reads once each with their parameters, and no disk's serial or model, NFS client's name or open file in
-  the report; then the temperatures and the NFSv4 clients refused, the NAS read all the same without them, saying so),
-  TrueNAS's alerts that quote a disk's serial or model, a disk at its critical temperature, a failed SMART self-test and
-  a pool degraded by a gone disk, each by the disk's device name in the text, the report and `--json`
-  (`test_no_disks_serial_or_model_reaches_the_report`), a failed and a not yet made backup with the reason from the
-  run's log (`fake_pve.backup_run` seeds runs as vzdump leaves them), the host's Tailscale through `fake_tailscale.py`
-  (after `fake_pve_bin` on PATH: a served and an unapproved route, `tailscaled` down, and no other device's or the
-  tailnet's name in the report), each of the four setups' sections and attention list against what it should have, and
-  that no fake's state changes. It also runs `just status` on a pseudo-terminal, replays what it wrote through
-  `tests/vt.py`'s terminal and compares the result with the piped report, with no frame wrapped and no sequence a
-  terminal would not know.
+  each item with what deals with it from `status_commands`, the three new reads once each with their parameters, and no
+  disk's serial or model, NFS client's name or open file in the report; then the temperatures and the NFSv4 clients
+  refused, the NAS read all the same without them, saying so), TrueNAS's alerts that quote a disk's serial or model, a
+  disk at its critical temperature, a failed SMART self-test and a pool degraded by a gone disk, each by the disk's
+  device name in the text, the report and `--json`, and the gone disk on the `Disks` line by the name TrueNAS last knew
+  there (`test_no_disks_serial_or_model_reaches_the_report`), a failed and a not yet made backup with the reason from
+  the run's log (`fake_pve.backup_run` seeds runs as vzdump leaves them), the host's Tailscale through
+  `fake_tailscale.py` (after `fake_pve_bin` on PATH: a served and an unapproved route, `tailscaled` down, and no other
+  device's or the tailnet's name in the report), each of the four setups' sections and attention list against what it
+  should have, and that no fake's state changes. It also runs `just status` on a pseudo-terminal, replays what it wrote
+  through `tests/vt.py`'s terminal and compares the result with the piped report, with no frame wrapped and no sequence
+  a terminal would not know.
 - The fake NAS's alerts, scans and topology follow TrueNAS 25.10's API reference, not a capture (the home NAS's key was
   not at hand). It reports the used and available space of any dataset its state's `space` names, and what a dataset's
   snapshots hold from `snapshot_space`. It answers `pool.snapshot.query` from the snapshot names in its state, with the
