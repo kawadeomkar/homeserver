@@ -2442,8 +2442,9 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
     pages ({name, url, and tailscale_node for the page the Proxmox host serves itself}) to list, `commands` the
     commands to suggest by purpose (upgrade, resume with {names}, talos_upgrade, credentials, allowlist, secrets, nas,
     nas_release, nas_network, nas_clock, nas_disk_heat, nas_disk_errors, nas_clients, time_machine, time_machine_quota,
-    backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns), `now` seconds since the epoch, `tailnet_dns` what tailscale dns status
-    --json said on this machine, if it runs Tailscale, `found`'s own when not given."""
+    backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns), `now` seconds since the epoch,
+    `tailnet_dns` what tailscale dns status --json said on this machine, if it runs Tailscale, `found`'s own when not
+    given."""
     shown, setup, commands = types_shown(types), dict(setup or {}), dict(commands or {})
     needed = sources(types)
     found = found or {}
