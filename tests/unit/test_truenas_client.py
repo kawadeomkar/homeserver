@@ -727,6 +727,13 @@ PERMISSION_ARGS = {
 
 
 class TestPermission:
+    def test_an_entry_it_refuses_is_refused_before_connecting(self, nas, run):
+        fake = nas({"auth.login_with_api_key": True})
+        bad = {**PERMISSION_ARGS["entries"][0], "mode": 504}
+        result = run(permission, {**PERMISSION_ARGS, "entries": [bad]})
+        assert result["failed"] and "is not an octal string" in result["msg"], result
+        assert fake.calls == [], "the NAS was asked something"
+
     def test_a_missing_directory_in_a_dry_run_is_one_a_dataset_of_the_run_makes_or_a_mistake(self, nas, run):
         nas({"auth.login_with_api_key": True, "filesystem.stat": Refuse("[ENOENT] Path does not exist")})
         made = {**PERMISSION_ARGS, "created_paths": ["/mnt/tank/timemachine/laptop"]}
@@ -754,7 +761,11 @@ class TestPermission:
         )
         result = run(permission, {**PERMISSION_ARGS, "entries": [*PERMISSION_ARGS["entries"], other]})
         assert result["failed"] and "studio: filesystem.setperm was accepted but it now has" in result["msg"], result
-        assert result["changed"] and result["actions"] == {"/mnt/tank/timemachine/laptop": "set mode"}
+        # The second directory's setperm ran, so it is in actions too, though it did not take.
+        assert result["changed"] and result["actions"] == {
+            "/mnt/tank/timemachine/laptop": "set mode",
+            "/mnt/tank/timemachine/studio": "set",
+        }
         assert len(fake.called("filesystem.setperm")) == 2
 
 

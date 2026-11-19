@@ -44,10 +44,11 @@ options:
     default: false
   update_together:
     description:
-      - Fields that go to C(<namespace>.update) as a group. When any of them differs, every one of them the entry
-        gives is sent, a nested object as the current one with the wanted keys laid over it; when none differs, none
-        is sent. When a plain field of the group changes too, a nested object goes as the entry gives it, since the
-        current one belongs to the old value and TrueNAS refuses keys the new one does not have.
+      - Fields that go to C(<namespace>.update) as a group. When any of them differs, all of them are sent, each as the
+        entry gives it or, for one it does not give, as the item has it, a nested object as the current one with the
+        wanted keys laid over it; when none differs, none is sent. When a plain field of the group changes too, a
+        nested object goes as the entry gives it, since the current one belongs to the old value and TrueNAS refuses
+        keys the new one does not have.
       - For C(sharing.smb), whose update refuses C(options) without C(purpose), and fills C(options) in from their
         defaults when C(purpose) comes alone (TrueNAS 25.10.7's C(normalize_legacy_fields)), so the two go together.
         Laying the wanted options over the current ones keeps what the entry does not give, such as the Time Machine
@@ -80,15 +81,20 @@ from ansible.module_utils.truenas_api import (
 
 
 def grouped(item, data, changes, together):
-    """The update's fields: those that differ, and with any field of the group every one the entry gives, a nested
-    object as the current one with the wanted keys laid over it, unless a plain field of the group changes too: the
-    current object then belongs to the old value (a share's options to its old purpose), so it goes as wanted."""
+    """The update's fields: those that differ, and with any field of the group the whole group, each as the entry
+    gives it or, for one it does not give, as the item has it. A nested object goes as the current one with the wanted
+    keys laid over it, unless a plain field of the group changes too: the current object then belongs to the old value
+    (a share's options to its old purpose), so it goes as wanted."""
     if not set(changes) & set(together):
         return changes
-    given = [key for key in together if key in data]
-    relaid = not any(key in changes and not isinstance(data[key], dict) for key in given)
+    relaid = not any(key in changes and not isinstance(data.get(key), dict) for key in together if key in data)
     group = {}
-    for key in given:
+    for key in together:
+        if key not in data:
+            # TrueNAS refuses part of the group alone (a share's options without its purpose): send what it has.
+            if key in item:
+                group[key] = item[key]
+            continue
         have, want = item.get(key), data[key]
         group[key] = {**have, **want} if relaid and isinstance(have, dict) and isinstance(want, dict) else want
     return {**changes, **group}

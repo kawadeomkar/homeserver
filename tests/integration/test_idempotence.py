@@ -696,6 +696,31 @@ def test_truenas_smb_stage_refuses_an_unlisted_smb_login(nas):
         assert smb_state(nas)[3]["cifs"]["state"] == "STOPPED"
 
 
+def test_truenas_smb_stage_checks_the_logins_again_before_the_service(nas):
+    """A login the users task was to take out of SMB and that stayed one is refused by the second check, just before
+    the service starts: here the API key's user, which the fake keeps an SMB login."""
+    with fresh_nas(nas):
+        s = read(nas["state"])
+        s["smb_kept"] = [fake_truenas.API_USER]
+        write(nas["state"], s)
+        rc, _, out = run("truenas_smb.yml", smb_vars(nas))
+        assert rc != 0, out[-3000:]
+        assert f"After the users task, SMB logins that the role does not list: {fake_truenas.API_USER}." in out, out[
+            -3000:
+        ]
+        assert smb_state(nas)[3]["cifs"]["state"] == "STOPPED", "SMB started past the second check"
+
+
+def test_a_string_false_for_the_api_users_smb_is_refused(nas):
+    """-e gives truenas_api_user_smb=false as a string, which the role refuses with what to write, before the NAS is
+    asked anything."""
+    with fresh_nas(nas):
+        since = call_count(nas)
+        rc, _, out = run("truenas_smb.yml", smb_vars(nas, truenas_api_user_smb="false"), check=True)
+        assert rc != 0 and 'Given with -e, false is the string "false"' in out, out[-3000:]
+        assert call_count(nas) == since, "the NAS was asked something"
+
+
 def test_truenas_smb_stage_refuses_without_the_connections_reading(nas):
     """With the connection's reading skipped, the login check refuses rather than passing on nothing."""
     with fresh_nas(nas):
@@ -754,6 +779,7 @@ def test_truenas_role_backs_up_a_mac(nas):
         dataset = "persistent/timemachine/laptop"
         assert s["datasets"][dataset]["quota"]["rawvalue"] == str(2048 * 2**30)
         assert s["datasets"][dataset]["refquota"]["rawvalue"] == str(1536 * 2**30)
+        assert s["datasets"]["persistent/timemachine"]["quota"]["rawvalue"] == str(2048 * 2**30)
         assert [t["lifetime_value"] for t in s["snapshot_tasks"] if t["dataset"] == dataset] == [8]
         assert (users["tm-laptop"]["uid"], users["tm-laptop"]["smb"]) == (3101, True)
         assert users["tm-laptop"]["password"] == fake_truenas.password_hash(TM_PASSWORD)

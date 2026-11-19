@@ -1416,6 +1416,9 @@ class FakeTrueNAS:
             raise CallError("user_update.smb: Password must be reset in order to enable SMB authentication")
         combined = {**user, **{k: v for k, v in data.items() if k != "password"}}
         self.check_user(combined, data, "user_update")
+        # A test's stand-in for a change that did not take: the users named in smb_kept stay SMB logins.
+        if user["username"] in self.s.get("smb_kept", []):
+            data = {k: v for k, v in data.items() if k != "smb"}
         user.update({k: v for k, v in data.items() if k in user and k != "password"})
         if data.get("password"):
             user["password"] = password_hash(data["password"])

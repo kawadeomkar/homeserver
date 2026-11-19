@@ -212,6 +212,14 @@ argument_specs:
         description: SMB shares, each with name, which identifies it, and the fields of sharing.smb.create. Never deleted.
       truenas_smb_service:
         type: dict
+        options:
+          enabled:
+            type: bool
+            description: Whether SMB starts at boot.
+          state:
+            type: str
+            choices: [started, stopped]
+            description: Whether SMB runs now.
         description: >-
           The SMB service (cifs) as {enabled, state}, applied as the SMB stage's last step, after its login check when
           it is to run. Null leaves it alone; the services stage refuses cifs.
