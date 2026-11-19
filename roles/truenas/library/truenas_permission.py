@@ -55,7 +55,11 @@ FIELDS = ("path", "user", "group", "mode")
 
 
 class Refused(Exception):
-    """A directory the module will not set, found after connecting."""
+    """A directory the module will not set, found after connecting; `action` when it changed the NAS all the same."""
+
+    def __init__(self, message, action=None):
+        super().__init__(message)
+        self.action = action
 
 
 def entry_problems(entries):
@@ -69,8 +73,10 @@ def entry_problems(entries):
         path = str(entry["path"])
         if set(entry) - set(FIELDS):
             problems.append(f"{path}: unknown field(s) {sorted(set(entry) - set(FIELDS))}")
-        # TrueNAS's setperm refuses a path outside a pool and a pool's own root (_common_perm_path_validate).
-        if not re.fullmatch(r"/mnt/[^/]+/[^/].*", path) or "/." in path or path.endswith("/"):
+        # TrueNAS's setperm refuses a path outside a pool, a pool's own root and anything under .zfs; ZFS names no
+        # directory "." or "..".
+        parts = path.split("/")
+        if len(parts) < 4 or parts[:2] != ["", "mnt"] or any(part in ("", ".", "..", ".zfs") for part in parts[2:]):
             problems.append(f"{path}: not a directory inside a pool, such as /mnt/<pool>/<dataset>")
         # A number is refused: YAML reads an unquoted 0770 as the decimal 504. TrueNAS's UnixPerm takes 000 to 777,
         # and setperm refuses 000.
@@ -116,7 +122,7 @@ def ensure(api, module, entry, created_paths=()):
         api.job("filesystem.setperm", {"path": entry["path"], **payload, "options": {"stripacl": True}})
         have_now = current(api.call("filesystem.stat", entry["path"]))
         if have_now != want:
-            raise Refused(f"{entry['path']}: filesystem.setperm was accepted but it now has {have_now}")
+            raise Refused(f"{entry['path']}: filesystem.setperm was accepted but it now has {have_now}", "set")
     changed = sorted(key for key in want if have[key] != want[key])
     return "set " + ",".join(changed), have, want
 
@@ -142,6 +148,9 @@ def main():
                 if action:
                     actions[path] = action
         except (TrueNASError, Refused) as exc:
+            if getattr(exc, "action", None):
+                # setperm ran: the NAS changed, though not as wanted.
+                actions[entry["path"]] = exc.action
             module.fail_json(msg=str(exc), changed=bool(actions), actions=actions)
     module.exit_json(changed=bool(actions), actions=actions, diff={"before": before, "after": after})
 

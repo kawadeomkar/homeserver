@@ -509,6 +509,37 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
   
   
   
+    
+
+    - **enabled**
+      - **Required**: false
+      - **Type**: bool
+      - **Default**: none
+  
+      - **Description**: Whether SMB starts at boot.
+  
+  
+  
+
+    - **state**
+      - **Required**: false
+      - **Type**: str
+      - **Default**: none
+  
+      - **Description**: Whether SMB runs now.
+  
+        - **Choices**:
+    
+            - started
+    
+            - stopped
+    
+  
+  
+  
+
+
+  
 
   - **truenas_mail**
     - **Required**: false
@@ -780,13 +811,14 @@ Description: Configure TrueNAS Community Edition through its API - address, pool
 | Name | Module | Has Conditions |
 | ---- | ------ | -------------- |
 | smb ¦ Configure SMB | block | False |
+| smb ¦ Stop or disable the SMB service | truenas_service | True |
 | smb ¦ Refuse an SMB login the role does not list | ansible.builtin.assert | True |
 | smb ¦ Apply the SMB service settings | truenas_config | True |
 | smb ¦ Create or correct the users | truenas_user | True |
 | smb ¦ Give each share's directory its owner | truenas_permission | True |
 | smb ¦ Create or update the SMB shares | truenas_resource | True |
 | smb ¦ Refuse an SMB login the role does not list, as the logins now stand | ansible.builtin.assert | True |
-| smb ¦ Start or stop the SMB service | truenas_service | True |
+| smb ¦ Start or enable the SMB service | truenas_service | True |
 
 #### File: tasks/snapshots.yml
 
@@ -1013,15 +1045,16 @@ classDef includeVars stroke:#8e44ad,stroke-width:2px;
 classDef rescue stroke:#665352,stroke-width:2px;
 
   Start-->|Block Start| smb___Configure_SMB0_block_start_0[[smb   configure smb]]:::block
-  smb___Configure_SMB0_block_start_0-->|Task| smb___Refuse_an_SMB_login_the_role_does_not_list0[smb   refuse an smb login the role does not list<br>When: **starts**]:::task
-  smb___Refuse_an_SMB_login_the_role_does_not_list0-->|Task| smb___Apply_the_SMB_service_settings1[smb   apply the smb service settings<br>When: **truenas smb settings   length   0**]:::task
-  smb___Apply_the_SMB_service_settings1-->|Task| smb___Create_or_correct_the_users2[smb   create or correct the users<br>When: **starts or truenas users   length   0 or truenas<br>smb closed users   length   0 or truenas api user<br>smb is not none**]:::task
-  smb___Create_or_correct_the_users2-->|Task| smb___Give_each_share_s_directory_its_owner3[smb   give each share s directory its owner<br>When: **truenas permissions   length   0**]:::task
-  smb___Give_each_share_s_directory_its_owner3-->|Task| smb___Create_or_update_the_SMB_shares4[smb   create or update the smb shares<br>When: **truenas smb shares   length   0**]:::task
-  smb___Create_or_update_the_SMB_shares4-->|Task| smb___Refuse_an_SMB_login_the_role_does_not_list__as_the_logins_now_stand5[smb   refuse an smb login the role does not list <br>as the logins now stand<br>When: **starts**]:::task
-  smb___Refuse_an_SMB_login_the_role_does_not_list__as_the_logins_now_stand5-->|Task| smb___Start_or_stop_the_SMB_service6[smb   start or stop the smb service<br>When: **truenas smb service is not none**]:::task
-  smb___Start_or_stop_the_SMB_service6-.->|End of Block| smb___Configure_SMB0_block_start_0
-  smb___Start_or_stop_the_SMB_service6-->End
+  smb___Configure_SMB0_block_start_0-->|Task| smb___Stop_or_disable_the_SMB_service0[smb   stop or disable the smb service<br>When: **truenas smb service is mapping and not  runs after**]:::task
+  smb___Stop_or_disable_the_SMB_service0-->|Task| smb___Refuse_an_SMB_login_the_role_does_not_list1[smb   refuse an smb login the role does not list<br>When: **checks**]:::task
+  smb___Refuse_an_SMB_login_the_role_does_not_list1-->|Task| smb___Apply_the_SMB_service_settings2[smb   apply the smb service settings<br>When: **truenas smb settings   length   0**]:::task
+  smb___Apply_the_SMB_service_settings2-->|Task| smb___Create_or_correct_the_users3[smb   create or correct the users<br>When: **checks or truenas users   length   0 or truenas<br>smb closed users   length   0 or truenas api user<br>smb is not none**]:::task
+  smb___Create_or_correct_the_users3-->|Task| smb___Give_each_share_s_directory_its_owner4[smb   give each share s directory its owner<br>When: **truenas permissions   length   0**]:::task
+  smb___Give_each_share_s_directory_its_owner4-->|Task| smb___Create_or_update_the_SMB_shares5[smb   create or update the smb shares<br>When: **truenas smb shares   length   0**]:::task
+  smb___Create_or_update_the_SMB_shares5-->|Task| smb___Refuse_an_SMB_login_the_role_does_not_list__as_the_logins_now_stand6[smb   refuse an smb login the role does not list <br>as the logins now stand<br>When: **checks**]:::task
+  smb___Refuse_an_SMB_login_the_role_does_not_list__as_the_logins_now_stand6-->|Task| smb___Start_or_enable_the_SMB_service7[smb   start or enable the smb service<br>When: **truenas smb service is mapping and  runs after**]:::task
+  smb___Start_or_enable_the_SMB_service7-.->|End of Block| smb___Configure_SMB0_block_start_0
+  smb___Start_or_enable_the_SMB_service7-->End
 ```
 
 

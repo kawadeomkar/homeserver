@@ -55,12 +55,12 @@ re-applied, since TrueNAS keeps those on the boot drive. This repo's full proced
 The input checks and the read-only connection (`truenas_info`) run under every tag, so one stage can be checked or
 applied on its own (`just check truenas --tags truenas_nfs`), and a stage whose variables are empty does nothing. The
 order matters: the snapshot tasks follow the datasets they name, which must exist, and the services come last, so that
-NFS starts only once its shares exist. SMB is the exception: the SMB stage starts or stops its own service, as its last
-step, after its login check (below), so that no tag can start SMB without that check, and the role refuses `cifs` in
-`truenas_services`. Every stage leaves alone what it is not given: no dataset, share, snapshot task, alert service or
-service that is not listed is touched, and none is deleted. The users the SMB stage touches without listing them in
-`truenas_users` are the ones it is told to take out of SMB, `truenas_smb_closed_users` and the API key's own user, and
-of those it changes `smb` alone.
+NFS starts only once its shares exist. SMB is the exception: the SMB stage starts its own service as its last step,
+after its login check (below), so that no tag can start SMB without that check, and stops it as its first, so that no
+later failure keeps it running; the role refuses `cifs` in `truenas_services`. Every stage leaves alone what it is not
+given: no dataset, share, snapshot task, alert service or service that is not listed is touched, and none is deleted.
+The users the SMB stage touches without listing them in `truenas_users` are the ones it is told to take out of SMB,
+`truenas_smb_closed_users` and the API key's own user, and of those it changes `smb` alone.
 
 A second entry point, `status` (`tasks_from: status`), is what `just status` runs on the NAS: `truenas_info` with its
 `status` option, which adds each pool's health, capacity, layout and last scrub, TrueNAS's alerts that are not
@@ -132,8 +132,9 @@ truenas_services:
 The design facts a change most often breaks:
 
 - **Every change to the NAS goes through this role.** No UI clicks, ad-hoc API calls or SSH: a fresh install plus one
-  run must rebuild it. Read-only API queries are fine. What the role never does, deleting and rolling back data, is
-  done by hand only where a runbook says how: `scripts/runbooks/teardown.md` and `scripts/runbooks/timemachine.md`.
+  run must rebuild it. Read-only API queries are fine. What the role never does, deleting, rolling back and a snapshot's
+  check clone with its temporary share, is the owner's alone, made in TrueNAS's web UI only where a runbook says how;
+  never an agent's. The runbooks are `scripts/runbooks/teardown.md` and `scripts/runbooks/timemachine.md`.
 - **TrueNAS rate-limits logins** to 20 per minute from one client address, counted in fixed 60-second windows, and
   each module run logs in once. The modules therefore take whole lists (every dataset, every service) rather than
   being looped over, so a full run logs in about 16 times, and the client waits out the window when it is hit
@@ -166,18 +167,20 @@ The design facts a change most often breaks:
   changes who can read the files already in it. An entry with `create_only` makes a dataset the role must not manage
   but a share needs (here the media library) only when it is missing, as after the ephemeral pool's disk is lost,
   since its share cannot be made without it, and otherwise leaves it exactly as it is.
-- **SMB runs only when no SMB login the role does not list exists.** Every local user with `smb` on becomes a
+- **SMB is never left to run with an SMB login the role does not list.** Every local user with `smb` on becomes a
   network login the moment the service starts, and TrueNAS makes every new user an SMB login unless told otherwise,
   so a hand-made full administrator (an API key's user, say) may be one without anyone having noticed while SMB was
-  off. When `truenas_smb_service` would have SMB running, the SMB stage's first task, in a dry run and under the
-  stage's own tag too, refuses to go on while the connection found such a login, naming it, naming
-  `truenas_api_user_smb` when it is the API key's own user (`auth.me`), and saying whether SMB already runs. The
-  remedy is `truenas_smb_closed_users`, which takes the named logins out of SMB and changes nothing else about them,
-  or an entry in `truenas_users` with `smb` false; `truenas_api_user_smb: false` takes the API key's user out. A
+  off. Whenever SMB will run after the run, now or at the next boot, as `truenas_smb_service` asks or, for what it
+  leaves out, as the connection found it, and the stage manages any of SMB, its first task, in a dry run and under the
+  stage's own tag too, refuses to go on while the connection found such a login: it names the login, names
+  `truenas_api_user_smb` when it is the API key's own user (`auth.me`), and says whether SMB already runs, in which
+  case the login can log in until it is closed. The remedy is `truenas_smb_closed_users`, which takes the named logins
+  out of SMB and changes nothing else about them; `truenas_api_user_smb: false` takes the API key's user out. A
   connection whose reading of the logins is missing (its tag skipped) is refused too, never taken as none. Just before
-  the service, the check runs again on the logins as `truenas_user` left them, which it returns, or predicts in a dry
-  run. A run that stops SMB is never refused, so a refusal never keeps SMB running: retire what uses it and the run
-  stops it. TrueNAS allows taking a user out of SMB for any but its built-in users and its first administrator, and
+  a start, the check runs again on the logins as `truenas_user` left them, which it returns, or predicts in a dry run.
+  A run that stops SMB is never refused, and the stop is the stage's first step: retire what uses SMB and the run
+  stops it. `truenas_smb_service` takes `enabled` and `state` alone, so a misspelt key is refused rather than read as
+  none. TrueNAS allows taking a user out of SMB for any but its built-in users and its first administrator, and
   refuses the API key's user's update of itself when two-factor authentication is on and that user has none set up;
   a dry run cannot show that, so check it before the first run that changes the API user.
 - **A user's password is set, never compared.** `user.query` returns each user's password hashes, the NT hash among
@@ -243,7 +246,7 @@ so a rebuild matches, and the system dataset stays on the boot pool, off the sin
 | `persistent/nextcloud`, `persistent/photoprism` | with a cluster: Nextcloud's files, PhotoPrism's originals | `sync=standard`, 1M records |
 | `ephemeral/frigate` | with a cluster: camera recordings | `sync=disabled`, 1M records, quota 500G |
 | `ephemeral/jellyfin` | with a cluster: the media library, from before this repo | `create_only`: properties and NFSv4 ACLs left alone |
-| `persistent/timemachine` | with a Mac: the Macs' Time Machine backups' parent | SMB preset |
+| `persistent/timemachine` | with a Mac: the Macs' Time Machine backups' parent | SMB preset, quota every Mac's `quota_gib` together |
 | `persistent/timemachine/<name>` | each Mac's backup (`timemachine_backups`) | SMB preset, `sync=standard`, quota `quota_gib`, refquota three quarters of it |
 
 - The persistent VMs keep synchronous writes synchronous. Their quota counts their snapshots, so a disk that fills
@@ -279,23 +282,25 @@ app's pod makes its own mount point uid 1000.
 
 **Time Machine.** Each Mac in `local.yml`'s `timemachine_backups` (`{name, quota_gib, uid}`, optionally `retired`) gets,
 from `group_vars/nas/timemachine.yml`, a dataset under `persistent/timemachine` made with the SMB preset (the only
-moment case-insensitivity can be chosen) with its quota, a refquota of three quarters of it and `sync=standard`, a
-weekly snapshot task kept eight weeks, an SMB-only login `tm-<name>` with its pinned uid and the vault's password
-(`vault_timemachine_passwords`), its directory owned by that login alone with the preset's template ACL stripped, and a
-Time Machine share `tm-<name>` with `auto_snapshot` (Samba snapshots the dataset after completed backups and deletes
-them after a week when the Mac next connects) and a volume id derived from the Mac's name, so a rebuilt NAS announces
-the volume the Mac knows. With a Mac, SMB requires transport encryption and has the Apple extensions on, SMB1, NTLMv1,
-multichannel and the master-browser election off, and its auxiliary parameters and admin group pinned to TrueNAS's
-defaults, since either set by hand would undo the rest; each share refuses the Proxmox host's address, which every
-tailnet client reaches the LAN as; the NAS announces itself over mDNS alone; the API key's own user is taken out of SMB;
-and the SMB stage starts the service, which the services stage keeps stopped otherwise. The Mac's own Time Machine
-limit, about half the quota, is the working limit. The refquota counts the disk image alone and is the disk the Mac
-sees; the quota counts the image and its snapshots, whose room is the rest. Should the snapshots fill it, writes fail
-inside an image that still shows free space, and a smaller limit on the Mac frees nothing they hold:
-`group_vars/nas/timemachine.yml` says why, and the runbook what to do. Samba reports the dataset's own statvfs here: its
-ZFS space hook (`zfs_core:zfs_space_enabled`) is off by default and TrueNAS never sets it. A retired Mac keeps its
-dataset and snapshots, its login closed (out of SMB, locked, its password disabled), its share and task disabled; with
-no Mac left backing up, the SMB stage stops SMB, and no login check stands in the way of that.
+moment case-insensitivity can be chosen) with its quota, a refquota of three quarters of it and `sync=standard`, under a
+parent whose quota is every Mac's together (TrueNAS's mailed quota alert watches that one, since a Mac's own dataset has
+a smaller refquota), a weekly snapshot task kept eight weeks, an SMB-only login `tm-<name>` with its pinned uid and the
+vault's password (`vault_timemachine_passwords`), its directory owned by that login alone with the preset's template ACL
+stripped, and a Time Machine share `tm-<name>` with `auto_snapshot` (Samba snapshots the dataset a minute after a
+completed backup, but not within 15 minutes of its last, and deletes them after a week when the Mac next connects, as
+long as more than three newer remain) and a volume id derived from the Mac's name, so a rebuilt NAS announces the volume
+the Mac knows. With a Mac, SMB requires transport encryption and has the Apple extensions on, SMB1, NTLMv1, multichannel
+and the master-browser election off, and its auxiliary parameters and admin group pinned to TrueNAS's defaults, since
+either set by hand would undo the rest; each share refuses the Proxmox host's address, which every tailnet client
+reaches the LAN as, and pins its allow list empty, which would override that; the NAS announces itself over mDNS alone;
+the API key's own user is taken out of SMB; and the SMB stage starts the service, which the services stage keeps stopped
+otherwise. The Mac's own Time Machine limit, about half the quota, is the working limit. The refquota counts the disk
+image alone and is the disk the Mac sees; the quota counts the image and its snapshots, whose room is the rest. Should
+the snapshots fill it, writes fail inside an image that still shows free space, and a smaller limit on the Mac frees
+nothing they hold: `group_vars/nas/timemachine.yml` says why, and the runbook what to do. Samba reports the dataset's
+own statvfs here: its ZFS space hook (`zfs_core:zfs_space_enabled`) is off by default and TrueNAS never sets it. A
+retired Mac keeps its dataset and snapshots, its login closed (out of SMB, locked, its password disabled), its share and
+task disabled; with no Mac left backing up, the SMB stage stops SMB, and no login check stands in the way of that.
 `group_vars/all/timemachine.yml`'s `timemachine_settings_error`, which `truenas.yml` asserts before the role runs,
 refuses a bad name, quota or uid, a uid or name given twice, a key an entry does not have (a misspelt `retired`), an
 active Mac without a password of 20 characters, a password for a Mac not listed, a vault key that is no Mac's name,
@@ -329,23 +334,24 @@ what the NAS is handed per Mac, retired or not.
 
 The SMB stage runs from `tests/integration/truenas_smb.yml`, the role with variables of its own: a Time Machine share
 for one Mac on a pool the run imports. The fake's SMB service, users, SMB shares and directory permissions follow
-TrueNAS 25.10.7's middleware source rather than a capture, with its refusals (an update's options without its purpose,
-a Time Machine share without the Apple extensions or mDNS, an SMB user without a password, SMB turned on without one,
-a mode outside 001 to 777), and it is stricter in two places: an update's purpose without its options is refused, where
+TrueNAS 25.10.7's middleware source rather than a capture, with its refusals (an update's options without its purpose, a
+Time Machine share without the Apple extensions or mDNS, an SMB user without a password, SMB turned on without one, a
+mode outside 001 to 777), and it is stricter in two places: an update's purpose without its options is refused, where
 TrueNAS fills them in from their defaults, and an update whose Time Machine options name no `vuid` gets a new one. On
-the real NAS the stage has run as a dry run only, so far (#142's, against the home NAS). The test runs a dry
-run, an apply, a second apply and a dry run, then drift corrected once (a share disabled, an option changed, the
-directory's owner and ACL, the API key's user an SMB login again), a password changed in the vault alone (nothing
-sent) and then reset, and the login and share closed and opened again; no password, password hash or API key may
-appear in any run's output. Other tests show that an SMB login the role does not list stops the stage before it
-changes anything, in a dry run and under the stage's tag too, that `truenas_smb_closed_users` closes it and SMB then
-starts, that a login made while SMB runs is refused saying so while a run that stops SMB goes through, that a missing
-reading of the logins is refused, and that the services stage alone never starts SMB and naming `cifs` there is
-refused before the NAS is asked anything. `tests/unit/test_truenas_client.py` shows that `truenas_user` never returns
-a password or a hash, even from a NAS that ignored its `select`, needs a password only when it sends one, closes a
-named login, returns the SMB logins after its changes, says what it had done when it fails part-way, and refuses
-every case it cannot manage before or after connecting; and that `truenas_permission` refuses a dry run's missing
-directory that no dataset of the run makes, and a `setperm` that did not take.
+the real NAS the stage has run as a dry run only, so far (#142's, against the home NAS). The test runs a dry run, an
+apply, a second apply and a dry run, then drift corrected once (a share disabled, an option changed, the directory's
+owner and ACL, the API key's user an SMB login again), a password changed in the vault alone (nothing sent) and then
+reset, and the login and share closed and opened again; no password, password hash or API key may appear in any run's
+output. Other tests show that an SMB login the role does not list stops the stage before it changes anything, in a dry
+run and under the stage's tag too, that `truenas_smb_closed_users` closes it and SMB then starts, that a login made
+while SMB runs is refused saying so while a run that stops SMB goes through, that a missing reading of the logins is
+refused, that a login the users task could not take out of SMB is caught by the check just before the service, that a
+string `false` for `truenas_api_user_smb` is refused, and that the services stage alone never starts SMB and naming
+`cifs` there is refused before the NAS is asked anything. `tests/unit/test_truenas_client.py` shows that `truenas_user`
+never returns a password or a hash, even from a NAS that ignored its `select`, needs a password only when it sends one,
+closes a named login, returns the SMB logins after its changes, says what it had done when it fails part-way, and
+refuses every case it cannot manage before or after connecting; and that `truenas_permission` refuses a dry run's
+missing directory that no dataset of the run makes, and a `setperm` that did not take.
 
 The fake always answers, so `tests/unit/test_truenas_client.py` covers in process, with a scripted socket and a clock
 that never waits, what it never does: TrueNAS refusing a login or a call, rate-limiting logins, dropping the

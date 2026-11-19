@@ -205,7 +205,7 @@ def take_api_user_out_of_smb(api, module, names):
     if found is None:
         raise Refused("auth.me names no local user, so the API key's user cannot be taken out of SMB")
     if name in names:
-        raise Refused(f"{name}, the API key's user, is also in users or smb_closed_users; give its smb in one place")
+        raise Refused(f"{name}, the API key's user, is also in users; give its smb there or with api_user_smb")
     return (name, *close_smb(api, module, name, found, "the API key's user"))
 
 
@@ -252,8 +252,12 @@ def main():
                     if action:
                         actions[name] = action
             if p["api_user_smb"] is False:
-                names = {user["username"] for user in p["users"]} | set(p["smb_closed_users"])
-                name, action, before[name], after[name] = take_api_user_out_of_smb(api, module, names)
+                # Named in smb_closed_users too, it is closed already: both mean out of SMB.
+                names = {user["username"] for user in p["users"]}
+                name, action, was, now = take_api_user_out_of_smb(api, module, names)
+                # Closed above already when smb_closed_users names it too: its diff keeps what it was then.
+                if name not in before:
+                    before[name], after[name] = was, now
                 if action:
                     actions[name] = action
             logins = smb_logins(api, module, after)

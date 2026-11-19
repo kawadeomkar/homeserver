@@ -61,7 +61,7 @@ truenas_pool_disks:
 # ------------------------------------------------------------- Time Machine ---
 # With a NAS: Macs that back up to it with Time Machine, over SMB on the LAN
 # (scripts/runbooks/timemachine.md). Each gets a dataset, an SMB share and a
-# login of its own, all named tm-<name>, and the SMB service starts. Per Mac:
+# login of its own, tm-<name> (the dataset <name>), and SMB starts. Per Mac:
 # its name, lower-case letters, digits and hyphens, up to 16; the most its
 # dataset may hold in GiB, snapshots included (give the Mac itself a limit of
 # about half of it); and the login's uid, 3000 or more and a number of its own,

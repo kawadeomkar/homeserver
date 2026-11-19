@@ -32,7 +32,8 @@ nas_section_error: >-
                    'truenas_mail_user': truenas_mail_user | default(''),
                    'truenas_mail_from': truenas_mail_from | default(''),
                    'truenas_alert_email': truenas_alert_email | default(''),
-                   'timemachine_backups': timemachine_backups | default('')}
+                   'timemachine_backups': timemachine_backups | default(''),
+                   'truenas_smb_closed_users': truenas_smb_closed_users | default('')}
                   | dict2items | selectattr('value') | map(attribute='key') | list -%}
   {%- set sender = truenas_mail_from | default('', true) or truenas_mail_user | default('', true) -%}
   {%- set mail = [] -%}

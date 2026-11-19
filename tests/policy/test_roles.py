@@ -746,6 +746,7 @@ def test_pool_names_follow_local_yml(tmp_path):
         "truenas_mail_server: smtp.example.org",
         "truenas_alert_email: a@b.c",
         "timemachine_backups: [{name: laptop, quota_gib: 2048, uid: 3101}]",
+        "truenas_smb_closed_users: [someone]",
     ],
 )
 def test_nas_settings_given_without_an_address_are_refused(tmp_path, setting):
@@ -947,6 +948,22 @@ SMB_PASSWORD = "-".join(["smb", "password", "for", "the", "test"])
             ["vault_timemachine_passwords must be a mapping of each Mac's name to its SMB password"],
             id="passwords-not-a-mapping",
         ),
+        pytest.param(True, {}, ["timemachine_backups is a list of Macs"], id="a-boolean-not-a-list"),
+        # A password pasted into a Mac's entry without its key: YAML reads it as a key with no value.
+        pytest.param(
+            [{**MAC, SMB_PASSWORD: None}],
+            {"laptop": SMB_PASSWORD},
+            ["timemachine_backups: laptop: unknown key(s) one too long to show"],
+            id="password-typed-as-an-entry-key",
+        ),
+        pytest.param(
+            [{**MAC, "name": 1234}],
+            {"1234": SMB_PASSWORD},
+            ["the name must be text, such as laptop: quoted, if it is all digits"],
+            id="name-not-text",
+        ),
+        # Time Machine turned off keeps its passwords in the vault, which nothing reads then.
+        pytest.param([], {"laptop": SMB_PASSWORD}, [], id="no-mac-left-passwords"),
     ],
 )
 def test_time_machine_settings_are_checked(tmp_path, macs, passwords, expected):
@@ -958,7 +975,19 @@ def test_time_machine_settings_are_checked(tmp_path, macs, passwords, expected):
     for text in expected:
         assert any(text in error for error in errors), f"{text!r} not in {errors}"
     secrets = [*passwords.values(), *passwords] if isinstance(passwords, dict) else [passwords]
+    secrets += [key for mac in macs if isinstance(mac, dict) for key in mac] if isinstance(macs, list) else []
     assert not [p for p in secrets if isinstance(p, str) and len(p) >= 20 and p in json.dumps(errors)], errors
+
+
+def test_a_proxmox_address_that_is_no_ipv4_is_refused_with_a_mac(tmp_path):
+    """Each share refuses SMB from the Proxmox host's address, and TrueNAS matches no host name there."""
+    given = {
+        "timemachine_backups": [MAC],
+        "vault_timemachine_passwords": {"laptop": SMB_PASSWORD},
+        "proxmox_address": "pve.example.org",
+    }
+    errors = resolve_on(example_tree(tmp_path), "truenas", "timemachine_settings_error", "-e", json.dumps(given))
+    assert any("proxmox_address must be an IPv4 address with a Mac listed" in error for error in errors), errors
 
 
 def test_timemachine_present_given_with_e_is_refused(tmp_path):
@@ -976,7 +1005,8 @@ def test_the_time_machine_test_playbook_runs_the_real_pre_task():
     name = "Refuse an incomplete Time Machine section"
     real = next(play for play in yaml.safe_load((ROOT / "truenas.yml").read_text()) if play.get("pre_tasks"))
     (test,) = yaml.safe_load((ROOT / "tests" / "integration" / "truenas.yml").read_text())
-    assert [t for t in test["pre_tasks"] if t["name"] == name] == [t for t in real["pre_tasks"] if t["name"] == name]
+    ours = [t for t in real["pre_tasks"] if t["name"] == name]
+    assert ours and [t for t in test["pre_tasks"] if t["name"] == name] == ours, "the pre-task is missing or differs"
     assert test["roles"] == real["roles"]
 
 
@@ -1024,6 +1054,8 @@ def test_time_machine_gives_each_mac_a_dataset_login_and_share(tmp_path):
         "smb_options": "",
         "admin_group": None,
     }
+    # The parent's quota is every Mac's together, so TrueNAS alerts as the backups and their snapshots near it.
+    assert got["datasets"][0]["properties"] == {"quota": (2048 + 512) * 2**30}
     assert got["users"] == [
         {
             "username": "tm-laptop",
@@ -1060,6 +1092,7 @@ def test_time_machine_gives_each_mac_a_dataset_login_and_share(tmp_path):
         "auto_snapshot": True,
         "auto_dataset_creation": False,
         "timemachine_quota": 0,
+        "hostsallow": [],
         "hostsdeny": [resolve_on(tree, "truenas", "proxmox_address")],
     }
     # The volume's id is derived from the Mac's name, so a rebuilt NAS makes it again; another Mac's is another. Pinned:
