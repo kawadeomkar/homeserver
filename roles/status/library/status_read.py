@@ -282,6 +282,8 @@ def api_read(parts, api, timeout):
     path = api["path"] + urllib.parse.quote(parts[0], safe="/:@!")
     query = urllib.parse.urlencode([tuple(part.split("=", 1)) for part in parts[1:]], quote_via=urllib.parse.quote)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    # Python's default already refuses anything older; said here too, for code scanning.
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
     connection = None
