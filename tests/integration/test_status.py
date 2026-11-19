@@ -1249,10 +1249,11 @@ def seed_details(path, refused=()):
     behind; and the methods `refused` refused."""
     fake = fake_truenas.FakeTrueNAS(path)
     fake.load()
-    # The fake's own port, by whatever name it has, and a second one.
+    # The fake's own port, by whatever name it has, and a second one. The fake saves its state with its keys sorted, so
+    # interface.query gives the ports by name: the second's, eth1, sorts after any en* name the fake's own may have.
     fake.s["interfaces"][next(iter(fake.s["interfaces"]))].update(media="2500Mb/s Twisted Pair")
     second = {"ipv4_dhcp": False, "ipv6_auto": False, "aliases": [], "live": [], "media": "1000Mb/s Twisted Pair"}
-    fake.s["interfaces"]["eno2"] = second
+    fake.s["interfaces"]["eth1"] = second
     fake.s["temperatures"]["nvme3n1"] = [74.0, 80.85]
     persistent = next(p for p in fake.s["pools"] if p["name"] == "persistent")
     persistent["topology"]["data"][0]["children"][1]["stats"]["checksum_errors"] = 3
