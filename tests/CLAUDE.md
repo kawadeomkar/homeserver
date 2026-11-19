@@ -20,22 +20,25 @@ each role's README says which fakes and test playbooks cover it, and what the fa
 
 ## The idempotence harness
 
-`tests/integration` checks every role against stateful fakes (`fake_truenas.py`, a TLS JSON-RPC server;
-`fake_pve.py` behind `fake_pve_bin/`, with `apt-get` reading the scratch repository directory the test passes as
+`tests/integration` checks every role against stateful fakes (`fake_truenas.py`, a TLS JSON-RPC server; `fake_pve.py`
+behind `fake_pve_bin/`, with `apt-get` reading the scratch repository directory the test passes as
 `proxmox_apt_sources_dir`; `fake_opnsense.py`, `fake_talos.py`, `fake_kubectl.py`, `fake_tailscale.py`), running each
 role with this repo's configuration: a dry run, an apply, a second apply, a dry run, then drift corrected once. A new
-API method or command needs a matching fake, or the test fails on purpose. The fakes always answer, so
-`tests/unit/test_truenas_client.py` covers in process, with a scripted socket and a clock that never waits, what they
-never do: TrueNAS refusing a login or a call, rate-limiting logins, dropping the connection, failing or never finishing
-a job, and refusing an interface commit, which must discard the saved change, or never seeing the check-in, after which
-TrueNAS rolls the address back by itself. The fakes cannot prove the real machines behave the same, so still run check
-mode against the real machine first.
+API method or command needs a matching fake, or the test fails on purpose. `just status`, which changes nothing, has its
+own tests there, reading the fake host's API too (`fake_pve_api.py`, an HTTPS server on the same state). The fakes
+always answer, so `tests/unit/test_truenas_client.py` covers in process, with a scripted socket and a clock that never
+waits, what they never do: TrueNAS refusing a login or a call, rate-limiting logins, dropping the connection, failing or
+never finishing a job, and refusing an interface commit, which must discard the saved change, or never seeing the
+check-in, after which TrueNAS rolls the address back by itself. The fakes cannot prove the real machines behave the
+same, so still run check mode against the real machine first.
 
 A test playbook under `tests/integration/` that stands in for a real one (`router.yml`, `homeassistant.yml`) runs the
 real play's vars, pre-tasks and roles, and `tests/policy/test_roles.py` checks that they match. The idempotence tests
-read NEXT STEPS' records from the default callback's custom stats (`next_steps` in `test_idempotence.py`), and the
-tests that need a home directory or credentials run with `HOME` set to their own. gitleaks flags a MAC written out in
-any tracked file, so the tests build theirs at run time. `openssl` comes from `PATH`, for the fake NAS's certificate.
+read NEXT STEPS' records from the default callback's custom stats (`next_steps` in `test_idempotence.py`), and the tests
+that need a home directory or credentials run with `HOME` set to their own. gitleaks flags a MAC written out in any
+tracked file, so the tests build theirs at run time. `openssl` comes from `PATH`, for the fake NAS's and Talos's
+certificates and the router's encrypted backups; the fake Proxmox API's certificate is made in process with
+`cryptography` (`tests/certs.py`).
 
 `tests/conftest.py` sets the default stdout callback for every `ansible-playbook` a test starts, so a scratch tree
 holding a copy of `ansible.cfg` alone runs (`tests/policy/helpers.py`'s `example_tree` builds one, `filter_plugins/`

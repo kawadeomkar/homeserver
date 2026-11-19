@@ -78,7 +78,8 @@ DEBIAN_FRONTEND=noninteractive it fails, as the real one would stop to ask. Its 
 simulation's `Inst <package> [<old>] (<new> ...)`, without the old version for a new package, and dpkg's
 `Unpacking <package> (<new>) over (<old>) ...`, without `over` for a new one. With the state's `dpkg_fails` set,
 dist-upgrade unpacks everything and then fails as dpkg does when a package's script fails, with apt's error and
-exit status 100.
+exit status 100. With `dpkg_interrupted` set, dist-upgrade, a simulation too, refuses at once as apt does after a dpkg
+run was killed, with exit status 100.
 
 `apt-get install` installs from Debian's own repository (`DEBIAN`), which apt knows whatever $FAKE_PVE_SOURCES_DIR
 holds, as a real host's debian.sources is always there, and from the package lists; it needs -y and
@@ -90,6 +91,8 @@ started or restarted keeps the drop-ins it started with (`started_with`), so a t
 was started with; `is-enabled`, `is-active`, `enable` and `restart` answer for the units installed packages bring.
 """
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -153,18 +156,53 @@ def state_path():
     return Path(os.environ["FAKE_PVE_STATE"])
 
 
+@contextlib.contextmanager
+def locked():
+    """The state held from one command's load to its save. just status runs commands side by side, and the fake API
+    answers beside them: one that loaded the state before another saved it would put the other's change back
+    (apt_get_runs, which the status tests count). The lock is a file of its own, as store() renames over the state."""
+    with open(state_path().with_name(f".{state_path().name}.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def load():
     if not state_path().exists():
         return fresh_state()
     return json.loads(state_path().read_text())
 
 
-def save(state):
-    # Written aside and renamed over the state, so that a command reading it meanwhile sees it whole.
-    path = state_path()
+def run_dir(path):
+    """qemu-server's run directory (/run/qemu-server) as the fake keeps it, beside the state file at `path`: a
+    <vmid>.pid and a <vmid>.qmp for each VM running, as on a Proxmox VE 9.2 host, which just status lists to learn
+    whose day's history to read (status_proxmox_run_dir)."""
+    return Path(path).parent / "qemu-server"
+
+
+def store(path, state):
+    """The state written aside and renamed over the file at `path`, so that a command reading it meanwhile sees it
+    whole, then the run directory made to match it."""
+    path = Path(path)
     scratch = path.with_name(f".{path.name}.{os.getpid()}")
     scratch.write_text(json.dumps(state, indent=1, sort_keys=True))
     os.replace(scratch, path)
+    running = run_dir(path)
+    running.mkdir(exist_ok=True)
+    files = {
+        f"{vmid}.{kind}"
+        for vmid, vm in (state.get("vms") or {}).items()
+        if vm.get("status") == "running"
+        for kind in ("pid", "qmp")
+    }
+    for old in running.iterdir():
+        if old.name not in files:
+            old.unlink()
+    for name in files:
+        (running / name).touch()
+
+
+def save(state):
+    store(state_path(), state)
 
 
 def fail(message):
@@ -1212,6 +1250,13 @@ def apt_get(state, args):
         packages["lists"] = dict(packages["repository"]) if offered else {}
         print("Reading package lists...")
     elif verbs == ["dist-upgrade"]:
+        if state.get("dpkg_interrupted"):
+            print(
+                "E: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem.",
+                file=sys.stderr,
+            )
+            save(state)
+            sys.exit(100)
         simulate = "-s" in flags
         if not simulate and ("-y" not in flags or os.environ.get("DEBIAN_FRONTEND") != "noninteractive"):
             fail("fake apt-get: dist-upgrade would stop to ask: it needs -y and DEBIAN_FRONTEND=noninteractive")
@@ -1315,19 +1360,20 @@ def hostname(state, args):
 
 def main():
     tool, args = sys.argv[1], sys.argv[2:]
-    state = load()
-    tools = {
-        "pvesh": pvesh,
-        "pvesm": pvesm,
-        "qm": qm,
-        "pvenode": pvenode,
-        "hostname": hostname,
-        "systemctl": systemctl,
-        "apt-get": apt_get,
-        "dpkg-query": dpkg_query,
-    }
-    tools[tool](state, args)
-    save(state)
+    with locked():
+        state = load()
+        tools = {
+            "pvesh": pvesh,
+            "pvesm": pvesm,
+            "qm": qm,
+            "pvenode": pvenode,
+            "hostname": hostname,
+            "systemctl": systemctl,
+            "apt-get": apt_get,
+            "dpkg-query": dpkg_query,
+        }
+        tools[tool](state, args)
+        save(state)
 
 
 if __name__ == "__main__":

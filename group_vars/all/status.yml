@@ -1,6 +1,6 @@
 ---
-# just status (status.yml, roles/status): what this setup has, and the VMs it reports on, which every play that
-# reports reads. These are the VMs this repo makes, the same ones the nightly backup covers (vm_backup_vmids,
+# just status (status.yml, roles/status): what this setup has, the VMs it reports on and the Macs that back up to the
+# NAS, which every play that reports reads. These are the VMs this repo makes, the same ones the nightly backup covers (vm_backup_vmids,
 # group_vars/proxmox/backup.yml): the cluster's nodes, Home Assistant's, and local.yml's vm_backup_extra_vmids. Any
 # other VM on the Proxmox host, another project's or one made by hand, is shown after them, never named as a problem.
 status_setup:
@@ -29,6 +29,30 @@ status_vms: >-
                             'guest_agent': true}) -%}
   {%- endfor -%}
   {{ out }}
+# The Macs that back up to the NAS with Time Machine, local.yml's timemachine_backups (group_vars/all/timemachine.yml),
+# each by its share, tm-<name> as group_vars/nas/timemachine.yml names it, and whether it is retired: the report judges
+# each Time Machine share by them, so a Mac is retired when local.yml says so, never because its share is disabled.
+status_nas_macs: >-
+  {%- set out = [] -%}
+  {%- for mac in timemachine_macs if mac is mapping and mac.name | default('', true) -%}
+  {%-   set _ = out.append({'share': 'tm-' ~ mac.name,
+                            'retired': true if mac.retired | default(false) else false}) -%}
+  {%- endfor -%}
+  {{ out }}
+# The machines of this setup by address, as local.yml gives them: the Proxmox host and each of the cluster's nodes. The
+# report names who has the NAS's NFS shares mounted by them, and any other address is a problem. The Tailscale subnet
+# router masquerades every tailnet client to the Proxmox host's address, so "the Proxmox host" may be the tailnet too.
+status_nas_known_clients: >-
+  {%- set out = [] -%}
+  {%- set pve = proxmox_address | default('', true) | string | trim -%}
+  {%- if pve -%}
+  {%-   set _ = out.append({'key': pve, 'value': 'the Proxmox host'}) -%}
+  {%- endif -%}
+  {%- set nodes = kubernetes_node_addresses | default({}, true) -%}
+  {%- for node in (nodes | dict2items if nodes is mapping else []) if node.value | default('', true) | string | trim -%}
+  {%-   set _ = out.append({'key': node.value | string | trim, 'value': node.key}) -%}
+  {%- endfor -%}
+  {{ out | items2dict }}
 # The admin pages the report lists: the Proxmox host's, the NAS's, and the cluster's two APIs, on the control plane.
 # The Proxmox host's own page is its Tailscale node's too, which the report also gives at the host's tailnet name.
 status_admin: >-
@@ -50,6 +74,12 @@ status_admin: >-
 # What the report suggests for each kind of thing to do; {names} is the apps just suspend stopped.
 status_commands:
   upgrade: just deploy proxmox
+  pveproxy: >-
+    systemctl status pveproxy on the Proxmox host, which serves its API and web UI (and /etc/default/pveproxy, should it
+    listen elsewhere)
+  proxmox_token: >-
+    the project's Proxmox API token, made on the host (scripts/runbooks/proxmox-token.md), its secret in the vault as
+    vault_proxmox_token_secret (just vault)
   reboot: reboot it at a quiet time
   resume: just resume --only {names}
   talos_upgrade: just talos-upgrade --check, then just talos-upgrade
@@ -63,6 +93,22 @@ status_commands:
     just deploy truenas refuses it until truenas_supported_version (roles/truenas) is raised, once TrueNAS's API
     changes are checked
   nas_network: commit or roll them back on the NAS's Network page; just deploy truenas refuses to run until then
+  nas_clock: >-
+    the NAS's NTP servers, in System, General Settings on the NAS, which truenas_ntp_servers
+    (group_vars/nas/truenas.yml) sets with just deploy truenas
+  nas_disk_heat: >-
+    the NAS's fans and airflow, and what the disk is busy with (a scrub or a resilver heats it); TrueNAS raises its own
+    critical alert at the disk's critical temperature
+  nas_disk_errors: >-
+    each disk's SMART results on the NAS's Storage page, and its cable or slot; ZFS keeps the counts until the NAS
+    reboots, TrueNAS 25.10 having no API call that clears them (roles/status/README.md)
+  nas_clients: >-
+    who holds the address, from the router's DHCP leases; just deploy truenas puts every share's hosts back as
+    group_vars/nas/truenas.yml has them
+  time_machine: on the Mac, Time Machine's settings and its last backup's error (scripts/runbooks/timemachine.md)
+  time_machine_quota: >-
+    a larger quota_gib in local.yml and just deploy truenas, or fewer weeks of weekly snapshots
+    (scripts/runbooks/timemachine.md)
   backup: just deploy proxmox
   backup_target: >-
     vm_backup_storage in local.yml names where they go (a USB disk, or a Proxmox Backup Server), then just deploy

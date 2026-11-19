@@ -48,6 +48,9 @@
   vars:
     # The sections just status names, comma-separated, passed as -e '{"types": "<names>"}'.
     status_types: "{{ (types | default('')).split(',') | map('trim') | select | list }}"
+    # The Proxmox host's upgrade simulation as last answered, which answers it again while nothing it depends on
+    # has changed; the report play keeps the new one, in the same file.
+    status_upgrades_kept_file: &upgrades_kept_file "{{ playbook_dir }}/.cache/status/upgrades.json"
   pre_tasks:
     - name: Refuse NAS settings that come without a NAS address
       ansible.builtin.assert:
@@ -95,6 +98,7 @@
     status_hosts: "{{ groups['proxmox'] | default([]) + groups['kubernetes'] | default([]) + groups['nas'] | default([]) }}"
     # just status reads its exit code from here, and --json prints it.
     status_report_file: "{{ playbook_dir }}/.cache/status/report.json"
+    status_upgrades_kept_file: *upgrades_kept_file
     status_color: "{{ lookup('ansible.builtin.env', 'STATUS_COLOR') == '1' }}"
     status_quiet: "{{ lookup('ansible.builtin.env', 'STATUS_QUIET') | length > 0 }}"
     # just status --mask: every address in the text as <addr>, the file keeping them.

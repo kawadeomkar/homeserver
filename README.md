@@ -118,12 +118,15 @@ just status                       # what runs and what needs doing, read without
 runs every type and names each failure at the end, rather than stopping at the first.
 
 Each TrueNAS stage can be run on its own with `--tags truenas_network`, `truenas_pools`, `truenas_system`,
-`truenas_datasets`, `truenas_snapshots`, `truenas_nfs`, `truenas_alerts` or `truenas_services`. Always run the check first: the idempotence tests use
+`truenas_datasets`, `truenas_snapshots`, `truenas_nfs`, `truenas_smb`, `truenas_alerts` or `truenas_services`. Always run the check first: the idempotence tests use
 fakes, which cannot prove the real machines behave the same. Every `just deploy proxmox` also refreshes the package
 lists and upgrades the Proxmox host, and says when an upgrade of the kernel, its firmware, the CPU's microcode or dbus
 waits for a reboot, which is then done by hand.
 
-`just status` reads the Proxmox host (and its Tailscale), the cluster and the NAS, and changes nothing. It shows the
+`just status` reads the Proxmox host (and its Tailscale), the cluster and the NAS, and changes nothing. It reads the
+Proxmox host through Proxmox's API with the project's read-only API token, made by hand once per host
+(`scripts/runbooks/proxmox-token.md`), its secret in the vault as `vault_proxmox_token_secret`: until then it says
+the Proxmox host could not be read and points there. It shows the
 admin pages (on the tailnet too), the VMs (each of this setup's with its CPU over the last day, memory and disks: a
 node's from kubelet, Home Assistant's from its guest agent; then every other VM on the host, another project's or one
 made by hand, as Proxmox sees it, marked as not this repo's and never named as a problem), the NAS (pools, snapshot
@@ -177,9 +180,13 @@ addresses and serials in the git-ignored `all/local.yml`. Each role's `README.md
 ### Setups and the vault
 
 Secrets go in the vault, `group_vars/all/local.vault.yml`, an Ansible Vault file encrypted with the password in
-`.vault_pass`, which `ansible.cfg` names: `vault_truenas_api_key` with a NAS, `vault_truenas_mail_password` with alert
-mail, `vault_opnsense_api_key`, `vault_opnsense_api_secret`, `vault_opnsense_backup_password` and `vault_opnsense_root_password` with the router, `vault_tailscale_auth_key` with remote access and `vault_haos_owner_password` with Home Assistant
-(`local.vault.yml.example` lists them, each explained). Both files are gitignored, like `local.yml`: nothing reads them
+`.vault_pass`, which `ansible.cfg` names: `vault_proxmox_token_secret` (the project's Proxmox API token, which `just
+status` reads the host with: `scripts/runbooks/proxmox-token.md`), `vault_truenas_api_key` with a NAS,
+`vault_truenas_mail_password` with alert mail, `vault_opnsense_api_key`, `vault_opnsense_api_secret`,
+`vault_opnsense_backup_password` and `vault_opnsense_root_password` with the router, `vault_tailscale_auth_key` with
+remote access, `vault_haos_owner_password` with Home Assistant and `vault_timemachine_passwords`, each Mac's SMB
+password under its name, with Time Machine (`local.vault.yml.example` lists them, each explained). Both files are
+gitignored, like `local.yml`: nothing reads them
 from the repository, and this public repository would publish even the vault's ciphertext, for anyone to guess its
 password at leisure. Every run decrypts the vault, so both must exist even when they hold nothing a setup uses:
 
@@ -188,7 +195,8 @@ just vault new     # what is missing: a random .vault_pass readable by you alone
 just vault         # fill in or change a secret
 ```
 
-A new vault is `local.vault.yml.example` as it is: every key, each empty and explained by the comment above it. An
+A new vault is `local.vault.yml.example` as it is: every key, each empty (`""`, or `{}` for the Macs' passwords) and
+explained by the comment above it. An
 empty key counts as unset, so fill in only those your setup uses (`just init` asks for them) and leave the others.
 `just vault` lays a vault made before the template, or from an older one, out the same way before it opens it: every
 comment and key of the template, each value you set kept, and what the template does not hold (a key no playbook reads
@@ -442,6 +450,11 @@ in `vm_backup_storage`: a USB disk added as a directory storage, set up as a che
 Server. Without it nothing is backed up, and every `just deploy proxmox` says so. Restoring, and the drill that
 proves a backup restores without disturbing the running cluster: `scripts/runbooks/vm-restore.md`.
 
+With a NAS, the Macs listed in `local.yml`'s `timemachine_backups` back up to it with Time Machine, over SMB on the
+LAN: a dataset, a share and an SMB-only login per Mac, the backup encrypted by the Mac itself, and snapshots after every
+completed backup and weekly, so a damaged disk image can be rolled back. Each Mac's SMB password goes in the vault, and
+adding the disk on the Mac is by hand: `scripts/runbooks/timemachine.md`.
+
 ### Home Assistant
 
 Home Assistant runs as a VM of its own, Home Assistant OS, which `just deploy homeassistant` creates from the
@@ -455,7 +468,8 @@ Zigbee stick) and what comes after.
 ### After a hardware failure
 
 `scripts/runbooks/REBUILD.md` is the recovery procedure. A reinstalled NAS needs a new API user and key and an
-updated certificate pin before Ansible can reach it, and a reinstalled Proxmox host needs root SSH access. Keep a
+updated certificate pin before Ansible can reach it, and a reinstalled Proxmox host needs root SSH access and, for
+`just status`, its API token made again (`scripts/runbooks/proxmox-token.md`), the new secret in the vault. Keep a
 copy of what is not in this repo in your password manager: `group_vars/all/local.yml`, the vault
 (`group_vars/all/local.vault.yml`) and `.vault_pass`, or with named setups their directory,
 `~/.config/homeserver/setups`; with a cluster, also the age key

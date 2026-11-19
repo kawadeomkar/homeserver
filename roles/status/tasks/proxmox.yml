@@ -1,47 +1,43 @@
 ---
-# The Proxmox host, in two reads: the node's name, which the API's paths need, and when the VMs are shown every guest
-# on it, which says whose day's history to read; then everything else at once. Each pvesh or qm command starts
-# Proxmox's Perl API afresh, a second of CPU, so they run in parallel: on a four-core host the second read took about
-# eight seconds, and reading the guests first adds a second, each running VM's history a little more (5 s to 7 s on a
-# host with seven other VMs running, 2026-11-09). A host that does not answer is recorded, not a failure: the report
-# says so.
+# The Proxmox host, in two reads: the node's name, which the API's paths need, and when the VMs are shown which VMs
+# run, from the pid files qemu-server keeps (status_proxmox_run_dir), which says whose day's history to read, both at
+# once; then everything else at once. Proxmox's own reads go through its API on the host's loopback with the token
+# (status_proxmox_token_id, status_proxmox_token_secret), each a few milliseconds: pvesh started Proxmox's Perl API
+# afresh for each, 0.65 s of CPU on the home host and 1.4 s on a four-core one, 6 to 11 s for them all. Without
+# status_proxmox_run_dir the first read is /cluster/resources. A host that does not answer is recorded, not a failure:
+# the report says so, and so does a token missing or refused.
 # status_reads (main.yml) says what the sections shown need: the host itself (proxmox), its Tailscale (tailscale,
 # which status.yml read before), or both.
 
-# This machine's view of the tailnet's DNS, beside the host's Tailscale, when the host advertises routes and this machine
-# runs Tailscale; then both, before the host's own reads, in status_early, for just status's callback to show the
-# sections that need nothing else as soon as they are read.
-- name: proxmox | Read this machine's Tailscale DNS
-  status_read:
-    commands:
-      dns: [tailscale, dns, status, --json]
-    timeout: "{{ status_probe_timeout }}"
-  delegate_to: localhost
-  register: status_tailnet_dns
-  when:
-    - "'tailscale' in status_reads"
-    - status_tailscale_state.routes | default([]) | selectattr('advertised') | list | length > 0
-
+# Its Tailscale, before the host's own reads, in status_early, for just status's callback to show the sections that
+# need nothing else (the admin pages) as soon as it is read. This machine's view of the tailnet's DNS is the cluster's
+# to read (cluster.yml), so it is never said here: the findings' merge lets the last host to say a source win.
 - name: proxmox | Say what its Tailscale says
   ansible.builtin.set_fact:
     status_early:
       tailscale: "{{ status_tailscale_state }}"
-      tailnet_dns: "{{ status_tailnet_dns.results.dns | default(none) }}"
   when: "'tailscale' in status_reads"
 
-- name: proxmox | Read the node's name and its guests
+- name: proxmox | Read the node's name and which VMs run
   status_read:
     commands: "{{ _commands }}"
+    api: "{{ _api }}"
+    api_url: "{{ status_proxmox_api_url }}"
+    api_token_id: "{{ status_proxmox_token_id }}"
+    api_token_secret: "{{ status_proxmox_token_secret }}"
+    api_cert_files: "{{ status_proxmox_api_cert_files }}"
     parallel: "{{ status_parallel }}"
     timeout: "{{ status_timeout }}"
   register: status_proxmox_first
   ignore_unreachable: true
-  when: "'proxmox' in status_reads and _commands | length > 0"
+  when: "'proxmox' in status_reads and (_commands | length + _api | length) > 0"
   vars:
+    _vms: "{{ 'vms' in status_types | status_types_shown }}"
+    _api: "{{ {'resources': ['/cluster/resources']} if _vms and status_proxmox_run_dir | length == 0 else {} }}"
     _commands: >-
       {%- set c = {} -%}
-      {%- if 'vms' in status_types | status_types_shown -%}
-      {%-   set _ = c.update({'resources': ['pvesh', 'get', '/cluster/resources', '--output-format', 'json']}) -%}
+      {%- if _vms and status_proxmox_run_dir | length > 0 -%}
+      {%-   set _ = c.update({'running': ['ls', status_proxmox_run_dir]}) -%}
       {%- endif -%}
       {%- if status_proxmox_node | length == 0 -%}
       {%-   set _ = c.update({'hostname': ['hostname', '-s']}) -%}
@@ -56,85 +52,116 @@
   when: "'proxmox' in status_reads"
 
 # The day's history of every VM running on the node, this setup's and any other, and of each of this setup's VMs; the
-# pending changes of each of this setup's; the guest agent's filesystems and OS of those whose agent reports them (Home
-# Assistant's; Talos's lists no filesystem), and the address of one that serves an app without a URL of its own; the
-# disks on each budgeted storage; the upgrades apt would make, from the lists as last refreshed (a simulation, which
-# is quick, where the API's own list takes four seconds); whether an upgrade asked for a reboot; and the backups: the
-# host's jobs (each with its next run), the latest backup runs, running ones among them, the backups on each of this
-# setup's jobs' storages, and when each job's schedule fires next, twice, which gives its period without reading the
-# calendar format here.
+# pending changes of each of this setup's; the guest agent's filesystems and OS of those whose agent reports them
+# (Home Assistant's; Talos's lists no filesystem), and the address of one that serves an app without a URL of its own;
+# the upgrades apt would make, from the lists as last refreshed (a simulation, which is quick, where the API's own
+# list takes four seconds), answered from the last answer while dpkg's status and journal, the lists and apt's
+# configuration are as they were (status_upgrades_state_paths), a key of their files' metadata; whether an upgrade
+# asked for a reboot; and the backups: the host's jobs (each with its next run), the latest backup runs, running ones
+# among them, and when each job's schedule fires next, twice, which gives its period without reading the calendar
+# format here. With them, the token's own privileges, which say whether it may read all of that: a token that may not
+# is reported, never taken for an empty host. All of them through Proxmox's API with the token (status_read's api),
+# each a few milliseconds where pvesh starts Proxmox's Perl API afresh, but two: a storage's disks (each budgeted
+# storage's) and its backups (each of this setup's jobs' storages), which Proxmox lists only to a token that may
+# change them (VM.Config.Disk, VM.Backup), so they stay pvesh's, as root, in the same pass.
 - name: proxmox | Read the host, its storages and its VMs, at once
   status_read:
     commands: "{{ _commands }}"
+    api: "{{ _api }}"
+    api_url: "{{ status_proxmox_api_url }}"
+    api_token_id: "{{ status_proxmox_token_id }}"
+    api_token_secret: "{{ status_proxmox_token_secret }}"
+    api_cert_files: "{{ status_proxmox_api_cert_files }}"
+    upgrades_state_paths: "{{ status_upgrades_state_paths if status_upgrades_kept_file | length > 0 else [] }}"
+    upgrades_kept: >-
+      {{ lookup('ansible.builtin.file', status_upgrades_kept_file, errors='ignore') | default('', true)
+         | status_upgrades_kept if status_upgrades_kept_file | length > 0 else {} }}
+    upgrades_host: "{{ status_proxmox_node_name }}"
     parallel: "{{ status_parallel }}"
     timeout: "{{ status_timeout }}"
   register: status_proxmox_reads
   ignore_unreachable: true
   when:
     - "'proxmox' in status_reads and not (status_proxmox_first.unreachable | default(false))"
-    - _commands | length > 0
+    - (_commands | length + _api | length) > 0
   vars:
     _node: "/nodes/{{ status_proxmox_node_name }}"
     _json: [--output-format, json]
-    _day: [--timeframe, day, --cf, AVERAGE]
+    _day: [timeframe=day, cf=AVERAGE]
     _types: "{{ status_types | status_types_shown }}"
     _running: "{{ status_proxmox_first.results | default({}) | status_running_vms(status_proxmox_node_name) }}"
-    _commands: >-
-      {%- set c = {} -%}
+    _api: >-
+      {%- set c = {'permissions': ['/access/permissions']} -%}
       {%- if 'resources' not in status_proxmox_first.results | default({}) -%}
-      {%-   set _ = c.update({'resources': ['pvesh', 'get', '/cluster/resources'] + _json}) -%}
+      {%-   set _ = c.update({'resources': ['/cluster/resources']}) -%}
       {%- endif -%}
       {%- if 'vms' in _types -%}
-      {%-   set _ = c.update({'node': ['pvesh', 'get', _node ~ '/status'] + _json,
-                              'rrd-node': ['pvesh', 'get', _node ~ '/rrddata'] + _day + _json,
-                              'updates': ['apt-get', '-q', '-s', 'dist-upgrade']}) -%}
-      {%-   if status_reboot_required_file | length > 0 -%}
-      {%-     set _ = c.update({'reboot': ['test', '-e', status_reboot_required_file]}) -%}
-      {%-   endif -%}
+      {%-   set _ = c.update({'node': [_node ~ '/status'], 'rrd-node': [_node ~ '/rrddata'] + _day}) -%}
       {%-   for vmid in (status_vms | map(attribute='vmid') | map('int') | list + _running) | unique -%}
-      {%-     set _ = c.update({'rrd-' ~ vmid: ['pvesh', 'get', _node ~ '/qemu/' ~ vmid ~ '/rrddata'] + _day + _json}) -%}
+      {%-     set _ = c.update({'rrd-' ~ vmid: [_node ~ '/qemu/' ~ vmid ~ '/rrddata'] + _day}) -%}
       {%-   endfor -%}
       {%-   for vm in status_vms -%}
-      {%-     set vmid = vm.vmid | string -%}
-      {%-     set _ = c.update({'pending-' ~ vmid: ['pvesh', 'get', _node ~ '/qemu/' ~ vmid ~ '/pending'] + _json}) -%}
+      {%-     set _ = c.update({'pending-' ~ vm.vmid: [_node ~ '/qemu/' ~ vm.vmid ~ '/pending']}) -%}
       {%-   endfor -%}
       {%- endif -%}
       {%- for vm in status_vms if vm.guest_agent | default(false) and ('vms' in _types or 'apps' in _types) -%}
-      {%-   set vmid = vm.vmid | string -%}
-      {%-   set _ = c.update({'fsinfo-' ~ vmid: ['qm', 'guest', 'cmd', vmid, 'get-fsinfo'],
-                              'osinfo-' ~ vmid: ['qm', 'guest', 'cmd', vmid, 'get-osinfo']}) -%}
+      {%-   set agent = _node ~ '/qemu/' ~ vm.vmid ~ '/agent/' -%}
+      {%-   set _ = c.update({'fsinfo-' ~ vm.vmid: [agent ~ 'get-fsinfo'], 'osinfo-' ~ vm.vmid: [agent ~ 'get-osinfo']}) -%}
       {%-   if vm.app | default(none) and not vm.app.url | default('') -%}
-      {%-     set _ = c.update({'network-' ~ vmid: ['qm', 'guest', 'cmd', vmid, 'network-get-interfaces']}) -%}
+      {%-     set _ = c.update({'network-' ~ vm.vmid: [agent ~ 'network-get-interfaces']}) -%}
       {%-   endif -%}
       {%- endfor -%}
+      {%- if 'backups' in _types -%}
+      {%-   set _ = c.update({'backup-jobs': ['/cluster/backup'],
+                            'backup-tasks': [_node ~ '/tasks', 'typefilter=vzdump', 'source=all', 'limit=20']}) -%}
+      {%-   for job in status_backup_jobs -%}
+      {%-     set _ = c.update({'schedule-' ~ job.id: ['/cluster/jobs/schedule-analyze', 'schedule=' ~ job.schedule,
+                                                     'iterations=2']}) -%}
+      {%-   endfor -%}
+      {%- endif -%}
+      {{ c }}
+    _commands: >-
+      {%- set c = {} -%}
+      {%- if 'vms' in _types -%}
+      {%-   set _ = c.update({'updates': ['apt-get', '-q', '-s', 'dist-upgrade']}) -%}
+      {%-   if status_reboot_required_file | length > 0 -%}
+      {%-     set _ = c.update({'reboot': ['test', '-e', status_reboot_required_file]}) -%}
+      {%-   endif -%}
+      {%- endif -%}
       {%- if 'storage' in _types -%}
       {%-   for storage in status_budget_storages -%}
       {%-     set _ = c.update({'content-' ~ storage: ['pvesh', 'get', _node ~ '/storage/' ~ storage ~ '/content'] + _json}) -%}
       {%-   endfor -%}
       {%- endif -%}
       {%- if 'backups' in _types -%}
-      {%-   set _ = c.update({'backup-jobs': ['pvesh', 'get', '/cluster/backup'] + _json,
-                            'backup-tasks': ['pvesh', 'get', _node ~ '/tasks', '--typefilter', 'vzdump', '--source',
-                                             'all', '--limit', '20'] + _json}) -%}
       {%-   for job in status_backup_jobs -%}
       {%-     set _ = c.update({'backups-' ~ job.storage: ['pvesh', 'get', _node ~ '/storage/' ~ job.storage ~ '/content',
-                                                         '--content', 'backup'] + _json,
-                              'schedule-' ~ job.id: ['pvesh', 'get', '/cluster/jobs/schedule-analyze', '--schedule',
-                                                     job.schedule | string, '--iterations', '2'] + _json}) -%}
+                                                         '--content', 'backup'] + _json}) -%}
       {%-   endfor -%}
       {%- endif -%}
       {{ c }}
 
+# The simulation's answer and its key, for the report play to keep: only a fresh one, since a kept one is kept already.
+- name: proxmox | Say what the upgrade simulation answered
+  ansible.builtin.set_fact:
+    status_upgrades_fresh: "{{ status_proxmox_reads.results.updates | default(none) | status_upgrades_to_keep }}"
+  when: status_upgrades_kept_file | length > 0
+
 # Which VMs a failed backup run failed, and why, is only in its log: read those of the newest few that failed.
 - name: proxmox | Read the logs of the backup runs that failed
   status_read:
-    commands: >-
+    commands: {}
+    api: >-
       {%- set c = {} -%}
       {%- for upid in _runs -%}
-      {%-   set _ = c.update({'log-' ~ upid: ['pvesh', 'get', '/nodes/' ~ status_proxmox_node_name ~ '/tasks/' ~ upid
-                                             ~ '/log', '--limit', '5000', '--output-format', 'json']}) -%}
+      {%-   set _ = c.update({'log-' ~ upid: ['/nodes/' ~ status_proxmox_node_name ~ '/tasks/' ~ upid ~ '/log',
+                                             'limit=5000']}) -%}
       {%- endfor -%}
       {{ c }}
+    api_url: "{{ status_proxmox_api_url }}"
+    api_token_id: "{{ status_proxmox_token_id }}"
+    api_token_secret: "{{ status_proxmox_token_secret }}"
+    api_cert_files: "{{ status_proxmox_api_cert_files }}"
     parallel: "{{ status_parallel }}"
     timeout: "{{ status_timeout }}"
   register: status_proxmox_logs
@@ -177,5 +204,4 @@
       proxmox: "{{ status_proxmox_found }}"
       # What roles/proxmox_tailscale's status entry point read, before this role ran: {} when Tailscale is off.
       tailscale: "{{ status_tailscale_state if 'tailscale' in status_reads else none }}"
-      tailnet_dns: "{{ status_tailnet_dns.results.dns | default(none) }}"
       probes: "{{ status_proxmox_probes.results | default([]) }}"

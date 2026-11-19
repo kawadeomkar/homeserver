@@ -29,17 +29,18 @@ SETTINGS = {
 
 
 def findings(**changes):
-    """What each host's play leaves, by host: the Proxmox host's (its Tailscale early too), the cluster's, the NAS's,
-    the probes split between the first two as each asks them."""
+    """What each host's play leaves, by host: the Proxmox host's (its Tailscale early too), the cluster's (with this
+    machine's view of the tailnet's DNS), the NAS's, the probes split between the first two as each asks them."""
     full = tsf.everything() | changes
     vm = [p for p in full["probes"] if "homeserver.internal" not in p["url"]]
-    early = {"tailscale": full["tailscale"], "tailnet_dns": full["tailnet_dns"]}
+    early = {"tailscale": full["tailscale"]}
     return {
         "homeserver": ({**early, "proxmox": full["proxmox"], "probes": vm}, early),
         "homeserver-k8s": (
             {
                 "cluster": full["cluster"],
                 "etcd_snapshots": full["etcd_snapshots"],
+                "tailnet_dns": full["tailnet_dns"],
                 "probes": [p for p in full["probes"] if p not in vm],
             },
             None,

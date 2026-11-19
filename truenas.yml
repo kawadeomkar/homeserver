@@ -2,7 +2,7 @@
 # Configure the NAS through its API. Check first:
 #   just check truenas                 (or, in the project's virtualenv: ansible-playbook truenas.yml --check --diff)
 # One stage at a time: just deploy truenas --tags truenas_network (or truenas_pools, truenas_system,
-# truenas_datasets, truenas_snapshots, truenas_nfs, truenas_alerts or truenas_services).
+# truenas_datasets, truenas_snapshots, truenas_nfs, truenas_smb, truenas_alerts or truenas_services).
 # Without a NAS (no truenas_static_address or truenas_bootstrap_address in group_vars/all/local.yml)
 # the play says so and ends before the role runs. A TrueNAS section that keeps other settings but gives
 # no address stops it instead: that is what a misspelt address looks like. The Kubernetes section is checked
@@ -21,6 +21,12 @@
       ansible.builtin.assert:
         that: kubernetes_settings_error | length == 0
         fail_msg: "{{ kubernetes_settings_error | join(' ') }}"
+        quiet: true
+      tags: [always]
+    - name: Refuse an incomplete Time Machine section
+      ansible.builtin.assert:
+        that: timemachine_settings_error | length == 0
+        fail_msg: "{{ timemachine_settings_error | join(' ') }}"
         quiet: true
       tags: [always]
     - name: Say why the NAS is skipped

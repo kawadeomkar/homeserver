@@ -4,7 +4,8 @@
 # they are read under no_log and only the server the kubeconfig names and when each client certificate expires are
 # kept. Another cluster's kubeconfig, such as the home cluster's on a test host whose local.yml leaves
 # kubernetes_talos_config_dir unset, is reported, never read with. status_reads (main.yml) says what the sections shown
-# need: the cluster itself (cluster), its etcd snapshots on this machine (etcd_snapshots), or both.
+# need: the cluster itself (cluster), its etcd snapshots on this machine (etcd_snapshots), this machine's view of the
+# tailnet's DNS (tailnet_dns), or some of them.
 
 - name: cluster | Read the credentials' server and expiry
   ansible.builtin.set_fact:
@@ -28,12 +29,17 @@
 
 # Every kind the report reads, none a Secret: the Deployments with the times each field was set (when just suspend
 # stopped an app), each node's kubelet statistics (its memory, and its disks: Talos's guest agent lists none),
-# Alertmanager's firing alerts, etcd's state, and the commit the branch Flux syncs points at now.
+# Alertmanager's firing alerts, etcd's state, and the commit the branch Flux syncs points at now. With them, this
+# machine's own Tailscale's view of the tailnet's DNS, where it sends the apps' domain, which the Tailscale section
+# shows when the Proxmox host advertises a route: read here, where the cluster's reads run anyway, rather than in
+# the Proxmox host's play before its own reads.
 - name: cluster | Read the cluster, at once
   status_read:
     commands: "{{ _commands }}"
     parallel: "{{ status_parallel }}"
     timeout: "{{ status_timeout }}"
+    # This machine's Tailscale answers at once or is wedged: it gives up as a probe does, not as a cluster may.
+    timeouts: "{{ {'dns': status_probe_timeout} if 'dns' in _commands else {} }}"
   register: status_cluster_reads
   when: "'cluster' in status_reads and status_cluster_unread | length == 0"
   vars:
@@ -67,6 +73,9 @@
       {%- endif -%}
       {%- if status_cluster_flux_url and status_cluster_flux_ref -%}
       {%-   set _ = c.update({'remote': ['git', 'ls-remote', status_cluster_flux_url, status_cluster_flux_ref]}) -%}
+      {%- endif -%}
+      {%- if 'tailnet_dns' in status_reads and status_tailnet_dns -%}
+      {%-   set _ = c.update({'dns': ['tailscale', 'dns', 'status', '--json']}) -%}
       {%- endif -%}
       {{ c }}
 
@@ -108,4 +117,5 @@
     status_found:
       etcd_snapshots: "{{ status_cluster_snapshots }}"
       cluster: "{{ status_cluster_found }}"
+      tailnet_dns: "{{ status_cluster_reads.results.dns | default(none) }}"
       probes: "{{ status_cluster_probes.results | default([]) }}"

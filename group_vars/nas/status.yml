@@ -9,3 +9,9 @@ status_nas_state: "{{ truenas_status | default({}) }}"
 status_nas_static_address: "{{ truenas_api_hosts | default([], true) | first | default('', true) | trim }}"
 # The release roles/truenas is written for, its own default, which status.yml's import of the role brings in.
 status_nas_release: "{{ truenas_supported_version | default('') }}"
+# The services as the NAS play keeps them, {name: {enabled, state}}: truenas_services (group_vars/nas/truenas.yml), and
+# the SMB service (cifs), which is truenas_smb_service's alone (group_vars/nas/timemachine.yml), since roles/truenas
+# refuses cifs among truenas_services. One that runs while it is to be stopped is a problem.
+status_nas_services: >-
+  {{ (truenas_services | default({}, true))
+     | combine({'cifs': truenas_smb_service} if truenas_smb_service | default(none) is mapping else {}) }}

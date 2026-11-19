@@ -2,7 +2,8 @@
 # tasks_from: report. Puts together what each host of status_hosts found (status_found, from the main entry point,
 # which also asked the apps' addresses), ranks what needs attention, writes the report to status_report_file and shows
 # it as text. just status runs as a dry run and takes its exit code from that file, so the file is written in a dry
-# run too; it holds addresses, so only its owner may read it.
+# run too; it holds addresses, so only its owner may read it. Beside it, status_upgrades_kept_file keeps the Proxmox
+# host's upgrade simulation's fresh answer for the next run.
 
 - name: report | Put the findings together
   ansible.builtin.set_fact:
@@ -20,27 +21,31 @@
                          admin=status_admin, commands=status_commands,
                          now=status_now or now().timestamp() | int) }}
 
-- name: report | Write the report
+# In the controller's own process (action_plugins/status_write_json.py): copy took 0.4 s of every run, two modules.
+- name: report | Write the report as JSON
+  status_write_json:
+    path: "{{ status_report_file }}"
+    content: "{{ status_report }}"
+  check_mode: false
   when: status_report_file | length > 0
-  block:
-    # Only the first time: a task less to wait for on every run after.
-    - name: report | Make the report's directory
-      ansible.builtin.file:
-        path: "{{ status_report_file | dirname }}"
-        state: directory
-        mode: "0700"
-      check_mode: false
-      when: status_report_file | dirname is not directory
-
-    - name: report | Write the report as JSON
-      ansible.builtin.copy:
-        content: "{{ status_report | to_nice_json }}\n"
-        dest: "{{ status_report_file }}"
-        mode: "0600"
-      check_mode: false
 
 # With status_mask, every address in the text reads <addr>; the file above keeps them.
 - name: report | Show the report
   ansible.builtin.debug:
     msg: "{{ status_report | status_text(status_color, status_mask) }}"
   when: not status_quiet
+
+# The Proxmox host's upgrade simulation, answered afresh, with its key: the next run answers it from here while the key
+# is the same. Only this machine keeps it: just status changes nothing on a host. After the report is shown, and never
+# a failure: the report is whole without it, and a file that cannot be written only means the next run simulates.
+- name: report | Keep the upgrade simulation's answer
+  status_write_json:
+    path: "{{ status_upgrades_kept_file }}"
+    content: "{{ _kept }}"
+  check_mode: false
+  failed_when: false
+  when: status_upgrades_kept_file | length > 0 and _kept | length > 0
+  vars:
+    _kept: >-
+      {{ status_hosts | map('extract', hostvars) | map(attribute='status_upgrades_fresh', default={})
+         | select | first | default({}) }}

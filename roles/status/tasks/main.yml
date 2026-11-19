@@ -35,6 +35,9 @@
       {%- if vmids | select('<', 100) | list or vmids | unique | length != vmids | length -%}
       {%-   set _ = out.append('status_vms must be VMs with distinct VMIDs from 100 up.') -%}
       {%- endif -%}
+      {%- if status_upgrades_kept_file and not status_upgrades_kept_file.startswith('/') -%}
+      {%-   set _ = out.append('status_upgrades_kept_file must be an absolute path, or empty.') -%}
+      {%- endif -%}
       {{ out }}
 
 # A host with nothing to read still says so, so that the report play can tell it from one refused before its reads:
@@ -59,5 +62,8 @@
 - name: Work out what the NAS says
   ansible.builtin.set_fact:
     status_found:
-      nas: "{{ status_nas_state | status_nas(status_nas_release, static_address=status_nas_static_address) }}"
+      nas: >-
+        {{ status_nas_state
+           | status_nas(status_nas_release, status_nas_macs, status_nas_services, status_nas_known_clients,
+                        static_address=status_nas_static_address) }}
   when: status_source == 'nas' and status_source | status_host_reads(status_types) | length > 0

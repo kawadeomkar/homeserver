@@ -3,6 +3,7 @@ paths:
   - "roles/truenas/**"
   - "group_vars/nas/**"
   - "group_vars/all/storage.yml"
+  - "group_vars/all/timemachine.yml"
   - "truenas.yml"
   - "tests/unit/test_truenas_*.py"
   - "tests/integration/truenas*.yml"

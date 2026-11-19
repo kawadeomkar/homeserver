@@ -8,7 +8,7 @@ by their variable in `group_vars/all/local.yml`; the real values live only there
 
 | Failure | What survives | What Ansible restores | What you do by hand |
 | --- | --- | --- | --- |
-| NAS boot drive | The data pools, with every dataset and its properties | Network, pool import, settings, NFS shares, services | Reinstall, API user and key, certificate pin |
+| NAS boot drive | The data pools, with every dataset and its properties, the Macs' Time Machine backups and their snapshots among them | Network, pool import, settings, NFS shares, the Macs' logins (same uids, passwords from the vault) and Time Machine shares (same volume ids), services | Reinstall, API user and key, certificate pin |
 | One disk of the RAIDZ1 pool (`persistent`) | The pool, degraded | Nothing until the pool is healthy: the role only imports ONLINE pools | Replace the disk and resilver (see [Known limits](#known-limits)) |
 | The single disk of `ephemeral` | Nothing: that pool and the media on it are lost, and so is the worker's system disk | A new, empty pool on a blank replacement disk, then its datasets and share | Allow pool creation and list the new disk; give the worker a new system disk and reinstall it ([dead-worker.md](dead-worker.md)) |
 | NAS network card | Everything on disk | Everything, once the NAS is reachable | Update the router's DHCP reservation to the new MAC |
@@ -93,7 +93,7 @@ minute and a full dry run uses about 16, so leave a minute between a full dry ru
 | 2 | `just deploy truenas --tags truenas_network` | DHCP off, static address applied. If the role can't reconnect, TrueNAS rolls back by itself after 90 s |
 | 3 | `just deploy truenas --tags truenas_pools` | System dataset pinned to the boot pool, both pools imported. Don't accept TrueNAS's offer to upgrade pool features |
 | 4 | `just check truenas --tags truenas_datasets` | No change: the datasets and their properties came back with the pools. Only a recreated pool shows new datasets |
-| 5 | `just deploy truenas` | HTTPS redirect, snapshot tasks, NFS shares, alert mail, NFS started. Shares, tasks and settings live in TrueNAS's own database, so they come back here. The mail password comes from the vault |
+| 5 | `just deploy truenas` | HTTPS redirect, snapshot tasks, NFS shares, alert mail, NFS started; with Macs in `timemachine_backups`, their logins, directory owners and Time Machine shares, SMB started. Shares, tasks, users and settings live in TrueNAS's own database, so they come back here. The mail and SMB passwords come from the vault. The Macs need nothing: their shares announce the volumes they knew |
 | 6 | `just deploy truenas` | `changed=0` |
 
 The Proxmox host needs nothing: its NFS storages reconnect once the shares exist. `just check proxmox` should
@@ -140,10 +140,11 @@ report no change, and `pvesm status` on the host should show every NFS storage a
 
 | Step | Command | Expect |
 | --- | --- | --- |
-| 1 | `just check proxmox` | A `proxmox.sources` file to write, `Enabled: false` for `pve-enterprise` and `ceph`, and no pending upgrade yet (the package lists are refreshed only for real). The plan shows `add` for the NFS storages (`homeserver-persistent`, `homeserver-ephemeral`, `claude-on-proxmox-ephemeral`, `homeserver-backup`) and, when `local.yml` names VMs to back up, `create` for the `vm-nightly` backup job, its storage pending. Without a NAS: `local-lvm: present` and nothing to add, and the backup job on `vm_backup_storage`, re-added in step 5 above. With remote access: Tailscale to install, the guard to load, with routes forwarding to turn on, and "Would log the node in with the auth key" |
+| 1 | `just check proxmox` | A `proxmox.sources` file to write, `Enabled: false` for `pve-enterprise` and `ceph`, and no pending upgrade yet (the package lists are refreshed only for real). The plan shows `add` for the NFS storages (`homeserver-persistent`, `homeserver-ephemeral`, `claude-on-proxmox-ephemeral`, `homeserver-backup`) and, when `local.yml` names VMs to back up, `create` for the `vm-nightly` backup job, its storage pending. Without a NAS: `local-lvm: present` and nothing to add, and the backup job on `vm_backup_storage`, re-added in step 6 above. With remote access: Tailscale to install, the guard to load, with routes forwarding to turn on, and "Would log the node in with the auth key" |
 | 2 | `just deploy proxmox` | Repositories written, package lists refreshed, packages upgraded, and, since that brings a newer kernel, "Reboot the node when it is safe to": reboot the host by hand. With remote access: Tailscale installed, the guard loaded, the host logged in and, with routes, its route approved ("Nothing for the admin console to fix"). The storages added and active, start-on-boot delay set, backup job created. Without a NAS: no storage change |
 | 3 | `just deploy proxmox` | `changed=0` |
 | 4 | `pveum aclmod /storage/claude-on-proxmox-ephemeral -user <user> -role <role>` | With a NAS: the grant for each project pool, with the user and role from that project's README, which also creates them on a fresh host |
+| 5 | [proxmox-token.md](proxmox-token.md)'s "Make it", then `just vault` | The project's Proxmox API token, which was on the old boot drive, made again with its role, user and grant, its new secret in the vault as `vault_proxmox_token_secret`; `just status vms` then reads the host. No playbook needs it: until then, `just status` alone says the Proxmox host could not be read |
 
 A fresh install carries none of the old `truenas-*` storage ids, so nothing needs removing; `README.md`'s
 section on storage for projects that create VMs says what each project is then told.

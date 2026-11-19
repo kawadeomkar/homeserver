@@ -64,9 +64,10 @@ files under `k8s/` stay; they decrypt with it alone.
 
 ## 4. The NAS (with a NAS)
 
-The NAS role creates and never deletes, so this part is by hand, the one exception to "every change goes through
-the role", and needs the owner. With the Kubernetes section gone from `local.yml`, `just check truenas` shows
-nothing to add back; it then lists what remains for you to remove in the TrueNAS UI (below with the default pool
+The NAS role creates and never deletes, so this part is by hand and needs the owner. What the role never does, deleting,
+rolling back and a snapshot's check clone with its temporary share, is the owner's alone, made in TrueNAS's web UI only
+where a runbook says how; never an agent's. With the Kubernetes section gone from `local.yml`, `just check truenas`
+shows nothing to add back; it then lists what remains for you to remove in the TrueNAS UI (below with the default pool
 names, `persistent` and `ephemeral`: yours if `local.yml` renames them):
 
 - **The NFS shares** of `persistent/nextcloud`, `persistent/photoprism`, `ephemeral/frigate` and
