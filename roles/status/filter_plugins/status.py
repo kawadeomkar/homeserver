@@ -2020,7 +2020,9 @@ def _nas_attention(found, commands):
     for pool in found.get("pools") or []:
         name = pool["name"]
         if not pool["healthy"] or pool["status"] != "ONLINE":
-            out.append(_item("problem", name, _pool_problem(pool, disks.get(name, []))))
+            faulty = any(_error_counts(disk) for disk in disks.get(name, []))
+            command = commands.get("nas_disk_errors", "") if faulty else ""
+            out.append(_item("problem", name, _pool_problem(pool, disks.get(name, [])), command))
         fraction = pool["used"] / pool["total"] if pool["total"] else 0
         if fraction >= STORAGE_TODO:
             text = f"the pool is {fraction:.0%} full: {_sizes(pool['used'], pool['total'])}"
@@ -2043,7 +2045,7 @@ def _nas_attention(found, commands):
         # pool's problem, above: ZFS calls a pool with any of them not healthy.
         if _hot(disk) and temp < critical:
             text = f"the disk is at {temp} °C, within {DISK_HOT_MARGIN} °C of its critical temperature"
-            out.append(_item("todo", name, f"{text} of {critical} °C"))
+            out.append(_item("todo", name, f"{text} of {critical} °C", commands.get("nas_disk_heat", "")))
     for task in found.get("snapshots") or []:
         if task["enabled"] and task["state"] == "ERROR":
             text = f"the {task['every']} snapshots of {task['dataset']} failed: {task['error'] or 'no reason given'}"
@@ -2060,7 +2062,7 @@ def _nas_attention(found, commands):
         out.append(_item("problem", "nfs", text, commands.get("nas", "")))
     for address in found.get("unexpected_clients") or []:
         text = f"an NFS share is mounted from {address}, which is no machine of this setup"
-        out.append(_item("problem", "nfs", text))
+        out.append(_item("problem", "nfs", text, commands.get("nas_clients", "")))
     smb = found.get("smb") or {}
     if smb.get("shares") and smb.get("state") != "RUNNING":
         count = smb["shares"]
@@ -2439,8 +2441,8 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
     empty means every one. `probes` is what status_probe saw, `found`'s own probes when not given, `admin` the admin
     pages ({name, url, and tailscale_node for the page the Proxmox host serves itself}) to list, `commands` the
     commands to suggest by purpose (upgrade, resume with {names}, talos_upgrade, credentials, allowlist, secrets, nas,
-    nas_release, nas_network, nas_clock, time_machine, time_machine_quota, backup, backup_target, etcd_snapshot,
-    tailscale, tailscale_login, split_dns), `now` seconds since the epoch, `tailnet_dns` what tailscale dns status
+    nas_release, nas_network, nas_clock, nas_disk_heat, nas_disk_errors, nas_clients, time_machine, time_machine_quota,
+    backup, backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns), `now` seconds since the epoch, `tailnet_dns` what tailscale dns status
     --json said on this machine, if it runs Tailscale, `found`'s own when not given."""
     shown, setup, commands = types_shown(types), dict(setup or {}), dict(commands or {})
     needed = sources(types)

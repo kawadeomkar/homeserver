@@ -286,8 +286,9 @@ argument_specs:
         default: {}
         description: >-
           The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials,
-          allowlist, secrets, nas, nas_release, nas_network, nas_clock, time_machine, time_machine_quota, backup,
-          backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns. One left out is suggested by text alone.
+          allowlist, secrets, nas, nas_release, nas_network, nas_clock, nas_disk_heat, nas_disk_errors, nas_clients,
+          time_machine, time_machine_quota, backup, backup_target, etcd_snapshot, tailscale, tailscale_login,
+          split_dns. One left out is suggested by text alone.
   report:
     short_description: Put just status's findings together, write the report and show it
     description:
@@ -342,5 +343,6 @@ argument_specs:
         default: {}
         description: >-
           The commands the report suggests, by purpose: upgrade, resume (with {names}), talos_upgrade, credentials,
-          allowlist, secrets, nas, nas_release, nas_network, nas_clock, time_machine, time_machine_quota, backup,
-          backup_target, etcd_snapshot, tailscale, tailscale_login, split_dns. One left out is suggested by text alone.
+          allowlist, secrets, nas, nas_release, nas_network, nas_clock, nas_disk_heat, nas_disk_errors, nas_clients,
+          time_machine, time_machine_quota, backup, backup_target, etcd_snapshot, tailscale, tailscale_login,
+          split_dns. One left out is suggested by text alone.

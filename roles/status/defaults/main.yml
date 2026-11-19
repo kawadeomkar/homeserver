@@ -96,8 +96,10 @@ status_admin: []
 # {names} for theirs), talos_upgrade, credentials (renewed), allowlist (Traefik's still closed), secrets (an app's
 # missing Secret), nas (the NAS's settings applied again), nas_release (a TrueNAS release its configuration is not
 # written for), nas_network (interface changes never committed), nas_clock (the NAS's clock a minute or more from this
-# machine's), time_machine (a Mac's backup late or never completed, looked at on the Mac), time_machine_quota (a Mac's
-# backup nearing its quota), backup (a backup job applied again), backup_target (where backups could go, when there is
-# no job), etcd_snapshot (taking one), tailscale (the Proxmox host's Tailscale applied again), tailscale_login (its
-# first login), split_dns (the tailnet's split DNS for the apps' domain). One left out is suggested by text alone.
+# machine's), nas_disk_heat (a disk near its critical temperature), nas_disk_errors (a pool not healthy for its disks'
+# errors), nas_clients (an NFS share mounted from an address no machine of this setup has), time_machine (a Mac's
+# backup late or never completed, looked at on the Mac), time_machine_quota (a Mac's backup nearing its quota), backup
+# (a backup job applied again), backup_target (where backups could go, when there is no job), etcd_snapshot (taking
+# one), tailscale (the Proxmox host's Tailscale applied again), tailscale_login (its first login), split_dns (the
+# tailnet's split DNS for the apps' domain). One left out is suggested by text alone.
 status_commands: {}

@@ -1473,6 +1473,9 @@ NAS_COMMANDS = {
     "nas_release": "raise truenas_supported_version",
     "nas_network": "commit them on the NAS",
     "nas_clock": "its NTP servers",
+    "nas_disk_heat": "cool the disk",
+    "nas_disk_errors": "the disks' SMART results",
+    "nas_clients": "who holds the address",
     "time_machine": "look on the Mac",
     "time_machine_quota": "raise quota_gib",
 }
@@ -2247,7 +2250,7 @@ def test_a_disk_near_its_critical_temperature(reading, todo, style):
     model = nas_report(nas_state(health={"temperatures": temperatures(nvme3n1=(reading, 80.85))}))
     shown = fs.whole_celsius(reading)
     text = f"the disk is at {shown} °C, within 10 °C of its critical temperature of 81 °C"
-    assert attention(model) == ([("todo", "nvme3n1", text, "")] if todo else [])
+    assert attention(model) == ([("todo", "nvme3n1", text, "cool the disk")] if todo else [])
     assert model["exit"] == 0
     line = next(line for line in nas_block(model, True) if "nvme3n1" in line)
     assert line.endswith(f"nvme3n1\033[{style}m {shown}\033[0m" if style else f"nvme3n1 {shown}"), line
@@ -2278,7 +2281,7 @@ def test_a_disks_errors_and_state_beside_its_temperature():
     model = nas_report(state)
     errors = "nvme2n1 (1 read, 2 write, 3 checksum) and nvme3n1 (faulted, 1 checksum)"
     text = f"the pool is DEGRADED, with errors on {errors}: {FAULTED_DEV}"
-    assert attention(model) == [("problem", "persistent", text, "")]
+    assert attention(model) == [("problem", "persistent", text, "the disks' SMART results")]
     assert model["exit"] == 1
     lines = nas_block(model)
     disks = lines.index(" Disks °C   persistent  nvme1n1 — · nvme2n1 37 (1 read, 2 write, 3 checksum)")
@@ -2306,7 +2309,7 @@ def test_a_disks_errors_are_its_pools_problem():
     failing = pool("persistent", 2.2, 4.9, disks=persistent, healthy=False, detail=FAILING_DEV)
     model = nas_report(nas_state(pools=[failing, pool("ephemeral", 1.0, 2.6, layout="stripe")]))
     text = f"the pool is ONLINE, with errors on nvme2n1 (3 checksum): {FAILING_DEV}"
-    assert attention(model) == [("problem", "persistent", text, "")]
+    assert attention(model) == [("problem", "persistent", text, "the disks' SMART results")]
     assert model["exit"] == 1 and model["counts"]["nas"] == {"problem": 1, "todo": 0}
     lines = nas_block(model, True)
     assert "\033[31monline\033[0m" in next(line for line in lines if "persistent" in line and "%" in line)
@@ -2329,7 +2332,7 @@ def test_a_gone_disk_hides_no_disk_of_its_name():
     assert " Disks °C   persistent  nvme1n1 36 · nvme2n1 (gone, unavail, 2 read) · nvme2n1 37 · nvme3n1 38" in lines
     assert "\033[31m (gone, unavail, 2 read)\033[0m" in "\n".join(nas_block(model, True))
     text = f"the pool is DEGRADED, with errors on nvme2n1 (gone, unavail, 2 read): {MISSING_DEV}"
-    assert attention(model) == [("problem", "persistent", text, "")]
+    assert attention(model) == [("problem", "persistent", text, "the disks' SMART results")]
 
 
 def test_temperatures_not_read_leave_the_disks_without_them():
@@ -2425,7 +2428,9 @@ def test_who_has_the_nfs_shares_mounted(addresses, known, mounted, unexpected):
     assert f" NFS        running · 3 shares · {mounted}" in nas_block(model)
     assert model["nas"]["unexpected_clients"] == unexpected
     text = "an NFS share is mounted from {}, which is no machine of this setup"
-    assert attention(model) == [("problem", "nfs", text.format(address), "") for address in unexpected]
+    assert attention(model) == [
+        ("problem", "nfs", text.format(address), "who holds the address") for address in unexpected
+    ]
     assert model["exit"] == (1 if unexpected else 0)
     if unexpected:
         assert "\033[31m192.0.2.99\033[0m" in "\n".join(nas_block(model, True))

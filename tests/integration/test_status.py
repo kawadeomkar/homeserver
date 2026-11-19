@@ -1317,8 +1317,13 @@ def test_the_nas_sections_details(nas_tree, nas, tmp_path):
         ("todo", "nas", "the NAS's clock is 95 s behind this machine's"),
         ("todo", "nvme3n1", "the disk is at 74 °C, within 10 °C of its critical temperature of 81 °C"),
     ], report["attention"]
-    assert report["attention"][2]["command"] == "just deploy truenas"
-    assert report["attention"][3]["command"].startswith("the NAS's NTP servers"), report["attention"]
+    # Each with what deals with it, from status_commands.
+    commands = [a["command"] for a in report["attention"]]
+    assert commands[0].startswith("each disk's SMART results on the NAS's Storage page"), commands
+    assert commands[1].startswith("who holds the address"), commands
+    assert commands[2] == "just deploy truenas", commands
+    assert commands[3].startswith("the NAS's NTP servers"), commands
+    assert commands[4].startswith("the NAS's fans and airflow"), commands
     found = report["nas"]
     assert found["link"] == {"ports": 2, "up": 2, "speeds": ["2.5 Gb/s", "1 Gb/s"], "mtu": 1500}
     assert [(d["name"], d["pool"], d["temp"], d["critical"], d["checksum_errors"]) for d in found["disks"]] == [

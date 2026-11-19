@@ -198,20 +198,20 @@ provisioned on it against its size, less `status_storage_headroom_gib` on ZFS, d
 **The NAS**: a pool not ONLINE or not healthy, 90% full, or whose last scrub found errors, a snapshot task in ERROR,
 an alert at ERROR or worse, NFS or SMB not running while it has shares, a service running that `status_nas_services`
 keeps stopped (with `status_commands`' `nas`), an NFS share mounted from an address that is no machine of
-`status_nas_known_clients`, and TrueNAS not ready are problems; a pool 80% full, a scrub more than eight days past its
-task's threshold, a pool no scrub task scrubs, a WARNING alert, a release other than `status_nas_release`, interface
-changes never committed, a disk within 10 °C of its own critical temperature, and the NAS's clock 60 s or more from
-this machine's either way (with `nas_clock`) are things to do.
+`status_nas_known_clients` (with `nas_clients`), and TrueNAS not ready are problems; a pool 80% full, a scrub more than
+eight days past its task's threshold, a pool no scrub task scrubs, a WARNING alert, a release other than
+`status_nas_release`, interface changes never committed, a disk within 10 °C of its own critical temperature (with
+`nas_disk_heat`), and the NAS's clock 60 s or more from this machine's either way (with `nas_clock`) are things to do.
 
 **A disk's errors are its pool's problem.** ZFS calls a pool not healthy (`FAILING_DEV`, which TrueNAS words "One or
-more devices has experienced an unrecoverable error…") as soon as any disk of it has a read, write or checksum error,
-a cache disk too, and only a spare not (`find_vdev_problem` in `libzfs_status.c` at zfs-2.3.4), so the pool's problem
-names each disk with errors and its counts, `the pool is ONLINE, with errors on nvme2n1 (3 checksum): …`, and a disk's
-errors are never an item of their own. The counts stay until the pool is imported again, when the NAS reboots, or a
-`zpool clear`: TrueNAS 25.10.7's API has no call that clears them (none in `api/v25_10_5/pool.py` or
-`plugins/zfs_/pool_actions.py`), and a shell on the NAS is no way this repository changes it, so a repaired error
-keeps the pool a problem until the NAS's next boot. A critical temperature of 0 or below, or none, is no threshold,
-as TrueNAS's own alert takes it (`alert/source/disk_temp.py`): such a disk is never hot and never red.
+more devices has experienced an unrecoverable error…") as soon as any disk of it has a read, write or checksum error, a
+cache disk too, and only a spare not (`find_vdev_problem` in `libzfs_status.c` at zfs-2.3.4), so the pool's problem
+names each disk with errors and its counts, `the pool is ONLINE, with errors on nvme2n1 (3 checksum): …`, with
+`nas_disk_errors`, and a disk's errors are never an item of their own. The counts stay until the pool is imported again,
+when the NAS reboots, or a `zpool clear`: TrueNAS 25.10.7's API has no call that clears them (none in
+`api/v25_10_5/pool.py` or `plugins/zfs_/pool_actions.py`), and a shell on the NAS is no way this repository changes it,
+so a repaired error keeps the pool a problem until the NAS's next boot. A critical temperature of 0 or below, or none,
+is no threshold, as TrueNAS's own alert takes it (`alert/source/disk_temp.py`): such a disk is never hot and never red.
 
 The section's lines, in order: the header; `Network`, each port that is up by its speed (Mb/s or Gb/s, from `<n>Mb/s` or
 `<n>base…`, else TrueNAS's own words), the MTU when it is not 1500, and how many of the ports (physical interfaces: a
@@ -306,7 +306,7 @@ its mount in `status_cluster_volumes`.
 | `status_probe_apps` | `true` | Whether each host's play asks the addresses of the apps it found from this machine |
 | `status_probe_timeout` | `5` | Seconds each lookup and request may take |
 | `status_admin` | `[]` | report: the admin pages it lists, each `{name, url}`; `tailscale_node: true` marks the page the Proxmox host serves itself |
-| `status_commands` | `{}` | report: the commands it suggests, by purpose (`upgrade`, `reboot`, `resume` with `{names}`, `talos_upgrade`, `credentials`, `allowlist`, `secrets`, `nas`, `nas_release`, `nas_network`, `nas_clock`, `time_machine`, `time_machine_quota`, `backup`, `backup_target`, `etcd_snapshot`, `tailscale`, `tailscale_login`, `split_dns`) |
+| `status_commands` | `{}` | report: the commands it suggests, by purpose (`upgrade`, `reboot`, `resume` with `{names}`, `talos_upgrade`, `credentials`, `allowlist`, `secrets`, `nas`, `nas_release`, `nas_network`, `nas_clock`, `nas_disk_heat`, `nas_disk_errors`, `nas_clients`, `time_machine`, `time_machine_quota`, `backup`, `backup_target`, `etcd_snapshot`, `tailscale`, `tailscale_login`, `split_dns`) |
 
 ## In this repository
 
