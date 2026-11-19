@@ -10,7 +10,26 @@ description:
     address it was installed with.
   - Makes no changes. C(pool.import_find) is a job, but it only scans disks.
   - With O(status), also reports what just status shows, in the same login - each pool's health, capacity, layout
-    and last scrub, TrueNAS's alerts that are not dismissed, each periodic snapshot task's last run, and the uptime.
+    and last scrub, TrueNAS's alerts that are not dismissed, each periodic snapshot task's last run, the uptime, and
+    each Time Machine share's backup - its dataset's use against its quota, what its snapshots hold, and, for an
+    enabled share, when the newest backup completed, the time in the newest C(aapltm-<epoch>) snapshot Samba takes
+    after each one.
+  - The backups' times come from one C(pool.snapshot.query) for every enabled Time Machine share whose dataset
+    exists, and none without one - filtered on C(dataset) with C(in) and selecting C(name) alone, which TrueNAS
+    answers by listing those datasets' snapshots by name, reading no property; any other filter or select reads every
+    snapshot on the NAS with every property first.
+  - With O(status), also reports each pool's disks by device name, with their state and ZFS's error counts, every
+    disk's temperature and critical temperature (C(disk.temperatures), which TrueNAS reads from the kernel's sensors
+    and keeps for five minutes), the addresses that have the NFS shares mounted, with how many live clients each is
+    (C(nfs.get_nfs3_clients), and C(nfs.get_nfs4_clients) asked for each client's address and status alone), and the
+    NAS's clock beside this machine's. These reads come last, each within 10 seconds, and one that fails or answers
+    null leaves its part null, with why in C(unread), never the whole read failed.
+  - With O(status), no disk's serial or model is reported, not even in TrueNAS's alerts, whose texts quote them - Disk
+    Temperature Is Too Hot and the SMART alerts a disk's serial, Pool Status Is Not Healthy a gone disk's model and
+    serial. Each serial and model the read knows (C(disk.details)', a gone disk's in a pool's topology, and the NAS's
+    own serial) is replaced in an alert's text by the disk's device name, or left out where it has none.
+  - Without O(status), also reports which local users are SMB logins and which user the API key logs in as, by name
+    alone, for the role's check that no SMB login it does not list exists when it starts SMB.
   - Runs on the controller and needs the websocket-client Python package there.
 options:
   api_hosts:
@@ -55,11 +74,38 @@ version:
   description: TrueNAS version without the product prefix, for example C(25.10.7).
   type: str
   returned: success
+smb_shares:
+  description: The SMB shares, by name, with their path, purpose and whether they are enabled.
+  type: list
+  elements: dict
+  returned: success
+  sample: [{name: tm-laptop, path: /mnt/persistent/timemachine/laptop, purpose: TIMEMACHINE_SHARE, enabled: true}]
+smb_users:
+  description: The names of the local users that are SMB logins, TrueNAS's own built-in users left out.
+  type: list
+  elements: str
+  returned: success and not O(status)
+api_user:
+  description: The name of the user the API key logs in as.
+  type: str
+  returned: success and not O(status)
 status:
   description:
     - The NAS's health. Times are RFC 3339 in UTC, sizes bytes. A pool's C(used) and C(available) are its root
       dataset's, what its datasets can still take, parity left out; C(scan) is its last scrub or resilver, and
-      C(scrub) the task that scrubs it, if any. Only alerts that are not dismissed are listed.
+      C(scrub) the task that scrubs it, if any. Only alerts that are not dismissed are listed, each C(text) with every
+      serial and model the read knows replaced by the disk's device name.
+    - A Time Machine share's C(dataset) is the one its path names, and C(dataset_found) false, its sizes null, when
+      the NAS has none there. Its C(last_backup) is null for a disabled share, which is not read, and when no
+      C(aapltm-) snapshot holds a time; a time more than an hour ahead of the controller's clock is ignored.
+    - A pool's C(disks) are its topology's, each named as C(disk.temperatures) names it (a disk that is gone, C(gone),
+      by the one TrueNAS last knew there, else by its ZFS guid), never by the vdev's own name, which can carry a
+      serial.
+      C(temperatures) is each disk's reading and critical temperature in degrees Celsius, either null when TrueNAS
+      has none, and C(nfs_clients) the addresses that have a share mounted, without their ports, each with how many
+      clients it is (an NFSv4 client counts only while live, C(confirmed)); each is null when its read failed or
+      answered null, and C(unread) then says why. C(datetime) is the NAS's clock, and C(read_at) this machine's,
+      halfway through the call that read it.
   type: dict
   returned: success and O(status)
   sample:
@@ -67,15 +113,26 @@ status:
     pools:
       - {name: persistent, status: ONLINE, healthy: true, detail: "", layout: raidz1, used: 2418925581107,
          available: 5387625168896, scan: {function: SCRUB, state: FINISHED, start_time: "2026-10-12T00:00:02+00:00",
-         end_time: "2026-10-12T03:14:51+00:00", percentage: 100.0, errors: 0}, scrub: {threshold: 35, enabled: true}}
+         end_time: "2026-10-12T03:14:51+00:00", percentage: 100.0, errors: 0}, scrub: {threshold: 35, enabled: true},
+         disks: [{name: nvme1n1, status: ONLINE, gone: false, read_errors: 0, write_errors: 0, checksum_errors: 0}]}
+    temperatures: {nvme0n1: {temp: 45.0, critical: 80.85}, sda: {temp: 30.0, critical: 70.85}}
+    nfs_clients: [{address: 192.0.2.20, clients: 1}]
+    datetime: "2026-11-18T10:00:00.250000+00:00"
+    read_at: "2026-11-18T10:00:00.210000+00:00"
+    unread: {}
     alerts:
       - {klass: SMARTTestFailed, level: CRITICAL, text: "...", datetime: "2026-10-20T08:00:00+00:00"}
     snapshot_tasks:
       - {id: 1, dataset: persistent/proxmox/vm, enabled: true, schedule: {minute: "0", hour: "*", dom: "*",
          month: "*", dow: "*"}, lifetime_value: 1, lifetime_unit: DAY, state: FINISHED,
          last_run: "2026-10-21T21:00:01+00:00", error: ""}
+    time_machine:
+      - {name: tm-laptop, dataset: persistent/timemachine/laptop, dataset_found: true, enabled: true,
+         used: 412316860416, quota: 2199023255552, snapshots_used: 21474836480,
+         last_backup: "2026-11-17T20:14:05+00:00"}
 """
 
+import re
 import time
 from datetime import UTC, datetime
 
@@ -86,6 +143,24 @@ from ansible.module_utils.truenas_api import (
     open_client,
     pick,
 )
+
+# Samba's snapshot after each completed Time Machine backup, named after the time it completed (vfs_tmprotect).
+BACKUP_SNAPSHOT = re.compile(r"aapltm-(\d+)")
+# Seconds a time in one's name may be ahead of this machine's clock: the NAS's clock and this one's never agree exactly.
+FUTURE_SLACK = 3600
+# A pool's kinds of vdev, as pool.query's topology names them, and the error counts ZFS keeps for each vdev (libzfs's
+# vdev stats), which `zpool clear` and a pool's import reset.
+VDEV_KINDS = ("data", "special", "dedup", "log", "cache", "spare")
+ERROR_COUNTS = ("read_errors", "write_errors", "checksum_errors")
+# Seconds each read that may fail on its own may take, where every other call has the client's api_timeout: a disk that
+# is slow to answer its sensor's read holds disk.temperatures up, and the status would wait for it.
+OPTIONAL_TIMEOUT = 10
+# What is asked of each NFSv4 client: its address and its status alone, which TrueNAS's filter_list selects on dotted
+# paths (utils/filter_list.py at TS-25.10.7), so the client's own name and every file it holds open stay on the NAS.
+NFS4_SELECT = {"select": ["info.address", "info.status"]}
+# The status of an NFSv4 client that is live. The kernel keeps a client that stopped renewing its lease as courtesy for
+# up to a day, then expirable, and one that never confirmed itself unconfirmed: none of them has a share mounted.
+NFS4_LIVE = "confirmed"
 
 
 def _address(alias):
@@ -118,12 +193,195 @@ def _layout(topology):
     return ", ".join("stripe" if kind == "disk" else kind for kind in kinds)
 
 
-def health(api, info, pools, datasets):
-    """What just status shows of the NAS, from what gather read and three more calls."""
+def _share_dataset(share):
+    return str(share.get("path") or "").removeprefix("/mnt/")
+
+
+def _count(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _leaves(topology):
+    """A pool's disks as its topology's vdevs give them, every kind of vdev, depth first, in order."""
+
+    def walk(vdev):
+        if not isinstance(vdev, dict):
+            return
+        if str(vdev.get("type") or "").upper() == "DISK":
+            yield vdev
+        for child in vdev.get("children") or []:
+            yield from walk(child)
+
+    for kind in VDEV_KINDS:
+        for vdev in (topology or {}).get(kind) or []:
+            yield from walk(vdev)
+
+
+def _unavail(vdev):
+    """The disk TrueNAS last knew at a gone disk's place (`unavail_disk`, a disk.query entry), or {}."""
+    return vdev.get("unavail_disk") if isinstance(vdev.get("unavail_disk"), dict) else {}
+
+
+def _disks(topology):
+    """A pool's disks, in its vdevs' order, each with its state, whether it is gone, and ZFS's error counts. A disk is
+    named as disk.temperatures names it (pool.query's `disk`, which TrueNAS works out from the vdev's path); one that
+    is gone, no disk at its path and its state not ONLINE, by the disk TrueNAS last knew at its place (`unavail_disk`,
+    of which its name alone is kept, and which the kernel may since have given another disk), else by its ZFS guid.
+    Never by the vdev's own name, which is its path's: a pool made by hand on /dev/disk/by-id/... would give the
+    disk's model and serial."""
+    return [
+        {
+            "name": str(vdev.get("disk") or _unavail(vdev).get("name") or vdev.get("guid") or ""),
+            "status": str(vdev.get("status") or ""),
+            "gone": not vdev.get("disk") and str(vdev.get("status") or "") != "ONLINE",
+            **{key: _count((vdev.get("stats") or {}).get(key)) for key in ERROR_COUNTS},
+        }
+        for vdev in _leaves(topology)
+    ]
+
+
+def _known_disks(details, pools, info):
+    """Every disk whose serial and model this read knows, each {name, serial, model}: disk.details' (used and
+    unused), each disk gone from a pool that TrueNAS last knew at its place, and the NAS itself, by its serial alone,
+    which has no device name."""
+    disks = [d for kind in ("used", "unused") for d in (details or {}).get(kind) or [] if isinstance(d, dict)]
+    disks += [_unavail(vdev) for p in pools for vdev in _leaves(p.get("topology")) if _unavail(vdev)]
+    return [*disks, {"name": "", "serial": info.get("system_serial"), "model": ""}]
+
+
+def without_serials(text, disks):
+    """`text` with every serial and model of `disks` ({name, serial, model}) left out, as TrueNAS's alerts quote
+    them at TS-25.10.7: Disk Temperature Is Too Hot gives a disk's serial after its device (alert/source/disk_temp.py),
+    the SMART alerts after its name (smart.py), and Pool Status Is Not Healthy a gone disk's model and serial
+    (volume_status.py). Their own wordings come out whole, "sda (<serial>)" as "sda", " (with serial: <serial>)" as
+    nothing and "<model> <serial>" as the device name; anywhere else a serial becomes the device name, or "(serial
+    left out)" without one, and a model, which many disks may share, "(model left out)". Each is matched whole, never
+    inside a longer word (a serial's own - and _ count as its letters), the longest first."""
+    pairs = []
+    for disk in disks:
+        name, serial, model = (str(disk.get(key) or "").strip() for key in ("name", "serial", "model"))
+        if serial:
+            if name:
+                pairs += [(f"{name} ({serial})", name), (f" (with serial: {serial})", "")]
+            if model:
+                pairs.append((f"{model} {serial}", name or "(serial left out)"))
+            pairs.append((serial, name or "(serial left out)"))
+        if model:
+            pairs.append((model, "(model left out)"))
+    for found, put in sorted(pairs, key=lambda pair: -len(pair[0])):
+        start = r"(?<![A-Za-z0-9_-])" if found[0].isalnum() else ""
+        end = r"(?![A-Za-z0-9_-])" if found[-1].isalnum() else ""
+        text = re.sub(start + re.escape(found) + end, lambda _, put=put: put, text)
+    return text
+
+
+def _celsius(value):
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _temperatures(answer):
+    """disk.temperatures' answer with thresholds, {disk: [celsius, critical celsius]}, as {disk: {temp, critical}}.
+    Either is null for a disk whose sensor TrueNAS cannot read (a virtual disk has none)."""
+    out = {}
+    for name, value in answer.items() if isinstance(answer, dict) else ():
+        reading, critical = [*value, None, None][:2] if isinstance(value, (list, tuple)) else (value, None)
+        out[str(name)] = {"temp": _celsius(reading), "critical": _celsius(critical)}
+    return out
+
+
+def _client_address(text):
+    """An NFSv4 client's address without its port: 192.0.2.20 from 192.0.2.20:739, and 2001:db8::5 from
+    [2001:db8::5]:739."""
+    text = str(text or "").strip()
+    if text.startswith("["):
+        return text[1:].partition("]")[0]
+    host, colon, port = text.rpartition(":")
+    return host if colon and port.isdigit() and ":" not in host else text
+
+
+def nfs_clients(v3, v4):
+    """The addresses that have an NFS share mounted, each once, in the order read, with how many clients it is:
+    NFSv3's from rmtab (`ip`), which may keep a client that has gone and tells no two clients of one address apart, one
+    client each, and NFSv4's live clients from the kernel's list (`info.address`, `info.status` NFS4_LIVE), each a
+    client of its own, so that a second client behind one address counts. Nothing else of either is kept."""
+    counts = {}
+    for client in v3 or []:
+        address = str(client.get("ip") or "").strip() if isinstance(client, dict) else ""
+        if address:
+            counts.setdefault(address, 0)
+    for client in v4 or []:
+        info = client.get("info") if isinstance(client, dict) else None
+        info = info if isinstance(info, dict) else {}
+        address = _client_address(info.get("address"))
+        if address and info.get("status") == NFS4_LIVE:
+            counts[address] = counts.get(address, 0) + 1
+    return [{"address": address, "clients": max(count, 1)} for address, count in counts.items()]
+
+
+def _optional(api, unread, part, method, *params):
+    """A read that may fail on its own, within OPTIONAL_TIMEOUT: its answer, or None with why in unread[part], also
+    for a null answer, which TrueNAS never gives for these. The NAS is still read."""
+    try:
+        answer = api.call(method, *params, timeout=OPTIONAL_TIMEOUT)
+    except TrueNASError as exc:
+        unread[part] = str(exc)
+        return None
+    if answer is None:
+        unread[part] = f"{method}: TrueNAS answered null"
+    return answer
+
+
+def time_machine(api, shares, datasets):
+    """Each Time Machine share's backup: its dataset's use, quota and snapshots' share of it, and, for an enabled share,
+    when the newest backup completed, which the newest of the aapltm-<epoch> snapshots Samba takes after each one says.
+
+    One pool.snapshot.query for every enabled share whose dataset exists, and none without one. A select of name alone,
+    filtered on dataset alone, is TrueNAS's fast path (zfs.snapshot.query, TS-25.10.7): it lists the snapshots of those
+    datasets alone and reads no property, where any other select or filter reads every snapshot on the NAS with every
+    property, then filters. Each name, <dataset>@<snapshot>, is split here, so a snapshot counts for its own dataset
+    alone, and for none it was not asked about. A time more than FUTURE_SLACK ahead of this machine's clock is no
+    backup's: the NAS's clock was wrong, or the name was made by hand. Taken as the newest it would keep the Mac from
+    ever reading as late, and one past the year 9999 is a time datetime cannot hold."""
+    shares = [s for s in shares if s.get("purpose") == "TIMEMACHINE_SHARE"]
+    enabled = [_share_dataset(s) for s in shares if s.get("enabled", True)]
+    read = list(dict.fromkeys(dataset for dataset in enabled if dataset in datasets))
+    newest = {}
+    if read:
+        latest = time.time() + FUTURE_SLACK
+        for snapshot in api.call("pool.snapshot.query", [["dataset", "in", read]], {"select": ["name"]}):
+            dataset, _, name = str(snapshot.get("name") or "").partition("@")
+            backup = BACKUP_SNAPSHOT.fullmatch(name)
+            if dataset in read and backup and int(backup.group(1)) <= latest:
+                newest[dataset] = max(newest.get(dataset, 0), int(backup.group(1)))
+    out = []
+    for share in shares:
+        dataset = _share_dataset(share)
+        found = datasets.get(dataset)
+        out.append(
+            {
+                **pick(share, ["name", "enabled"]),
+                "dataset": dataset,
+                "dataset_found": found is not None,
+                "used": _bytes((found or {}).get("used")),
+                "quota": _bytes((found or {}).get("quota")),
+                "snapshots_used": _bytes((found or {}).get("usedbysnapshots")),
+                "last_backup": _date(newest[dataset]) if dataset in newest else None,
+            }
+        )
+    return out
+
+
+def health(api, info, pools, datasets, smb_shares=(), info_at=None, details=None):
+    """What just status shows of the NAS, from what gather read and three more calls, one for the Time Machine shares'
+    snapshots, and last the three reads that may fail on their own: the disks' temperatures and the NFS clients, whose
+    failure leaves that part null and says why in `unread`. `info_at` is this machine's clock when system.info
+    answered, and `details` disk.details' answer, whose serials and models no alert's text keeps."""
+    known = _known_disks(details, pools, info)
     roots = {d.get("id"): d for d in datasets if "/" not in str(d.get("id"))}
+    by_id = {d.get("id"): d for d in datasets}
     scrubs = {s.get("pool_name"): pick(s, ["threshold", "enabled"]) for s in api.call("pool.scrub.query")}
     scan_fields = ["function", "state", "percentage", "errors"]
-    return {
+    out = {
         "uptime_seconds": info.get("uptime_seconds"),
         "pools": [
             {
@@ -140,13 +398,14 @@ def health(api, info, pools, datasets):
                 if p.get("scan")
                 else None,
                 "scrub": scrubs.get(p.get("name")),
+                "disks": _disks(p.get("topology")),
             }
             for p in pools
         ],
         "alerts": [
             {
                 **pick(a, ["klass", "level"]),
-                "text": a.get("formatted") or a.get("text") or "",
+                "text": without_serials(str(a.get("formatted") or a.get("text") or ""), known),
                 "datetime": _date(a.get("datetime")),
             }
             for a in api.call("alert.list")
@@ -162,15 +421,33 @@ def health(api, info, pools, datasets):
             }
             for t in api.call("pool.snapshottask.query")
         ],
+        "time_machine": time_machine(api, smb_shares, by_id),
+        "datetime": _date(info.get("datetime")),
+        "read_at": _date(info_at),
+    }
+    unread = {}
+    # Every disk, with its critical temperature: TrueNAS reads the kernel's sensors (hwmon), each read a command to the
+    # disk, and keeps each reading for five minutes, which its own temperature alert's checks keep fresh.
+    temperatures = _optional(api, unread, "temperatures", "disk.temperatures", [], True)
+    v3 = _optional(api, unread, "nfs_clients", "nfs.get_nfs3_clients")
+    v4 = _optional(api, unread, "nfs_clients", "nfs.get_nfs4_clients", [], NFS4_SELECT) if v3 is not None else None
+    return out | {
+        "temperatures": None if temperatures is None else _temperatures(temperatures),
+        "nfs_clients": None if v3 is None or v4 is None else nfs_clients(v3, v4),
+        "unread": unread,
     }
 
 
 def gather(api, importable, status=False):
     network = api.call("network.configuration.config")
     disks = api.call("disk.details", {"type": "BOTH"})
+    before = time.time()
     info = api.call("system.info")
+    # This machine's clock when the NAS read its own: halfway through the call, within half its round trip.
+    info_at = (before + time.time()) / 2
     pools = api.call("pool.query")
     datasets = api.call("pool.dataset.query", [], {"extra": {"flat": True}})
+    smb_shares = api.call("sharing.smb.query")
     result = {
         "version": api.call("system.version").removeprefix("TrueNAS-"),
         "ready": api.call("system.ready"),
@@ -183,6 +460,11 @@ def gather(api, importable, status=False):
                 "aliases": [_address(a) for a in iface["aliases"]],
                 "addresses": [_address(a) for a in iface["state"]["aliases"]],
                 "link_state": iface["state"].get("link_state"),
+                # PHYSICAL for a port; a bridge, a VLAN or a link aggregation is another. Its MTU, and the speed
+                # its link runs at, as TrueNAS words it (10000Mb/s Twisted Pair): never its MAC.
+                "type": iface.get("type"),
+                "mtu": iface["state"].get("mtu"),
+                "media": iface["state"].get("active_media_subtype") or "",
             }
             for iface in api.call("interface.query")
         ],
@@ -210,11 +492,17 @@ def gather(api, importable, status=False):
             pick(s, ["id", "path", "hosts", "networks", "enabled", "ro", "maproot_user", "maproot_group"])
             for s in api.call("sharing.nfs.query")
         ],
+        "smb_shares": [pick(s, ["name", "path", "purpose", "enabled"]) for s in smb_shares],
     }
+    if not status:
+        # Names alone: user.query also holds each user's password hashes, which select leaves out.
+        smb = [["local", "=", True], ["builtin", "=", False], ["smb", "=", True]]
+        result["smb_users"] = [u["username"] for u in api.call("user.query", smb, {"select": ["username"]})]
+        result["api_user"] = (api.call("auth.me") or {}).get("pw_name")
     if importable:
         result["importable_pools"] = api.job("pool.import_find")
     if status:
-        result["status"] = health(api, info, pools, datasets)
+        result["status"] = health(api, info, pools, datasets, smb_shares, info_at, disks)
     return result
 
 

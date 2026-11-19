@@ -3,8 +3,8 @@
 The idempotence suite runs every module against tests/integration/fake_truenas.py, which always answers. Here
 websocket.create_connection is replaced by a scripted NAS, and the clock by one whose sleep() returns at once,
 to cover the client's retries and error handling, a failed job, and the interface commit's refusal, rollback
-and check-in. It also shows that truenas_config never returns the UI certificate's private key, which no test
-that only reads Ansible's output can see.
+and check-in. It also shows that truenas_config never returns the UI certificate's private key, and truenas_user
+no password or password hash, which no test that only reads Ansible's output can see.
 """
 
 import importlib.util
@@ -31,6 +31,9 @@ def load(name, path):
 api = load("ansible.module_utils.truenas_api", ROLE / "module_utils" / "truenas_api.py")
 interface = load("truenas_interface", ROLE / "library" / "truenas_interface.py")
 config = load("truenas_config", ROLE / "library" / "truenas_config.py")
+user = load("truenas_user", ROLE / "library" / "truenas_user.py")
+permission = load("truenas_permission", ROLE / "library" / "truenas_permission.py")
+resource = load("truenas_resource", ROLE / "library" / "truenas_resource.py")
 
 NAS = "nas.invalid"
 
@@ -471,3 +474,304 @@ class TestConfigNeverReturnsASecretSetting:
         result = run(config, MAIL_ARGS)
         assert result["failed"] and "these fields did not take: ['pass']" in result["msg"]
         assert PASSWORD not in json.dumps(result) and "FAKE-ROTATED-PASSWORD" not in json.dumps(result)
+
+
+# user.query returns each user's password hashes, and user.create and user.update echo the password they were given
+# (TrueNAS 25.10.7's plugins/account.py). truenas_user asks for named fields alone, but a NAS that ignored select is
+# scripted here: neither a hash nor a password may come back in the result.
+SMB_PASSWORD = "FAKE-SMB-PASSWORD"
+HASHES = {"unixhash": "$6$FAKE-UNIX-HASH", "smbhash": "FAKE-NT-HASH", "password_history": ["FAKE-OLD-HASH"]}
+LOGIN = {
+    "id": 7,
+    "uid": 3101,
+    "username": "tm-laptop",
+    "full_name": "tm-laptop",
+    "smb": True,
+    "shell": "/usr/sbin/nologin",
+    "home": "/var/empty",
+    "locked": False,
+    "password_disabled": False,
+    "builtin": False,
+    "immutable": False,
+    **HASHES,
+}
+USER_ARGS = {
+    "api_host": NAS,
+    "api_key": "a-key",
+    "validate_certs": True,
+    "users": [{"username": "tm-laptop", "uid": 3101, "smb": True, "shell": "/usr/sbin/nologin"}],
+    "passwords": {"tm-laptop": SMB_PASSWORD},
+}
+
+
+def no_secret(result):
+    text = json.dumps(result)
+    return SMB_PASSWORD not in text and not [value for value in HASHES.values() if str(value).strip("[]'") in text]
+
+
+class TestUserNeverReturnsAPassword:
+    @pytest.mark.parametrize("check_mode", [True, False], ids=["check", "apply"])
+    def test_a_new_user_gets_its_password_and_group_and_returns_neither(self, nas, run, check_mode):
+        fake = nas(
+            {
+                "auth.login_with_api_key": True,
+                "user.query": [[]],
+                "user.create": {**LOGIN, "password": SMB_PASSWORD},
+            }
+        )
+        result = run(user, USER_ARGS, check_mode=check_mode)
+        assert not result.get("failed"), result
+        assert result["changed"] and result["actions"] == {"tm-laptop": "create"}
+        assert result["diff"]["after"]["tm-laptop"]["password"] == "<secret, changed>"
+        sent = fake.called("user.create")
+        assert sent == (
+            []
+            if check_mode
+            else [
+                [
+                    {
+                        "username": "tm-laptop",
+                        "full_name": "tm-laptop",
+                        "smb": True,
+                        "shell": "/usr/sbin/nologin",
+                        "group_create": True,
+                        "uid": 3101,
+                        "password": SMB_PASSWORD,
+                    }
+                ]
+            ]
+        )
+        assert fake.called("user.query")[0][1] == {"select": user.SELECT}
+        assert no_secret(result)
+
+    def test_an_existing_user_is_left_alone_and_its_hashes_never_returned(self, nas, run):
+        fake = nas({"auth.login_with_api_key": True, "user.query": [[LOGIN]]})
+        result = run(user, USER_ARGS)
+        assert not result.get("failed"), result
+        assert not result["changed"] and fake.called("user.update") == []
+        assert no_secret(result)
+
+    def test_a_reset_sends_the_password_and_never_returns_it(self, nas, run):
+        fake = nas({"auth.login_with_api_key": True, "user.query": [[LOGIN]], "user.update": LOGIN})
+        result = run(user, {**USER_ARGS, "users_reset": ["tm-laptop"]})
+        assert result["changed"] and result["actions"] == {"tm-laptop": "reset password"}
+        assert fake.called("user.update") == [[7, {"password": SMB_PASSWORD}]]
+        assert no_secret(result)
+
+    def test_smb_turned_on_sends_the_password_with_it(self, nas, run):
+        closed = {**LOGIN, "smb": False, "locked": True, "password_disabled": True}
+        fake = nas({"auth.login_with_api_key": True, "user.query": [[closed]], "user.update": LOGIN})
+        args = {**USER_ARGS, "users": [{**USER_ARGS["users"][0], "locked": False, "password_disabled": False}]}
+        result = run(user, args)
+        assert result["actions"] == {"tm-laptop": "update locked,password_disabled,smb, password"}
+        sent = fake.called("user.update")
+        assert sent == [[7, {"smb": True, "locked": False, "password_disabled": False, "password": SMB_PASSWORD}]]
+        assert no_secret(result)
+
+    def test_a_closed_login_needs_no_password(self, nas, run):
+        fake = nas({"auth.login_with_api_key": True, "user.query": [[LOGIN]], "user.update": LOGIN})
+        closed = {**USER_ARGS["users"][0], "smb": False, "locked": True, "password_disabled": True}
+        result = run(user, {**USER_ARGS, "users": [closed], "passwords": {}})
+        assert not result.get("failed"), result
+        assert fake.called("user.update") == [[7, {"smb": False, "locked": True, "password_disabled": True}]]
+
+    def test_the_api_keys_user_is_taken_out_of_smb(self, nas, run):
+        admin = {**LOGIN, "id": 4, "uid": 3000, "username": "api-admin"}
+        fake = nas(
+            {
+                "auth.login_with_api_key": True,
+                "auth.me": {"pw_name": "api-admin", "two_factor_config": {"provisioning_uri": "otpauth://SECRET"}},
+                "user.query": [[admin]],
+                "user.update": admin,
+            }
+        )
+        result = run(user, {**USER_ARGS, "users": [], "api_user_smb": False})
+        assert result["actions"] == {"api-admin": "update smb"}
+        assert fake.called("user.update") == [[4, {"smb": False}]]
+        assert no_secret(result) and "otpauth" not in json.dumps(result)
+
+    def test_a_login_named_to_close_is_taken_out_of_smb_and_left_otherwise_alone(self, nas, run):
+        someone = {**LOGIN, "id": 9, "uid": 3050, "username": "someone"}
+        fake = nas(
+            {
+                "auth.login_with_api_key": True,
+                "user.query": [[LOGIN], [someone], [], [LOGIN]],
+                "user.update": someone,
+            }
+        )
+        result = run(user, {**USER_ARGS, "smb_closed_users": ["someone", "gone"]})
+        assert not result.get("failed"), result
+        assert result["actions"] == {"someone": "update smb"}
+        assert fake.called("user.update") == [[9, {"smb": False}]]
+        assert result["smb_users"] == ["tm-laptop"]
+
+    @pytest.mark.parametrize("check_mode", [True, False], ids=["check", "apply"])
+    def test_the_smb_logins_after_the_changes_are_returned(self, nas, run, check_mode):
+        admin = {**LOGIN, "id": 4, "uid": 3000, "username": "api-admin"}
+        # The last query reads the SMB logins again: in check mode the API user is still one, as nothing was sent.
+        nas(
+            {
+                "auth.login_with_api_key": True,
+                "auth.me": {"pw_name": "api-admin"},
+                "user.query": [[], [admin], [admin] if check_mode else [{**LOGIN, "username": "tm-laptop"}]],
+                "user.create": LOGIN,
+                "user.update": admin,
+            }
+        )
+        result = run(user, {**USER_ARGS, "api_user_smb": False}, check_mode=check_mode)
+        assert not result.get("failed"), result
+        assert result["smb_users"] == ["tm-laptop"]
+
+    def test_a_password_is_needed_only_when_one_is_sent(self, nas, run):
+        nas({"auth.login_with_api_key": True, "user.query": [[LOGIN]]})
+        result = run(user, {**USER_ARGS, "passwords": {}})
+        assert not result.get("failed") and not result["changed"], result
+
+        nas({"auth.login_with_api_key": True, "user.query": [[]]})
+        result = run(user, {**USER_ARGS, "passwords": {}})
+        assert result["failed"] and "no password in passwords, and the user needs one to be created" in result["msg"]
+
+        closed = {**LOGIN, "smb": False}
+        fake = nas({"auth.login_with_api_key": True, "user.query": [[closed]]})
+        result = run(user, {**USER_ARGS, "passwords": {}})
+        assert result["failed"] and "turning smb on or the password back on needs one" in result["msg"], result
+        assert fake.called("user.update") == []
+
+    def test_a_failure_part_way_says_what_was_already_done(self, nas, run):
+        second = {"username": "tm-studio", "uid": 3102, "smb": True}
+        fake = nas(
+            {
+                "auth.login_with_api_key": True,
+                "user.query": [[{**LOGIN, "shell": "/usr/bin/zsh"}], [{**LOGIN, "username": "tm-studio", "uid": 3005}]],
+                "user.update": LOGIN,
+            }
+        )
+        args = {**USER_ARGS, "users": [*USER_ARGS["users"], second], "passwords": {"tm-laptop": SMB_PASSWORD}}
+        result = run(user, args)
+        assert result["failed"] and "tm-studio exists with uid 3005, not 3102" in result["msg"], result
+        assert result["changed"] and result["actions"] == {"tm-laptop": "update shell"}
+        assert len(fake.called("user.update")) == 1
+
+    @pytest.mark.parametrize(
+        ("found", "message"),
+        [
+            ({**LOGIN, "uid": 3005}, "exists with uid 3005, not 3101"),
+            ({**LOGIN, "immutable": True}, "is one of TrueNAS's own users"),
+            ({**LOGIN, "builtin": True}, "is one of TrueNAS's own users"),
+        ],
+    )
+    def test_a_user_it_cannot_manage_is_refused(self, nas, run, found, message):
+        fake = nas({"auth.login_with_api_key": True, "user.query": [[found]]})
+        result = run(user, USER_ARGS)
+        assert result["failed"] and message in result["msg"], result
+        assert fake.called("user.update") == [] and no_secret(result)
+
+    @pytest.mark.parametrize(
+        ("me", "found", "args", "message"),
+        [
+            ({}, [], {"users": []}, "auth.me names no local user"),
+            ({"pw_name": "nobody"}, [], {"users": []}, "auth.me names no local user"),
+            ({"pw_name": "tm-laptop"}, [LOGIN], {}, "tm-laptop, the API key's user, is also in users"),
+            (
+                {"pw_name": "truenas_admin"},
+                [{**LOGIN, "username": "truenas_admin", "uid": 950, "immutable": True}],
+                {"users": []},
+                "truenas_admin, the API key's user, is one of TrueNAS's own users",
+            ),
+        ],
+    )
+    def test_an_api_user_it_cannot_take_out_of_smb_is_refused(self, nas, run, me, found, args, message):
+        fake = nas({"auth.login_with_api_key": True, "auth.me": me, "user.query": [found]})
+        result = run(user, {**USER_ARGS, **args, "api_user_smb": False})
+        assert result["failed"] and message in result["msg"], result
+        assert fake.called("user.update") == []
+
+    @pytest.mark.parametrize(
+        ("changed", "message"),
+        [
+            ({"users": [{"username": "tm-laptop"}]}, "smb must be true or false"),
+            (
+                {"users": [{"username": "tm-laptop", "smb": True, "password_disabled": True}]},
+                "cannot have password_disabled",
+            ),
+            ({"users_reset": ["someone"]}, "someone: in users_reset, but not one of the users"),
+            (
+                {
+                    "users": [{"username": "tm-laptop", "smb": False, "password_disabled": True}],
+                    "users_reset": ["tm-laptop"],
+                },
+                "tm-laptop: in users_reset, but its password is disabled",
+            ),
+            ({"users_reset": ["tm-laptop"], "passwords": {}}, "tm-laptop: in users_reset, but passwords has none"),
+            ({"smb_closed_users": ["tm-laptop"]}, "tm-laptop: in smb_closed_users and in users"),
+            ({"api_user_smb": True}, "only false is supported"),
+            ({"users": [{"username": "tm-laptop", "smb": True, "groups": [545]}]}, "unknown field(s) ['groups']"),
+            ({"users": [{"smb": True}]}, "a user has no username"),
+            ({"users": [USER_ARGS["users"][0], USER_ARGS["users"][0]]}, "tm-laptop: given twice"),
+        ],
+    )
+    def test_options_are_checked_before_connecting(self, nas, run, changed, message):
+        fake = nas({"auth.login_with_api_key": True})
+        result = run(user, {**USER_ARGS, **changed})
+        assert result["failed"] and message in result["msg"], result
+        assert fake.calls == [], "the NAS was asked something"
+
+
+STAT = {"user": "tm-laptop", "group": "tm-laptop", "mode": 0o40700, "acl": False, "uid": 3101, "gid": 3101}
+PERMISSION_ARGS = {
+    "api_host": NAS,
+    "api_key": "a-key",
+    "validate_certs": True,
+    "entries": [{"path": "/mnt/tank/timemachine/laptop", "user": "tm-laptop", "group": "tm-laptop", "mode": "700"}],
+}
+
+
+class TestPermission:
+    def test_an_entry_it_refuses_is_refused_before_connecting(self, nas, run):
+        fake = nas({"auth.login_with_api_key": True})
+        bad = {**PERMISSION_ARGS["entries"][0], "mode": 504}
+        result = run(permission, {**PERMISSION_ARGS, "entries": [bad]})
+        assert result["failed"] and "is not an octal string" in result["msg"], result
+        assert fake.calls == [], "the NAS was asked something"
+
+    def test_a_missing_directory_in_a_dry_run_is_one_a_dataset_of_the_run_makes_or_a_mistake(self, nas, run):
+        nas({"auth.login_with_api_key": True, "filesystem.stat": Refuse("[ENOENT] Path does not exist")})
+        made = {**PERMISSION_ARGS, "created_paths": ["/mnt/tank/timemachine/laptop"]}
+        result = run(permission, made, check_mode=True)
+        assert not result.get("failed") and result["actions"] == {"/mnt/tank/timemachine/laptop": "set"}, result
+
+        nas({"auth.login_with_api_key": True, "filesystem.stat": Refuse("[ENOENT] Path does not exist")})
+        result = run(permission, PERMISSION_ARGS, check_mode=True)
+        assert result["failed"] and "no such directory, and no dataset this run creates" in result["msg"], result
+
+    def test_a_setperm_that_does_not_take_is_refused_with_what_was_done(self, nas, run):
+        other = {**PERMISSION_ARGS["entries"][0], "path": "/mnt/tank/timemachine/studio"}
+        fake = nas(
+            {
+                "auth.login_with_api_key": True,
+                "filesystem.stat": [
+                    {**STAT, "mode": 0o40770},
+                    STAT,
+                    {**STAT, "mode": 0o40770},
+                    {**STAT, "user": "root"},
+                ],
+                "filesystem.setperm": 5,
+                "core.get_jobs": [[{"id": 5, "state": "SUCCESS"}]],
+            }
+        )
+        result = run(permission, {**PERMISSION_ARGS, "entries": [*PERMISSION_ARGS["entries"], other]})
+        assert result["failed"] and "studio: filesystem.setperm was accepted but it now has" in result["msg"], result
+        # The second directory's setperm ran, so it is in actions too, though it did not take.
+        assert result["changed"] and result["actions"] == {
+            "/mnt/tank/timemachine/laptop": "set mode",
+            "/mnt/tank/timemachine/studio": "set",
+        }
+        assert len(fake.called("filesystem.setperm")) == 2
+
+
+def test_update_whole_and_update_together_are_refused_together(nas, run):
+    fake = nas({"auth.login_with_api_key": True})
+    args = {"api_host": NAS, "api_key": "a-key", "validate_certs": True, "namespace": "sharing.smb", "key": ["name"]}
+    result = run(resource, {**args, "entries": [], "update_whole": True, "update_together": ["purpose", "options"]})
+    assert result["failed"] and "give it or update_together, not both" in result["msg"], result
+    assert fake.calls == [], "the NAS was asked something"

@@ -11,6 +11,6 @@
       ansible.builtin.copy:
         content: >-
           {{ {'nas': nas_section_error, 'kubernetes': kubernetes_settings_error,
-              'homeassistant': haos_settings_error} | to_json }}
+              'homeassistant': haos_settings_error, 'timemachine': timemachine_settings_error} | to_json }}
         dest: "{{ init_checks_file }}"
         mode: "0600"

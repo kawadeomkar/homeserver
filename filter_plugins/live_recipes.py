@@ -100,6 +100,7 @@ NAS_STEPS = (
     ("datasets", "datasets"),
     ("snapshots", "snapshots"),
     ("NFS", "nfs"),
+    ("SMB", "smb"),
     ("alerts", "alerts"),
     ("services", "services"),
 )

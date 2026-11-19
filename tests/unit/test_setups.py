@@ -400,6 +400,7 @@ def test_a_vault_from_before_the_template_is_laid_out_as_it_every_value_kept():
     assert yaml.safe_load(text) == {**TEMPLATE_KEYS, **yaml.safe_load(OLD)}
     assert added == [
         "vault_truenas_mail_password",
+        "vault_timemachine_passwords",
         "vault_opnsense_api_key",
         "vault_opnsense_api_secret",
         "vault_opnsense_backup_password",
@@ -451,6 +452,7 @@ def test_a_laid_out_vault_keeps_its_password_vault_id_and_mode(root, capsys):
     added = ", ".join(
         [
             "vault_truenas_mail_password",
+            "vault_timemachine_passwords",
             "vault_opnsense_api_key",
             "vault_opnsense_api_secret",
             "vault_opnsense_backup_password",
