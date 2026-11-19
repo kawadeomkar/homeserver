@@ -70,8 +70,8 @@ NAME_RULE = "lower-case letters, digits and dashes, such as home or lab"
 # What a new vault starts as: every key the playbooks read, each empty and explained.
 VAULT_TEMPLATE = Path("group_vars/all/local.vault.yml.example")
 _KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\s*:", re.M)
-# A key left empty, as the template leaves each: unset for every playbook that reads it.
-_EMPTY_KEY = re.compile(r"""^[A-Za-z_][A-Za-z0-9_]*\s*:[ \t]*(?:""|'')[ \t]*(?:#.*)?$""", re.M)
+# A key left empty, as the template leaves each ("", or {} for a mapping): unset for every playbook that reads it.
+_EMPTY_KEY = re.compile(r"""^[A-Za-z_][A-Za-z0-9_]*\s*:[ \t]*(?:""|''|\{\})[ \t]*(?:#.*)?$""", re.M)
 # What a vault holds that the template does not, kept at its end when it is laid out as the template.
 OWN_HEADING = [
     "# ------------------------------------------------------ not in the template ---",
@@ -362,7 +362,7 @@ def read_vault(vault: Path, password_file: Path, again: str = "just vault") -> s
             f"The vault does not read as Ansible reads it: {'; '.join(found)}. {again} opens it again, to mend it"
         )
     data = yaml.load(text, Loader=_AnsibleTags) or {}
-    keys = sum(1 for value in data.values() if value not in ("", None))
+    keys = sum(1 for value in data.values() if value not in ("", None, {}))
     return f"The vault reads as Ansible reads it: {keys} key{'' if keys == 1 else 's'} set, {len(data) - keys} empty."
 
 

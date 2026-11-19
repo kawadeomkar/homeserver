@@ -740,11 +740,18 @@ def test_pool_names_follow_local_yml(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "setting", ["truenas_pool_persistent: tank", "truenas_mail_server: smtp.example.org", "truenas_alert_email: a@b.c"]
+    "setting",
+    [
+        "truenas_pool_persistent: tank",
+        "truenas_mail_server: smtp.example.org",
+        "truenas_alert_email: a@b.c",
+        "timemachine_backups: [{name: laptop, quota_gib: 2048, uid: 3101}]",
+        "truenas_smb_closed_users: [someone]",
+    ],
 )
 def test_nas_settings_given_without_an_address_are_refused(tmp_path, setting):
-    """Pool names and the alert mail are TrueNAS settings: given without a NAS address they read as a misspelt
-    address."""
+    """Pool names, the alert mail and the Macs' backups are TrueNAS settings: given without a NAS address they read as
+    a misspelt address."""
     tree = example_tree(tmp_path, PROXMOX_ONLY_LOCAL_YML + setting + "\n")
     rc, out = argspec_pass(tree, "proxmox.yml")
     assert rc != 0, out[-3000:]
@@ -833,6 +840,280 @@ def test_alert_mail_follows_local_yml(tmp_path):
     assert alerts == [
         {"name": "Email", "attributes": {"type": "Mail", "email": "a@b.c"}, "level": "WARNING", "enabled": True}
     ]
+
+
+# A Mac that backs up to the NAS with Time Machine, and an SMB password long enough, built at run time.
+MAC = {"name": "laptop", "quota_gib": 2048, "uid": 3101}
+SMB_PASSWORD = "-".join(["smb", "password", "for", "the", "test"])
+
+
+@pytest.mark.parametrize(
+    ("macs", "passwords", "expected"),
+    [
+        pytest.param([MAC], {"laptop": SMB_PASSWORD}, [], id="one-mac"),
+        pytest.param([{**MAC, "retired": True}], {}, [], id="retired-needs-no-password"),
+        pytest.param("laptop", {}, ["timemachine_backups is a list of Macs"], id="not-a-list"),
+        pytest.param(["laptop"], {}, ["each entry of timemachine_backups is a Mac"], id="entry-not-a-mapping"),
+        pytest.param(
+            [{**MAC, "name": "Laptop!"}],
+            {"Laptop!": SMB_PASSWORD},
+            ["timemachine_backups: Laptop!: the name must be 1 to 16 lower-case letters, digits and hyphens"],
+            id="bad-name",
+        ),
+        pytest.param(
+            [MAC, {**MAC, "uid": 3102}],
+            {"laptop": SMB_PASSWORD},
+            ["timemachine_backups: laptop is given twice."],
+            id="name-twice",
+        ),
+        pytest.param(
+            [{**MAC, "quota_gib": 10}],
+            {"laptop": SMB_PASSWORD},
+            ["timemachine_backups: laptop: quota_gib must be a whole number of GiB, 64 or more"],
+            id="quota-too-small",
+        ),
+        pytest.param(
+            [{"name": "laptop", "quota_gib": 2048}],
+            {"laptop": SMB_PASSWORD},
+            ["timemachine_backups: laptop: uid must be a whole number, 3000 or more"],
+            id="uid-missing",
+        ),
+        pytest.param(
+            [{**MAC, "uid": 950}],
+            {"laptop": SMB_PASSWORD},
+            ["timemachine_backups: laptop: uid must be a whole number, 3000 or more"],
+            id="uid-too-low",
+        ),
+        pytest.param(
+            [MAC, {**MAC, "name": "studio"}],
+            {"laptop": SMB_PASSWORD, "studio": SMB_PASSWORD},
+            ["timemachine_backups: studio: uid 3101 is another Mac's too."],
+            id="uid-twice",
+        ),
+        pytest.param(
+            [{**MAC, "retired": "yes"}],
+            {"laptop": SMB_PASSWORD},
+            ["timemachine_backups: laptop: retired must be true or false."],
+            id="retired-not-a-boolean",
+        ),
+        pytest.param(
+            [MAC],
+            {},
+            ["timemachine_backups: laptop: the vault has no SMB password of 20 characters or more"],
+            id="no-password",
+        ),
+        pytest.param(
+            [MAC],
+            {"laptop": "short"},
+            ["timemachine_backups: laptop: the vault has no SMB password of 20 characters or more"],
+            id="short-password",
+        ),
+        pytest.param(
+            [MAC],
+            {"laptop": SMB_PASSWORD, "old": SMB_PASSWORD},
+            ["vault_timemachine_passwords has a password for old, which timemachine_backups does not list"],
+            id="password-for-no-mac",
+        ),
+        pytest.param(
+            [{**MAC, "retierd": True}],
+            {"laptop": SMB_PASSWORD},
+            ["timemachine_backups: laptop: unknown key(s) retierd; an entry has name, quota_gib, uid and"],
+            id="misspelt-key",
+        ),
+        # The password typed inside the template's braces without its name: YAML reads it as a key with no value.
+        pytest.param(
+            [MAC],
+            {SMB_PASSWORD: None},
+            [
+                "timemachine_backups: laptop: the vault has no SMB password of 20 characters or more",
+                "vault_timemachine_passwords has a key that is no Mac's name, not shown here in case it is a password",
+            ],
+            id="password-typed-as-a-key",
+        ),
+        pytest.param(
+            [MAC],
+            {"laptop": None},
+            ["timemachine_backups: laptop: the vault has no SMB password of 20 characters or more"],
+            id="password-null",
+        ),
+        pytest.param(
+            [MAC],
+            {"laptop": {"password": SMB_PASSWORD}},
+            ["timemachine_backups: laptop: the vault has no SMB password of 20 characters or more"],
+            id="password-not-a-string",
+        ),
+        pytest.param(
+            [MAC],
+            f"laptop: {SMB_PASSWORD}",
+            ["vault_timemachine_passwords must be a mapping of each Mac's name to its SMB password"],
+            id="passwords-not-a-mapping",
+        ),
+        pytest.param(True, {}, ["timemachine_backups is a list of Macs"], id="a-boolean-not-a-list"),
+        # A password pasted into a Mac's entry without its key: YAML reads it as a key with no value.
+        pytest.param(
+            [{**MAC, SMB_PASSWORD: None}],
+            {"laptop": SMB_PASSWORD},
+            ["timemachine_backups: laptop: unknown key(s) one too long to show"],
+            id="password-typed-as-an-entry-key",
+        ),
+        pytest.param(
+            [{**MAC, "name": 1234}],
+            {"1234": SMB_PASSWORD},
+            ["the name must be text, such as laptop: quoted, if it is all digits"],
+            id="name-not-text",
+        ),
+        # Time Machine turned off keeps its passwords in the vault, which nothing reads then.
+        pytest.param([], {"laptop": SMB_PASSWORD}, [], id="no-mac-left-passwords"),
+    ],
+)
+def test_time_machine_settings_are_checked(tmp_path, macs, passwords, expected):
+    """What truenas.yml refuses in the Time Machine section before the role runs; no message carries a password."""
+    given = {"timemachine_backups": macs, "vault_timemachine_passwords": passwords}
+    errors = resolve_on(example_tree(tmp_path), "truenas", "timemachine_settings_error", "-e", json.dumps(given))
+    if not expected:
+        assert errors == []
+    for text in expected:
+        assert any(text in error for error in errors), f"{text!r} not in {errors}"
+    secrets = [*passwords.values(), *passwords] if isinstance(passwords, dict) else [passwords]
+    secrets += [key for mac in macs if isinstance(mac, dict) for key in mac] if isinstance(macs, list) else []
+    assert not [p for p in secrets if isinstance(p, str) and len(p) >= 20 and p in json.dumps(errors)], errors
+
+
+def test_a_proxmox_address_that_is_no_ipv4_is_refused_with_a_mac(tmp_path):
+    """Each share refuses SMB from the Proxmox host's address, and TrueNAS matches no host name there."""
+    given = {
+        "timemachine_backups": [MAC],
+        "vault_timemachine_passwords": {"laptop": SMB_PASSWORD},
+        "proxmox_address": "pve.example.org",
+    }
+    errors = resolve_on(example_tree(tmp_path), "truenas", "timemachine_settings_error", "-e", json.dumps(given))
+    assert any("proxmox_address must be an IPv4 address with a Mac listed" in error for error in errors), errors
+
+
+def test_timemachine_present_given_with_e_is_refused(tmp_path):
+    """The switch is worked out from timemachine_backups; given with -e it is a string, true whatever it says."""
+    tree = example_tree(tmp_path)
+    errors = resolve_on(
+        tree, "truenas", "timemachine_settings_error", "-e", json.dumps({"timemachine_present": "false"})
+    )
+    assert any("timemachine_present is worked out from timemachine_backups" in error for error in errors), errors
+
+
+def test_the_time_machine_test_playbook_runs_the_real_pre_task():
+    """tests/integration/truenas.yml asserts the Time Machine section as truenas.yml does, so the integration tests
+    run the check just deploy truenas runs."""
+    name = "Refuse an incomplete Time Machine section"
+    real = next(play for play in yaml.safe_load((ROOT / "truenas.yml").read_text()) if play.get("pre_tasks"))
+    (test,) = yaml.safe_load((ROOT / "tests" / "integration" / "truenas.yml").read_text())
+    ours = [t for t in real["pre_tasks"] if t["name"] == name]
+    assert ours and [t for t in test["pre_tasks"] if t["name"] == name] == ours, "the pre-task is missing or differs"
+    assert test["roles"] == real["roles"]
+
+
+# What the NAS is handed for Time Machine, from group_vars/nas/timemachine.yml: the passwords by name alone, since a
+# debug message would print them.
+TIME_MACHINE_INPUTS = (
+    "{'datasets': truenas_datasets_timemachine, 'tasks': truenas_snapshot_tasks_timemachine,"
+    " 'smb': truenas_smb_settings, 'users': truenas_users, 'passwords': truenas_user_passwords | list,"
+    " 'api_user_smb': truenas_api_user_smb, 'permissions': truenas_permissions, 'shares': truenas_smb_shares,"
+    " 'smb_service': truenas_smb_service, 'cifs': truenas_services.cifs | default(none),"
+    " 'network': truenas_network_settings, 'all_datasets': truenas_datasets | map(attribute='name') | list,"
+    " 'all_tasks': truenas_snapshot_tasks | map(attribute='dataset') | list}"
+)
+
+
+def test_time_machine_gives_each_mac_a_dataset_login_and_share(tmp_path):
+    """Per Mac a dataset with its quota under one of their own, a weekly task, an SMB-only login with its uid, its
+    directory's owner and a Time Machine share, and the SMB service started by the SMB stage, never the services
+    stage; a retired Mac's login, share and task closed and its password not wanted; nothing without a Mac."""
+    tree = example_tree(tmp_path)
+    old = {"name": "old", "quota_gib": 512, "uid": 3102, "retired": True}
+    given = {"timemachine_backups": [MAC, old], "vault_timemachine_passwords": {"laptop": SMB_PASSWORD}}
+    got = resolve_on(tree, "truenas", TIME_MACHINE_INPUTS, "-e", json.dumps(given))
+    assert [d["name"] for d in got["datasets"]] == [
+        "persistent/timemachine",
+        "persistent/timemachine/laptop",
+        "persistent/timemachine/old",
+    ]
+    assert {d.get("share_type") for d in got["datasets"]} == {"SMB"}
+    assert got["datasets"][1]["properties"] == {"quota": 2048 * 2**30, "refquota": 1536 * 2**30, "sync": "STANDARD"}
+    assert got["datasets"][2]["properties"]["refquota"] == 384 * 2**30
+    assert set(got["all_datasets"]) >= {d["name"] for d in got["datasets"]}
+    assert [(t["dataset"], t["lifetime_value"], t["lifetime_unit"], t["enabled"]) for t in got["tasks"]] == [
+        ("persistent/timemachine/laptop", 8, "WEEK", True),
+        ("persistent/timemachine/old", 8, "WEEK", False),
+    ]
+    assert set(got["all_tasks"]) >= {"persistent/timemachine/laptop", "persistent/timemachine/old"}
+    assert got["smb"] == {
+        "aapl_extensions": True,
+        "encryption": "REQUIRED",
+        "enable_smb1": False,
+        "ntlmv1_auth": False,
+        "multichannel": False,
+        "localmaster": False,
+        "smb_options": "",
+        "admin_group": None,
+    }
+    # The parent's quota is every Mac's together, so TrueNAS alerts as the backups and their snapshots near it.
+    assert got["datasets"][0]["properties"] == {"quota": (2048 + 512) * 2**30}
+    assert got["users"] == [
+        {
+            "username": "tm-laptop",
+            "uid": 3101,
+            "full_name": "Time Machine, laptop",
+            "smb": True,
+            "shell": "/usr/sbin/nologin",
+            "locked": False,
+            "password_disabled": False,
+        },
+        {
+            "username": "tm-old",
+            "uid": 3102,
+            "full_name": "Time Machine, old",
+            "smb": False,
+            "shell": "/usr/sbin/nologin",
+            "locked": True,
+            "password_disabled": True,
+        },
+    ]
+    assert got["passwords"] == ["tm-laptop"] and got["api_user_smb"] is False
+    assert got["permissions"][0] == {
+        "path": "/mnt/persistent/timemachine/laptop",
+        "user": "tm-laptop",
+        "group": "tm-laptop",
+        "mode": "700",
+    }
+    assert [(sh["name"], sh["path"], sh["purpose"], sh["enabled"]) for sh in got["shares"]] == [
+        ("tm-laptop", "/mnt/persistent/timemachine/laptop", "TIMEMACHINE_SHARE", True),
+        ("tm-old", "/mnt/persistent/timemachine/old", "TIMEMACHINE_SHARE", False),
+    ]
+    vuid = got["shares"][0]["options"].pop("vuid")
+    assert got["shares"][0]["options"] == {
+        "auto_snapshot": True,
+        "auto_dataset_creation": False,
+        "timemachine_quota": 0,
+        "hostsallow": [],
+        "hostsdeny": [resolve_on(tree, "truenas", "proxmox_address")],
+    }
+    # The volume's id is derived from the Mac's name, so a rebuilt NAS makes it again; another Mac's is another. Pinned:
+    # a change to the derivation would give every Mac a new volume.
+    assert vuid == "f5f5fae1-df50-596e-bb02-2cec2937615f" and vuid != got["shares"][1]["options"]["vuid"]
+    assert resolve_on(tree, "truenas", "truenas_smb_shares[0].options.vuid", "-e", json.dumps(given)) == vuid
+    assert got["smb_service"] == {"enabled": True, "state": "started"} and got["cifs"] is None
+    assert got["network"]["service_announcement"] == {"netbios": False, "mdns": True, "wsd": False}
+
+    # Every Mac retired: the service is stopped by the SMB stage, with no login check, and no password is wanted.
+    retired = {"timemachine_backups": [{**MAC, "retired": True}, old], "vault_timemachine_passwords": {}}
+    got = resolve_on(tree, "truenas", TIME_MACHINE_INPUTS, "-e", json.dumps(retired))
+    assert got["smb_service"] == {"enabled": False, "state": "stopped"} and got["cifs"] is None
+    assert got["passwords"] == [] and not [sh for sh in got["shares"] if sh["enabled"]]
+
+    # No Mac: nothing for the SMB stage, the API key's user and the announcements left alone, SMB stopped.
+    got = resolve_on(tree, "truenas", TIME_MACHINE_INPUTS)
+    assert (got["datasets"], got["tasks"], got["smb"], got["users"], got["shares"]) == ([], [], {}, [], [])
+    assert got["api_user_smb"] is None and got["smb_service"] == {"enabled": False, "state": "stopped"}
+    assert got["cifs"] is None
+    assert "service_announcement" not in got["network"]
 
 
 def without(settings, *names):
@@ -1927,7 +2208,9 @@ def test_status_refuses_a_backup_job_it_cannot_check(tmp_path):
 @pytest.mark.parametrize(("local_yml", "source"), [(None, "nas"), (PROXMOX_ONLY_LOCAL_YML, "")])
 def test_status_reads_the_nas_as_its_play_reaches_it(tmp_path, local_yml, source):
     """just status reads the NAS through roles/truenas's status entry point, with the NAS play's own connection
-    settings (the static address, then the bootstrap one; the pinned certificate), and only with a NAS."""
+    settings (the static address, then the bootstrap one; the pinned certificate), and only with a NAS; it judges each
+    Time Machine share by local.yml's Macs, each service by the NAS play's configuration, and each NFS client by the
+    machines local.yml gives addresses."""
     tree = example_tree(tmp_path, local_yml)
     names = "{'status_source': status_source, 'truenas_api_hosts': truenas_api_hosts}"
     found = resolve_on(tree, "truenas", names)
@@ -1946,6 +2229,23 @@ def test_status_reads_the_nas_as_its_play_reaches_it(tmp_path, local_yml, source
     nas_vars = yaml.safe_load((ROOT / "group_vars" / "nas" / "status.yml").read_text())
     assert "truenas_status" in nas_vars["status_nas_state"]
     assert "truenas_supported_version" in nas_vars["status_nas_release"]
+    if source:
+        # Each Mac by the share the NAS is handed for it, and retired as local.yml says, which the NAS knows only as a
+        # disabled share.
+        macs = [MAC, {**MAC, "name": "desk", "uid": 3102}, {**MAC, "name": "old", "uid": 3103, "retired": True}]
+        names = "{'macs': status_nas_macs, 'shares': truenas_smb_shares}"
+        found = resolve_on(tree, "truenas", names, "-e", json.dumps({"timemachine_backups": macs}))
+        assert found["macs"] == [{"share": s["name"], "retired": not s["enabled"]} for s in found["shares"]]
+        assert [mac["share"] for mac in found["macs"]] == ["tm-laptop", "tm-desk", "tm-old"]
+    # The services as the NAS play keeps them, SMB's as its SMB stage does, without a Mac and with one; and the
+    # machines of this setup by address, by which the report names who has the NFS shares mounted.
+    names = "{'services': status_nas_services, 'truenas': truenas_services, 'known': status_nas_known_clients}"
+    nodes = {"192.0.2.30": "homeserver-cp-1", "192.0.2.31": "homeserver-worker-1"} if source else {}
+    for macs, smb in (([], {"enabled": False, "state": "stopped"}), ([MAC], {"enabled": True, "state": "started"})):
+        found = resolve_on(tree, "truenas", names, "-e", json.dumps({"timemachine_backups": macs}))
+        assert found["services"] == found["truenas"] | {"cifs": smb}, found
+        assert found["services"]["ssh"] == {"enabled": False, "state": "stopped"}, found
+        assert found["known"] == {"192.0.2.20": "the Proxmox host", **nodes}, found
 
 
 @pytest.mark.parametrize(

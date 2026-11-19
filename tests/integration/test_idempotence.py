@@ -17,6 +17,7 @@ Needs the project virtualenv and openssl. Run: just test idempotence
 """
 
 import base64
+import contextlib
 import hashlib
 import http.server
 import json
@@ -65,6 +66,8 @@ SMALL_SIZES = {
 # Sentinels that must never reach Ansible's output.
 MAIL_PASSWORD = "mail-password-sentinel-6c1f"
 ROTATED_MAIL_PASSWORD = "mail-password-sentinel-rotated-91ad"
+TM_PASSWORD = "tm-password-sentinel-3e7a"
+ROTATED_TM_PASSWORD = "tm-password-sentinel-rotated-c05b"
 
 
 def free_port():
@@ -73,10 +76,10 @@ def free_port():
         return s.getsockname()[1]
 
 
-def run(playbook, extra, check=False, env=None):
+def run(playbook, extra, check=False, env=None, args=()):
     """Run a test playbook; return (return code, {host: stats}, combined output). `env` adds to the environment,
-    such as a HOME of the test's own. The default callback shows the run's custom stats, where next_steps reads what
-    the roles recorded as left to do."""
+    such as a HOME of the test's own, and `args` to ansible-playbook's arguments, such as --tags. The default callback
+    shows the run's custom stats, where next_steps reads what the roles recorded as left to do."""
     # ANSIBLE_FORCE_COLOR overrides ANSIBLE_NOCOLOR, and a coloured PLAY RECAP does not match RECAP.
     environment = {k: v for k, v in os.environ.items() if k != "ANSIBLE_FORCE_COLOR"}
     environment |= {
@@ -94,6 +97,7 @@ def run(playbook, extra, check=False, env=None):
     ]
     if check:
         cmd.append("--check")
+    cmd += args
     proc = subprocess.run(cmd, env=environment, cwd=HERE, capture_output=True, text=True, stdin=subprocess.DEVNULL)
     out = proc.stdout + proc.stderr
     stats = {
@@ -286,7 +290,7 @@ def test_truenas_role_is_idempotent(nas):
     expect(result, "truenas", changed=0, note="dry run after applying")
 
     s = read(nas["state"])
-    iface = s["interfaces"]["enp7s0"]
+    iface = s["interfaces"]["eno1"]
     assert iface["ipv4_dhcp"] is False and iface["aliases"] == [{"type": "INET", "address": NAS_ADDRESS, "netmask": 8}]
     assert s["interface_snapshot"] is None and s["checkin_waiting"] is None, "the address change was not checked in"
     assert (s["network"]["ipv4gateway"], s["network"]["nameserver1"]) == ("127.0.0.254", "127.0.0.53")
@@ -453,6 +457,357 @@ def test_truenas_role_with_defaults_changes_nothing(nas):
     result = run("truenas_defaults.yml", extra)
     expect(result, "truenas", changed=0, note="role with only its defaults")
     assert semantic(read(nas["state"])) == before
+
+
+# ------------------------------------------------------------------------------ TrueNAS SMB ---
+
+# truenas_smb.yml's own variables, which a test changes through extra vars.
+SMB_PLAY = yaml.safe_load((HERE / "truenas_smb.yml").read_text())[0]["vars"]
+TM_SHARE_PATH = SMB_PLAY["truenas_permissions"][0]["path"]
+
+
+@contextlib.contextmanager
+def fresh_nas(nas):
+    """A freshly installed NAS for one test, and the module's shared one back after it."""
+    shared = read(nas["state"])
+    write(nas["state"], fake_truenas.initial_state(NAS_ADDRESS))
+    try:
+        yield
+    finally:
+        write(nas["state"], shared)
+
+
+def smb_vars(nas, **more):
+    """The connection alone, and the Mac's SMB password, which the test playbook reads as tm_password."""
+    connection = {k: v for k, v in nas_vars(nas).items() if k.startswith("truenas_api")}
+    return {**connection, "tm_password": TM_PASSWORD, **more}
+
+
+def call_count(nas):
+    return len(Path(nas["calls"]).read_text().splitlines())
+
+
+def calls_of(nas, method, since=0):
+    """The parameters of each call of `method` the fake NAS logged, from the `since`-th call on."""
+    calls = [json.loads(line) for line in Path(nas["calls"]).read_text().splitlines()[since:]]
+    return [c["params"] for c in calls if c["method"] == method]
+
+
+def smb_state(nas):
+    """The fake NAS's users by name, its one SMB share, and its services by name."""
+    s = read(nas["state"])
+    users = {u["username"]: u for u in s["users"]}
+    share = next(iter(s["smb_shares"]), None)
+    return s, users, share, {sv["service"]: sv for sv in s["services"]}
+
+
+def test_truenas_smb_stage_is_idempotent(nas):
+    """The SMB stage with variables of its own: a Time Machine share for one Mac, its login, its directory's owner,
+    the API key's user taken out of SMB, and the SMB service started last. Then drift, a password changed and reset,
+    and the login and share closed and opened again."""
+    extra = smb_vars(nas)
+    outputs = []
+    with fresh_nas(nas):
+        before = semantic(read(nas["state"]))
+        result = run("truenas_smb.yml", extra, check=True)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=True, note="dry run on a fresh NAS")
+        assert semantic(read(nas["state"])) == before, "the dry run changed the NAS"
+
+        result = run("truenas_smb.yml", extra)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=True, note="first run")
+        result = run("truenas_smb.yml", extra)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=0, note=f"second run (changed: {changed_tasks(result[2])})")
+        result = run("truenas_smb.yml", extra, check=True)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=0, note="dry run after applying")
+
+        s, users, share, services = smb_state(nas)
+        assert (s["smb"]["aapl_extensions"], s["smb"]["encryption"], s["smb"]["localmaster"]) == (
+            True,
+            "REQUIRED",
+            False,
+        )
+        assert s["network"]["service_announcement"] == {"netbios": False, "mdns": True, "wsd": False}
+        login = users["tm-laptop"]
+        assert (login["uid"], login["smb"], login["shell"], login["locked"]) == (3101, True, "/usr/sbin/nologin", False)
+        assert login["password"] == fake_truenas.password_hash(TM_PASSWORD)
+        assert [g["group"] for g in s["groups"] if g["gid"] == login["group"]] == ["tm-laptop"]
+        assert users[fake_truenas.API_USER]["smb"] is False, "the API key's user is still an SMB login"
+        assert s["paths"][TM_SHARE_PATH] == {"uid": 3101, "gid": login["group"], "mode": 0o700, "acl": False}
+        assert (share["name"], share["path"], share["purpose"], share["enabled"]) == (
+            "tm-laptop",
+            TM_SHARE_PATH,
+            "TIMEMACHINE_SHARE",
+            True,
+        )
+        assert share["options"]["auto_snapshot"] is True and share["options"]["vuid"]
+        vuid = share["options"]["vuid"]
+        assert services["cifs"]["enable"] and services["cifs"]["state"] == "RUNNING"
+        dataset = s["datasets"]["persistent/timemachine/laptop"]
+        assert (dataset["quota"]["rawvalue"], dataset["acltype"]["rawvalue"]) == (str(2 * 2**40), "nfsv4")
+        assert [
+            t["lifetime_value"] for t in s["snapshot_tasks"] if t["dataset"] == "persistent/timemachine/laptop"
+        ] == [8]
+
+        # A share disabled behind the role's back is enabled again by an update that names neither purpose nor
+        # options, which TrueNAS would refuse alone.
+        s["smb_shares"][0]["enabled"] = False
+        write(nas["state"], s)
+        since = call_count(nas)
+        expect(run("truenas_smb.yml", extra), "truenas", changed=1, note="the share disabled")
+        assert calls_of(nas, "sharing.smb.update", since) == [[share["id"], {"enabled": True}]]
+
+        # An option changed: purpose and options go together, the options as they were with the wanted ones laid
+        # over them, so the volume keeps its vuid (the fake would make a new one for an update without it).
+        s = read(nas["state"])
+        s["smb_shares"][0]["options"]["auto_snapshot"] = False
+        write(nas["state"], s)
+        since = call_count(nas)
+        expect(run("truenas_smb.yml", extra), "truenas", changed=1, note="an option of the share changed")
+        sent = calls_of(nas, "sharing.smb.update", since)
+        assert [sorted(update) for _, update in sent] == [["options", "purpose"]], sent
+        share = smb_state(nas)[2]
+        assert share["options"]["auto_snapshot"] is True and share["options"]["vuid"] == vuid, "the volume's id changed"
+
+        # The directory given back to root with an ACL, the API key's user an SMB login again, the login's shell
+        # changed: each corrected once.
+        s = read(nas["state"])
+        s["paths"][TM_SHARE_PATH] = {"uid": 0, "gid": 544, "mode": 0o770, "acl": True}
+        for user in s["users"]:
+            if user["username"] == fake_truenas.API_USER:
+                user["smb"] = True
+            if user["username"] == "tm-laptop":
+                user["shell"] = "/usr/bin/zsh"
+        write(nas["state"], s)
+        result = run("truenas_smb.yml", extra)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=2, note="the owner, the API user and the shell drifted")
+        expect(run("truenas_smb.yml", extra), "truenas", changed=0, note="second run after drift")
+        s, users, share, services = smb_state(nas)
+        assert s["paths"][TM_SHARE_PATH] == {"uid": 3101, "gid": login["group"], "mode": 0o700, "acl": False}
+        assert users[fake_truenas.API_USER]["smb"] is False and users["tm-laptop"]["shell"] == "/usr/sbin/nologin"
+
+        # A password is set when the login is made, and after that only when truenas_users_reset names it: a new
+        # one in the vault alone changes nothing, since the role cannot see the one TrueNAS holds.
+        rotated = {**extra, "tm_password": ROTATED_TM_PASSWORD}
+        result = run("truenas_smb.yml", rotated)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=0, note="a new password alone")
+        assert smb_state(nas)[1]["tm-laptop"]["password"] == fake_truenas.password_hash(TM_PASSWORD)
+        reset = {**rotated, "truenas_users_reset": ["tm-laptop"]}
+        result = run("truenas_smb.yml", reset, check=True)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=1, note="dry run of a password reset")
+        assert "<secret, changed>" in result[2], result[2][-3000:]
+        result = run("truenas_smb.yml", reset)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=1, note="a password reset")
+        assert smb_state(nas)[1]["tm-laptop"]["password"] == fake_truenas.password_hash(ROTATED_TM_PASSWORD)
+
+        # The login and the share closed, the service stopped: no password is wanted then, and nothing is deleted.
+        closed_login = {**SMB_PLAY["truenas_users"][0], "smb": False, "locked": True, "password_disabled": True}
+        closed = {
+            **rotated,
+            "truenas_users": [closed_login],
+            "truenas_user_passwords": {},
+            "truenas_smb_shares": [{**SMB_PLAY["truenas_smb_shares"][0], "enabled": False}],
+            "truenas_smb_service": {"enabled": False, "state": "stopped"},
+        }
+        result = run("truenas_smb.yml", closed)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=3, note="the login and the share closed")
+        expect(run("truenas_smb.yml", closed), "truenas", changed=0, note="closed, second run")
+        s, users, share, services = smb_state(nas)
+        login = users["tm-laptop"]
+        assert (login["smb"], login["locked"], login["password_disabled"]) == (False, True, True)
+        assert share["enabled"] is False and share["options"]["vuid"] == vuid
+        assert not services["cifs"]["enable"] and services["cifs"]["state"] == "STOPPED"
+        assert "persistent/timemachine/laptop" in s["datasets"] and TM_SHARE_PATH in s["paths"]
+
+        # Opened again: turning SMB on sends the password, which TrueNAS insists on.
+        result = run("truenas_smb.yml", rotated)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=3, note="the login and the share opened again")
+        expect(run("truenas_smb.yml", rotated), "truenas", changed=0, note="opened again, second run")
+        s, users, share, services = smb_state(nas)
+        login = users["tm-laptop"]
+        assert (login["smb"], login["locked"], login["password_disabled"]) == (True, False, False)
+        assert login["password"] == fake_truenas.password_hash(ROTATED_TM_PASSWORD)
+        assert share["enabled"] and services["cifs"]["state"] == "RUNNING"
+
+    hashes = [fake_truenas.password_hash(p) for p in (TM_PASSWORD, ROTATED_TM_PASSWORD, "api-admin-password")]
+    for out in outputs:
+        assert TM_PASSWORD not in out and ROTATED_TM_PASSWORD not in out, "an SMB password reached Ansible output"
+        assert not [h for h in hashes if h in out], "a password hash reached Ansible output"
+        assert fake_truenas.API_KEY not in out, "the API key reached Ansible output"
+
+
+def add_smb_login(nas, username):
+    """A local SMB login made by hand, as an administrator might, which no variable of the role names."""
+    s, users, _, _ = smb_state(nas)
+    number = len(s["users"])
+    login = {**users[fake_truenas.API_USER], "id": 90 + number, "uid": 3040 + number, "roles": []}
+    s["users"].append({**login, "username": username, "full_name": username, "smb": True})
+    write(nas["state"], s)
+
+
+def test_truenas_smb_stage_refuses_an_unlisted_smb_login(nas):
+    """Starting SMB while a local SMB login the role does not list exists is refused, in a dry run too and under the
+    stage's own tag, before the stage changes anything: the API key's own user unless truenas_api_user_smb takes it
+    out, or any other until truenas_smb_closed_users names it. A run that stops SMB is never refused."""
+    with fresh_nas(nas):
+        extra = smb_vars(nas, truenas_api_user_smb=None)
+        for check in (True, False):
+            rc, _, out = run("truenas_smb.yml", extra, check=check)
+            assert rc != 0, out[-3000:]
+            assert f"SMB logins that the role does not list: {fake_truenas.API_USER}." in out, out[-3000:]
+            assert "Starting SMB would let them log in over the network." in out, out[-3000:]
+            assert "is the API key's own user: set truenas_api_user_smb to false" in out, out[-3000:]
+        s, users, share, services = smb_state(nas)
+        assert "tm-laptop" not in users and share is None and not s["smb"]["aapl_extensions"]
+        assert users[fake_truenas.API_USER]["smb"] is True and services["cifs"]["state"] == "STOPPED"
+
+        # Another SMB login, made by hand: the API key's user is taken out, this one is not, under the tag alone too.
+        add_smb_login(nas, "someone")
+        for args in ((), ("--tags", "truenas_smb")):
+            rc, _, out = run("truenas_smb.yml", smb_vars(nas), check=True, args=args)
+            assert rc != 0 and "SMB logins that the role does not list: someone." in out, out[-3000:]
+            assert "is the API key's own user" not in out and "truenas_smb_closed_users" in out, out[-3000:]
+
+        # Named to close: taken out of SMB and otherwise left alone, and SMB starts.
+        closing = smb_vars(nas, truenas_smb_closed_users=["someone"])
+        result = run("truenas_smb.yml", closing)
+        expect(result, "truenas", changed=True, note="the hand-made login closed")
+        s, users, share, services = smb_state(nas)
+        assert users["someone"]["smb"] is False and users["someone"]["locked"] is False
+        assert services["cifs"]["state"] == "RUNNING"
+        expect(run("truenas_smb.yml", closing), "truenas", changed=0, note="closed, second run")
+
+        # One more made while SMB runs: refused, saying SMB already lets it in; stopping SMB is not refused.
+        add_smb_login(nas, "another")
+        rc, _, out = run("truenas_smb.yml", closing)
+        assert rc != 0 and "SMB is running, so they can log in over the network now." in out, out[-3000:]
+        stopping = {**closing, "truenas_smb_service": {"enabled": False, "state": "stopped"}}
+        result = run("truenas_smb.yml", stopping)
+        expect(result, "truenas", changed=True, note="SMB stopped with a stray login")
+        assert smb_state(nas)[3]["cifs"]["state"] == "STOPPED"
+
+
+def test_truenas_smb_stage_checks_the_logins_again_before_the_service(nas):
+    """A login the users task was to take out of SMB and that stayed one is refused by the second check, just before
+    the service starts: here the API key's user, which the fake keeps an SMB login."""
+    with fresh_nas(nas):
+        s = read(nas["state"])
+        s["smb_kept"] = [fake_truenas.API_USER]
+        write(nas["state"], s)
+        rc, _, out = run("truenas_smb.yml", smb_vars(nas))
+        assert rc != 0, out[-3000:]
+        assert f"After the users task, SMB logins that the role does not list: {fake_truenas.API_USER}." in out, out[
+            -3000:
+        ]
+        assert smb_state(nas)[3]["cifs"]["state"] == "STOPPED", "SMB started past the second check"
+
+
+def test_a_string_false_for_the_api_users_smb_is_refused(nas):
+    """-e gives truenas_api_user_smb=false as a string, which the role refuses with what to write, before the NAS is
+    asked anything."""
+    with fresh_nas(nas):
+        since = call_count(nas)
+        rc, _, out = run("truenas_smb.yml", smb_vars(nas, truenas_api_user_smb="false"), check=True)
+        assert rc != 0 and 'Given with -e, false is the string "false"' in out, out[-3000:]
+        assert call_count(nas) == since, "the NAS was asked something"
+
+
+def test_truenas_smb_stage_refuses_without_the_connections_reading(nas):
+    """With the connection's reading skipped, the login check refuses rather than passing on nothing."""
+    with fresh_nas(nas):
+        extra = smb_vars(nas, truenas_api_host=NAS_ADDRESS)
+        args = ["--tags", "truenas_smb", "--skip-tags", "truenas_info"]
+        rc, _, out = run("truenas_smb.yml", extra, check=True, args=args)
+        assert rc != 0 and "The connection's reading of the SMB logins is missing" in out, out[-3000:]
+
+
+def test_smb_starts_only_with_its_stage(nas):
+    """The SMB service is the SMB stage's to start or stop, after its login check: the services stage, run on its
+    own, leaves it alone, and the services stage naming it is refused before anything is asked of the NAS."""
+    with fresh_nas(nas):
+        extra = smb_vars(nas)
+        result = run("truenas_smb.yml", extra, args=["--tags", "truenas_services"])
+        expect(result, "truenas", changed=0, note="the services stage alone")
+        cifs = smb_state(nas)[3]["cifs"]
+        assert not cifs["enable"] and cifs["state"] == "STOPPED"
+
+        since = call_count(nas)
+        for state in ("started", "stopped"):
+            named = {**extra, "truenas_services": {"cifs": {"enabled": state == "started", "state": state}}}
+            for check in (True, False):
+                rc, _, out = run("truenas_smb.yml", named, check=check)
+                assert rc != 0 and "cifs is in truenas_services." in out, out[-3000:]
+        assert call_count(nas) == since, "the NAS was asked something"
+
+
+def test_truenas_role_backs_up_a_mac(nas):
+    """This repo's configuration with a Mac in local.yml's timemachine_backups: its dataset, weekly task, SMB-only
+    login, directory owner and Time Machine share, the API key's user out of SMB, and SMB started by the SMB stage,
+    which the services stage alone never does. Then the Mac retired, its login, share and task closed and SMB
+    stopped, and its entry deleted, with no refusal and nothing deleted on the NAS."""
+    mac = {"name": "laptop", "quota_gib": 2048, "uid": 3101}
+    extra = {**nas_vars(nas), "timemachine_backups": [mac], "vault_timemachine_passwords": {"laptop": TM_PASSWORD}}
+    outputs = []
+    with fresh_nas(nas):
+        result = run("truenas.yml", extra, args=["--tags", "truenas_services"])
+        expect(result, "truenas", note="the services stage alone")
+        assert smb_state(nas)[3]["cifs"]["state"] == "STOPPED", "the services stage started SMB"
+
+        result = run("truenas.yml", extra, check=True)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=True, note="dry run with a Mac")
+        result = run("truenas.yml", extra)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=True, note="first run with a Mac")
+        result = run("truenas.yml", extra)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=0, note=f"second run with a Mac (changed: {changed_tasks(result[2])})")
+        result = run("truenas.yml", extra, check=True)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=0, note="dry run after applying, with a Mac")
+
+        s, users, share, services = smb_state(nas)
+        dataset = "persistent/timemachine/laptop"
+        assert s["datasets"][dataset]["quota"]["rawvalue"] == str(2048 * 2**30)
+        assert s["datasets"][dataset]["refquota"]["rawvalue"] == str(1536 * 2**30)
+        assert s["datasets"]["persistent/timemachine"]["quota"]["rawvalue"] == str(2048 * 2**30)
+        assert [t["lifetime_value"] for t in s["snapshot_tasks"] if t["dataset"] == dataset] == [8]
+        assert (users["tm-laptop"]["uid"], users["tm-laptop"]["smb"]) == (3101, True)
+        assert users["tm-laptop"]["password"] == fake_truenas.password_hash(TM_PASSWORD)
+        assert users[fake_truenas.API_USER]["smb"] is False
+        assert s["paths"][f"/mnt/{dataset}"]["mode"] == 0o700 and not s["paths"][f"/mnt/{dataset}"]["acl"]
+        assert (share["name"], share["enabled"], share["options"]["auto_snapshot"]) == ("tm-laptop", True, True)
+        assert services["cifs"]["enable"] and services["cifs"]["state"] == "RUNNING"
+        assert s["smb"]["encryption"] == "REQUIRED" and s["network"]["service_announcement"]["mdns"] is True
+        assert len(s["shares"]) == len(EXPECTED_SHARES), "the NFS shares changed"
+
+        retired = {**extra, "timemachine_backups": [{**mac, "retired": True}], "vault_timemachine_passwords": {}}
+        result = run("truenas.yml", retired)
+        outputs.append(result[2])
+        expect(result, "truenas", changed=True, note="the Mac retired")
+        expect(run("truenas.yml", retired), "truenas", changed=0, note="the Mac retired, second run")
+        s, users, share, services = smb_state(nas)
+        assert (users["tm-laptop"]["smb"], users["tm-laptop"]["locked"]) == (False, True)
+        assert share["enabled"] is False and services["cifs"]["state"] == "STOPPED" and not services["cifs"]["enable"]
+        assert [t["enabled"] for t in s["snapshot_tasks"] if t["dataset"] == dataset] == [False]
+
+        gone = {**extra, "timemachine_backups": [], "vault_timemachine_passwords": {}}
+        expect(run("truenas.yml", gone), "truenas", changed=0, note="the retired Mac's entry deleted")
+        s = smb_state(nas)[0]
+        assert dataset in s["datasets"] and s["smb_shares"] and "tm-laptop" in {u["username"] for u in s["users"]}
+
+    for out in outputs:
+        assert TM_PASSWORD not in out and fake_truenas.password_hash(TM_PASSWORD) not in out
+        assert fake_truenas.API_KEY not in out
 
 
 # ---------------------------------------------------------------------------------- Proxmox ---

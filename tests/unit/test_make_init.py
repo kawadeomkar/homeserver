@@ -474,6 +474,81 @@ def test_secrets_go_to_the_vault_and_never_to_the_screen(repo):
     assert "vault_truenas_api_key" in console.out[-1].split("STILL REQUIRED")[1]
 
 
+def nas_answers(**more) -> dict:
+    """A setup with a NAS and nothing else, its addresses and the vault's API key left to the test."""
+    return {
+        "switch:nas": "y",
+        "switch:remote": "n",
+        "switch:cluster": "n",
+        "switch:homeassistant": "n",
+        "proxmox_address": lan(10),
+        "truenas_static_address": f"{lan(5)}/24",
+        "truenas_bootstrap_address": "-",
+        "truenas_api_cert_sha256": "-",
+        "truenas_pool_disks/persistent": "-",
+        "truenas_pool_disks/ephemeral": "-",
+        **more,
+    }
+
+
+def test_the_macs_are_asked_with_a_nas_and_their_passwords_go_to_the_vault(repo):
+    """Time Machine is asked only with a NAS: the Macs' names, then each one's quota (2048 offered) and uid (3101 up
+    offered), and each Mac's SMB password into the vault, never to the screen, 20 characters at least."""
+    make_vault(repo, {"vault_other": "left-alone"})
+    laptop, studio = ("-".join([name, "smb", "password", "for", "the", "test"]) for name in ("laptop", "studio"))
+    answers = nas_answers(
+        **{
+            "switch:timemachine": "y",
+            "timemachine_backups/names": "laptop, studio",
+            "timemachine_backups/studio.quota_gib": ["10", "1024"],
+            "vault_timemachine_passwords/laptop": laptop,
+            "vault_timemachine_passwords/studio": ["too-short", studio],
+        }
+    )
+    console = Scripted(answers)
+    init_run(repo, console)
+    assert local(repo)["timemachine_backups"] == [
+        {"name": "laptop", "quota_gib": 2048, "uid": 3101},
+        {"name": "studio", "quota_gib": 1024, "uid": 3102},
+    ]
+    assert read_vault(repo) == {
+        "vault_other": "left-alone",
+        "vault_timemachine_passwords": {"laptop": laptop, "studio": studio},
+    }
+    assert "give a whole number of GiB, 64 or more" in console.text
+    assert "at least 20 characters" in console.text
+    assert laptop not in console.text and studio not in console.text and "too-short" not in console.text
+    assert "each Mac's own steps" in console.out[-1]
+
+    # A Mac retired by hand keeps its entry and wants no password; "-" clears laptop's, and the retired Mac's stays in
+    # the vault, which the runbook says it may leave once retired.
+    path = repo / "group_vars/all/local.yml"
+    path.write_text(path.read_text().replace("name: studio", "name: studio, retired: true"))
+    console = Scripted({"vault_timemachine_passwords/laptop": "-"})
+    init_run(repo, console)
+    assert {"name": "studio", "quota_gib": 1024, "uid": 3102, "retired": True} in local(repo)["timemachine_backups"]
+    assert "vault_timemachine_passwords/studio" not in console.topics
+    assert read_vault(repo)["vault_timemachine_passwords"] == {"studio": studio}
+
+
+def test_time_machine_is_not_asked_without_a_nas(repo):
+    console = Scripted(first_run_answers())
+    init_run(repo, console)
+    assert "switch:timemachine" not in console.topics and "timemachine_backups" not in local(repo)
+
+
+def test_macs_left_after_the_nas_is_turned_off_are_deleted_by_default(repo):
+    # Without a NAS every playbook refuses them, so Enter deletes them rather than keeping a setup none accepts.
+    init_run(repo, Scripted(first_run_answers()))
+    path = repo / "group_vars/all/local.yml"
+    path.write_text(path.read_text() + "timemachine_backups:\n  - {name: laptop, quota_gib: 2048, uid: 3101}\n")
+    console = Scripted(first_run_answers())
+    init_run(repo, console)
+    assert "switch:timemachine" not in console.topics and "clear:timemachine" in console.topics
+    assert "Without the TrueNAS NAS the playbooks refuse them." in "\n".join(console.out), console.out[-5:]
+    assert "timemachine_backups" not in local(repo)
+
+
 @pytest.mark.parametrize("routes", [True, False], ids=["subnet-router", "host-only"])
 def test_remote_access_requires_the_auth_key_for_the_hosts_first_login(repo, routes):
     # proxmox.yml refuses a host that is not logged in without the key, after changing it, and a dry run cannot tell;

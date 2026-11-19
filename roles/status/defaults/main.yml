@@ -65,6 +65,17 @@ status_cluster_snapshot_dir: ""
 # its configuration is written for, which a NAS on another is told; empty compares none.
 status_nas_state: {}
 status_nas_release: ""
+# The Macs that back up to the NAS with Time Machine, each {share, retired}: the name of its Time Machine share, and
+# whether the Mac is retired. Each share is judged by them: a retired Mac's is only listed, unless still enabled, a
+# thing to do, an active Mac's disabled share is a problem and a missing one a thing to do, and a share none names is
+# only listed. Empty judges none.
+status_nas_macs: []
+# The NAS's services as its configuration keeps them, {name: {enabled, state}} as roles/truenas takes them: one that
+# runs while it is to be stopped is a problem. Empty judges none.
+status_nas_services: {}
+# The machines of this setup, {address: name}, by which the report names who has the NAS's NFS shares mounted: any
+# other address is a problem. Empty judges none, and each client is shown by its address.
+status_nas_known_clients: {}
 # The Proxmox host's Tailscale: what roles/proxmox_tailscale's status entry point recorded, {} when it is off.
 status_tailscale_state: {}
 # How many reads run at once on a host, and the seconds each may take; null runs one per CPU, 8 at most.
@@ -90,8 +101,11 @@ status_admin: []
 # The commands the report suggests, by purpose: upgrade (the Proxmox host's packages), resume (suspended apps, with
 # {names} for theirs), talos_upgrade, credentials (renewed), allowlist (Traefik's still closed), secrets (an app's
 # missing Secret), nas (the NAS's settings applied again), nas_release (a TrueNAS release its configuration is not
-# written for), nas_network (interface changes never committed), backup (a backup job applied again), backup_target
-# (where backups could go, when there is no job), etcd_snapshot (taking one), tailscale (the Proxmox host's Tailscale
-# applied again), tailscale_login (its first login), split_dns (the tailnet's split DNS for the apps' domain). One left
-# out is suggested by text alone.
+# written for), nas_network (interface changes never committed), nas_clock (the NAS's clock a minute or more from this
+# machine's), nas_disk_heat (a disk near its critical temperature), nas_disk_errors (a pool not healthy for its disks'
+# errors), nas_clients (an NFS share mounted from an address no machine of this setup has), time_machine (a Mac's
+# backup late or never completed, looked at on the Mac), time_machine_quota (a Mac's backup nearing its quota), backup
+# (a backup job applied again), backup_target (where backups could go, when there is no job), etcd_snapshot (taking
+# one), tailscale (the Proxmox host's Tailscale applied again), tailscale_login (its first login), split_dns (the
+# tailnet's split DNS for the apps' domain). One left out is suggested by text alone.
 status_commands: {}

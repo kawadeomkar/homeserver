@@ -66,8 +66,8 @@ requires blocking IO"; redirect stdin from `/dev/null` and stdout/stderr to a fi
 
 **The vault** is `group_vars/all/local.vault.yml`, git-ignored like `local.yml` and committed nowhere, since this public
 repo would publish even its ciphertext; every setup needs it and `.vault_pass` (`just vault new`).
-`local.vault.yml.example` is its template: every key, each `""` under a comment saying what it is for
-(`vault_discord_token`, in an older vault, is left over from the deleted roles). The Talos secrets bundle, every key of
+`local.vault.yml.example` is its template: every key, each `""` (`{}` for a mapping) under a comment saying what it is
+for (`vault_discord_token`, in an older vault, is left over from the deleted roles). The Talos secrets bundle, every key of
 the cluster, lives in `talos_config_dir` alone, and a Kubernetes Secret is a SOPS file. **Never print the vault's
 contents; check it by listing variable names only.**
 
@@ -126,7 +126,7 @@ say who owns a storage and what it is for, never the backend (`roles/truenas/REA
 What is easy to break wherever the change is; `docs/` (gitignored) holds the audits behind them.
 
 - **Every change to the NAS goes through `roles/truenas`.** No UI clicks, ad-hoc API calls or SSH; a fresh install plus
-  one run must rebuild it. Read-only API queries are fine.
+  one run must rebuild it. Reads are fine; deleting, rollbacks and check clones are the owner's alone, by runbook.
 - **Flux holds cluster-admin, so merge rights on `main` are the cluster's admin boundary.** It applies whatever the
   synced branch holds. Whoever can merge to `main` controls the cluster, which is why `flux_sync_url` has no default and
   a fork syncs its own repository; another branch is unprotected, so syncing one takes `flux_sync_ref_unprotected: true`
