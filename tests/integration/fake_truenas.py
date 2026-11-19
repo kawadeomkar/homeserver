@@ -242,7 +242,7 @@ def initial_state(address):
         "jobs": {},
         "address": address,
         "interfaces": {
-            "enp7s0": {"ipv4_dhcp": True, "ipv6_auto": True, "aliases": [], "live": [address]},
+            "eno1": {"ipv4_dhcp": True, "ipv6_auto": True, "aliases": [], "live": [address]},
         },
         "interface_snapshot": None,
         "checkin_waiting": None,
@@ -555,7 +555,7 @@ class FakeTrueNAS:
         return [i for i in (self.iface(n) for n in self.s["interfaces"]) if matches(i, filters)]
 
     def m_interface_websocket_interface(self):
-        return self.iface("enp7s0")
+        return self.iface("eno1")
 
     def m_interface_websocket_local_ip(self):
         return self.s["address"]
