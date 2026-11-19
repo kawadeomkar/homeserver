@@ -42,9 +42,10 @@ Two entry points:
     say why, and are a thing to do already.
   - On the NAS (`nas`) it reads nothing itself: the play reads the NAS first, through roles/truenas's `status` entry
     point (`roles/truenas/tasks/status.yml`: `truenas_info` with its `status` option, one login), and the role works
-    out what `status_nas_state` says: the address that answered, of the ones the NAS is tried at, each pool's
-    health, use, layout and last scrub, TrueNAS's alerts, each snapshot task's last run, the NFS service and its
-    shares, and whether the NAS runs `status_nas_release`. The `status`
+    out what `status_nas_state` says: the address that answered, of the ones the NAS is tried at, and whether it is
+    its static one, `status_nas_static_address`, each pool's health, use, layout and last scrub, TrueNAS's alerts,
+    each snapshot task's last run, the NFS service and its shares, and whether the NAS runs `status_nas_release`. The
+    `status`
     option adds `pool.scrub.query`, `alert.list` and `pool.snapshottask.query` to `truenas_info`'s reads and picks
     each pool's health, root-dataset use, layout and last scan, the alerts not dismissed and each snapshot task's
     last run, with the API's times (`{"$date": ms}`) turned into RFC 3339. The entry point tries each address once
@@ -162,6 +163,13 @@ an alert at ERROR or worse, NFS not running while it has shares, and TrueNAS not
 a scrub more than eight days past its task's threshold, a pool no scrub task scrubs, a WARNING alert, a release other
 than `status_nas_release`, and interface changes never committed are things to do.
 
+**A NAS that answered at its bootstrap address** has lost its static one: `status_nas_static_address`, the first
+address the NAS is tried at, did not answer and the next did, in this repository the bootstrap lease
+(`truenas_api_hosts`, `group_vars/nas/connection.yml`). The header then reads `TrueNAS 25.10.7 at <address>
+(bootstrap)`, the JSON's `nas.bootstrap` is true, and it is a thing to do, which `just deploy truenas` deals with
+(`status_commands`' `nas`), since the NAS play gives the NAS its static address. Empty, as in a setup that has only
+the bootstrap address, it compares none.
+
 Memory is Proxmox's view, the host's, for a VM that is no cluster node: with ballooning off, as on every VM here, PVE 9
 shows the host's PSS, every page the guest has touched, and the text marks it. A node's memory and disks are the
 guest's own, from kubelet's statistics (`kubectl get --raw /api/v1/nodes/<node>/proxy/stats/summary`), since Talos's
@@ -196,6 +204,7 @@ its mount in `status_cluster_volumes`.
 | `status_cluster_request_timeout` | `10` | Seconds kubectl waits for the API server |
 | `status_cluster_snapshot_dir` | `""` | The directory of the etcd snapshots, each `<anything>-<UTC time>.db`; empty shows none |
 | `status_nas_state` | `{}` | What `truenas_info` returned with its `status` option, or its failure |
+| `status_nas_static_address` | `""` | The address the NAS is to answer at, its static one, the first it is tried at; one that answered at another, its bootstrap lease, has lost it, a thing to do; empty compares none |
 | `status_nas_release` | `""` | The TrueNAS release (major.minor) the NAS's configuration is written for; empty compares none |
 | `status_tailscale_state` | `{}` | The Proxmox host's Tailscale, as roles/proxmox_tailscale's `status` entry point records it; empty when it is off |
 | `status_parallel` | `8` | How many reads run at once on a host |
@@ -220,7 +229,8 @@ flag, the nightly backup job roles/proxmox_backup keeps, the Tailscale state rol
 `group_vars/kubernetes/status.yml` (the credentials roles/talos writes in `talos_config_dir`, the apps as
 roles/app_scale finds them, the worker's user volumes, the settings roles/flux_bootstrap keeps, Alertmanager's pod, the
 pins, where roles/talos keeps the etcd snapshots) and `group_vars/nas/status.yml` (what roles/truenas's `status` entry
-point read, and `truenas_supported_version`, the release that role is written for, in scope through `status.yml`'s
+point read, the first of `truenas_api_hosts`, the static address, as `status_nas_static_address`, and
+`truenas_supported_version`, the release that role is written for, in scope through `status.yml`'s
 import of it). `status_source` is `proxmox` on the Proxmox host, `cluster` on `homeserver-k8s` and `nas` on `truenas`,
 the last two empty without a cluster or a NAS. `status_vms` is the same list of VMIDs as `vm_backup_vmids` (the
 cluster's nodes, Home Assistant's, and `local.yml`'s `vm_backup_extra_vmids`), which
@@ -275,19 +285,25 @@ Without the filter, the sections are shown at the end, and the callback says so 
 - `tests/unit/test_status_filters.py`: the filter (parsing, report and text are pure functions), with the shapes
   captured on 2026-10-21 from a Proxmox VE 9.2 host and the Talos cluster on it (the cluster's from the NUC), written
   out with made-up names, addresses and sizes. `test_each_section_depends_only_on_its_sources` removes every other
-  source in turn and compares each section, which is what lets the callback print it early.
+  source in turn and compares each section, which is what lets the callback print it early. A NAS that answered at
+  another address than its static one says so in its header and is a thing to do, and one that answered at its static
+  address, or has none configured, neither (`test_a_nas_that_answered_at_its_bootstrap_address`).
 - `tests/unit/test_status_callback.py`: the callback's `Progress`, which is pure: the sections in order whatever host
   answers first, the lines below them, and that what it prints in the end is the report play's own text.
 - `tests/unit/test_status_read.py`: the read list, every form allowed and others refused, and the parallel runs.
 - `tests/unit/test_status_probe.py`: the probe, against servers in the test's process.
 - `tests/policy/test_roles.py`: `test_status_reads_only_through_status_read` keeps every other task of the role to a
-  short list of modules, delegated to localhost alone, and the report entry point's writes to `status_report_file`.
+  short list of modules, delegated to localhost alone, and the report entry point's writes to `status_report_file`;
+  `test_status_reads_the_nas_as_its_play_reaches_it`, that `status_nas_static_address` is the first address the NAS
+  play tries, the static one.
 - `tests/integration/test_status.py` runs the real `status.yml`, callback and `just status` in a scratch tree against
   the fake Proxmox host, the fake cluster and, in `local.yml.example`'s setup, `fake_truenas.py` (`fake_kubectl.py`
   lists the kinds the role reads, makes pods up from the Deployments and answers kubelet's statistics and amtool,
   `fake_talos.py` answers `git ls-remote`), with HOME and the credentials the test's own. It checks the exit codes,
   `--json`, another cluster's kubeconfig, a stopped cluster, a host that refuses the connection, probes that get no
-  answer, a NAS that does not answer or presents another certificate, one login to the NAS with nothing but reads and
+  answer, a NAS that does not answer or presents another certificate, a NAS whose static address does not answer
+  while its bootstrap one does (127.0.0.2, where nothing listens, tried first: `test_a_nas_at_its_bootstrap_address`),
+  one login to the NAS with nothing but reads and
   no secret in the report, a failed and a not yet made backup with the reason from the run's log (`fake_pve.backup_run`
   seeds runs as vzdump leaves them), the host's Tailscale through `fake_tailscale.py` (after `fake_pve_bin` on PATH: a
   served and an unapproved route, `tailscaled` down, and no other device's or the tailnet's name in the report), each

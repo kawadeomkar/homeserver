@@ -1208,11 +1208,13 @@ def _nas_unread(state):
     return message
 
 
-def nas(state, release=""):
+def nas(state, release="", static_address=""):
     """What the NAS says, from truenas_info with its status option (roles/truenas's status entry point): each pool's
     health, capacity and last scrub, TrueNAS's alerts, each periodic snapshot task's last run, the NFS service, and
-    the release it runs against `release`, the one its role is written for. A NAS that did not answer, refused the
-    key or presented another certificate than the pinned one is {"unread": why}."""
+    the release it runs against `release`, the one its role is written for. `static_address` is the address it is to
+    answer at, the first it is tried at: one that answered at another, its bootstrap lease, has lost it (`bootstrap`);
+    empty compares none. A NAS that did not answer, refused the key or presented another certificate than the pinned
+    one is {"unread": why}."""
     state = state if isinstance(state, dict) else {}
     health = state.get("status")
     if not state.get("api_host") or not isinstance(health, dict):
@@ -1242,6 +1244,7 @@ def nas(state, release=""):
     return {
         "name": str(state.get("hostname") or ""),
         "address": str(state["api_host"]),
+        "bootstrap": bool(static_address) and str(state["api_host"]) != str(static_address),
         "version": str(state.get("version") or ""),
         "release": str(release or ""),
         "ready": bool(state.get("ready")),
@@ -1794,6 +1797,9 @@ def _nas_attention(found, commands):
     out = []
     if not found["ready"]:
         out.append(_item("problem", "nas", "TrueNAS is not ready: its middleware is still starting"))
+    if found.get("bootstrap"):
+        text = "the NAS answered on its bootstrap address, not its static one"
+        out.append(_item("todo", "nas", text, commands.get("nas", "")))
     release, version = found.get("release"), found.get("version", "")
     if release and version and ".".join(version.split(".")[:2]) != release:
         text = f"the NAS runs TrueNAS {version}, and its configuration is written for {release}"
@@ -2872,9 +2878,11 @@ def _nas_lines(model):
     found = model.get("nas") or {}
     if not found or found.get("unread"):
         return [Line().add("NAS", "h").add("  ").add("not read", "d")]
-    # The address that answered, of the ones the NAS is tried at, beside the release.
-    at = f" at {found['address']}" if found.get("address") else ""
-    facts = [found["name"], f"TrueNAS {found['version']}{at}" if found["version"] else found.get("address", "")]
+    # The address that answered, of the ones the NAS is tried at, beside the release, and whether it was not the static
+    # one but the bootstrap lease, the NAS having lost its static address.
+    where = found.get("address", "") + (" (bootstrap)" if found.get("address") and found.get("bootstrap") else "")
+    at = f" at {where}" if where else ""
+    facts = [found["name"], f"TrueNAS {found['version']}{at}" if found["version"] else where]
     facts.append(f"up {_uptime(found['uptime'])}" if found.get("uptime") is not None else "")
     lines = [Line().add("NAS", "h").add("  ").add(" · ".join(f for f in facts if f), "d")]
     pools = found.get("pools") or []

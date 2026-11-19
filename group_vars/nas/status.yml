@@ -3,5 +3,9 @@
 # point (truenas_info, one login), and roles/status works out what that says. Without a NAS it reads nothing.
 status_source: "{{ 'nas' if nas_present else '' }}"
 status_nas_state: "{{ truenas_status | default({}) }}"
+# The NAS's static address, the first of truenas_api_hosts (group_vars/nas/connection.yml), the bootstrap one second:
+# a NAS that answers at another has lost its static address. Empty without one, when the bootstrap address is all
+# there is.
+status_nas_static_address: "{{ truenas_api_hosts | default([], true) | first | default('', true) | trim }}"
 # The release roles/truenas is written for, its own default, which status.yml's import of the role brings in.
 status_nas_release: "{{ truenas_supported_version | default('') }}"

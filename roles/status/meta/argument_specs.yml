@@ -189,6 +189,12 @@ argument_specs:
         type: dict
         default: {}
         description: What truenas_info returned with its status option, or its failure; the NAS's findings.
+      status_nas_static_address:
+        type: str
+        default: ""
+        description: >-
+          The address the NAS is to answer at, its static one, the first it is tried at; one that answered at another,
+          its bootstrap lease, has lost it, which the report says and makes a thing to do. Empty compares none.
       status_nas_release:
         type: str
         default: ""

@@ -1768,6 +1768,27 @@ def test_the_nas_is_left_out_unless_shown():
     assert fs.report({"nas": {"unread": "timed out"}}, NAS_SETUP, ["nas"], now=NAS_NOW)["exit"] == 2
 
 
+@pytest.mark.parametrize(
+    ("answered", "static", "header", "bootstrap"),
+    [
+        pytest.param("192.0.2.50", "192.0.2.10", "at 192.0.2.50 (bootstrap)", True, id="bootstrap"),
+        pytest.param("192.0.2.10", "192.0.2.10", "at 192.0.2.10", False, id="static"),
+        pytest.param("192.0.2.50", "", "at 192.0.2.50", False, id="no-static-address"),
+    ],
+)
+def test_a_nas_that_answered_at_its_bootstrap_address(answered, static, header, bootstrap):
+    """The NAS answered at another address than its static one, the first it is tried at: the header says it was its
+    bootstrap lease, and the NAS having lost its static address is a thing to do. At its static address, or with none
+    configured, nothing."""
+    found = fs.nas(nas_state(api_host=answered), "25.10", static_address=static)
+    model = fs.report({"proxmox": {}, "nas": found}, NAS_SETUP, (), now=NAS_NOW, commands=NAS_COMMANDS)
+    assert model["nas"]["bootstrap"] is bootstrap
+    assert f"NAS  truenas · TrueNAS 25.10.7 {header} · up 34 d" in fs.text(model, False).splitlines()
+    text = "the NAS answered on its bootstrap address, not its static one"
+    assert attention(model) == ([("todo", "nas", text, "just deploy truenas")] if bootstrap else [])
+    assert model["exit"] == 0
+
+
 def test_the_nas_text():
     state = nas_state(
         pools=[

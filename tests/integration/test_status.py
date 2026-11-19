@@ -1141,6 +1141,23 @@ def test_a_nas_on_another_release_is_a_thing_to_do(nas_tree, nas, tmp_path):
     assert todo[0]["command"].startswith("just deploy truenas refuses it until truenas_supported_version")
 
 
+def test_a_nas_at_its_bootstrap_address(nas_tree, nas, tmp_path):
+    """The NAS's static address, the first it is tried at, does not answer, and its bootstrap one does: the header
+    says the NAS answered at its bootstrap address, and its having lost its static one is a thing to do, with just
+    deploy truenas. 127.0.0.2 is loopback too, where nothing listens on the fake's port."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    seed_nas(nas["state"])
+    hosts = ["127.0.0.2", "127.0.0.1"]
+    rc, out, err = just_status(nas_tree, state, "nas", **nas_vars(nas, truenas_api_hosts=hosts))
+    report = report_of(nas_tree)
+    assert rc == report["exit"] == 0, out + err
+    assert "NAS  truenas · TrueNAS 25.10.7 at 127.0.0.1 (bootstrap) · up 34 d" in out.splitlines(), out
+    assert report["nas"]["address"] == "127.0.0.1" and report["nas"]["bootstrap"] is True
+    todo = [(a["level"], a["text"], a["command"]) for a in report["attention"] if a["subject"] == "nas"]
+    assert todo == [("todo", "the NAS answered on its bootstrap address, not its static one", "just deploy truenas")]
+
+
 @pytest.mark.parametrize(
     ("given", "why"),
     [

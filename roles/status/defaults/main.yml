@@ -58,6 +58,9 @@ status_cluster_snapshot_dir: ""
 # The NAS: what truenas_info returned with its status option, or its failure, and the TrueNAS release (major.minor)
 # its configuration is written for, which a NAS on another is told; empty compares none.
 status_nas_state: {}
+# The address the NAS is to answer at, its static one, the first it is tried at: one that answered at another, its
+# bootstrap lease, has lost it, which the report says. Empty compares none.
+status_nas_static_address: ""
 status_nas_release: ""
 # The Proxmox host's Tailscale: what roles/proxmox_tailscale's status entry point recorded, {} when it is off.
 status_tailscale_state: {}

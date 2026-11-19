@@ -300,6 +300,16 @@ Description: Read the homeserver's machines without changing them, and report wh
   
   
 
+  - **status_nas_static_address**
+    - **Required**: false
+    - **Type**: str
+    - **Default**: 
+  
+    - **Description**: The address the NAS is to answer at, its static one, the first it is tried at; one that answered at another, its bootstrap lease, has lost it, which the report says and makes a thing to do. Empty compares none.
+  
+  
+  
+
   - **status_nas_release**
     - **Required**: false
     - **Type**: str
@@ -597,20 +607,21 @@ Description: Read the homeserver's machines without changing them, and report wh
 | [status_cluster_request_timeout](defaults/main.yml#L54)   | int | `10` |    
 | [status_cluster_snapshot_dir](defaults/main.yml#L57)   | str |  |    
 | [status_nas_state](defaults/main.yml#L60)   | dict | `{}` |    
-| [status_nas_release](defaults/main.yml#L61)   | str |  |    
-| [status_tailscale_state](defaults/main.yml#L63)   | dict | `{}` |    
-| [status_parallel](defaults/main.yml#L65)   | int | `8` |    
-| [status_timeout](defaults/main.yml#L66)   | int | `30` |    
-| [status_hosts](defaults/main.yml#L69)   | list | `[]` |    
-| [status_report_file](defaults/main.yml#L70)   | str |  |    
-| [status_color](defaults/main.yml#L71)   | bool | `False` |    
-| [status_quiet](defaults/main.yml#L72)   | bool | `False` |    
-| [status_read_at](defaults/main.yml#L75)   | str |  |    
-| [status_now](defaults/main.yml#L76)   | int | `0` |    
-| [status_probe_apps](defaults/main.yml#L79)   | bool | `True` |    
-| [status_probe_timeout](defaults/main.yml#L80)   | int | `5` |    
-| [status_admin](defaults/main.yml#L83)   | list | `[]` |    
-| [status_commands](defaults/main.yml#L91)   | dict | `{}` |    
+| [status_nas_static_address](defaults/main.yml#L63)   | str |  |    
+| [status_nas_release](defaults/main.yml#L64)   | str |  |    
+| [status_tailscale_state](defaults/main.yml#L66)   | dict | `{}` |    
+| [status_parallel](defaults/main.yml#L68)   | int | `8` |    
+| [status_timeout](defaults/main.yml#L69)   | int | `30` |    
+| [status_hosts](defaults/main.yml#L72)   | list | `[]` |    
+| [status_report_file](defaults/main.yml#L73)   | str |  |    
+| [status_color](defaults/main.yml#L74)   | bool | `False` |    
+| [status_quiet](defaults/main.yml#L75)   | bool | `False` |    
+| [status_read_at](defaults/main.yml#L78)   | str |  |    
+| [status_now](defaults/main.yml#L79)   | int | `0` |    
+| [status_probe_apps](defaults/main.yml#L82)   | bool | `True` |    
+| [status_probe_timeout](defaults/main.yml#L83)   | int | `5` |    
+| [status_admin](defaults/main.yml#L86)   | list | `[]` |    
+| [status_commands](defaults/main.yml#L94)   | dict | `{}` |    
 
 
 

@@ -1929,11 +1929,15 @@ def test_status_reads_the_nas_as_its_play_reaches_it(tmp_path, local_yml, source
     """just status reads the NAS through roles/truenas's status entry point, with the NAS play's own connection
     settings (the static address, then the bootstrap one; the pinned certificate), and only with a NAS."""
     tree = example_tree(tmp_path, local_yml)
-    names = "{'status_source': status_source, 'truenas_api_hosts': truenas_api_hosts}"
+    names = (
+        "{'status_source': status_source, 'truenas_api_hosts': truenas_api_hosts, 'static': status_nas_static_address}"
+    )
     found = resolve_on(tree, "truenas", names)
     assert found["status_source"] == source
     if source:
         assert found["truenas_api_hosts"] == ["192.0.2.10", "192.0.2.50"]
+    # The NAS's static address, the first it is tried at, which status compares with the one that answered.
+    assert found["static"] == ("192.0.2.10" if source else "")
     play = next(p for p in yaml.safe_load((ROOT / "status.yml").read_text()) if p["name"] == "Read the machines")
     assert "nas" in play["hosts"].split(":")
     imports = [t for t in play["pre_tasks"] if "ansible.builtin.import_role" in t]
