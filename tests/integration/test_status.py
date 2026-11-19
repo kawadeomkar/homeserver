@@ -1233,6 +1233,8 @@ def test_the_macs_backups_are_read_from_the_nas(nas_tree, nas, tmp_path):
     assert " Macs       tm-laptop backed up 11 d ago, 0.4 / 2.0 TiB, snapshots 20 GiB" in out, out
 
 
+# The NAS section's header in local.yml.example's setup, whether or not it also says the address the NAS answered at.
+NAS_HEADER = r"NAS  truenas · TrueNAS 25\.10\.7( at [^·]+)? · up 34 d"
 # What an NFSv4 client says of itself, and the files it holds open, which the report never carries.
 NFS_CLIENT_NAME = "Linux NFSv4.2 FAKE-CLIENT-NAME-MUST-NOT-LEAK"
 NFS_OPEN_FILE = "/FAKE-OPEN-FILE-MUST-NOT-LEAK"
@@ -1297,7 +1299,9 @@ def test_the_nas_sections_details(nas_tree, nas, tmp_path):
     nfs = lines.index(" NFS        running · 1 share · mounted by the Proxmox host (2 clients) · homeserver-worker-1")
     assert lines[nfs + 1] == "            198.51.100.7", out
     assert " Services   ssh running, configured stopped" in lines, out
-    keys = [line[:12].strip() for line in lines[lines.index("NAS  truenas · TrueNAS 25.10.7 · up 34 d") + 1 :]]
+    # The section's lines after its header, which may also say the address the NAS answered at.
+    header = next(i for i, line in enumerate(lines) if re.fullmatch(NAS_HEADER, line))
+    keys = [line[:12].strip() for line in lines[header + 1 :]]
     assert [k for k in keys[: keys.index("Alerts") + 1] if k] == [
         "Network",
         "Pools",
