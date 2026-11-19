@@ -22,7 +22,11 @@ description:
     disk's temperature and critical temperature (C(disk.temperatures), which TrueNAS reads from the kernel's sensors
     and keeps for five minutes), the addresses that have the NFS shares mounted (C(nfs.get_nfs3_clients) and
     C(nfs.get_nfs4_clients)), and the NAS's clock beside this machine's. These reads come last, and one that fails
-    leaves its part null, with why in C(unread), never the whole read failed. No disk's serial or model is reported.
+    leaves its part null, with why in C(unread), never the whole read failed.
+  - With O(status), no disk's serial or model is reported, not even in TrueNAS's alerts, whose texts quote them - Disk
+    Temperature Is Too Hot and the SMART alerts a disk's serial, Pool Status Is Not Healthy a gone disk's model and
+    serial. Each serial and model the read knows (C(disk.details)', a gone disk's in a pool's topology, and the NAS's
+    own serial) is replaced in an alert's text by the disk's device name, or left out where it has none.
   - Without O(status), also reports which local users are SMB logins and which user the API key logs in as, by name
     alone, for the role's check that no SMB login it does not list exists when it starts SMB.
   - Runs on the controller and needs the websocket-client Python package there.
@@ -88,7 +92,8 @@ status:
   description:
     - The NAS's health. Times are RFC 3339 in UTC, sizes bytes. A pool's C(used) and C(available) are its root
       dataset's, what its datasets can still take, parity left out; C(scan) is its last scrub or resilver, and
-      C(scrub) the task that scrubs it, if any. Only alerts that are not dismissed are listed.
+      C(scrub) the task that scrubs it, if any. Only alerts that are not dismissed are listed, each C(text) with every
+      serial and model the read knows replaced by the disk's device name.
     - A Time Machine share's C(dataset) is the one its path names, and C(dataset_found) false, its sizes null, when
       the NAS has none there. Its C(last_backup) is null for a disabled share, which is not read, and when no
       C(aapltm-) snapshot holds a time; a time more than an hour ahead of the controller's clock is ignored.
@@ -184,34 +189,76 @@ def _count(value):
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
-def _disks(topology):
-    """A pool's disks, in its vdevs' order, each with its state and ZFS's error counts. A disk is named as
-    disk.temperatures names it (pool.query's `disk`, which TrueNAS works out from the vdev's path); one that is gone
-    by the disk TrueNAS last knew at its place (`unavail_disk`, a disk.query entry, of which its name alone is kept),
-    else by its ZFS guid. Never by the vdev's own name, which is its path's: a pool made by hand on
-    /dev/disk/by-id/... would give the disk's model and serial."""
-    out = []
+def _leaves(topology):
+    """A pool's disks as its topology's vdevs give them, every kind of vdev, depth first, in order."""
 
     def walk(vdev):
         if not isinstance(vdev, dict):
             return
         if str(vdev.get("type") or "").upper() == "DISK":
-            stats = vdev.get("stats") or {}
-            gone = vdev.get("unavail_disk") if isinstance(vdev.get("unavail_disk"), dict) else {}
-            out.append(
-                {
-                    "name": str(vdev.get("disk") or gone.get("name") or vdev.get("guid") or ""),
-                    "status": str(vdev.get("status") or ""),
-                    **{key: _count(stats.get(key)) for key in ERROR_COUNTS},
-                }
-            )
+            yield vdev
         for child in vdev.get("children") or []:
-            walk(child)
+            yield from walk(child)
 
     for kind in VDEV_KINDS:
         for vdev in (topology or {}).get(kind) or []:
-            walk(vdev)
-    return out
+            yield from walk(vdev)
+
+
+def _unavail(vdev):
+    """The disk TrueNAS last knew at a gone disk's place (`unavail_disk`, a disk.query entry), or {}."""
+    return vdev.get("unavail_disk") if isinstance(vdev.get("unavail_disk"), dict) else {}
+
+
+def _disks(topology):
+    """A pool's disks, in its vdevs' order, each with its state and ZFS's error counts. A disk is named as
+    disk.temperatures names it (pool.query's `disk`, which TrueNAS works out from the vdev's path); one that is gone
+    by the disk TrueNAS last knew at its place (`unavail_disk`, of which its name alone is kept), else by its ZFS guid.
+    Never by the vdev's own name, which is its path's: a pool made by hand on /dev/disk/by-id/... would give the
+    disk's model and serial."""
+    return [
+        {
+            "name": str(vdev.get("disk") or _unavail(vdev).get("name") or vdev.get("guid") or ""),
+            "status": str(vdev.get("status") or ""),
+            **{key: _count((vdev.get("stats") or {}).get(key)) for key in ERROR_COUNTS},
+        }
+        for vdev in _leaves(topology)
+    ]
+
+
+def _known_disks(details, pools, info):
+    """Every disk whose serial and model this read knows, each {name, serial, model}: disk.details' (used and
+    unused), each disk gone from a pool that TrueNAS last knew at its place, and the NAS itself, by its serial alone,
+    which has no device name."""
+    disks = [d for kind in ("used", "unused") for d in (details or {}).get(kind) or [] if isinstance(d, dict)]
+    disks += [_unavail(vdev) for p in pools for vdev in _leaves(p.get("topology")) if _unavail(vdev)]
+    return [*disks, {"name": "", "serial": info.get("system_serial"), "model": ""}]
+
+
+def without_serials(text, disks):
+    """`text` with every serial and model of `disks` ({name, serial, model}) left out, as TrueNAS's alerts quote
+    them at TS-25.10.7: Disk Temperature Is Too Hot gives a disk's serial after its device (alert/source/disk_temp.py),
+    the SMART alerts after its name (smart.py), and Pool Status Is Not Healthy a gone disk's model and serial
+    (volume_status.py). Their own wordings come out whole, "sda (<serial>)" as "sda", " (with serial: <serial>)" as
+    nothing and "<model> <serial>" as the device name; anywhere else a serial becomes the device name, or "(serial
+    left out)" without one, and a model, which many disks may share, "(model left out)". Each is matched whole, never
+    inside a longer word (a serial's own - and _ count as its letters), the longest first."""
+    pairs = []
+    for disk in disks:
+        name, serial, model = (str(disk.get(key) or "").strip() for key in ("name", "serial", "model"))
+        if serial:
+            if name:
+                pairs += [(f"{name} ({serial})", name), (f" (with serial: {serial})", "")]
+            if model:
+                pairs.append((f"{model} {serial}", name or "(serial left out)"))
+            pairs.append((serial, name or "(serial left out)"))
+        if model:
+            pairs.append((model, "(model left out)"))
+    for found, put in sorted(pairs, key=lambda pair: -len(pair[0])):
+        start = r"(?<![A-Za-z0-9_-])" if found[0].isalnum() else ""
+        end = r"(?![A-Za-z0-9_-])" if found[-1].isalnum() else ""
+        text = re.sub(start + re.escape(found) + end, lambda _, put=put: put, text)
+    return text
 
 
 def _celsius(value):
@@ -296,11 +343,12 @@ def time_machine(api, shares, datasets):
     return out
 
 
-def health(api, info, pools, datasets, smb_shares=(), info_at=None):
+def health(api, info, pools, datasets, smb_shares=(), info_at=None, details=None):
     """What just status shows of the NAS, from what gather read and three more calls, one for the Time Machine shares'
     snapshots, and last the three reads that may fail on their own: the disks' temperatures and the NFS clients, whose
     failure leaves that part null and says why in `unread`. `info_at` is this machine's clock when system.info
-    answered."""
+    answered, and `details` disk.details' answer, whose serials and models no alert's text keeps."""
+    known = _known_disks(details, pools, info)
     roots = {d.get("id"): d for d in datasets if "/" not in str(d.get("id"))}
     by_id = {d.get("id"): d for d in datasets}
     scrubs = {s.get("pool_name"): pick(s, ["threshold", "enabled"]) for s in api.call("pool.scrub.query")}
@@ -329,7 +377,7 @@ def health(api, info, pools, datasets, smb_shares=(), info_at=None):
         "alerts": [
             {
                 **pick(a, ["klass", "level"]),
-                "text": a.get("formatted") or a.get("text") or "",
+                "text": without_serials(str(a.get("formatted") or a.get("text") or ""), known),
                 "datetime": _date(a.get("datetime")),
             }
             for a in api.call("alert.list")
@@ -426,7 +474,7 @@ def gather(api, importable, status=False):
     if importable:
         result["importable_pools"] = api.job("pool.import_find")
     if status:
-        result["status"] = health(api, info, pools, datasets, smb_shares, info_at)
+        result["status"] = health(api, info, pools, datasets, smb_shares, info_at, disks)
     return result
 
 

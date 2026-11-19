@@ -149,6 +149,8 @@ VDEV_NAME = "VDEV-NAME-MUST-NOT-LEAK"
 LINK_ADDRESS = "LINK-ADDRESS-MUST-NOT-LEAK"
 CLIENT_NAME = "Linux NFSv4.2 CLIENT-NAME-MUST-NOT-LEAK"
 OPEN_FILE = "/OPEN-FILE-MUST-NOT-LEAK"
+# The NAS's own serial, which system.info gives and an alert could quote.
+NAS_SERIAL = "NAS-SERIAL-MUST-NOT-LEAK"
 
 
 def disk_vdev(disk, status="ONLINE", guid="1", unavail_disk=None, **errors):
@@ -665,6 +667,83 @@ def test_without_status_nothing_more_is_asked():
     assert result["hostname"] == "truenas" and result["datasets"] == [
         d["id"] for d in api.ANSWERS["pool.dataset.query"]
     ]
+
+
+def alert(klass, level, formatted, **args):
+    """An alert as alert.list returns it, its text formatted as its source words it."""
+    when = {"$date": 1792497600000}
+    return {"klass": klass, "level": level, "formatted": formatted, "args": args, "datetime": when, "dismissed": False}
+
+
+# How TrueNAS 25.10.7 words the pool's state when a disk is gone (py-libzfs's MISSING_DEV_R).
+MISSING = (
+    "One or more devices could not be opened. Sufficient replicas exist for the pool to continue functioning in a "
+    "degraded state."
+)
+
+
+class AlertsAPI(ScriptedAPI):
+    """ScriptedAPI, with alerts that quote disks' serials and models as TrueNAS 25.10.7's alert sources word them
+    (alert/source/disk_temp.py, smart.py and volume_status.py): sda and nvme1n1 in disk.details, each with a serial
+    of its own, the gone nvme2n1 that pool.query's unavail_disk names by the model and serial TrueNAS last knew there,
+    and a text no source has, which quotes the NAS's own serial and a model alone."""
+
+    ANSWERS: ClassVar[dict] = ScriptedAPI.ANSWERS | {
+        "disk.details": {
+            "used": [
+                {"name": "sda", "serial": f"{SERIAL}-SDA", "model": MODEL, "size": TIB},
+                {"name": "nvme1n1", "serial": f"{SERIAL}-NVME1", "model": MODEL, "size": TIB},
+            ],
+            "unused": [],
+        },
+        "system.info": ScriptedAPI.ANSWERS["system.info"] | {"system_serial": NAS_SERIAL},
+        "alert.list": [
+            alert(
+                "DiskTemperatureTooHot",
+                "CRITICAL",
+                f"Disk /dev/sda (with serial: {SERIAL}-SDA) critical temperature threshold is 70 degrees celsius and"
+                " the current temp is 72 degrees celsius",
+                serial=f"{SERIAL}-SDA",
+            ),
+            alert("SMARTFailedSelfTest", "WARNING", f"nvme1n1 ({SERIAL}-NVME1) failed a SMART selftest."),
+            alert(
+                "VolumeStatus",
+                "CRITICAL",
+                f"Pool persistent state is DEGRADED: {MISSING}<br>The following devices are not healthy:"
+                f"<ul><li>Disk {MODEL} {SERIAL} is UNAVAIL</li><li>Disk 4242 is REMOVED</li></ul>",
+            ),
+            alert("Made up", "WARNING", f"The NAS {NAS_SERIAL} holds {MODEL} disks."),
+        ],
+    }
+
+
+def test_no_alert_keeps_a_disks_serial_or_model():
+    """TrueNAS's alerts quote disks' serials and models: each comes out by the disk's device name, its alert's own
+    wording whole, a gone disk's by the name TrueNAS last knew there; the NAS's serial and a model alone are left out.
+    An alert's args are never returned."""
+    status = info.gather(AlertsAPI(), importable=False, status=True)["status"]
+    assert [a["text"] for a in status["alerts"]] == [
+        "Disk /dev/sda critical temperature threshold is 70 degrees celsius and the current temp is 72 degrees celsius",
+        "nvme1n1 failed a SMART selftest.",
+        f"Pool persistent state is DEGRADED: {MISSING}<br>The following devices are not healthy:"
+        "<ul><li>Disk nvme2n1 is UNAVAIL</li><li>Disk 4242 is REMOVED</li></ul>",
+        "The NAS (serial left out) holds (model left out) disks.",
+    ]
+    for secret in (SERIAL, MODEL, NAS_SERIAL):
+        assert secret not in repr(status), secret
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param("sda-SERIAL-1 is ok", "sda-SERIAL-1 is ok", id="inside-a-longer-word"),
+        pytest.param("SERIAL-12 and SERIAL-1", "sdb and sda", id="one-the-start-of-another"),
+        pytest.param("SERIAL-1.", "sda.", id="before-a-full-stop"),
+    ],
+)
+def test_a_serial_is_matched_whole(text, expected):
+    disks = [{"name": "sda", "serial": "SERIAL-1"}, {"name": "sdb", "serial": "SERIAL-12"}]
+    assert info.without_serials(text, disks) == expected
 
 
 def test_each_interface_with_its_type_mtu_and_speed_and_never_its_mac():

@@ -21,7 +21,9 @@ source: pool.query's topology with the device and disk pool.transform_topology a
 (plugins/pool_/topology.py), a pool not healthy once ZFS counts errors on any of its disks but a spare, as libzfs
 works it out (FAILING_DEV), disk.details' used disks by the pool they are in, the boot pool's included
 (plugins/disk_/availability.py), and disk.temperatures' [celsius, critical celsius] for every disk
-(plugins/disk_/temperature.py), with stand-in serials and models; so do the NFS clients (plugins/nfs_/status.py),
+(plugins/disk_/temperature.py), with stand-in serials and models, and alert() with the texts of the alerts that
+quote a disk's serial or model (alert/source/disk_temp.py, smart.py, volume_status.py); so do the NFS clients
+(plugins/nfs_/status.py),
 interface.query's link state, MTU and active media (plugins/interface/netif_linux), and system.info's clock, which
 state["clock_offset"] sets apart from this machine's. A method named in state["refused"] is refused as TrueNAS refuses
 a call the key may not make. Any other method is an error, so an unexpected call fails the test.
@@ -75,6 +77,44 @@ SCRUBBED = 1791763200
 def date(seconds):
     """A time as the API sends it."""
     return {"$date": int(seconds * 1000)}
+
+
+def disk_serial(name):
+    """A disk's stand-in serial, its own: DISK_SERIAL and its name."""
+    return f"{DISK_SERIAL}-{name}"
+
+
+# Alerts that quote a disk's serial or model, as TrueNAS 25.10.7's alert sources word them: Disk Temperature Is Too
+# Hot (alert/source/disk_temp.py), a SMART self-test failed (smart.py), and Pool Status Is Not Healthy, which names a
+# gone disk by the model and serial TrueNAS last knew there (volume_status.py).
+DISK_TEMPERATURE_TOO_HOT = (
+    "Disk %(device)s (with serial: %(serial)s) critical temperature threshold is %(crit_threshold)d degrees celsius"
+    " and the current temp is %(temp)d degrees celsius"
+)
+SMART_FAILED_SELFTEST = "%(name)s (%(serial)s) failed a SMART selftest."
+VOLUME_STATUS = "Pool %(volume)s state is %(state)s: %(status)s%(devices)s"
+
+
+def alert(klass, level, text, args):
+    """An alert as alert.list returns it, ten minutes old, its text formatted from its args as TrueNAS does."""
+    when, key = date(time.time() - 600), str(uuid.uuid4())
+    return {
+        "uuid": key,
+        "source": klass,
+        "klass": klass,
+        "args": args,
+        "node": "A",
+        "key": json.dumps(args, sort_keys=True),
+        "datetime": when,
+        "last_occurrence": when,
+        "dismissed": False,
+        "mail": None,
+        "text": text,
+        "id": key,
+        "level": level,
+        "formatted": text % args,
+        "one_shot": False,
+    }
 
 
 def finished_scrub(end=SCRUBBED + 3 * 3600, errors=0):
@@ -694,8 +734,8 @@ class FakeTrueNAS:
         return {
             "name": name,
             "devname": name,
-            "identifier": f"{{serial_lunid}}{DISK_SERIAL}-{name}",
-            "serial": f"{DISK_SERIAL}-{name}",
+            "identifier": f"{{serial_lunid}}{disk_serial(name)}",
+            "serial": disk_serial(name),
             "model": DISK_MODEL,
             "size": 2 * TIB,
             "type": "SSD",

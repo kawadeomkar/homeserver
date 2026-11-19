@@ -1354,6 +1354,62 @@ def test_the_nas_sections_details(nas_tree, nas, tmp_path):
     assert report["nas"]["nfs"]["clients"] is None and report["nas"]["temperatures_read"] is False
 
 
+# How TrueNAS 25.10.7 words a pool's state when a disk is gone (py-libzfs's MISSING_DEV_R).
+MISSING = (
+    "One or more devices could not be opened. Sufficient replicas exist for the pool to continue functioning in a "
+    "degraded state."
+)
+
+
+def test_no_disks_serial_or_model_reaches_the_report(nas_tree, nas, tmp_path):
+    """TrueNAS's alerts that quote a disk's serial or model, as its alert sources word them: nvme1n1 at its critical
+    temperature, sda's SMART self-test failed, and persistent degraded by nvme3n1, gone, which TrueNAS names by the
+    model and serial it last knew there. Each comes out by the disk's device name, in the text, the report and --json
+    alike."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    seed_nas(nas["state"])
+    fake = fake_truenas.FakeTrueNAS(nas["state"])
+    fake.load()
+    persistent = next(p for p in fake.s["pools"] if p["name"] == "persistent")
+    gone = persistent["topology"]["data"][0]["children"][2]
+    gone.update(disk=None, device=None, status="UNAVAIL", unavail_disk=fake.disk_entry("nvme3n1"))
+    persistent.update(status="DEGRADED", healthy=False, status_code="MISSING_DEV_R", status_detail=MISSING)
+    fake.s["temperatures"]["nvme1n1"] = [83.0, 80.85]
+    hot = {"device": "/dev/nvme1n1", "serial": fake_truenas.disk_serial("nvme1n1"), "crit_threshold": 80.85, "temp": 83}
+    devices = "<br>The following devices are not healthy:<ul><li>Disk {} {} is UNAVAIL</li></ul>"
+    devices = devices.format(fake_truenas.DISK_MODEL, fake_truenas.disk_serial("nvme3n1"))
+    degraded = {"volume": "persistent", "state": "DEGRADED", "status": MISSING, "devices": devices}
+    fake.s["alerts"] = [
+        fake_truenas.alert("DiskTemperatureTooHot", "CRITICAL", fake_truenas.DISK_TEMPERATURE_TOO_HOT, hot),
+        fake_truenas.alert(
+            "SMARTFailedSelfTest",
+            "WARNING",
+            fake_truenas.SMART_FAILED_SELFTEST,
+            {"name": "sda", "serial": fake_truenas.disk_serial("sda")},
+        ),
+        fake_truenas.alert("VolumeStatus", "CRITICAL", fake_truenas.VOLUME_STATUS, degraded),
+    ]
+    fake.s["mutations"] = 0
+    fake.save()
+    rc, out, err = just_status(nas_tree, state, "nas", **nas_vars(nas))
+    report = report_of(nas_tree)
+    assert rc == report["exit"] == 1, out + err
+    assert [a["text"] for a in report["nas"]["alerts"]] == [
+        "Disk /dev/nvme1n1 critical temperature threshold is 80 degrees celsius and the current temp is 83 degrees"
+        " celsius",
+        "sda failed a SMART selftest.",
+        f"Pool persistent state is DEGRADED: {MISSING} The following devices are not healthy:Disk nvme3n1 is UNAVAIL",
+    ]
+    assert "TrueNAS alerts (warning): sda failed a SMART selftest." in [a["text"] for a in report["attention"]]
+    rc, printed, json_err = just_status(nas_tree, state, "nas", "--json", **nas_vars(nas))
+    assert rc == 1 and json.loads(printed)["nas"]["alerts"] == report["nas"]["alerts"], printed + json_err
+    written = (nas_tree / ".cache" / "status" / "report.json").read_text()
+    for secret in (fake_truenas.DISK_SERIAL, fake_truenas.DISK_MODEL):
+        assert secret not in out + err + written + printed + json_err, secret
+    assert json.loads(nas["state"].read_text())["mutations"] == 0
+
+
 def test_a_nas_on_another_release_is_a_thing_to_do(nas_tree, nas, tmp_path):
     state = tmp_path / "pve.json"
     seed(state)

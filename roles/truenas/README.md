@@ -76,7 +76,10 @@ clock beside the controller's, and reads last, each of which may fail without fa
 and why in `unread`): every disk's temperature and critical temperature (`disk.temperatures` with `[]` and `true`,
 from the kernel's sensors, which TrueNAS keeps five minutes), and the addresses that have the NFS shares mounted
 (`nfs.get_nfs3_clients` and `nfs.get_nfs4_clients`, their ports and everything else left out). No disk's serial or
-model is in what it reports.
+model is in what it reports, TrueNAS's alerts included: their texts quote them (Disk Temperature Is Too Hot and the
+SMART alerts a disk's serial, Pool Status Is Not Healthy a gone disk's model and serial), so each serial and model it
+knows, `disk.details`' and a gone disk's in a pool's topology, and the NAS's own serial, is replaced by the disk's
+device name, or left out where it has none.
 It changes nothing, tries each address once (`api_connect_wait: 0`), and never fails: a NAS that does not answer,
 refuses the key or presents another certificate than the pinned one leaves `truenas_status` without an `api_host`, with
 why in its `msg`, and the key goes to no other server. `roles/status` reports what it says.

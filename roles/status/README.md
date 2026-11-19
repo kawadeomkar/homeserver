@@ -78,7 +78,10 @@ Two entry points:
     are `disk.details`' disks whose `imported_zpool` is no pool `pool.query` lists. The entry point tries each address
     once (`api_connect_wait: 0`) and never fails (`failed_when: false`): a NAS that did not answer, refused the key or
     presented another certificate than the pinned one is reported as a source not read, not a failure, and the key
-    goes to no other server. `system.info`'s serial and the disks' serials and models never reach the report.
+    goes to no other server. `system.info`'s serial and the disks' serials and models never reach the report:
+    `truenas_info` keeps none of them, and TrueNAS's alerts, whose texts quote them (Disk Temperature Is Too Hot and
+    the SMART alerts a disk's serial, Pool Status Is Not Healthy a gone disk's model and serial, at TS-25.10.7), come
+    with the disk's device name in their place, or `(serial left out)` and `(model left out)` where none fits.
 - **report** (`tasks_from: report`), on localhost, puts together what each of `status_hosts` found (`status_merge`,
   every host's probes together), ranks what needs attention (sources not read, problems, things to do, each with the
   command from `status_commands` that deals with it, so the role names none of this repository's recipes itself),
@@ -211,14 +214,15 @@ Celsius (a half rounded up), yellow within 10 °C of its critical one and red at
 brackets a state other than ONLINE (red) and its errors (yellow), as `nvme3n1 33 (3 checksum)`; `Snapshots`; `NFS`, with
 who has its shares mounted, `by the Proxmox host and homeserver-worker-1`, an address no machine has in red, or `mounted
 by nothing`; `SMB` and `Macs`; `Services`, only when one runs that is to be stopped; `Alerts`. A disk at or above its
-critical temperature is red and nothing more: TrueNAS's own alert (Disk Temperature Is Too Hot, critical) is among the
-alerts already. A pool whose disks have errors reads not healthy, its state red on the `Pools` line. A read of the
-temperatures or of the NFS clients that failed leaves them out of the section and is listed with the reads that
-failed; the NAS is read all the same. **Tailnet clients reach the LAN masqueraded as the Proxmox host's address**
-(roles/proxmox_tailscale), so the NAS sees a tailnet client that mounts a share as `the Proxmox host`: that name can
-stand for traffic from the tailnet too, which only the tailnet guard and the shares' hosts keep out. With no machine
-in `status_nas_known_clients`, every client is shown by its address and none is judged. Whatever sections are asked for, the NAS's section, what it needs and the
-reads that failed are the same: `just status` shows each section as `just status <section>` does.
+critical temperature is red and nothing more: TrueNAS's own alert (Disk Temperature Is Too Hot, critical, its serial
+left out) is among the alerts already. A pool whose disks have errors reads not healthy, its state red on the `Pools`
+line. A read of the temperatures or of the NFS clients that failed leaves them out of the section and is listed with the
+reads that failed; the NAS is read all the same. **Tailnet clients reach the LAN masqueraded as the Proxmox host's
+address** (roles/proxmox_tailscale), so the NAS sees a tailnet client that mounts a share as `the Proxmox host`: that
+name can stand for traffic from the tailnet too, which only the tailnet guard and the shares' hosts keep out. With no
+machine in `status_nas_known_clients`, every client is shown by its address and none is judged. Whatever sections are
+asked for, the NAS's section, what it needs and the reads that failed are the same: `just status` shows each section as
+`just status <section>` does.
 
 **A Mac's Time Machine backup** is judged by the Macs of `status_nas_macs`, each its share's name and whether it is
 retired, as the configuration says, never the share: TrueNAS disables a pool's shares when the pool is exported, and a
@@ -389,7 +393,10 @@ Without the filter, the sections are shown at the end, and the callback says so 
   (`test_each_time_machine_backup_is_its_own_datasets_newest`); each pool's disks, a gone one by the disk TrueNAS knew
   there or its guid, a cache disk too; every disk's temperature, `disk.temperatures` asked `[]` and `true`; the NFS
   clients' addresses once each, without their ports; the clock with this machine's during the read; the three reads
-  last; and no model, vdev name, MAC, client's own name or open file returned. A refused `disk.temperatures`,
+  last; and no model, vdev name, MAC, client's own name or open file returned. TrueNAS's alerts as its sources word
+  them, each serial and model by the disk's device name, a gone disk's by the name TrueNAS last knew there, the NAS's
+  serial and a model alone left out (`test_no_alert_keeps_a_disks_serial_or_model`), and a serial matched whole, never
+  inside a longer one (`test_a_serial_is_matched_whole`). A refused `disk.temperatures`,
   `nfs.get_nfs3_clients` (after which `nfs.get_nfs4_clients` is not asked) or `nfs.get_nfs4_clients` leaves its part
   null and says why, the rest whole (`test_a_read_that_fails_on_its_own_leaves_its_part_out`).
 - `tests/unit/test_status_callback.py`: the callback's `Progress`, which is pure: the sections in order whatever host
@@ -415,7 +422,9 @@ Without the filter, the sections are shown at the end, and the callback says so 
   exactly and in order, a hot disk, one with checksum errors and its pool's problem naming them, ssh running, an NFS client of no machine of this setup
   and the clock 95 s behind, the three new reads once each with their parameters, and no disk's serial or model, NFS
   client's name or open file in the report; then the temperatures and the NFSv4 clients refused, the NAS read all the
-  same without them, saying so), a
+  same without them, saying so), TrueNAS's alerts that quote a disk's serial or model, a disk at its critical
+  temperature, a failed SMART self-test and a pool degraded by a gone disk, each by the disk's device name in the
+  text, the report and `--json` (`test_no_disks_serial_or_model_reaches_the_report`), a
   failed and a not yet made backup with the reason from the run's log (`fake_pve.backup_run` seeds runs as vzdump
   leaves them), the host's Tailscale through `fake_tailscale.py` (after `fake_pve_bin` on PATH: a served and an
   unapproved route, `tailscaled` down, and no other device's or the tailnet's name in the report), each of the four
@@ -431,7 +440,8 @@ Without the filter, the sections are shown at the end, and the callback says so 
   NFS clients, links and clock follow TrueNAS 25.10.7's middleware source: each pool's topology with the `disk` and
   `device` `pool.transform_topology` adds, a pool not healthy (`FAILING_DEV`) once ZFS counts errors on any of its
   disks but a spare, as libzfs works it out, `disk.details`' used disks by pool, the boot pool's included, with stand-in
-  serials and models, `disk.temperatures` from the state's `temperatures` (nulls for a disk it leaves out), rmtab's
+  serials and models, the alerts that quote them as TrueNAS's alert sources word them (`fake_truenas.alert`),
+  `disk.temperatures` from the state's `temperatures` (nulls for a disk it leaves out), rmtab's
   and the kernel's NFS clients from `nfs3_clients` and `nfs4_clients`, each interface's `link`, `mtu` and `media`,
   and `system.info`'s `datetime` set apart from this machine's by `clock_offset`. A method in the state's `refused` is
   refused as TrueNAS refuses a call the key may not make. The shapes were checked against the middleware source and a
