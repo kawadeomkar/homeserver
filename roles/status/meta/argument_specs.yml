@@ -202,8 +202,8 @@ argument_specs:
         default: []
         description: >-
           The Macs that back up to the NAS with Time Machine, which each Time Machine share on it is judged by: a
-          retired Mac's share is only listed, an active Mac's disabled share is a problem and a missing one a thing to
-          do, and a share none names is only listed. Empty judges none.
+          retired Mac's share is only listed, unless still enabled, a thing to do, an active Mac's disabled share is a
+          problem and a missing one a thing to do, and a share none names is only listed. Empty judges none.
         options:
           share:
             type: str

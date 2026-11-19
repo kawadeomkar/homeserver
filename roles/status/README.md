@@ -211,33 +211,37 @@ The section's lines, in order: the header; `Network`, each port that is up by it
 bridge, VLAN or link aggregation is none) are up, never judged; `Pools`; `Disks °C` (`Disks` when the temperatures were
 not read), a line per pool, then the boot pool's and a disk in no pool, each disk with its temperature in whole degrees
 Celsius (a half rounded up), yellow within 10 °C of its critical one and red at or above it, `—` for no reading, and in
-brackets a state other than ONLINE (red) and its errors (yellow), as `nvme3n1 33 (3 checksum)`; `Snapshots`; `NFS`, with
-who has its shares mounted, `by the Proxmox host and homeserver-worker-1`, an address no machine has in red, or `mounted
-by nothing`; `SMB` and `Macs`; `Services`, only when one runs that is to be stopped; `Alerts`. A disk at or above its
-critical temperature is red and nothing more: TrueNAS's own alert (Disk Temperature Is Too Hot, critical, its serial
-left out) is among the alerts already. A pool whose disks have errors reads not healthy, its state red on the `Pools`
-line. A read of the temperatures or of the NFS clients that failed leaves them out of the section and is listed with the
-reads that failed; the NAS is read all the same. **Tailnet clients reach the LAN masqueraded as the Proxmox host's
-address** (roles/proxmox_tailscale), so the NAS sees a tailnet client that mounts a share as `the Proxmox host`: that
-name can stand for traffic from the tailnet too, which only the tailnet guard and the shares' hosts keep out. With no
-machine in `status_nas_known_clients`, every client is shown by its address and none is judged. Whatever sections are
-asked for, the NAS's section, what it needs and the reads that failed are the same: `just status` shows each section as
-`just status <section>` does.
+brackets `gone` and a state other than ONLINE (red) and its errors (yellow), as `nvme3n1 33 (3 checksum)`; `Snapshots`;
+`NFS`, with who has its shares mounted, `mounted by the Proxmox host · homeserver-worker-1`, each client a phrase of its
+own, so that many wrap the line between them, an address no machine has in red, or `mounted by nothing`; `SMB` and
+`Macs`; `Services`, only when one runs that is to be stopped, SMB by that name, where TrueNAS's id is `cifs`; `Alerts`.
+A disk that is gone (no disk at its path and its state not ONLINE) goes by the name TrueNAS last knew at its place, as
+`nvme2n1 (gone, unavail)`, with no reading: the kernel may since have given that name to another disk, its replacement
+even, which keeps its own line and reading. A disk at or above its critical temperature is red and nothing more:
+TrueNAS's own alert (Disk Temperature Is Too Hot, critical, its serial left out) is among the alerts already. A pool
+whose disks have errors reads not healthy, its state red on the `Pools` line. A read of the temperatures or of the NFS
+clients that failed leaves them out of the section and is listed with the reads that failed; the NAS is read all the
+same. **Tailnet clients reach the LAN masqueraded as the Proxmox host's address** (roles/proxmox_tailscale), so the NAS
+sees a tailnet client that mounts a share as `the Proxmox host`: that name can stand for traffic from the tailnet too,
+which only the tailnet guard and the shares' hosts keep out. With no machine in `status_nas_known_clients`, every client
+is shown by its address and none is judged. Whatever sections are asked for, the NAS's section, what it needs and the
+reads that failed are the same: `just status` shows each section as `just status <section>` does.
 
 **A Mac's Time Machine backup** is judged by the Macs of `status_nas_macs`, each its share's name and whether it is
 retired, as the configuration says, never the share: TrueNAS disables a pool's shares when the pool is exported, and a
-share can be turned off by hand, while the Mac goes on wanting its backups. For a Mac that backs up, a disabled share
-or a missing dataset is a problem, since the Mac cannot back up (with `status_commands`' `nas`), and so is a backup at
-90% of its quota or more: should the snapshots fill the quota, writes fail inside a disk image that still shows free
-space. A backup at 80% of its quota or more (`time_machine_quota`), one whose newest backup is ten days old or more
-and one with no completed backup yet (`time_machine`), and a Mac the NAS has no share for yet (`nas`) are things to do.
-A late backup is never a problem, since a laptop travels, and a disabled share's backup is neither late nor never
-completed: the problem says why, and its time is not read. A retired Mac's share and a share no Mac names are listed
-and never judged. TrueNAS raises no quota alert of its own for a dataset whose refquota is smaller than its quota, as
-each Mac's is in this repository, so this is the one warning that the snapshots are filling their room. The report's
-`Macs` line shows each backup's age, its use against its quota, in yellow from 80% and red from 90% as a pool's bar is,
-and what its snapshots hold, which the first months after a Mac's backup fills up are watched for. A retired Mac's
-share reads `retired`, a Mac's share the NAS does not have `no share yet`, one without its dataset `dataset missing`, a
+share can be turned off by hand, while the Mac goes on wanting its backups. For a Mac that backs up, a disabled share or
+a missing dataset is a problem, since the Mac cannot back up (with `status_commands`' `nas`), and so is a backup at 90%
+of its quota or more: should the snapshots fill the quota, writes fail inside a disk image that still shows free space.
+A backup at 80% of its quota or more (`time_machine_quota`), one whose newest backup is ten days old or more and one
+with no completed backup yet (`time_machine`), and a Mac the NAS has no share for yet (`nas`) are things to do. A late
+backup is never a problem, since a laptop travels, and a disabled share's backup is neither late nor never completed:
+the problem says why, and its time is not read. A retired Mac's share is never late or full, but one still enabled is a
+thing to do (`nas`), since the NAS play disables it; a share no Mac names is listed and never judged. TrueNAS raises no
+quota alert of its own for a dataset whose refquota is smaller than its quota, as each Mac's is in this repository, so
+this is the one warning that the snapshots are filling their room. The report's `Macs` line shows each backup's age, its
+use against its quota, in yellow from 80% and red from 90% as a pool's bar is, and what its snapshots hold, which the
+first months after a Mac's backup fills up are watched for. A retired Mac's share reads `retired` (`retired, share
+enabled` while it is), a Mac's share the NAS does not have `no share yet`, one without its dataset `dataset missing`, a
 disabled one `share disabled` in place of its age, and a share no Mac names `not configured`, its name in cyan.
 
 Memory is Proxmox's view, the host's, for a VM that is no cluster node: with ballooning off, as on every VM here, PVE 9
@@ -363,27 +367,29 @@ Without the filter, the sections are shown at the end, and the callback says so 
 - `tests/unit/test_status_filters.py`: the filter (parsing, report and text are pure functions), with the shapes
   captured on 2026-10-21 from a Proxmox VE 9.2 host and the Talos cluster on it (the cluster's from the NUC), written
   out with made-up names, addresses and sizes. `test_each_section_depends_only_on_its_sources` removes every other
-  source in turn and compares each section, which is what lets the callback print it early. The Time Machine tests
-  judge each share by the Macs configured: a retired Mac's share listed whatever its state, an active Mac's disabled
-  share and missing dataset problems, a Mac without a share a thing to do, and a share no Mac names listed and never
-  judged, nearly full and never backed up (`test_each_share_is_judged_by_the_macs_configured`); each threshold at its
-  edge, exactly 80% and 90% of the quota and exactly ten days a thing to do or a problem, 79.9%, nine days and 23 hours
-  and no quota at all nothing; and the `Macs` line's colours, plain, yellow and red as a pool's bar. The NAS's
-  details: the `Network` and `Disks` lines exactly, each disk by pool, the boot pool's and one in no pool, with no
-  serial or model in the JSON; a reading exactly 10 °C below its critical temperature (and 70.5 against 81, shown as
-  71) a thing to do in yellow, 11 below nothing, at or above it red and nothing more, and none without a critical
-  temperature or with one of 0 or below (`test_a_disk_near_its_critical_temperature`,
-  `test_a_disk_without_a_critical_temperature_is_never_hot`); a disk's errors and state on its line, wrapped under the
-  first disk, and named in its pool's problem, never an item of their own, the pool not healthy as ZFS makes it:
-  DEGRADED by a faulted disk, or ONLINE with errors ZFS repaired (`test_a_disks_errors_are_its_pools_problem`); a
-  refused temperature read, the disks listed without readings and the read named among the reads that
-  failed; each port's speed from TrueNAS's words; no client, this setup's machines, an unknown client (a problem, in
-  red), and no machine configured (shown, never judged); the NFS clients not read; a service running though configured
-  stopped, alone or beside SMB, and none without the configuration; a clock 60 s ahead or behind a thing to do, 59 s
-  either way nothing; and the section's lines in order within 100 columns.
-  `test_just_status_shows_the_nas_as_just_status_nas_does` holds `just status` to the union of its sections: the NAS's
-  block, its attention items and counts, and the reads that failed are the same with `nas` alone and with every
-  section.
+  source in turn and compares each section, which is what lets the callback print it early. The Time Machine tests judge
+  each share by the Macs configured: a retired Mac's share never late or full whatever its state, and a thing to do
+  while still enabled (`test_a_retired_mac_is_never_late_or_full_whatever_its_share`), an active Mac's disabled share
+  and missing dataset problems, a Mac without a share a thing to do, and a share no Mac names listed and never judged,
+  nearly full and never backed up (`test_each_share_is_judged_by_the_macs_configured`); each threshold at its edge,
+  exactly 80% and 90% of the quota and exactly ten days a thing to do or a problem, 79.9%, nine days and 23 hours and no
+  quota at all nothing; and the `Macs` line's colours, plain, yellow and red as a pool's bar. The NAS's details: the
+  `Network` and `Disks` lines exactly, each disk by pool, the boot pool's and one in no pool, with no serial or model in
+  the JSON; a reading exactly 10 °C below its critical temperature (and 70.5 against 81, shown as 71) a thing to do in
+  yellow, 11 below nothing, at or above it red and nothing more, and none without a critical temperature or with one of
+  0 or below (`test_a_disk_near_its_critical_temperature`, `test_a_disk_without_a_critical_temperature_is_never_hot`); a
+  disk's errors and state on its line, wrapped under the first disk, and named in its pool's problem, never an item of
+  their own, the pool not healthy as ZFS makes it: DEGRADED by a faulted disk, or ONLINE with errors ZFS repaired
+  (`test_a_disks_errors_are_its_pools_problem`); a refused temperature read, the disks listed without readings and the
+  read named among the reads that failed; a gone disk beside its replacement of the same name, each on its own
+  (`test_a_gone_disk_hides_no_disk_of_its_name`); each port's speed from TrueNAS's words; no client, this setup's
+  machines, an unknown client (a problem, in red), and no machine configured (shown, never judged); many clients
+  wrapping the NFS line between them (`test_the_nfs_line_wraps_between_clients`); the NFS clients not read; a service
+  running though configured stopped, alone or beside SMB, which the text calls SMB and the JSON `cifs`, and none without
+  the configuration; a clock 60 s ahead or behind a thing to do, 59 s either way nothing; and the section's lines in
+  order within 100 columns. `test_just_status_shows_the_nas_as_just_status_nas_does` holds `just status` to the union of
+  its sections: the NAS's block, its attention items and counts, and the reads that failed are the same with `nas` alone
+  and with every section.
 - `tests/unit/test_truenas_modules.py`: `truenas_info`'s `status` read, against a scripted API that records each
   call's parameters and answers alike whatever they filter on: `sharing.smb.query` once, one `pool.snapshot.query`
   with exactly the fast path's filter and select, for the enabled Time Machine shares on a dataset, and none without

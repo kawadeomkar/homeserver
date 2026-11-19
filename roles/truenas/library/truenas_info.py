@@ -97,8 +97,9 @@ status:
     - A Time Machine share's C(dataset) is the one its path names, and C(dataset_found) false, its sizes null, when
       the NAS has none there. Its C(last_backup) is null for a disabled share, which is not read, and when no
       C(aapltm-) snapshot holds a time; a time more than an hour ahead of the controller's clock is ignored.
-    - A pool's C(disks) are its topology's, each named as C(disk.temperatures) names it (a disk that is gone by the
-      one TrueNAS last knew there, else by its ZFS guid), never by the vdev's own name, which can carry a serial.
+    - A pool's C(disks) are its topology's, each named as C(disk.temperatures) names it (a disk that is gone, C(gone),
+      by the one TrueNAS last knew there, else by its ZFS guid), never by the vdev's own name, which can carry a
+      serial.
       C(temperatures) is each disk's reading and critical temperature in degrees Celsius, either null when TrueNAS
       has none, and C(nfs_clients) the addresses that have a share mounted, without their ports; each is null when
       its read failed, and C(unread) then says why. C(datetime) is the NAS's clock, and C(read_at) this machine's,
@@ -111,7 +112,7 @@ status:
       - {name: persistent, status: ONLINE, healthy: true, detail: "", layout: raidz1, used: 2418925581107,
          available: 5387625168896, scan: {function: SCRUB, state: FINISHED, start_time: "2026-10-12T00:00:02+00:00",
          end_time: "2026-10-12T03:14:51+00:00", percentage: 100.0, errors: 0}, scrub: {threshold: 35, enabled: true},
-         disks: [{name: nvme1n1, status: ONLINE, read_errors: 0, write_errors: 0, checksum_errors: 0}]}
+         disks: [{name: nvme1n1, status: ONLINE, gone: false, read_errors: 0, write_errors: 0, checksum_errors: 0}]}
     temperatures: {nvme0n1: {temp: 45.0, critical: 80.85}, sda: {temp: 30.0, critical: 70.85}}
     nfs_clients: [192.0.2.20]
     datetime: "2026-11-18T10:00:00.250000+00:00"
@@ -211,15 +212,17 @@ def _unavail(vdev):
 
 
 def _disks(topology):
-    """A pool's disks, in its vdevs' order, each with its state and ZFS's error counts. A disk is named as
-    disk.temperatures names it (pool.query's `disk`, which TrueNAS works out from the vdev's path); one that is gone
-    by the disk TrueNAS last knew at its place (`unavail_disk`, of which its name alone is kept), else by its ZFS guid.
+    """A pool's disks, in its vdevs' order, each with its state, whether it is gone, and ZFS's error counts. A disk is
+    named as disk.temperatures names it (pool.query's `disk`, which TrueNAS works out from the vdev's path); one that
+    is gone, no disk at its path and its state not ONLINE, by the disk TrueNAS last knew at its place (`unavail_disk`,
+    of which its name alone is kept, and which the kernel may since have given another disk), else by its ZFS guid.
     Never by the vdev's own name, which is its path's: a pool made by hand on /dev/disk/by-id/... would give the
     disk's model and serial."""
     return [
         {
             "name": str(vdev.get("disk") or _unavail(vdev).get("name") or vdev.get("guid") or ""),
             "status": str(vdev.get("status") or ""),
+            "gone": not vdev.get("disk") and str(vdev.get("status") or "") != "ONLINE",
             **{key: _count((vdev.get("stats") or {}).get(key)) for key in ERROR_COUNTS},
         }
         for vdev in _leaves(topology)

@@ -153,6 +153,11 @@ OPEN_FILE = "/OPEN-FILE-MUST-NOT-LEAK"
 NAS_SERIAL = "NAS-SERIAL-MUST-NOT-LEAK"
 
 
+def counts(read=0, write=0, checksum=0):
+    """ZFS's error counts of a disk as truenas_info's status reports them."""
+    return {"read_errors": read, "write_errors": write, "checksum_errors": checksum}
+
+
 def disk_vdev(disk, status="ONLINE", guid="1", unavail_disk=None, **errors):
     """A disk in pool.query's topology as libzfs gives it, with the device and disk TrueNAS works out from its path
     (none for a disk that is gone, which unavail_disk then names, a disk.query entry)."""
@@ -445,10 +450,10 @@ def test_status_reports_the_nas_health_in_the_same_login():
                 "scrub": {"threshold": 35, "enabled": True},
                 # The data disks in order, then the cache's; a gone disk by the one TrueNAS knew there, else its guid.
                 "disks": [
-                    {"name": "nvme1n1", "status": "ONLINE", "read_errors": 0, "write_errors": 0, "checksum_errors": 3},
-                    {"name": "nvme2n1", "status": "UNAVAIL", "read_errors": 2, "write_errors": 0, "checksum_errors": 0},
-                    {"name": "4242", "status": "REMOVED", "read_errors": 0, "write_errors": 0, "checksum_errors": 0},
-                    {"name": "nvme4n1", "status": "ONLINE", "read_errors": 0, "write_errors": 0, "checksum_errors": 0},
+                    {"name": "nvme1n1", "status": "ONLINE", "gone": False, **counts(checksum=3)},
+                    {"name": "nvme2n1", "status": "UNAVAIL", "gone": True, **counts(read=2)},
+                    {"name": "4242", "status": "REMOVED", "gone": True, **counts()},
+                    {"name": "nvme4n1", "status": "ONLINE", "gone": False, **counts()},
                 ],
             },
             {
@@ -461,9 +466,7 @@ def test_status_reports_the_nas_health_in_the_same_login():
                 "available": TIB,
                 "scan": None,
                 "scrub": None,
-                "disks": [
-                    {"name": "sda", "status": "ONLINE", "read_errors": 0, "write_errors": 0, "checksum_errors": 0}
-                ],
+                "disks": [{"name": "sda", "status": "ONLINE", "gone": False, **counts()}],
             },
         ],
         "alerts": [

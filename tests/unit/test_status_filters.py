@@ -1516,11 +1516,17 @@ FAULTED_DEV = (
     "One or more devices are faulted in response to persistent errors. Sufficient replicas exist for the pool to "
     "continue functioning in a degraded state."
 )
+# And for one with a disk gone (MISSING_DEV_R).
+MISSING_DEV = (
+    "One or more devices could not be opened. Sufficient replicas exist for the pool to continue functioning in a "
+    "degraded state."
+)
 
 
-def disk(name, status="ONLINE", read=0, write=0, checksum=0):
+def disk(name, status="ONLINE", read=0, write=0, checksum=0, gone=False):
     """A pool's disk as truenas_info's status reads it from pool.query's topology."""
-    return {"name": name, "status": status, "read_errors": read, "write_errors": write, "checksum_errors": checksum}
+    counts = {"read_errors": read, "write_errors": write, "checksum_errors": checksum}
+    return {"name": name, "status": status, "gone": gone, **counts}
 
 
 def temperatures(**changed):
@@ -2143,10 +2149,15 @@ def test_each_share_is_judged_by_the_macs_configured():
 
 @pytest.mark.parametrize("enabled", [False, True], ids=["share-disabled", "share-enabled"])
 def test_a_retired_mac_is_never_late_or_full_whatever_its_share(enabled):
+    """Neither late nor full, whatever its share holds; but a share still enabled is a thing to do, since the NAS play
+    disables a retired Mac's."""
     retired = backup(used=2000, last_backup="2026-01-01T00:00:00+00:00", enabled=enabled)
     model = nas_report(macs(retired), configured_macs=configured("tm-laptop", retired=["tm-laptop"]))
-    assert model["attention"] == [] and model["exit"] == 0
-    assert " Macs       tm-laptop retired" in fs.text(model, False)
+    text = "the Mac is retired, but its Time Machine share is still enabled"
+    assert attention(model) == ([("todo", "tm-laptop", text, "just deploy truenas")] if enabled else [])
+    assert model["exit"] == 0
+    lines = fs.text(model, False).splitlines()
+    assert f" Macs       tm-laptop retired{', share enabled' if enabled else ''}" in lines, lines
 
 
 def test_the_nas_report_is_json():
@@ -2192,6 +2203,7 @@ def test_each_disk_by_pool_with_its_temperature_and_no_serial():
         "temp": 36,
         "critical": 81,
         "status": "ONLINE",
+        "gone": False,
         "read_errors": 0,
         "write_errors": 0,
         "checksum_errors": 0,
@@ -2272,6 +2284,7 @@ def test_a_disks_errors_and_state_beside_its_temperature():
         "temp": 37,
         "critical": 81,
         "status": "ONLINE",
+        "gone": False,
         "read_errors": 1,
         "write_errors": 2,
         "checksum_errors": 3,
@@ -2290,6 +2303,25 @@ def test_a_disks_errors_are_its_pools_problem():
     lines = nas_block(model, True)
     assert "\033[31monline\033[0m" in next(line for line in lines if "persistent" in line and "%" in line)
     assert "\033[33m (3 checksum)\033[0m" in next(line for line in lines if "nvme2n1" in line)
+
+
+def test_a_gone_disk_hides_no_disk_of_its_name():
+    """A disk that is gone goes by the name TrueNAS last knew at its place, which the kernel may since have given its
+    replacement: both are listed, the gone one in red with no reading, and the reading is the replacement's."""
+    persistent = [disk("nvme1n1"), disk("nvme2n1", "UNAVAIL", read=2, gone=True), disk("nvme2n1"), disk("nvme3n1")]
+    degraded = pool("persistent", 2.2, 4.9, disks=persistent, status="DEGRADED", healthy=False, detail=MISSING_DEV)
+    model = nas_report(nas_state(pools=[degraded, pool("ephemeral", 1.0, 2.6, layout="stripe")]))
+    assert [(d["name"], d["gone"], d["temp"]) for d in model["nas"]["disks"][:4]] == [
+        ("nvme1n1", False, 36),
+        ("nvme2n1", True, None),
+        ("nvme2n1", False, 37),
+        ("nvme3n1", False, 38),
+    ]
+    lines = nas_block(model)
+    assert " Disks °C   persistent  nvme1n1 36 · nvme2n1 (gone, unavail, 2 read) · nvme2n1 37 · nvme3n1 38" in lines
+    assert "\033[31m (gone, unavail, 2 read)\033[0m" in "\n".join(nas_block(model, True))
+    text = f"the pool is DEGRADED, with errors on nvme2n1 (gone, unavail, 2 read): {MISSING_DEV}"
+    assert attention(model) == [("problem", "persistent", text, "")]
 
 
 def test_temperatures_not_read_leave_the_disks_without_them():
@@ -2357,14 +2389,14 @@ def test_the_network_line(ports, line):
         pytest.param(
             ["192.0.2.31", "192.0.2.20"],
             NAS_MACHINES,
-            "mounted by the Proxmox host and homeserver-worker-1",
+            "mounted by the Proxmox host · homeserver-worker-1",
             [],
             id="this-setups-machines",
         ),
         pytest.param(
             ["192.0.2.20", "192.0.2.99", "::ffff:192.0.2.30"],
             NAS_MACHINES,
-            "mounted by the Proxmox host, homeserver-cp-1 and 192.0.2.99",
+            "mounted by the Proxmox host · homeserver-cp-1 · 192.0.2.99",
             ["192.0.2.99"],
             id="an-unknown-client",
         ),
@@ -2389,6 +2421,18 @@ def test_who_has_the_nfs_shares_mounted(addresses, known, mounted, unexpected):
         ]
 
 
+def test_the_nfs_line_wraps_between_clients():
+    """Each client a phrase of its own, so that many wrap the NFS line between them, under its first phrase."""
+    addresses = ["192.0.2.20", "192.0.2.31", *(f"198.51.100.{n}" for n in range(101, 106))]
+    lines = nas_block(nas_report(nas_state(health={"nfs_clients": addresses}), known=NAS_MACHINES))
+    nfs = next(i for i, line in enumerate(lines) if line.startswith(" NFS "))
+    assert lines[nfs : nfs + 2] == [
+        " NFS        running · 3 shares · mounted by the Proxmox host · homeserver-worker-1 · 198.51.100.101",
+        "            198.51.100.102 · 198.51.100.103 · 198.51.100.104 · 198.51.100.105",
+    ], lines
+    assert max(len(line) for line in lines) <= 100
+
+
 def test_nfs_clients_not_read_are_not_shown():
     why = "nfs.get_nfs4_clients: [EPERM] Not authorized"
     model = nas_report(nas_state(health={"nfs_clients": None, "unread": {"nfs_clients": why}}), known=NAS_MACHINES)
@@ -2408,16 +2452,18 @@ def test_nfs_clients_not_read_are_not_shown():
     ],
 )
 def test_a_service_that_runs_though_configured_stopped(services, configured, unexpected):
+    """The JSON keeps TrueNAS's ids, and the text says SMB for cifs, as the rest of the report does."""
     state = nas_state(services={name: {"enable": False, "state": s} for name, s in services.items()})
     model = nas_report(state, services=configured)
     assert model["nas"]["unexpected_services"] == unexpected
+    names = [{"cifs": "SMB"}.get(name, name) for name in unexpected]
     text = "{} is running, though the configuration keeps it stopped"
     assert [a for a in attention(model) if a[1] == "nas"] == [
-        ("problem", "nas", text.format(name), "just deploy truenas") for name in unexpected
+        ("problem", "nas", text.format(name), "just deploy truenas") for name in names
     ]
     lines = nas_block(model)
     services_line = [line for line in lines if line.startswith(" Services")]
-    shown = " · ".join(f"{name} running, configured stopped" for name in unexpected)
+    shown = " · ".join(f"{name} running, configured stopped" for name in names)
     assert services_line == ([f" Services   {shown}"] if unexpected else []), lines
 
 

@@ -315,7 +315,7 @@ Description: Read the homeserver's machines without changing them, and report wh
     - **Type**: list
     - **Default**: []
   
-    - **Description**: The Macs that back up to the NAS with Time Machine, which each Time Machine share on it is judged by: a retired Mac's share is only listed, an active Mac's disabled share is a problem and a missing one a thing to do, and a share none names is only listed. Empty judges none.
+    - **Description**: The Macs that back up to the NAS with Time Machine, which each Time Machine share on it is judged by: a retired Mac's share is only listed, unless still enabled, a thing to do, an active Mac's disabled share is a problem and a missing one a thing to do, and a share none names is only listed. Empty judges none.
   
   
   
@@ -630,22 +630,22 @@ Description: Read the homeserver's machines without changing them, and report wh
 | [status_cluster_snapshot_dir](defaults/main.yml#L57)   | str |  |    
 | [status_nas_state](defaults/main.yml#L60)   | dict | `{}` |    
 | [status_nas_release](defaults/main.yml#L61)   | str |  |    
-| [status_nas_macs](defaults/main.yml#L65)   | list | `[]` |    
-| [status_nas_services](defaults/main.yml#L68)   | dict | `{}` |    
-| [status_nas_known_clients](defaults/main.yml#L71)   | dict | `{}` |    
-| [status_tailscale_state](defaults/main.yml#L73)   | dict | `{}` |    
-| [status_parallel](defaults/main.yml#L75)   | int | `8` |    
-| [status_timeout](defaults/main.yml#L76)   | int | `30` |    
-| [status_hosts](defaults/main.yml#L79)   | list | `[]` |    
-| [status_report_file](defaults/main.yml#L80)   | str |  |    
-| [status_color](defaults/main.yml#L81)   | bool | `False` |    
-| [status_quiet](defaults/main.yml#L82)   | bool | `False` |    
-| [status_read_at](defaults/main.yml#L85)   | str |  |    
-| [status_now](defaults/main.yml#L86)   | int | `0` |    
-| [status_probe_apps](defaults/main.yml#L89)   | bool | `True` |    
-| [status_probe_timeout](defaults/main.yml#L90)   | int | `5` |    
-| [status_admin](defaults/main.yml#L93)   | list | `[]` |    
-| [status_commands](defaults/main.yml#L102)   | dict | `{}` |    
+| [status_nas_macs](defaults/main.yml#L66)   | list | `[]` |    
+| [status_nas_services](defaults/main.yml#L69)   | dict | `{}` |    
+| [status_nas_known_clients](defaults/main.yml#L72)   | dict | `{}` |    
+| [status_tailscale_state](defaults/main.yml#L74)   | dict | `{}` |    
+| [status_parallel](defaults/main.yml#L76)   | int | `8` |    
+| [status_timeout](defaults/main.yml#L77)   | int | `30` |    
+| [status_hosts](defaults/main.yml#L80)   | list | `[]` |    
+| [status_report_file](defaults/main.yml#L81)   | str |  |    
+| [status_color](defaults/main.yml#L82)   | bool | `False` |    
+| [status_quiet](defaults/main.yml#L83)   | bool | `False` |    
+| [status_read_at](defaults/main.yml#L86)   | str |  |    
+| [status_now](defaults/main.yml#L87)   | int | `0` |    
+| [status_probe_apps](defaults/main.yml#L90)   | bool | `True` |    
+| [status_probe_timeout](defaults/main.yml#L91)   | int | `5` |    
+| [status_admin](defaults/main.yml#L94)   | list | `[]` |    
+| [status_commands](defaults/main.yml#L103)   | dict | `{}` |    
 
 
 

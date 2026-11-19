@@ -60,8 +60,9 @@ status_cluster_snapshot_dir: ""
 status_nas_state: {}
 status_nas_release: ""
 # The Macs that back up to the NAS with Time Machine, each {share, retired}: the name of its Time Machine share, and
-# whether the Mac is retired. Each share is judged by them: a retired Mac's is only listed, an active Mac's disabled
-# share is a problem and a missing one a thing to do, and a share none names is only listed. Empty judges none.
+# whether the Mac is retired. Each share is judged by them: a retired Mac's is only listed, unless still enabled, a
+# thing to do, an active Mac's disabled share is a problem and a missing one a thing to do, and a share none names is
+# only listed. Empty judges none.
 status_nas_macs: []
 # The NAS's services as its configuration keeps them, {name: {enabled, state}} as roles/truenas takes them: one that
 # runs while it is to be stopped is a problem. Empty judges none.

@@ -1192,6 +1192,8 @@ CLOCK_DRIFT = 60
 # 10Gbase-SR in its API's examples.
 LINK_SPEED = re.compile(r"(\d+(?:\.\d+)?)\s*([MG])b/s|(\d+)(G?)base", re.I)
 ERROR_COUNTS = ("read_errors", "write_errors", "checksum_errors")
+# A NAS service as the report names it where TrueNAS's id differs: the rest of the report says SMB.
+SERVICE_NAMES = {"cifs": "SMB"}
 
 
 def _plain_text(text):
@@ -1294,18 +1296,22 @@ def _nas_disks(state, health):
     pool's, which pool.query leaves out and disk.details names (imported_zpool), then each disk in no imported pool;
     each with its reading and critical temperature in whole degrees Celsius (None where TrueNAS has none, and a
     critical temperature of 0 or below None too, since it is no threshold), its state and ZFS's error counts (none for
-    the boot pool's, which are not read). disk.details also holds each disk's serial and model, which are never kept.
-    Also whether the temperatures were read at all."""
+    the boot pool's, which are not read). A disk that is gone (`gone`) goes by the name TrueNAS last knew at its
+    place, which the kernel may since have given another disk, its replacement even: it has no reading, and hides no
+    disk of that name. disk.details also holds each disk's serial and model, which are never kept. Also whether the
+    temperatures were read at all."""
     temperatures = health.get("temperatures")
     read = isinstance(temperatures, dict)
     temperatures = temperatures if read else {}
     out, seen = [], set()
 
     def add(name, pool, vdev):
-        if not name or name in seen:
+        gone = bool(vdev.get("gone"))
+        if not name or (name in seen and not gone):
             return
-        seen.add(name)
-        reading = temperatures.get(name) if isinstance(temperatures.get(name), dict) else {}
+        if not gone:
+            seen.add(name)
+        reading = temperatures.get(name) if isinstance(temperatures.get(name), dict) and not gone else {}
         critical = whole_celsius(reading.get("critical"))
         out.append(
             {
@@ -1314,6 +1320,7 @@ def _nas_disks(state, health):
                 "temp": whole_celsius(reading.get("temp")),
                 "critical": critical if critical is not None and critical > 0 else None,
                 "status": str(vdev.get("status") or ""),
+                "gone": gone,
                 **{key: vdev.get(key) or 0 for key in ERROR_COUNTS},
             }
         )
@@ -2053,13 +2060,16 @@ def _nas_attention(found, commands):
         text += f"{'s are' if count != 1 else ' is'} not served"
         out.append(_item("problem", "smb", text, commands.get("nas", "")))
     for service in found.get("unexpected_services") or []:
-        text = f"{service} is running, though the configuration keeps it stopped"
+        text = f"{SERVICE_NAMES.get(service, service)} is running, though the configuration keeps it stopped"
         out.append(_item("problem", "nas", text, commands.get("nas", "")))
-    # A Mac the configuration does not name, and a retired one, are only listed.
+    # A Mac the configuration does not name is only listed, and so is a retired one, unless its share is still enabled,
+    # which the NAS play disables.
     for backup in found.get("time_machine") or []:
+        name, deploy = backup["name"], commands.get("nas", "")
+        if backup["configured"] and backup["retired"] and backup["share_found"] and backup["enabled"]:
+            out.append(_item("todo", name, "the Mac is retired, but its Time Machine share is still enabled", deploy))
         if not backup["configured"] or backup["retired"]:
             continue
-        name, deploy = backup["name"], commands.get("nas", "")
         if not backup["share_found"]:
             out.append(_item("todo", name, "the NAS has no Time Machine share of this name yet", deploy))
             continue
@@ -2107,10 +2117,11 @@ def _error_counts(disk):
 
 
 def _faults(disk):
-    """What is wrong with a disk, as its line and its pool's problem word it: a state other than ONLINE, then ZFS's
-    error counts (faulted, 1 checksum)."""
+    """What is wrong with a disk, as its line and its pool's problem word it: gone, a state other than ONLINE, then
+    ZFS's error counts (faulted, 1 checksum; gone, unavail)."""
     status = disk.get("status") or ""
-    return ([status.lower()] if status and status != "ONLINE" else []) + _error_counts(disk)
+    gone = ["gone"] if disk.get("gone") else []
+    return gone + ([status.lower()] if status and status != "ONLINE" else []) + _error_counts(disk)
 
 
 def _pool_problem(pool, disks):
@@ -3161,33 +3172,33 @@ def _scan_text(pool):
 
 def _disk_phrase(disk, temperatures):
     """A disk on its pool's Disks line: its name, its temperature when they were read (yellow within DISK_HOT_MARGIN
-    of its critical one, red at or above it, — for no reading), and, in brackets, a state other than ONLINE (red) and
-    ZFS's errors (yellow): nvme3n1 33 (3 checksum)."""
+    of its critical one, red at or above it, — for no reading, none for a disk that is gone), and, in brackets, gone
+    and a state other than ONLINE (red) and ZFS's errors (yellow): nvme3n1 33 (3 checksum), nvme2n1 (gone, unavail)."""
     phrase = [(disk["name"], "")]
     temp, critical = disk.get("temp"), disk.get("critical")
-    if temperatures and temp is None:
-        phrase.append((" —", "d"))
-    elif temperatures:
-        phrase.append((f" {temp}", ("r" if temp >= critical else "y") if _hot(disk) else ""))
+    if temperatures and not disk.get("gone"):
+        phrase.append(
+            (" —", "d") if temp is None else (f" {temp}", ("r" if temp >= critical else "y") if _hot(disk) else "")
+        )
     status, faults = disk.get("status") or "", _faults(disk)
     if faults:
-        phrase.append((f" ({', '.join(faults)})", "r" if status and status != "ONLINE" else "y"))
+        broken = disk.get("gone") or (status and status != "ONLINE")
+        phrase.append((f" ({', '.join(faults)})", "r" if broken else "y"))
     return phrase
 
 
 def _mounted_by(clients, unexpected):
-    """Who has the NFS shares mounted, a machine of this setup by its name and any other by its address, in red when
-    it is `unexpected`; nothing when they were not read."""
+    """Who has the NFS shares mounted, as phrases of the NFS line, a client each, so that the line wraps between them:
+    a machine of this setup by its name and any other by its address, in red when it is `unexpected`; none when they
+    were not read."""
     if clients is None:
         return []
     if not clients:
-        return [("mounted by nothing", "d")]
-    phrase = [("mounted by ", "")]
-    for i, client in enumerate(clients):
-        if i:
-            phrase.append((" and " if i == len(clients) - 1 else ", ", ""))
-        phrase.append((client["name"] or client["address"], "r" if client["address"] in unexpected else ""))
-    return phrase
+        return [[("mounted by nothing", "d")]]
+    phrases = [
+        [(client["name"] or client["address"], "r" if client["address"] in unexpected else "")] for client in clients
+    ]
+    return [[("mounted by ", ""), *phrases[0]], *phrases[1:]]
 
 
 def _nas_lines(model):
@@ -3255,7 +3266,7 @@ def _nas_lines(model):
         [
             [((nfs.get("state") or "unknown").lower(), "g" if running else "r" if count else "d")],
             [(f"{count} share{'s' if count != 1 else ''}", "")],
-            _mounted_by(nfs.get("clients"), found.get("unexpected_clients") or []),
+            *_mounted_by(nfs.get("clients"), found.get("unexpected_clients") or []),
         ],
     )
     smb = found.get("smb") or {}
@@ -3275,7 +3286,8 @@ def _nas_lines(model):
             backups.append([(name, "c"), (" not configured", "d")])
             continue
         if backup["retired"]:
-            backups.append([(name, "b"), (" retired", "d")])
+            enabled = [(", share enabled", "y")] if backup["share_found"] and backup["enabled"] else []
+            backups.append([(name, "b"), (" retired", "d"), *enabled])
             continue
         if not backup["share_found"] or not backup["dataset_found"]:
             fault = (" no share yet", "y") if not backup["share_found"] else (" dataset missing", "r")
@@ -3296,7 +3308,10 @@ def _nas_lines(model):
         lines += _phrases("Macs", backups)
     unexpected = found.get("unexpected_services") or []
     if unexpected:
-        services = [[(service, "b"), (" running", "r"), (", configured stopped", "d")] for service in unexpected]
+        services = [
+            [(SERVICE_NAMES.get(service, service), "b"), (" running", "r"), (", configured stopped", "d")]
+            for service in unexpected
+        ]
         lines += _phrases("Services", services)
     alerts = found.get("alerts") or []
     if not alerts:

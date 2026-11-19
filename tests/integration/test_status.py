@@ -1284,7 +1284,7 @@ def test_the_nas_sections_details(nas_tree, nas, tmp_path):
     assert " Network    2.5 Gb/s · 1 Gb/s · 2 of 2 ports up" in lines, out
     disks = lines.index(" Disks °C   persistent  nvme1n1 36 · nvme2n1 37 (3 checksum) · nvme3n1 74")
     assert lines[disks + 1 : disks + 3] == ["            ephemeral   sda 30", "            boot-pool   nvme0n1 45"], out
-    nfs = " NFS        running · 1 share · mounted by the Proxmox host, homeserver-worker-1 and 198.51.100.7"
+    nfs = " NFS        running · 1 share · mounted by the Proxmox host · homeserver-worker-1 · 198.51.100.7"
     assert nfs in lines and " Services   ssh running, configured stopped" in lines, out
     keys = [line[:12].strip() for line in lines[lines.index("NAS  truenas · TrueNAS 25.10.7 · up 34 d") + 1 :]]
     assert [k for k in keys[: keys.index("Alerts") + 1] if k] == [
@@ -1402,6 +1402,8 @@ def test_no_disks_serial_or_model_reaches_the_report(nas_tree, nas, tmp_path):
         f"Pool persistent state is DEGRADED: {MISSING} The following devices are not healthy:Disk nvme3n1 is UNAVAIL",
     ]
     assert "TrueNAS alerts (warning): sda failed a SMART selftest." in [a["text"] for a in report["attention"]]
+    # The gone disk by the name TrueNAS last knew there, with no reading.
+    assert " Disks °C   persistent  nvme1n1 83 · nvme2n1 37 · nvme3n1 (gone, unavail)" in out.splitlines(), out
     rc, printed, json_err = just_status(nas_tree, state, "nas", "--json", **nas_vars(nas))
     assert rc == 1 and json.loads(printed)["nas"]["alerts"] == report["nas"]["alerts"], printed + json_err
     written = (nas_tree / ".cache" / "status" / "report.json").read_text()
