@@ -1183,7 +1183,8 @@ SCRUB_GRACE_DAYS = 8
 # A Time Machine backup whose newest is this many days old or more is a thing to do, never a problem: a laptop travels.
 TIME_MACHINE_LATE_DAYS = 10
 # A disk this many degrees Celsius below its own critical temperature, or nearer, is a thing to do. At or above it,
-# TrueNAS's own alert (Disk Temperature Is Too Hot, critical) is among the alerts already.
+# TrueNAS's own alert (Disk Temperature Is Too Hot, critical) is among the alerts already. A critical temperature of 0
+# or below is none, as that alert takes it (alert/source/disk_temp.py at TS-25.10.7).
 DISK_HOT_MARGIN = 10
 # The NAS's clock this many seconds or more from this machine's, either way, is a thing to do.
 CLOCK_DRIFT = 60
@@ -1291,9 +1292,10 @@ def _natural(name):
 def _nas_disks(state, health):
     """Every disk, grouped by pool: each pool's in its topology's order (truenas_info's status read), then the boot
     pool's, which pool.query leaves out and disk.details names (imported_zpool), then each disk in no imported pool;
-    each with its reading and critical temperature in whole degrees Celsius (None where TrueNAS has none), its state
-    and ZFS's error counts (none for the boot pool's, which are not read). disk.details also holds each disk's serial
-    and model, which are never kept. Also whether the temperatures were read at all."""
+    each with its reading and critical temperature in whole degrees Celsius (None where TrueNAS has none, and a
+    critical temperature of 0 or below None too, since it is no threshold), its state and ZFS's error counts (none for
+    the boot pool's, which are not read). disk.details also holds each disk's serial and model, which are never kept.
+    Also whether the temperatures were read at all."""
     temperatures = health.get("temperatures")
     read = isinstance(temperatures, dict)
     temperatures = temperatures if read else {}
@@ -1304,12 +1306,13 @@ def _nas_disks(state, health):
             return
         seen.add(name)
         reading = temperatures.get(name) if isinstance(temperatures.get(name), dict) else {}
+        critical = whole_celsius(reading.get("critical"))
         out.append(
             {
                 "name": name,
                 "pool": pool,
                 "temp": whole_celsius(reading.get("temp")),
-                "critical": whole_celsius(reading.get("critical")),
+                "critical": critical if critical is not None and critical > 0 else None,
                 "status": str(vdev.get("status") or ""),
                 **{key: vdev.get(key) or 0 for key in ERROR_COUNTS},
             }
@@ -1996,11 +1999,13 @@ def _nas_attention(found, commands):
     if drift is not None and abs(drift) >= CLOCK_DRIFT:
         text = f"the NAS's clock is {_drift_text(abs(drift))} {'behind' if drift < 0 else 'ahead of'} this machine's"
         out.append(_item("todo", "nas", text, commands.get("nas_clock", "")))
+    disks = {}
+    for disk in found.get("disks") or []:
+        disks.setdefault(disk["pool"], []).append(disk)
     for pool in found.get("pools") or []:
         name = pool["name"]
         if not pool["healthy"] or pool["status"] != "ONLINE":
-            text = f"the pool is {pool['status'] or 'not healthy'}" + (f": {pool['detail']}" if pool["detail"] else "")
-            out.append(_item("problem", name, text))
+            out.append(_item("problem", name, _pool_problem(pool, disks.get(name, []))))
         fraction = pool["used"] / pool["total"] if pool["total"] else 0
         if fraction >= STORAGE_TODO:
             text = f"the pool is {fraction:.0%} full: {_sizes(pool['used'], pool['total'])}"
@@ -2019,15 +2024,11 @@ def _nas_attention(found, commands):
                 out.append(_item("todo", name, text))
     for disk in found.get("disks") or []:
         name, temp, critical = disk["name"], disk.get("temp"), disk.get("critical")
-        # At or above its critical temperature, TrueNAS's own alert says so among the alerts.
+        # At or above its critical temperature, TrueNAS's own alert says so among the alerts. A disk's errors are its
+        # pool's problem, above: ZFS calls a pool with any of them not healthy.
         if _hot(disk) and temp < critical:
             text = f"the disk is at {temp} °C, within {DISK_HOT_MARGIN} °C of its critical temperature"
             out.append(_item("todo", name, f"{text} of {critical} °C"))
-        counts = _error_counts(disk)
-        if counts:
-            total = sum(disk.get(key) or 0 for key in ERROR_COUNTS)
-            text = f"the disk has {and_list(counts)} error{'s' if total != 1 else ''} in {disk['pool'] or 'no pool'}"
-            out.append(_item("todo", name, text))
     for task in found.get("snapshots") or []:
         if task["enabled"] and task["state"] == "ERROR":
             text = f"the {task['every']} snapshots of {task['dataset']} failed: {task['error'] or 'no reason given'}"
@@ -2095,14 +2096,32 @@ def _late(backup):
 
 def _hot(disk):
     """Whether a disk reads DISK_HOT_MARGIN degrees below its own critical temperature or nearer, or above it, in the
-    whole degrees the report shows."""
+    whole degrees the report shows; never without a critical temperature above 0."""
     temp, critical = disk.get("temp"), disk.get("critical")
-    return temp is not None and critical is not None and temp >= critical - DISK_HOT_MARGIN
+    return temp is not None and critical is not None and critical > 0 and temp >= critical - DISK_HOT_MARGIN
 
 
 def _error_counts(disk):
     """A disk's errors as the report words them: 1 read, 2 write, 3 checksum; none that are 0."""
     return [f"{disk[key]} {key.split('_')[0]}" for key in ERROR_COUNTS if disk.get(key)]
+
+
+def _faults(disk):
+    """What is wrong with a disk, as its line and its pool's problem word it: a state other than ONLINE, then ZFS's
+    error counts (faulted, 1 checksum)."""
+    status = disk.get("status") or ""
+    return ([status.lower()] if status and status != "ONLINE" else []) + _error_counts(disk)
+
+
+def _pool_problem(pool, disks):
+    """Why a pool that is not healthy is a problem: its state, the disks of it that ZFS counts errors on, and
+    TrueNAS's own words. Any count on a disk that is not a spare makes ZFS call its pool not healthy (FAILING_DEV), so
+    a disk's errors are said here, never as an item of their own."""
+    text = f"the pool is {pool['status'] or 'not healthy'}"
+    faulty = [d for d in disks if _error_counts(d)]
+    if faulty:
+        text += ", with errors on " + and_list(f"{d['name']} ({', '.join(_faults(d))})" for d in faulty)
+    return text + (f": {pool['detail']}" if pool["detail"] else "")
 
 
 def _drift_text(seconds):
@@ -3150,8 +3169,7 @@ def _disk_phrase(disk, temperatures):
         phrase.append((" —", "d"))
     elif temperatures:
         phrase.append((f" {temp}", ("r" if temp >= critical else "y") if _hot(disk) else ""))
-    status = disk.get("status") or ""
-    faults = ([status.lower()] if status and status != "ONLINE" else []) + _error_counts(disk)
+    status, faults = disk.get("status") or "", _faults(disk)
     if faults:
         phrase.append((f" ({', '.join(faults)})", "r" if status and status != "ONLINE" else "y"))
     return phrase

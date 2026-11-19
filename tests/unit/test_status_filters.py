@@ -1506,6 +1506,16 @@ TEMPERATURES = {
 }
 SERIAL = "SERIAL-MUST-NOT-LEAK"
 MODEL = "MODEL-MUST-NOT-LEAK"
+# py-libzfs's words for a pool with a disk ZFS counts errors on (FAILING_DEV), which stays ONLINE though not healthy,
+# and for one with a faulted disk (FAULTED_DEV_R), DEGRADED.
+FAILING_DEV = (
+    "One or more devices has experienced an unrecoverable error. An attempt was made to correct the error. "
+    "Applications are unaffected."
+)
+FAULTED_DEV = (
+    "One or more devices are faulted in response to persistent errors. Sufficient replicas exist for the pool to "
+    "continue functioning in a degraded state."
+)
 
 
 def disk(name, status="ONLINE", read=0, write=0, checksum=0):
@@ -2223,31 +2233,37 @@ def test_a_disk_near_its_critical_temperature(reading, todo, style):
     assert line.endswith(f"nvme3n1\033[{style}m {shown}\033[0m" if style else f"nvme3n1 {shown}"), line
 
 
-def test_a_disk_without_a_critical_temperature_is_never_hot():
-    model = nas_report(nas_state(health={"temperatures": temperatures(nvme3n1=(90.0, None), sda=(None, 70.85))}))
-    assert model["attention"] == []
+@pytest.mark.parametrize("critical", [None, 0, 0.0, -273.15], ids=["none", "zero", "zero-float", "negative"])
+def test_a_disk_without_a_critical_temperature_is_never_hot(critical):
+    """No critical temperature, or one of 0 or below, which TrueNAS's own alert takes for none: never hot and never
+    red, however warm the disk reads."""
+    model = nas_report(nas_state(health={"temperatures": temperatures(nvme3n1=(90.0, critical), sda=(None, 70.85))}))
+    assert model["attention"] == [] and model["nas"]["disks"][2]["critical"] is None
     lines = nas_block(model)
     assert " Disks °C   persistent  nvme1n1 36 · nvme2n1 37 · nvme3n1 90" in lines
     assert "            ephemeral   sda —" in lines
+    assert "\033[31m" not in next(line for line in nas_block(model, True) if "nvme3n1" in line)
 
 
 def test_a_disks_errors_and_state_beside_its_temperature():
-    """ZFS's error counts on a disk are a thing to do naming its pool, and a state other than ONLINE is shown; the
-    pool's own line is as it was. The line wraps between disks, under the first."""
+    """ZFS's error counts on a disk and a state other than ONLINE are on its line, and its pool's problem names each
+    disk with errors and its counts, never an item of its own: ZFS calls a pool with any of them not healthy, here
+    DEGRADED by a faulted disk. The line wraps between disks, under the first."""
     persistent = [disk("nvme1n1"), disk("nvme2n1", read=1, write=2, checksum=3), disk("nvme3n1", "FAULTED", checksum=1)]
+    degraded = pool("persistent", 2.2, 4.9, disks=persistent, status="DEGRADED", healthy=False, detail=FAULTED_DEV)
     state = nas_state(
-        pools=[pool("persistent", 2.2, 4.9, disks=persistent), pool("ephemeral", 1.0, 2.6, layout="stripe")],
+        pools=[degraded, pool("ephemeral", 1.0, 2.6, layout="stripe")],
         health={"temperatures": temperatures(nvme1n1=(None, None))},
     )
     model = nas_report(state)
-    assert attention(model) == [
-        ("todo", "nvme2n1", "the disk has 1 read, 2 write and 3 checksum errors in persistent", ""),
-        ("todo", "nvme3n1", "the disk has 1 checksum error in persistent", ""),
-    ]
+    errors = "nvme2n1 (1 read, 2 write, 3 checksum) and nvme3n1 (faulted, 1 checksum)"
+    text = f"the pool is DEGRADED, with errors on {errors}: {FAULTED_DEV}"
+    assert attention(model) == [("problem", "persistent", text, "")]
+    assert model["exit"] == 1
     lines = nas_block(model)
     disks = lines.index(" Disks °C   persistent  nvme1n1 — · nvme2n1 37 (1 read, 2 write, 3 checksum)")
     assert lines[disks + 1] == " " * 24 + "nvme3n1 38 (faulted, 1 checksum)"
-    assert any(line.startswith(" Pools      persistent  raidz1  online") for line in lines)
+    assert any(line.startswith(" Pools      persistent  raidz1  degraded") for line in lines)
     out = "\n".join(nas_block(model, True))
     assert "\033[33m (1 read, 2 write, 3 checksum)\033[0m" in out and "\033[31m (faulted, 1 checksum)\033[0m" in out
     assert model["nas"]["disks"][1] == {
@@ -2260,6 +2276,20 @@ def test_a_disks_errors_and_state_beside_its_temperature():
         "write_errors": 2,
         "checksum_errors": 3,
     }
+
+
+def test_a_disks_errors_are_its_pools_problem():
+    """Checksum errors ZFS repaired: the pool stays ONLINE but is not healthy, one problem naming the disk and its
+    count beside TrueNAS's own words, the pool's state red and the count yellow on their lines."""
+    persistent = [disk("nvme1n1"), disk("nvme2n1", checksum=3), disk("nvme3n1")]
+    failing = pool("persistent", 2.2, 4.9, disks=persistent, healthy=False, detail=FAILING_DEV)
+    model = nas_report(nas_state(pools=[failing, pool("ephemeral", 1.0, 2.6, layout="stripe")]))
+    text = f"the pool is ONLINE, with errors on nvme2n1 (3 checksum): {FAILING_DEV}"
+    assert attention(model) == [("problem", "persistent", text, "")]
+    assert model["exit"] == 1 and model["counts"]["nas"] == {"problem": 1, "todo": 0}
+    lines = nas_block(model, True)
+    assert "\033[31monline\033[0m" in next(line for line in lines if "persistent" in line and "%" in line)
+    assert "\033[33m (3 checksum)\033[0m" in next(line for line in lines if "nvme2n1" in line)
 
 
 def test_temperatures_not_read_leave_the_disks_without_them():
@@ -2424,11 +2454,13 @@ def test_the_nas_lines_in_order():
 
 
 def rich_nas():
-    """A NAS whose every new line has something to say: a hot disk, one with errors, a service running though
-    configured stopped, a client that is no machine of this setup, and a clock behind this machine's."""
+    """A NAS whose every new line has something to say: a hot disk, one with errors, which make its pool not
+    healthy, a service running though configured stopped, a client that is no machine of this setup, and a clock
+    behind this machine's."""
     persistent = [disk("nvme1n1"), disk("nvme2n1", checksum=3), disk("nvme3n1")]
+    failing = pool("persistent", 2.2, 4.9, disks=persistent, healthy=False, detail=FAILING_DEV)
     state = nas_state(
-        pools=[pool("persistent", 2.2, 4.9, disks=persistent), pool("ephemeral", 1.0, 2.6, layout="stripe")],
+        pools=[failing, pool("ephemeral", 1.0, 2.6, layout="stripe")],
         health={
             "temperatures": temperatures(nvme3n1=(74.0, 80.85)),
             "nfs_clients": ["192.0.2.20", "192.0.2.99"],
@@ -2463,8 +2495,8 @@ def test_just_status_shows_the_nas_as_just_status_nas_does(nas_found, every):
     assert all(line in whole["attention"] for line in alone.get("attention", [])[1:])
     assert all(line in whole.get("errors", []) for line in alone.get("errors", []))
     if nas_found["unexpected_services"]:
-        assert {a["subject"] for a in items} == {"nas", "nfs", "nvme2n1", "nvme3n1"}
-        assert alone_model["counts"]["nas"] == {"problem": 2, "todo": 4}
+        assert {a["subject"] for a in items} == {"nas", "nfs", "persistent", "nvme3n1"}
+        assert alone_model["counts"]["nas"] == {"problem": 3, "todo": 3}
     else:
         assert len(alone["errors"]) == 3
 

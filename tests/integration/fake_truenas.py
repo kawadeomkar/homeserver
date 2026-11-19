@@ -18,7 +18,8 @@ tasks, mail and alert services, alert.list, and the pools' health, capacity and 
 reference (api.truenas.com) rather than a capture, times as the API sends them ({"$date": milliseconds}), and
 mail.config returns the password as set, as the reference documents. The disks follow TrueNAS 25.10.7's middleware
 source: pool.query's topology with the device and disk pool.transform_topology adds to each libzfs vdev
-(plugins/pool_/topology.py), disk.details' used disks by the pool they are in, the boot pool's included
+(plugins/pool_/topology.py), a pool not healthy once ZFS counts errors on any of its disks but a spare, as libzfs
+works it out (FAILING_DEV), disk.details' used disks by the pool they are in, the boot pool's included
 (plugins/disk_/availability.py), and disk.temperatures' [celsius, critical celsius] for every disk
 (plugins/disk_/temperature.py), with stand-in serials and models; so do the NFS clients (plugins/nfs_/status.py),
 interface.query's link state, MTU and active media (plugins/interface/netif_linux), and system.info's clock, which
@@ -136,6 +137,28 @@ def topology_disks(topology_):
             out.append(vdev["disk"])
         todo[:0] = vdev.get("children", [])
     return out
+
+
+# py-libzfs's words for a pool with a device ZFS counts errors on (zpool_get_status's FAILING_DEV), which it reads as
+# not healthy, though the pool stays ONLINE.
+FAILING_DEV = (
+    "One or more devices has experienced an unrecoverable error. An attempt was made to correct the error. "
+    "Applications are unaffected."
+)
+ERROR_COUNTS = ("read_errors", "write_errors", "checksum_errors")
+
+
+def failing(topology_):
+    """Whether ZFS counts errors on any disk of a pool: a data, special, dedup or log disk, or a cache disk, which
+    libzfs's find_vdev_problem walks too (libzfs_status.c at zfs-2.3.4); never a spare."""
+    todo = [vdev for kind in ("data", "special", "dedup", "log", "cache") for vdev in topology_.get(kind, [])]
+    while todo:
+        vdev = todo.pop(0)
+        stats = vdev.get("stats") or {}
+        if vdev.get("type") == "DISK" and any(stats.get(key) for key in ERROR_COUNTS):
+            return True
+        todo[:0] = vdev.get("children", [])
+    return False
 
 
 class CallError(Exception):
@@ -547,7 +570,12 @@ class FakeTrueNAS:
 
     # -------------------------------------------------------------------- pools
     def pool_obj(self, pool):
-        return copy.deepcopy(pool)
+        """A pool as pool.query answers it: a pool otherwise healthy whose disks ZFS counts errors on is not, as libzfs
+        works it out from the vdevs' stats."""
+        out = copy.deepcopy(pool)
+        if out.get("status_code") == "OK" and failing(out.get("topology") or {}):
+            out.update(healthy=False, status_code="FAILING_DEV", status_detail=FAILING_DEV)
+        return out
 
     def m_pool_query(self, filters=None, options=None):
         return [self.pool_obj(p) for p in self.s["pools"] if matches(p, filters)]

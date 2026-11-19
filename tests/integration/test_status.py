@@ -1240,10 +1240,10 @@ NFS_OPEN_FILE = "/FAKE-OPEN-FILE-MUST-NOT-LEAK"
 
 def seed_details(path, refused=()):
     """The NAS seed_nas leaves, with something for each of the NAS section's details to say: two ports, both up, at
-    2.5 Gb/s and 1 Gb/s; nvme3n1 hot, 74 °C of its critical 80.85, and nvme2n1 with three checksum errors; ssh
-    running though the configuration keeps it stopped; the shares mounted by the Proxmox host over NFSv3, and by the
-    worker and an address of no machine of this setup over NFSv4; the NAS's clock 95 s behind; and the methods
-    `refused` refused."""
+    2.5 Gb/s and 1 Gb/s; nvme3n1 hot, 74 °C of its critical 80.85, and nvme2n1 with three checksum errors, which make
+    persistent not healthy; ssh running though the configuration keeps it stopped; the shares mounted by the Proxmox
+    host over NFSv3, and by the worker and an address of no machine of this setup over NFSv4; the NAS's clock 95 s
+    behind; and the methods `refused` refused."""
     fake = fake_truenas.FakeTrueNAS(path)
     fake.load()
     # The fake's own port, by whatever name it has, and a second one.
@@ -1297,15 +1297,17 @@ def test_the_nas_sections_details(nas_tree, nas, tmp_path):
         "Alerts",
     ], out
     attention = [(a["level"], a["subject"], a["text"]) for a in report["attention"]]
+    # A disk's errors are its pool's problem: ZFS calls the pool not healthy.
+    unhealthy = f"the pool is ONLINE, with errors on nvme2n1 (3 checksum): {fake_truenas.FAILING_DEV}"
     assert attention == [
+        ("problem", "persistent", unhealthy),
         ("problem", "nfs", "an NFS share is mounted from 198.51.100.7, which is no machine of this setup"),
         ("problem", "nas", "ssh is running, though the configuration keeps it stopped"),
         ("todo", "nas", "the NAS's clock is 95 s behind this machine's"),
-        ("todo", "nvme2n1", "the disk has 3 checksum errors in persistent"),
         ("todo", "nvme3n1", "the disk is at 74 °C, within 10 °C of its critical temperature of 81 °C"),
     ], report["attention"]
-    assert report["attention"][1]["command"] == "just deploy truenas"
-    assert report["attention"][2]["command"].startswith("the NAS's NTP servers"), report["attention"]
+    assert report["attention"][2]["command"] == "just deploy truenas"
+    assert report["attention"][3]["command"].startswith("the NAS's NTP servers"), report["attention"]
     found = report["nas"]
     assert found["link"] == {"ports": 2, "up": 2, "speeds": ["2.5 Gb/s", "1 Gb/s"], "mtu": 1500}
     assert [(d["name"], d["pool"], d["temp"], d["critical"], d["checksum_errors"]) for d in found["disks"]] == [
@@ -1345,9 +1347,9 @@ def test_the_nas_sections_details(nas_tree, nas, tmp_path):
     assert " not read: the disks' temperatures: disk.temperatures: [EPERM] Not authorized" in lines, out
     assert " not read: the NFS clients: nfs.get_nfs4_clients: [EPERM] Not authorized" in lines, out
     assert [(a["level"], a["subject"]) for a in report["attention"]] == [
+        ("problem", "persistent"),
         ("problem", "nas"),
         ("todo", "nas"),
-        ("todo", "nvme2n1"),
     ], report["attention"]
     assert report["nas"]["nfs"]["clients"] is None and report["nas"]["temperatures_read"] is False
 
