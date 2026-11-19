@@ -1,0 +1,113 @@
+---
+# Time Machine backups of the Macs on the NAS (scripts/runbooks/timemachine.md): local.yml's timemachine_backups, each
+# Mac's SMB password from the vault's vault_timemachine_passwords, and the check truenas.yml asserts first. What the NAS
+# is handed is derived in group_vars/nas/timemachine.yml. Both settings are read here and never set: group_vars/all/ is
+# read alphabetically and the last file wins, so a value set in this file would override local.yml's.
+
+# The Macs local.yml lists, retired ones included; none without the setting.
+timemachine_macs: >-
+  {{ timemachine_backups | default([], true)
+     if (timemachine_backups | default([], true)) is iterable and (timemachine_backups | default([], true)) is not string
+        and (timemachine_backups | default([], true)) is not mapping
+     else [] }}
+# Whether any Mac backs up to the NAS, or did: its dataset, login and share are then the NAS's.
+timemachine_present: "{{ timemachine_macs | length > 0 }}"
+# The Macs that still back up. A retired one keeps its dataset and snapshots, its login and share closed.
+timemachine_active: >-
+  {%- set out = [] -%}
+  {%- for mac in timemachine_macs if mac is mapping and not (mac.retired | default(false)) -%}
+  {%-   set _ = out.append(mac) -%}
+  {%- endfor -%}
+  {{ out }}
+
+# What the playbooks refuse in the section, each message naming the Mac and never a password; empty when it passes.
+timemachine_settings_error: >-
+  {%- set errors = [] -%}
+  {%- set macs = timemachine_backups | default([], true) -%}
+  {%- set passwords = vault_timemachine_passwords | default({}, true) -%}
+  {%- if timemachine_present is not boolean -%}
+  {%-   set _ = errors.append('timemachine_present is worked out from timemachine_backups in group_vars/all/local.yml,'
+                             ~ ' not set: given with -e it is a string, which counts as true whatever it says. To back'
+                             ~ ' no Mac up, leave timemachine_backups out.') -%}
+  {%- endif -%}
+  {%- if macs is string or macs is mapping or macs is not iterable -%}
+  {%-   set _ = errors.append('group_vars/all/local.yml: timemachine_backups is a list of Macs, each with name,'
+                             ~ ' quota_gib and uid, such as [{name: laptop, quota_gib: 2048, uid: 3101}].') -%}
+  {%- else -%}
+  {%-   set names = [] -%}
+  {%-   set uids = [] -%}
+  {%-   for mac in macs -%}
+  {%-     if mac is not mapping -%}
+  {%-       set _ = errors.append('group_vars/all/local.yml: each entry of timemachine_backups is a Mac with name,'
+                                 ~ ' quota_gib and uid.') -%}
+  {%-     else -%}
+  {%-       set name = mac.name | default('', true) | string -%}
+  {#-       What local.yml gives is shown only when 16 characters or fewer: a password, 20 or more, never is. -#}
+  {%-       set label = 'timemachine_backups: ' ~ ((name if name | length <= 16 else 'an entry whose name is too long to'
+                                                    ~ ' show') if name else 'an entry without a name') -%}
+  {%-       set unknown = mac | list | reject('in', ['name', 'quota_gib', 'uid', 'retired']) | list -%}
+  {%-       if unknown -%}
+  {%-         set shown = unknown | map('string') | select('match', '^.{1,16}$') | list -%}
+  {%-         set _ = errors.append(label ~ ': unknown key(s) ' ~ (shown | join(', ') if shown else '')
+                                   ~ (' and ' if shown and shown | length < unknown | length else '')
+                                   ~ ((('one' if unknown | length - shown | length == 1
+                                        else (unknown | length - shown | length) | string) ~ ' too long to show')
+                                      if shown | length < unknown | length else '')
+                                   ~ '; an entry has name, quota_gib, uid and, once the Mac is retired, retired.') -%}
+  {%-       endif -%}
+  {%-       if mac.name | default(none) is not string -%}
+  {%-         set _ = errors.append(label ~ ': the name must be text, such as laptop: quoted, if it is all digits.') -%}
+  {%-       elif name is not match('^[a-z0-9][a-z0-9-]{0,15}$') -%}
+  {%-         set _ = errors.append(label ~ ': the name must be 1 to 16 lower-case letters, digits and hyphens,'
+                                   ~ ' starting with a letter or a digit: it names a dataset, a login and a share.') -%}
+  {%-       elif name in names -%}
+  {%-         set _ = errors.append(label ~ ' is given twice.') -%}
+  {%-       endif -%}
+  {%-       set _ = names.append(name) -%}
+  {%-       set quota = mac.quota_gib | default(none) -%}
+  {%-       if quota is not integer or quota is boolean or quota < 64 -%}
+  {%-         set _ = errors.append(label ~ ': quota_gib must be a whole number of GiB, 64 or more: the most its'
+                                   ~ ' dataset may hold, snapshots included.') -%}
+  {%-       endif -%}
+  {%-       set uid = mac.uid | default(none) -%}
+  {%-       if uid is not integer or uid is boolean or uid < 3000 -%}
+  {%-         set _ = errors.append(label ~ ": uid must be a whole number, 3000 or more, of its own: the login's,"
+                                   ~ ' which a rebuilt NAS gives it again.') -%}
+  {%-       elif uid in uids -%}
+  {%-         set _ = errors.append(label ~ ': uid ' ~ uid ~ " is another Mac's too.") -%}
+  {%-       endif -%}
+  {%-       set _ = uids.append(uid) -%}
+  {%-       set retired = mac.retired | default(false) -%}
+  {%-       if retired is not boolean -%}
+  {%-         set _ = errors.append(label ~ ': retired must be true or false.') -%}
+  {%-       elif not retired and (passwords is not mapping or passwords[name] | default(none) is not string
+                                  or (passwords[name] | length) < 20) -%}
+  {%-         set _ = errors.append(label ~ ': the vault has no SMB password of 20 characters or more for it under'
+                                   ~ ' vault_timemachine_passwords (just vault).') -%}
+  {%-       endif -%}
+  {%-     endif -%}
+  {%-   endfor -%}
+  {%-   if names and proxmox_address | default('') | string is not match('^(\\d{1,3}\\.){3}\\d{1,3}$') -%}
+  {%-     set _ = errors.append('group_vars/all/local.yml: proxmox_address must be an IPv4 address with a Mac listed:'
+                               ~ " each Mac's share refuses SMB from it (hostsdeny), and TrueNAS matches no host name.")
+                               -%}
+  {%-   endif -%}
+  {%-   if passwords is not mapping -%}
+  {%-     set _ = errors.append("the vault's vault_timemachine_passwords must be a mapping of each Mac's name to its SMB"
+                               ~ ' password.') -%}
+  {%-   else -%}
+  {#-     With no Mac listed, a password left in the vault is read by nothing: Time Machine turned off keeps it. -#}
+  {%-     for name in passwords if names and name not in names -%}
+  {#-       A key is shown only when it could be a Mac's name: one that cannot may be a password typed as a key. -#}
+  {%-       if name is string and name is match('^[a-z0-9][a-z0-9-]{0,15}$') -%}
+  {%-         set _ = errors.append("the vault's vault_timemachine_passwords has a password for " ~ name ~ ', which'
+                                   ~ ' timemachine_backups does not list: remove it, or add the Mac.') -%}
+  {%-       else -%}
+  {%-         set _ = errors.append("the vault's vault_timemachine_passwords has a key that is no Mac's name, not"
+                                   ~ ' shown here in case it is a password: each line under it is <name>: <password>'
+                                   ~ ' (just vault).') -%}
+  {%-       endif -%}
+  {%-     endfor -%}
+  {%-   endif -%}
+  {%- endif -%}
+  {{ errors }}

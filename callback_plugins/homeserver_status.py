@@ -21,6 +21,8 @@ description:
     them. On a terminal too short for them, only the line on what is read is kept.
   - Prints nothing on standard output when STATUS_QUIET is set, for just status --json, which prints the report's
     file instead.
+  - With STATUS_MASK set, as just status --mask sets it, every IPv4 and IPv6 address in the report it prints, live or
+    not, reads <addr>, as in the report play's own text; the report's file, which --json prints, keeps them.
   - Prints every failure and every unreachable host on standard error, and nothing else of Ansible's.
 requirements:
   - Chosen with ANSIBLE_STDOUT_CALLBACK=homeserver_status, as just status does; Ansible finds it beside status.yml.
@@ -73,8 +75,8 @@ class Progress:
     prints nothing more after a host failed, which leaves the run without a report. `filters` is the filter's module,
     `settings` what status.yml's first play says (setup, types, read_at, now, admin, commands, hosts by label)."""
 
-    def __init__(self, filters, settings, color=False):
-        self.f, self.settings, self.color = filters, settings, color
+    def __init__(self, filters, settings, color=False, mask=False):
+        self.f, self.settings, self.color, self.mask = filters, settings, color, mask
         self.types = settings.get("types") or []
         self.expected = filters.sections_expected(settings.get("setup"), self.types)
         self.hosts = {label: list(names or []) for label, names in (settings.get("hosts") or {}).items()}
@@ -126,7 +128,7 @@ class Progress:
     def blocks(self):
         if self._blocks is None:
             model = self.model()
-            self._blocks = (model, self.f.blocks(model, self.color))
+            self._blocks = (model, self.f.blocks(model, self.color, self.mask))
         return self._blocks
 
     def head(self):
@@ -199,6 +201,7 @@ class CallbackModule(CallbackBase):
         self._quiet = bool(os.environ.get("STATUS_QUIET"))
         self._live_wanted = os.environ.get("STATUS_LIVE") == "1" and not self._quiet and sys.stdout.isatty()
         self._color = os.environ.get("STATUS_COLOR") == "1"
+        self._mask = bool(os.environ.get("STATUS_MASK"))
         # Display's own lock, which the live lines' thread holds while it draws them from what the hosts found.
         self._lock = getattr(self._display, "_lock", None) or threading.RLock()
         self._basedir = Path.cwd()
@@ -319,7 +322,7 @@ class CallbackModule(CallbackBase):
             spec = importlib.util.spec_from_file_location("homeserver_status_filters", self._basedir / FILTERS)
             filters = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(filters)
-            self._progress = Progress(filters, settings, self._color)
+            self._progress = Progress(filters, settings, self._color, self._mask)
             self._print(self._progress.head())
         except Exception as exc:  # noqa: BLE001 - without the filter, the line on what is read alone is kept
             self._progress = None

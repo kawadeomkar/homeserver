@@ -19,6 +19,16 @@ vault_truenas_api_key: ""
 # next run sends it to the NAS.
 vault_truenas_mail_password: ""
 
+# With Time Machine (timemachine_backups in local.yml): each Mac's SMB password,
+# 20 characters at least, long and random (openssl rand -base64 30 | pbcopy,
+# which prints nothing); the Mac keeps it in its keychain. Not the backup's own
+# encryption password, which never leaves the Mac and your password manager.
+# Replace the {} with an indented line per Mac, under its name:
+#   vault_timemachine_passwords:
+#     laptop: <password>
+# Changing one here is not enough: scripts/runbooks/timemachine.md says how.
+vault_timemachine_passwords: {}
+
 # ------------------------------------------------------------------- Router ---
 # With the router (opnsense_address in local.yml): the API key pair of its user
 # for this project, made under System > Access > Users
@@ -40,6 +50,13 @@ vault_opnsense_backup_password: ""
 vault_opnsense_root_password: ""
 
 # ------------------------------------------------------------------ Proxmox ---
+# The project's Proxmox API token: the secret of homeserver@pve!homeserver,
+# or of the token local.yml's proxmox_token_id names, made on the host with
+# pveum (scripts/runbooks/proxmox-token.md, which also lists what it may do).
+# just status reads the host with it; another role may later, adding the
+# privileges it needs there. Proxmox shows the secret once.
+vault_proxmox_token_secret: ""
+
 # With remote access (tailscale_enabled or tailscale_advertise_routes in
 # local.yml): a one-off, pre-approved auth key, tagged tag:homeserver, spent at
 # the host's first login (scripts/runbooks/tailscale.md, section 4). A spent key

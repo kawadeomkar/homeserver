@@ -1,12 +1,22 @@
 ---
 # roles/truenas with this repo's own NAS configuration, pointed at fake_truenas.py. Addresses, the cluster's
-# nodes included, and the API key come from the test as extra vars.
+# nodes included, the Macs that back up with Time Machine, their passwords and the API key come from the test as extra
+# vars. Its pre-task is the real play's Time Machine check.
 - name: Configure the fake NAS
   hosts: nas
   gather_facts: false
   vars_files:
     - ../../group_vars/all/storage.yml
     - ../../group_vars/all/kubernetes.yml
+    - ../../group_vars/all/timemachine.yml
+    - ../../group_vars/nas/timemachine.yml
     - ../../group_vars/nas/truenas.yml
+  pre_tasks:
+    - name: Refuse an incomplete Time Machine section
+      ansible.builtin.assert:
+        that: timemachine_settings_error | length == 0
+        fail_msg: "{{ timemachine_settings_error | join(' ') }}"
+        quiet: true
+      tags: [always]
   roles:
     - role: truenas

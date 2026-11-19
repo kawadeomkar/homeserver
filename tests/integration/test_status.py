@@ -10,9 +10,11 @@ cluster changed, the apps and their states, the nodes' memory and disks from kub
 exit codes (the report's own, which just exits with: 0 when nothing is wrong, 1 for a problem, 2 for a source that could
 not be read, 3 for a refused run, also on the report's last line), --json, a section the recipe does not have, another
 cluster's kubeconfig, and a host that does not answer at all. With a NAS (local.yml.example's setup), the NAS is read
-through roles/truenas's status entry point against fake_truenas.py: one login, no change, no secret in the report, and a
-NAS that does not answer or presents another certificate is a source not read. The apps' probes ask addresses that never
-answer here, under a domain that never resolves (.invalid), so what they find does not depend on the network.
+through roles/truenas's status entry point against fake_truenas.py: one login, no change, no secret in the report, the
+Macs' Time Machine backups judged by local.yml's Macs from one snapshot read for every enabled share, each Mac's from
+its own dataset, and a NAS that does not answer or presents another certificate is a source not read. The apps' probes
+ask addresses that never answer here, under a domain that never resolves (.invalid), so what they find does not depend
+on the network.
 
 Run: just test idempotence
 """
@@ -43,6 +45,7 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "tests" / "policy"))
 sys.path.insert(0, str(ROOT / "tests"))
+import certs  # noqa: E402
 import fake_pve  # noqa: E402
 import fake_tailscale  # noqa: E402
 import fake_talos  # noqa: E402
@@ -400,7 +403,7 @@ def seed(path, **more):
     state["guest_ip"] = "192.0.2.32"
     state["packages"]["lists"] = dict(state["packages"]["repository"])
     state.update(more)
-    path.write_text(json.dumps(state))
+    fake_pve.store(path, state)
     return state
 
 
@@ -445,18 +448,109 @@ def environment(tree, state, fake=True, **more):
     }
 
 
+# The fake Proxmox API of each test, by the test's directory (the tree's parent), which extra_vars asks for its address,
+# token and certificate (the pve_api fixture, FakeApi).
+APIS = {}
+TOKEN_ID = "homeserver@pve!homeserver"
+
+
+@pytest.fixture(scope="module")
+def api_certificates(tmp_path_factory):
+    """The certificate the fake API serves, and another, as an impostor's."""
+    work = tmp_path_factory.mktemp("pve-api")
+    return {"served": certs.self_signed(work, "served"), "other": certs.self_signed(work, "other")}
+
+
+class FakeApi:
+    """fake_pve_api.py for one test, on a port of its own, answering from the test's fake host (tmp_path / "pve.json")
+    with a token of its own, every request logged to tmp_path / "api-calls.jsonl". It starts when a run first needs it
+    (vars(), which extra_vars calls), so a test that never reads the Proxmox host starts none. restart() runs it again
+    with the fake's own options: a token's privileges narrower than the runbook's, or paths it answers 403."""
+
+    def __init__(self, tmp_path, certificate):
+        self.tmp_path, self.certificate = tmp_path, certificate
+        self.port, self.secret, self.proc, self.options = free_port(), os.urandom(16).hex(), None, ()
+        self.calls = tmp_path / "api-calls.jsonl"
+        self.calls.touch()
+
+    def __getitem__(self, name):
+        return getattr(self, name)
+
+    def start(self):
+        cert, key = self.certificate
+        command = [sys.executable, HERE / "fake_pve_api.py", "--port", str(self.port), "--cert", cert, "--key", key]
+        command += ["--state", self.tmp_path / "pve.json", "--token-id", TOKEN_ID, "--token-secret", self.secret]
+        self.proc = subprocess.Popen(
+            [*command, "--log", self.calls, *self.options], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            try:
+                socket.create_connection(("127.0.0.1", self.port), timeout=1).close()
+                return
+            except OSError:
+                time.sleep(0.1)
+        self.proc.kill()
+        pytest.fail("the fake Proxmox API did not start")
+
+    def vars(self):
+        """What a run needs to read the fake as the Proxmox host's API, the fake started first if it is not yet."""
+        if self.proc is None:
+            self.start()
+        return {
+            "status_proxmox_api_url": f"https://127.0.0.1:{self.port}/api2/json",
+            "status_proxmox_token_id": TOKEN_ID,
+            "status_proxmox_token_secret": self.secret,
+            "status_proxmox_api_cert_files": [str(self.tmp_path / "no-such.pem"), str(self.certificate[0])],
+        }
+
+    def stop(self):
+        if self.proc:
+            self.proc.terminate()
+            self.proc.wait(timeout=10)
+            self.proc = None
+
+    def restart(self, *options):
+        """The fake with other options, from the next run on."""
+        self.stop()
+        self.options = options
+
+
+@pytest.fixture(autouse=True)
+def pve_api(tmp_path, api_certificates):
+    """The fake Proxmox API of each test here (FakeApi), which extra_vars finds by the test's directory, the tree's
+    parent: every tree here is tmp_path / "tree"."""
+    api = FakeApi(tmp_path, api_certificates["served"])
+    APIS[tmp_path] = api
+    yield api
+    APIS.pop(tmp_path, None)
+    api.stop()
+
+
+def api_calls(tmp_path):
+    """What the fake API was asked, each {path, token}."""
+    return [json.loads(line) for line in (tmp_path / "api-calls.jsonl").read_text().splitlines()]
+
+
 def extra_vars(tree, local=True, cluster=True, **more):
     """The variables a run needs here: the local connection, unless the inventory gives one, this Python, the
     placeholders' values (a cluster's and Home Assistant's, unless the setup has neither), the reboot flag in the tree,
-    the cluster's credentials, and no probes unless asked."""
+    the fake's pid files, the fake Proxmox API with its token, the cluster's credentials, and no probes unless
+    asked."""
     return json.dumps(
         {
             **({"ansible_connection": "local"} if local else {}),
             "ansible_python_interpreter": sys.executable,
             "status_reboot_required_file": str(tree / "run" / "reboot-required"),
+            # Where the fake keeps a pid file for each VM it runs, beside its state (tmp_path / "pve.json").
+            "status_proxmox_run_dir": str(fake_pve.run_dir(tree.parent / "pve.json")),
             "talos_config_dir": str(talos_dir(tree.parent)),
             "status_probe_apps": False,
             **(CLUSTER_VARS if cluster else {}),
+            **(APIS[tree.parent].vars() if tree.parent in APIS else {}),
+            # No kept upgrade answer unless a test asks: the fake's packages change between runs, the files of this
+            # machine that group_vars' paths name do not.
+            "status_upgrades_state_paths": [],
             **more,
         }
     )
@@ -628,7 +722,8 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
     # The NAS's host reads nothing without a NAS, so the line leaves it out.
     assert " nas " not in line and "NAS  " not in out, out
     assert "TASK [" not in out and "PLAY RECAP" not in out and "\033[" not in out, out
-    assert "VMS  pve · Proxmox VE 9.2.2-1 · kernel 7.0.2-6-pve" in out
+    # The address the host is reached at sits beside its release: here local.yml's proxmox_address.
+    assert re.search(r"VMS  pve · Proxmox VE 9\.2\.2-1 at \S+ · kernel 7\.0\.2-6-pve", out), out
     assert " 9000  ◇ ubuntu-template      template" in out
     assert " 9001  ◆ another-project      1 h 0 m   10%  ▁▁▁▁▁▁▁▁▁▁▁▁   2.0 / 4.0   —" in out
     assert " ◆ ◇ not this repo's: another project's, or made by hand; shown, never a problem or a thing to do" in out
@@ -643,10 +738,147 @@ def test_the_report_of_a_proxmox_only_host_and_its_cluster(tree, tmp_path):
     assert max(len(line) for line in lines) <= 100, out
 
 
+def test_the_host_is_read_through_its_api_with_the_token(tree, tmp_path, pve_api):
+    """Proxmox's own reads go to its API on the host, every one with the token; the token's secret is in nothing just
+    status writes or prints."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    rc, out, err = just_status(tree, state)
+    assert rc == 0, out + err
+    asked = api_calls(tmp_path)
+    assert asked and all(call["token"] for call in asked)
+    paths = {call["path"] for call in asked}
+    assert {"/cluster/resources", "/nodes/pve/status", "/nodes/pve/qemu/310/agent/get-fsinfo"} <= paths
+    # The two listings Proxmox gives no read-only token stay pvesh's (the fake host's), never the API's.
+    assert not any(path.endswith("/content") for path in paths)
+    report = (tree / ".cache" / "status" / "report.json").read_text()
+    assert pve_api["secret"] not in out + err + report
+
+
+def test_a_token_missing_or_refused_leaves_the_host_unread(tree, tmp_path, pve_api):
+    """Without the token, or with one Proxmox refuses, the host could not be read, and the report says how to make
+    it; with a missing one, nothing is asked at all."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    rc, out, err = just_status(tree, state, status_proxmox_token_secret="")
+    assert rc == 2, out + err
+    unread = next(a for a in report_of(tree)["attention"] if a["subject"] == "proxmox")
+    assert unread["text"] == "the Proxmox host could not be read: Proxmox's API, /cluster/resources: no API token"
+    assert "scripts/runbooks/proxmox-token.md" in unread["command"]
+    assert api_calls(tmp_path) == []
+
+    other = os.urandom(16).hex()
+    rc, out, err = just_status(tree, state, status_proxmox_token_secret=other)
+    assert rc == 2, out + err
+    unread = next(a for a in report_of(tree)["attention"] if a["subject"] == "proxmox")
+    assert unread["text"].endswith(f"Proxmox refused the API token {TOKEN_ID} (HTTP 401)")
+    assert "scripts/runbooks/proxmox-token.md" in unread["command"]
+    assert other not in out + err
+
+    # A secret of another shape, a line break at its end as a YAML block scalar leaves one: refused before anything
+    # is sent, and never quoted (the HTTP library's own error would quote the whole Authorization header).
+    asked = len(api_calls(tmp_path))
+    rc, out, err = just_status(tree, state, status_proxmox_token_secret=pve_api["secret"] + "\n")
+    assert rc == 2, out + err
+    unread = next(a for a in report_of(tree)["attention"] if a["subject"] == "proxmox")
+    assert "the API token's secret is not a token's" in unread["text"]
+    assert "scripts/runbooks/proxmox-token.md" in unread["command"]
+    assert pve_api["secret"] not in out + err and len(api_calls(tmp_path)) == asked
+
+
+def test_a_token_that_may_not_see_the_host_is_named_not_taken_for_an_empty_host(tree, tmp_path, pve_api):
+    """Proxmox answers /cluster/resources to any token, leaving out what it may not see: a token without VM.Audit and
+    Datastore.Audit (privilege separation left on, say) leaves the host unread, naming them, never a host whose VMs
+    are all missing."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    pve_api.restart("--privileges", json.dumps({"/": ["Sys.Audit"], "/nodes/pve": ["Sys.Audit"]}))
+    rc, out, err = just_status(tree, state)
+    assert rc == 2, out + err
+    unread = next(a for a in report_of(tree)["attention"] if a["subject"] == "proxmox")
+    assert unread["text"] == (
+        "the Proxmox host could not be read: the Proxmox API token lacks VM.Audit on /vms, Datastore.Audit on /storage"
+    )
+    assert "scripts/runbooks/proxmox-token.md" in unread["command"]
+    assert "is not on this host" not in out
+
+
+def test_a_read_the_token_may_not_make_is_a_problem_with_the_runbook(tree, tmp_path, pve_api):
+    """A read Proxmox answers 403, the guest agent's here: the host is read, and the report says which reads the token
+    was refused, with the runbook as the thing to do."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    pve_api.restart("--forbid", "/agent/")
+    rc, out, err = just_status(tree, state)
+    assert rc == 1, out + err
+    problem = next(a for a in report_of(tree)["attention"] if a["subject"] == "API token")
+    assert problem["level"] == "problem"
+    assert problem["text"].startswith("the Proxmox API token may not read everything: Proxmox refused it")
+    assert "fsinfo-310" in problem["text"] and "scripts/runbooks/proxmox-token.md" in problem["command"]
+
+
+def test_the_token_goes_only_to_the_nodes_own_certificate(tree, tmp_path, api_certificates):
+    """A server that presents another certificate than the node's own file gets no request at all, the token least of
+    all: the host is not read, and the report says why."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    other = str(api_certificates["other"][0])
+    rc, out, err = just_status(tree, state, status_proxmox_api_cert_files=[other])
+    assert rc == 2, out + err
+    unread = next(a for a in report_of(tree)["attention"] if a["subject"] == "proxmox")
+    assert unread["text"].endswith(f"serves another certificate than {other}'s: no token sent")
+    assert unread["command"] == ""
+    assert api_calls(tmp_path) == []
+
+
+def test_the_upgrade_simulation_is_kept_while_nothing_it_depends_on_changes(tree, tmp_path):
+    """The first run simulates and keeps the answer with its key, on this machine alone; the next is answered from it
+    without running apt-get, the same report; a changed package list makes it simulate again, and the run after that
+    is answered from the new answer. A run that reads no upgrades, or whose simulation fails, leaves the kept answer as
+    it was."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    lists = tmp_path / "lists"
+    lists.mkdir()
+    (lists / "pve_Packages").write_text("Package: pve-manager\n")
+    keyed = {"status_upgrades_state_paths": [str(lists)]}
+    runs = lambda: json.loads(state.read_text())["apt_get_runs"]  # noqa: E731
+    before = runs()
+    rc, out, err = just_status(tree, state, **keyed)
+    assert rc == 0 and runs() == before + 1, out + err
+    kept = tree / ".cache" / "status" / "upgrades.json"
+    assert stat.S_IMODE(kept.stat().st_mode) == 0o600 and set(json.loads(kept.read_text())) == {"key", "stdout"}
+    upgrades = report_of(tree)["proxmox"]["upgrades"]
+
+    rc, out, err = just_status(tree, state, **keyed)
+    assert rc == 0 and runs() == before + 1, out + err
+    assert report_of(tree)["proxmox"]["upgrades"] == upgrades
+
+    (lists / "pve_Packages").write_text("Package: pve-manager\nVersion: 9.2.28\n")
+    rc, out, err = just_status(tree, state, **keyed)
+    assert rc == 0 and runs() == before + 2, out + err
+    rc, out, err = just_status(tree, state, **keyed)
+    assert rc == 0 and runs() == before + 2, out + err
+
+    written, at = kept.read_bytes(), kept.stat().st_mtime_ns
+    rc, out, err = just_status(tree, state, "storage", **keyed)
+    assert rc == 0 and runs() == before + 2, out + err
+    assert (kept.read_bytes(), kept.stat().st_mtime_ns) == (written, at)
+
+    # dpkg killed mid-upgrade: its journal changes the key, the simulation refuses, the report says so (a read that
+    # failed, as on main, not a problem), and the kept answer is neither used nor replaced.
+    (lists / "pve_Packages").write_text("Package: pve-manager\nVersion: 9.2.29\n")
+    fake_pve.store(state, json.loads(state.read_text()) | {"dpkg_interrupted": True})
+    rc, out, err = just_status(tree, state, **keyed)
+    assert rc == 0 and runs() == before + 3, out + err
+    assert "not read: the pending upgrades: E: dpkg was interrupted" in out
+    assert (kept.read_bytes(), kept.stat().st_mtime_ns) == (written, at)
+
+
 def test_a_node_named_in_advance_reads_the_same(tree, tmp_path):
-    """With status_proxmox_node given, the host's name is not asked: with the VMs shown the guest list is read alone
-    first, and without them (just status storage) there is no first read, the guest list read with the rest. Each
-    report is the one the run that asks the name makes."""
+    """With status_proxmox_node given, the host's name is not asked: with the VMs shown which VMs run is read alone
+    first, and without them (just status storage) there is no first read. Each report is the one the run that asks the
+    name makes."""
     state = tmp_path / "pve.json"
     seed(state)
     for args in ((), ("storage",)):
@@ -672,11 +904,17 @@ def test_just_status_exits_with_the_reports_code(tree, tmp_path):
     assert rc == 1 and "exit 1 · 1 problem" in out and "error:" not in err, out + err
     assert "the storage is unknown" in out
 
-    # A host whose commands are not there could not be read: exit 2.
+    # A host that is no Proxmox host, its commands not there and no API answering: it could not be read, exit 2.
     seed(state)
-    rc, out, err = just_status(tree, state, fake=False)
+    rc, out, err = just_status(
+        tree, state, fake=False, status_proxmox_api_url=f"https://127.0.0.1:{free_port()}/api2/json"
+    )
     assert rc == 2 and "exit 2 · 1 source not read" in out, out + err
-    assert "could not be read: pvesh get /cluster/resources" in out
+    unread = next(a for a in report_of(tree)["attention"] if a["subject"] == "proxmox")
+    assert unread["text"].startswith(
+        "the Proxmox host could not be read: Proxmox's API, /cluster/resources: pveproxy does not answer at"
+    )
+    assert unread["command"].startswith("systemctl status pveproxy")
 
     # A section just status does not have: the recipe refuses it before anything runs, with 3.
     rc, out, err = just_status(tree, state, "vms", "disks")
@@ -739,7 +977,7 @@ def test_a_stopped_cluster_is_no_unread_source(tree, tmp_path):
     pve = json.loads(state.read_text())
     for vmid in ("300", "301"):
         pve["vms"][vmid]["status"] = "stopped"
-    state.write_text(json.dumps(pve))
+    fake_pve.store(state, pve)
     seed_cluster(tmp_path / "talos.json", bootstrapped=False)
     rc, out, err = just_status(tree, state, status_timeout=5)
     report = report_of(tree)
@@ -771,6 +1009,32 @@ def test_the_apps_are_asked_from_here(tree, tmp_path):
 
 
 SPINNER = re.compile(r"reading  .*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] \d+\.\d s")
+
+
+def test_mask_shows_no_address_and_the_report_keeps_them(tree, tmp_path):
+    """just status --mask, for a report pasted where others read it: every address in the text reads <addr>, piped and
+    on a terminal alike, with the same lines otherwise, while the report's file, and so --json, keeps them."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    rc, plain, err = just_status(tree, state)
+    assert rc == 0, plain + err
+    addresses = set(re.findall(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?!\w)", plain))
+    addresses |= {a for a in fake_tailscale.NODE_ADDRESSES + fake_tailscale.PEER_ADDRESSES if a in plain}
+    assert addresses, plain
+    rc, masked, err = just_status(tree, state, "--mask")
+    assert rc == 0 and "<addr>" in masked, masked + err
+    assert not [a for a in addresses if a in masked], masked
+    assert len(masked.splitlines()) == len(plain.splitlines()), masked
+    assert any(a in json.dumps(report_of(tree)) for a in addresses)
+    rc, stream = just_status_on_a_terminal(tree, state, "--mask")
+    assert rc == 0, stream
+    terminal = VT(120, 20)
+    terminal.feed(stream.encode())
+    assert without_times("\n".join(terminal.transcript()) + "\n") == without_times(masked), stream
+    # --json is the report's file, addresses and all.
+    rc, printed, err = just_status(tree, state, "--mask", "--json")
+    assert rc == 0 and json.loads(printed) == report_of(tree), printed + err
+    assert any(a in printed for a in addresses), printed
 
 
 def test_on_a_terminal_each_section_shows_as_it_is_read(tree, tmp_path):
@@ -887,14 +1151,16 @@ def test_the_hosts_tailscale(tree, tmp_path, approved):
     after = json.loads(tailscale.read_text())
     assert after["mutations"] == 0
     calls = [c for c in after["calls"] if c[0] != "ip"]
-    assert sorted(calls[:5]) == [
+    # The host's five reads and this machine's tailnet DNS, in whatever order: the host's play and the cluster's run at
+    # once (strategy free), and the DNS is read in the cluster's batch.
+    assert sorted(calls) == [
         ["nft", "list", "table", "inet", "tailnet_guard"],
         ["sysctl", "-n", "net.ipv4.ip_forward"],
+        ["tailscale", "dns", "status", "--json"],
         ["tailscale", "get", "--json"],
         ["tailscale", "serve", "status", "--json"],
         ["tailscale", "status", "--json"],
     ]
-    assert calls[5:] == [["tailscale", "dns", "status", "--json"]]
 
     report = report_of(tree)
     tail = report["tailscale"]
@@ -962,6 +1228,9 @@ def test_tailscale_that_is_not_running_is_a_problem(tree, tmp_path):
     assert "TAILSCALE  subnet router on the Proxmox host · ● not running" in proc.stdout
 
 
+# What just status may call on the NAS, reads alone: roles/truenas's status entry point, truenas_info with its status
+# option, whose one pool.snapshot.query reads the enabled Time Machine shares' snapshots together, by name alone, and
+# whose last three reads, the disks' temperatures and the NFS clients, may each fail without the NAS going unread.
 NAS_READS = {
     "auth.login_with_api_key",
     "network.configuration.config",
@@ -978,9 +1247,14 @@ NAS_READS = {
     "service.query",
     "systemdataset.config",
     "sharing.nfs.query",
+    "sharing.smb.query",
     "pool.scrub.query",
     "alert.list",
     "pool.snapshottask.query",
+    "pool.snapshot.query",
+    "disk.temperatures",
+    "nfs.get_nfs3_clients",
+    "nfs.get_nfs4_clients",
 }
 
 
@@ -1003,6 +1277,51 @@ def seed_nas(path, **more):
     fake.s["snapshot_tasks"][-1]["state"] = {"state": "FINISHED", "datetime": fake_truenas.date(time.time() - 3700)}
     next(s for s in fake.s["services"] if s["service"] == "nfs").update(enable=True, state="RUNNING")
     fake.s.update(more)
+    fake.s["mutations"] = 0
+    fake.save()
+
+
+# The Macs local.yml lists for seed_macs' shares: laptop and desk back up, old is retired.
+MACS = [
+    {"name": "laptop", "quota_gib": 2048, "uid": 3101},
+    {"name": "desk", "quota_gib": 1024, "uid": 3102},
+    {"name": "old", "quota_gib": 2048, "uid": 3103, "retired": True},
+]
+
+
+def seed_macs(path, laptop_ago=7200, desk_ago=3600):
+    """MACS' Time Machine shares as roles/truenas leaves them, SMB running: laptop's backup 400 GiB of a 2 TiB quota,
+    its snapshots 20 GiB, its newest backup `laptop_ago` seconds old; desk's 100 GiB of 1 TiB, its snapshots 5 GiB, its
+    newest `desk_ago` seconds old; and old's share disabled, a retired Mac's."""
+    fake = fake_truenas.FakeTrueNAS(path)
+    fake.load()
+    fake.s["network"]["service_announcement"] = {"netbios": False, "mdns": True, "wsd": False}
+    fake.s["smb"]["aapl_extensions"] = True
+    fake.s["datasets"]["persistent/timemachine"] = fake.new_dataset("persistent/timemachine", {})
+    for mac in MACS:
+        dataset = f"persistent/timemachine/{mac['name']}"
+        fake.s["datasets"][dataset] = fake.new_dataset(dataset, {"quota": str(mac["quota_gib"] * GIB)})
+        fake.m_sharing_smb_create(
+            {
+                "name": f"tm-{mac['name']}",
+                "path": f"/mnt/{dataset}",
+                "purpose": "TIMEMACHINE_SHARE",
+                "enabled": not mac.get("retired", False),
+                "options": {"auto_snapshot": True},
+            }
+        )
+    fake.s["space"]["persistent/timemachine/laptop"] = [400 * GIB, 1648 * GIB]
+    fake.s["space"]["persistent/timemachine/desk"] = [100 * GIB, 924 * GIB]
+    fake.s["snapshot_space"] = {"persistent/timemachine/laptop": 20 * GIB, "persistent/timemachine/desk": 5 * GIB}
+    now = int(time.time())
+    fake.s["snapshots"] = [
+        f"persistent/timemachine/laptop@aapltm-{now - laptop_ago}",
+        f"persistent/timemachine/laptop@aapltm-{now - laptop_ago - 86400}",
+        "persistent/timemachine/laptop@weekly-2026-11-15_00-00",
+        f"persistent/timemachine/desk@aapltm-{now - desk_ago}",
+        f"persistent/timemachine/old@aapltm-{now - 90 * 86400}",
+    ]
+    next(s for s in fake.s["services"] if s["service"] == "cifs").update(enable=True, state="RUNNING")
     fake.s["mutations"] = 0
     fake.save()
 
@@ -1110,21 +1429,274 @@ def test_the_nas_is_read_through_its_api(nas_tree, nas, tmp_path):
         ("persistent", "raidz1", "ONLINE"),
         ("ephemeral", "stripe", "ONLINE"),
     ]
-    assert found["nfs"] == {"enabled": True, "state": "RUNNING", "shares": 1}
+    assert found["nfs"] == {"enabled": True, "state": "RUNNING", "shares": 1, "clients": []}
     assert [(a["level"], a["subject"], a["text"]) for a in report["attention"] if a["subject"] == "nas"] == [
         ("problem", "nas", "TrueNAS alerts (critical): Device: /dev/sda, Self-Test Log error count increased")
     ]
-    assert "NAS  truenas · TrueNAS 25.10.7 · up 34 d" in out, out
+    assert "NAS  truenas · TrueNAS 25.10.7 at 127.0.0.1 · up 34 d" in out, out
     assert " persistent  raidz1  online   ████░░░░░░░░  31%  2.2 / 7.1 TiB  scrub 3 d ago, 0 errors" in out, out
     assert " Snapshots  nextcloud hourly 1 h ago" in out and " NFS        running · 1 share" in out, out
     assert "TrueNAS https://192.0.2.10" in " ".join(out.split()), out
     # One login, nothing but reads, nothing changed, and no secret anywhere.
     calls = nas_calls(nas)
     assert calls.count("auth.login_with_api_key") == 1 and set(calls) <= NAS_READS, calls
+    # No Time Machine share, so no snapshot is read.
+    assert "pool.snapshot.query" not in calls, calls
     assert json.loads(nas["state"].read_text())["mutations"] == 0
     written = (nas_tree / ".cache" / "status" / "report.json").read_text()
     for secret in (fake_truenas.API_KEY, fake_truenas.SYSTEM_SERIAL, fake_truenas.PRIVATE_KEY):
         assert secret not in out + err + written, secret
+
+
+def test_the_macs_backups_are_read_from_the_nas(nas_tree, nas, tmp_path):
+    """Each Time Machine share's backup, judged by local.yml's Macs, from the share, its dataset and Samba's snapshots,
+    in the same login and with nothing but reads: its use against its quota, its snapshots' share, and its newest
+    backup, from one snapshot read for every enabled share, by name alone; a retired Mac's listed and never late. Then
+    laptop's newest backup eleven days old while desk's is an hour old: laptop's own is late, a thing to do."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    seed_nas(nas["state"])
+    seed_macs(nas["state"])
+    nas["calls"].write_text("")
+    rc, out, err = just_status(nas_tree, state, "nas", **nas_vars(nas, timemachine_backups=MACS))
+    report = report_of(nas_tree)
+    assert rc == report["exit"] == 0, out + err
+    found = report["nas"]
+    assert found["smb"] == {"enabled": True, "state": "RUNNING", "shares": 2}
+    keys = ("name", "configured", "retired", "enabled", "used", "quota", "snapshots_used")
+    assert [tuple(b[key] for key in keys) for b in found["time_machine"]] == [
+        ("tm-laptop", True, False, True, 400 * GIB, 2 * 2**40, 20 * GIB),
+        ("tm-desk", True, False, True, 100 * GIB, 2**40, 5 * GIB),
+        ("tm-old", True, True, False, 0, 2 * 2**40, 0),
+    ]
+    assert found["time_machine"][2]["last_backup"] == "", "a disabled share's time is not read"
+    assert " SMB        running · 2 shares" in out, out
+    macs = (
+        " Macs       tm-laptop backed up 2 h ago, 0.4 / 2.0 TiB, snapshots 20 GiB\n"
+        "            tm-desk backed up 1 h ago, 0.1 / 1.0 TiB, snapshots 5.0 GiB · tm-old retired\n"
+    )
+    assert macs in out, out
+    calls = nas_calls(nas)
+    assert calls.count("auth.login_with_api_key") == 1 and set(calls) <= NAS_READS, calls
+    assert calls.count("sharing.smb.query") == 1, calls
+    # The enabled shares' datasets together, by name alone: TrueNAS's fast path, which reads no property.
+    logged = [json.loads(line) for line in nas["calls"].read_text().splitlines()]
+    queries = [call["params"] for call in logged if call["method"] == "pool.snapshot.query"]
+    datasets = ["persistent/timemachine/laptop", "persistent/timemachine/desk"]
+    assert queries == [[[["dataset", "in", datasets]], {"select": ["name"]}]], queries
+    assert json.loads(nas["state"].read_text())["mutations"] == 0
+
+    seed_nas(nas["state"])
+    seed_macs(nas["state"], laptop_ago=11 * 86400 + 600, desk_ago=3600)
+    rc, out, err = just_status(nas_tree, state, "nas", **nas_vars(nas, timemachine_backups=MACS))
+    assert rc == 0, out + err
+    attention = report_of(nas_tree)["attention"]
+    todo = [(a["level"], a["subject"], a["text"]) for a in attention]
+    assert todo == [("todo", "tm-laptop", "its newest Time Machine backup completed 11 d ago")], todo
+    assert attention[0]["command"].startswith("on the Mac, Time Machine's settings"), attention
+    assert " Macs       tm-laptop backed up 11 d ago, 0.4 / 2.0 TiB, snapshots 20 GiB" in out, out
+
+
+# The NAS section's header in local.yml.example's setup, whether or not it also says the address the NAS answered at.
+NAS_HEADER = r"NAS  truenas · TrueNAS 25\.10\.7( at [^·]+)? · up 34 d"
+# What an NFSv4 client says of itself, and the files it holds open, which the report never carries.
+NFS_CLIENT_NAME = "Linux NFSv4.2 FAKE-CLIENT-NAME-MUST-NOT-LEAK"
+NFS_OPEN_FILE = "/FAKE-OPEN-FILE-MUST-NOT-LEAK"
+
+
+def seed_details(path, refused=()):
+    """The NAS seed_nas leaves, with something for each of the NAS section's details to say: two ports, both up, at
+    2.5 Gb/s and 1 Gb/s; nvme3n1 hot, 74 °C of its critical 80.85, and nvme2n1 with three checksum errors, which make
+    persistent not healthy; ssh running though the configuration keeps it stopped; the shares mounted by the Proxmox
+    host over NFSv3 and by two NFSv4 clients behind its address, by the worker and an address of no machine of this
+    setup over NFSv4, and an NFSv4 client that stopped renewing its lease, which no longer counts; the NAS's clock 95 s
+    behind; and the methods `refused` refused."""
+    fake = fake_truenas.FakeTrueNAS(path)
+    fake.load()
+    # The fake's own port, by whatever name it has, and a second one. The fake saves its state with its keys sorted, so
+    # interface.query gives the ports by name: the second's, eth1, sorts after any en* name the fake's own may have.
+    fake.s["interfaces"][next(iter(fake.s["interfaces"]))].update(media="2500Mb/s Twisted Pair")
+    second = {"ipv4_dhcp": False, "ipv6_auto": False, "aliases": [], "live": [], "media": "1000Mb/s Twisted Pair"}
+    fake.s["interfaces"]["eth1"] = second
+    fake.s["temperatures"]["nvme3n1"] = [74.0, 80.85]
+    persistent = next(p for p in fake.s["pools"] if p["name"] == "persistent")
+    persistent["topology"]["data"][0]["children"][1]["stats"]["checksum_errors"] = 3
+    next(s for s in fake.s["services"] if s["service"] == "ssh").update(state="RUNNING")
+    fake.s["nfs3_clients"] = [{"ip": "192.0.2.20", "export": "/mnt/persistent/nextcloud"}]
+    states = [{"1": {"type": "open", "access": "rw", "filename": NFS_OPEN_FILE}}]
+    # The kernel keeps a client that stopped renewing its lease as courtesy for up to a day.
+    clients = [
+        ("192.0.2.31:812", "confirmed"),
+        ("198.51.100.7:740", "confirmed"),
+        ("192.0.2.20:801", "confirmed"),
+        ("192.0.2.20:802", "confirmed"),
+        ("198.51.100.8:741", "courtesy"),
+    ]
+    fake.s["nfs4_clients"] = [
+        {"id": str(n), "info": {"address": address, "status": status, "name": NFS_CLIENT_NAME}, "states": states}
+        for n, (address, status) in enumerate(clients)
+    ]
+    fake.s["clock_offset"] = -95
+    fake.s["refused"] = list(refused)
+    fake.s["mutations"] = 0
+    fake.save()
+
+
+def test_the_nas_sections_details(nas_tree, nas, tmp_path):
+    """The ports, each disk's temperature and errors by pool, who has the NFS shares mounted, a service running though
+    configured stopped, and the NAS's clock, from three more reads in the same login, nothing but reads, and no disk's
+    serial or model, no client's own name and no file it holds open in the report. Then the disks' temperatures and
+    the NFSv4 clients refused: the NAS is read all the same, without them, saying so."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    seed_nas(nas["state"])
+    seed_details(nas["state"])
+    nas["calls"].write_text("")
+    rc, out, err = just_status(nas_tree, state, "nas", **nas_vars(nas))
+    report = report_of(nas_tree)
+    assert rc == report["exit"] == 1, out + err
+    assert "nas ok " in reading(out), out
+    lines = out.splitlines()
+    assert " Network    2.5 Gb/s · 1 Gb/s · 2 of 2 ports up" in lines, out
+    disks = lines.index(" Disks °C   persistent  nvme1n1 36 · nvme2n1 37 (3 checksum) · nvme3n1 74")
+    assert lines[disks + 1 : disks + 3] == ["            ephemeral   sda 30", "            boot-pool   nvme0n1 45"], out
+    # The line wraps between its clients.
+    nfs = lines.index(" NFS        running · 1 share · mounted by the Proxmox host (2 clients) · homeserver-worker-1")
+    assert lines[nfs + 1] == "            198.51.100.7", out
+    assert " Services   ssh running, configured stopped" in lines, out
+    # The section's lines after its header, which may also say the address the NAS answered at.
+    header = next(i for i, line in enumerate(lines) if re.fullmatch(NAS_HEADER, line))
+    keys = [line[:12].strip() for line in lines[header + 1 :]]
+    assert [k for k in keys[: keys.index("Alerts") + 1] if k] == [
+        "Network",
+        "Pools",
+        "Disks °C",
+        "Snapshots",
+        "NFS",
+        "Services",
+        "Alerts",
+    ], out
+    attention = [(a["level"], a["subject"], a["text"]) for a in report["attention"]]
+    # A disk's errors are its pool's problem: ZFS calls the pool not healthy.
+    unhealthy = f"the pool is ONLINE, with errors on nvme2n1 (3 checksum): {fake_truenas.FAILING_DEV}"
+    assert attention == [
+        ("problem", "persistent", unhealthy),
+        ("problem", "nfs", "an NFS share is mounted from 198.51.100.7, which is no machine of this setup"),
+        ("problem", "nas", "ssh is running, though the configuration keeps it stopped"),
+        ("todo", "nas", "the NAS's clock is 95 s behind this machine's"),
+        ("todo", "nvme3n1", "the disk is at 74 °C, within 10 °C of its critical temperature of 81 °C"),
+    ], report["attention"]
+    # Each with what deals with it, from status_commands.
+    commands = [a["command"] for a in report["attention"]]
+    assert commands[0].startswith("each disk's SMART results on the NAS's Storage page"), commands
+    assert commands[1].startswith("who holds the address"), commands
+    assert commands[2] == "just deploy truenas", commands
+    assert commands[3].startswith("the NAS's NTP servers"), commands
+    assert commands[4].startswith("the NAS's fans and airflow"), commands
+    found = report["nas"]
+    assert found["link"] == {"ports": 2, "up": 2, "speeds": ["2.5 Gb/s", "1 Gb/s"], "mtu": 1500}
+    assert [(d["name"], d["pool"], d["temp"], d["critical"], d["checksum_errors"]) for d in found["disks"]] == [
+        ("nvme1n1", "persistent", 36, 81, 0),
+        ("nvme2n1", "persistent", 37, 81, 3),
+        ("nvme3n1", "persistent", 74, 81, 0),
+        ("sda", "ephemeral", 30, 71, 0),
+        ("nvme0n1", "boot-pool", 45, 81, 0),
+    ]
+    assert found["nfs"]["clients"] == [
+        {"address": "192.0.2.20", "name": "the Proxmox host", "clients": 2},
+        {"address": "192.0.2.31", "name": "homeserver-worker-1", "clients": 1},
+        {"address": "198.51.100.7", "name": "", "clients": 1},
+    ]
+    assert (found["unexpected_clients"], found["unexpected_services"]) == (["198.51.100.7"], ["ssh"])
+    assert found["clock_drift"] == -95 and found["errors"] == []
+    # One login and nothing but reads, the three new ones once each: every disk's temperature with its threshold.
+    logged = [json.loads(line) for line in nas["calls"].read_text().splitlines()]
+    calls = [call["method"] for call in logged]
+    assert calls.count("auth.login_with_api_key") == 1 and set(calls) <= NAS_READS, calls
+    new = [(call["method"], call["params"]) for call in logged if call["method"].startswith(("disk.t", "nfs."))]
+    # Of each NFSv4 client, its address and status alone: its own name and the files it holds open stay on the NAS.
+    select = [[], {"select": ["info.address", "info.status"]}]
+    assert new == [("disk.temperatures", [[], True]), ("nfs.get_nfs3_clients", []), ("nfs.get_nfs4_clients", select)]
+    assert json.loads(nas["state"].read_text())["mutations"] == 0
+    written = (nas_tree / ".cache" / "status" / "report.json").read_text()
+    for secret in (fake_truenas.DISK_SERIAL, fake_truenas.DISK_MODEL, NFS_CLIENT_NAME, NFS_OPEN_FILE):
+        assert secret not in out + err + written, secret
+
+    seed_nas(nas["state"])
+    seed_details(nas["state"], refused=["disk.temperatures", "nfs.get_nfs4_clients"])
+    rc, out, err = just_status(nas_tree, state, "nas", **nas_vars(nas))
+    report = report_of(nas_tree)
+    assert rc == report["exit"] == 1, out + err
+    assert "nas ok " in reading(out), out
+    lines = out.splitlines()
+    assert " Disks      persistent  nvme1n1 · nvme2n1 (3 checksum) · nvme3n1" in lines, out
+    assert " NFS        running · 1 share" in lines, out
+    assert " not read: the disks' temperatures: disk.temperatures: [EPERM] Not authorized" in lines, out
+    assert " not read: the NFS clients: nfs.get_nfs4_clients: [EPERM] Not authorized" in lines, out
+    assert [(a["level"], a["subject"]) for a in report["attention"]] == [
+        ("problem", "persistent"),
+        ("problem", "nas"),
+        ("todo", "nas"),
+    ], report["attention"]
+    assert report["nas"]["nfs"]["clients"] is None and report["nas"]["temperatures_read"] is False
+
+
+# How TrueNAS 25.10.7 words a pool's state when a disk is gone (py-libzfs's MISSING_DEV_R).
+MISSING = (
+    "One or more devices could not be opened. Sufficient replicas exist for the pool to continue functioning in a "
+    "degraded state."
+)
+
+
+def test_no_disks_serial_or_model_reaches_the_report(nas_tree, nas, tmp_path):
+    """TrueNAS's alerts that quote a disk's serial or model, as its alert sources word them: nvme1n1 at its critical
+    temperature, sda's SMART self-test failed, and persistent degraded by nvme3n1, gone, which TrueNAS names by the
+    model and serial it last knew there. Each comes out by the disk's device name, in the text, the report and --json
+    alike."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    seed_nas(nas["state"])
+    fake = fake_truenas.FakeTrueNAS(nas["state"])
+    fake.load()
+    persistent = next(p for p in fake.s["pools"] if p["name"] == "persistent")
+    gone = persistent["topology"]["data"][0]["children"][2]
+    gone.update(disk=None, device=None, status="UNAVAIL", unavail_disk=fake.disk_entry("nvme3n1"))
+    persistent.update(status="DEGRADED", healthy=False, status_code="MISSING_DEV_R", status_detail=MISSING)
+    fake.s["temperatures"]["nvme1n1"] = [83.0, 80.85]
+    hot = {"device": "/dev/nvme1n1", "serial": fake_truenas.disk_serial("nvme1n1"), "crit_threshold": 80.85, "temp": 83}
+    devices = "<br>The following devices are not healthy:<ul><li>Disk {} {} is UNAVAIL</li></ul>"
+    devices = devices.format(fake_truenas.DISK_MODEL, fake_truenas.disk_serial("nvme3n1"))
+    degraded = {"volume": "persistent", "state": "DEGRADED", "status": MISSING, "devices": devices}
+    fake.s["alerts"] = [
+        fake_truenas.alert("DiskTemperatureTooHot", "CRITICAL", fake_truenas.DISK_TEMPERATURE_TOO_HOT, hot),
+        fake_truenas.alert(
+            "SMARTFailedSelfTest",
+            "WARNING",
+            fake_truenas.SMART_FAILED_SELFTEST,
+            {"name": "sda", "serial": fake_truenas.disk_serial("sda")},
+        ),
+        fake_truenas.alert("VolumeStatus", "CRITICAL", fake_truenas.VOLUME_STATUS, degraded),
+    ]
+    fake.s["mutations"] = 0
+    fake.save()
+    rc, out, err = just_status(nas_tree, state, "nas", **nas_vars(nas))
+    report = report_of(nas_tree)
+    assert rc == report["exit"] == 1, out + err
+    assert [a["text"] for a in report["nas"]["alerts"]] == [
+        "Disk /dev/nvme1n1 critical temperature threshold is 80 degrees celsius and the current temp is 83 degrees"
+        " celsius",
+        "sda failed a SMART selftest.",
+        f"Pool persistent state is DEGRADED: {MISSING} The following devices are not healthy:Disk nvme3n1 is UNAVAIL",
+    ]
+    assert "TrueNAS alerts (warning): sda failed a SMART selftest." in [a["text"] for a in report["attention"]]
+    # The gone disk by the name TrueNAS last knew there, with no reading.
+    assert " Disks °C   persistent  nvme1n1 83 · nvme2n1 37 · nvme3n1 (gone, unavail)" in out.splitlines(), out
+    rc, printed, json_err = just_status(nas_tree, state, "nas", "--json", **nas_vars(nas))
+    assert rc == 1 and json.loads(printed)["nas"]["alerts"] == report["nas"]["alerts"], printed + json_err
+    written = (nas_tree / ".cache" / "status" / "report.json").read_text()
+    for secret in (fake_truenas.DISK_SERIAL, fake_truenas.DISK_MODEL):
+        assert secret not in out + err + written + printed + json_err, secret
+    assert json.loads(nas["state"].read_text())["mutations"] == 0
 
 
 def test_a_nas_on_another_release_is_a_thing_to_do(nas_tree, nas, tmp_path):
@@ -1138,6 +1710,23 @@ def test_a_nas_on_another_release_is_a_thing_to_do(nas_tree, nas, tmp_path):
         ("todo", "the NAS runs TrueNAS 26.04.1, and its configuration is written for 25.10")
     ]
     assert todo[0]["command"].startswith("just deploy truenas refuses it until truenas_supported_version")
+
+
+def test_a_nas_at_its_bootstrap_address(nas_tree, nas, tmp_path):
+    """The NAS's static address, the first it is tried at, does not answer, and its bootstrap one does: the header
+    says the NAS answered at its bootstrap address, and its having lost its static one is a thing to do, with just
+    deploy truenas. 127.0.0.2 is loopback too, where nothing listens on the fake's port."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    seed_nas(nas["state"])
+    hosts = ["127.0.0.2", "127.0.0.1"]
+    rc, out, err = just_status(nas_tree, state, "nas", **nas_vars(nas, truenas_api_hosts=hosts))
+    report = report_of(nas_tree)
+    assert rc == report["exit"] == 0, out + err
+    assert "NAS  truenas · TrueNAS 25.10.7 at 127.0.0.1 (bootstrap) · up 34 d" in out.splitlines(), out
+    assert report["nas"]["address"] == "127.0.0.1" and report["nas"]["bootstrap"] is True
+    todo = [(a["level"], a["text"], a["command"]) for a in report["attention"] if a["subject"] == "nas"]
+    assert todo == [("todo", "the NAS answered on its bootstrap address, not its static one", "just deploy truenas")]
 
 
 @pytest.mark.parametrize(
@@ -1229,7 +1818,7 @@ def seed_backups(path, runs, vmids=(300, 301, 310), job=True, next_in=4 * 3600 -
         state["next_runs"] = {"vm-nightly": next_run}
     for days, failures in runs:
         fake_pve.backup_run(state, next_run - (days + 1) * DAY + 1, list(vmids), "homeserver-backup", failures)
-    path.write_text(json.dumps(state))
+    fake_pve.store(path, state)
     return state
 
 
@@ -1244,7 +1833,7 @@ def test_the_backups_of_this_setups_vms(nas_tree, nas, tmp_path):
     seed_backups(state, [(1, {}), (0, {301: FREEZE})], vmids=(300, 301))
     pve = json.loads(state.read_text())
     pve["backup_jobs"]["vm-nightly"]["vmid"] = "300,301,310"
-    state.write_text(json.dumps(pve))
+    fake_pve.store(state, pve)
     snapshots = talos_dir(tmp_path) / "etcd"
     snapshots.mkdir()
     taken = datetime.now(UTC) - timedelta(days=3, hours=1)

@@ -52,9 +52,10 @@ from a plain variable.
 - Credentials go only to the machine they belong to, and not every role checks that itself. The NAS's and the
   router's clients compare the certificate pin before they send a key; `roles/talos` refuses a talosconfig or
   kubeconfig whose endpoint or CA is another cluster's; `roles/app_scale` compares the kubeconfig's server alone;
-  `roles/status` leaves another server's kubeconfig unread. `roles/flux_bootstrap` has no check of its own: it is
-  safe only after `roles/talos` in the same play, as in `kubernetes.yml`, and run anywhere else it would apply the
-  age key to whatever cluster its kubeconfig names. A role that reaches a cluster or a machine checks its
+  `roles/status` leaves another server's kubeconfig unread, and sends the Proxmox API token only to the host's own
+  loopback, on a connection serving the node's own certificate file. `roles/flux_bootstrap` has no check of its own:
+  it is safe only after `roles/talos` in the same play, as in `kubernetes.yml`, and run anywhere else it would apply
+  the age key to whatever cluster its kubeconfig names. A role that reaches a cluster or a machine checks its
   credentials first, so a test host's run never touches the home machines.
 
 ## Role references
