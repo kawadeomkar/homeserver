@@ -253,7 +253,9 @@ def _uid(text: str) -> int:
 
 def _smb_password(text: str) -> str:
     if len(text) < 20:
-        raise ValueError("at least 20 characters, long and random (openssl rand -base64 30)")
+        raise ValueError(
+            "at least 20 characters, long and random (openssl rand -base64 30 | pbcopy, which prints nothing)"
+        )
     return text
 
 
@@ -300,6 +302,15 @@ def _choice(*options):
         return value
 
     return parse
+
+
+def _nas_login(text: str) -> str:
+    """A TrueNAS local username, as its validate_local_username takes it: letters, digits, _, - and ., starting with a
+    letter or _, 32 at most."""
+    text = text.strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,31}", text):
+        raise ValueError("a TrueNAS login: letters, digits, _, - and ., starting with a letter or _, 32 at most")
+    return text
 
 
 def _username(text: str) -> str:
@@ -369,7 +380,7 @@ PARSERS = {
     "pool_name": _pool_name,
     "fingerprint": _fingerprint,
     "username": _username,
-    "usernames": _list_of(_username),
+    "usernames": _list_of(_nas_login),
     "text": _text,
     "path": _path,
     "usb": _usb,
@@ -542,7 +553,8 @@ SETTINGS: tuple[Setting, ...] = (
         "macs",
         "The Macs that back up to the NAS: each one's name, its dataset's quota in GiB and its login's uid",
         need="required",
-        help="Each gets a dataset, an SMB share and a login, all named tm-<name> (scripts/runbooks/timemachine.md). "
+        help="Each gets a dataset named <name>, and an SMB share and a login named tm-<name> "
+        "(scripts/runbooks/timemachine.md). "
         "The quota counts the snapshots: give the Mac itself a limit of about half of it. The uid is the login's, "
         "which a rebuilt NAS gives it again. A Mac retired by hand (retired: true) keeps its entry.",
     ),

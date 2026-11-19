@@ -779,6 +779,7 @@ def test_truenas_role_backs_up_a_mac(nas):
         dataset = "persistent/timemachine/laptop"
         assert s["datasets"][dataset]["quota"]["rawvalue"] == str(2048 * 2**30)
         assert s["datasets"][dataset]["refquota"]["rawvalue"] == str(1536 * 2**30)
+        assert s["datasets"]["persistent/timemachine"]["quota"]["rawvalue"] == str(2048 * 2**30)
         assert [t["lifetime_value"] for t in s["snapshot_tasks"] if t["dataset"] == dataset] == [8]
         assert (users["tm-laptop"]["uid"], users["tm-laptop"]["smb"]) == (3101, True)
         assert users["tm-laptop"]["password"] == fake_truenas.password_hash(TM_PASSWORD)

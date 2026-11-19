@@ -23,7 +23,9 @@ timemachine_dataset_root: "{{ nas_pools.persistent }}/timemachine"
 truenas_datasets_timemachine: >-
   {%- set out = [] -%}
   {%- if timemachine_present -%}
-  {%-   set _ = out.append({'name': timemachine_dataset_root, 'share_type': 'SMB'}) -%}
+  {%-   set total = timemachine_macs | map(attribute='quota_gib') | map('int') | sum -%}
+  {%-   set _ = out.append({'name': timemachine_dataset_root, 'share_type': 'SMB',
+                            'properties': {'quota': total * 1073741824}}) -%}
   {%-   for mac in timemachine_macs -%}
   {%-     set quota = (mac.quota_gib | int) * 1073741824 -%}
   {%-     set _ = out.append({'name': timemachine_dataset_root ~ '/' ~ mac.name, 'share_type': 'SMB',
@@ -57,7 +59,8 @@ truenas_smb_settings: >-
      if timemachine_present else {} }}
 
 # A login per Mac, for SMB alone: no shell, no home. Its uid is pinned, so a reinstalled NAS that imports the pool gives
-# the files back to the same number. A retired Mac's login is closed: out of SMB, locked, without a password.
+# the files back to the same number. A retired Mac's login is closed: out of SMB, locked, its password disabled (TrueNAS
+# keeps the hash, unused).
 truenas_users: >-
   {%- set out = [] -%}
   {%- for mac in timemachine_macs -%}
@@ -95,9 +98,11 @@ truenas_permissions: >-
 # Machine share. No dataset made by Samba at the first connection (auto_dataset_creation), and no size the share
 # reports (timemachine_quota): the refquota and the Mac's own limit set it. The vuid names the volume in the share's
 # Bonjour record, and TrueNAS would make a random one: it is derived from the Mac's name instead (a UUID5), so a share
-# a rebuilt NAS makes again is the volume the Mac knows. SMB from the Proxmox host is refused (hostsdeny): every
-# tailnet client reaches the LAN as that address, and only the tailnet guard would stop it otherwise; when the router
-# takes over Tailscale, its address goes here instead. A retired Mac's share is disabled.
+# a rebuilt NAS makes again is the volume the Mac knows. The share refuses the Proxmox host's address (hostsdeny),
+# which every tailnet client reaches the LAN as: Samba still answers its login, but connects it to no share, and the
+# tailnet guard keeps tcp/445 from it besides. hostsallow is pinned empty, since an allow list set by hand would
+# override the deny list. When the router takes over Tailscale, this changes (TODO.md). A retired Mac's share is
+# disabled.
 truenas_smb_shares: >-
   {%- set out = [] -%}
   {%- for mac in timemachine_macs -%}
@@ -106,7 +111,7 @@ truenas_smb_shares: >-
                             'purpose': 'TIMEMACHINE_SHARE', 'comment': 'Time Machine, ' ~ mac.name,
                             'enabled': not (mac.retired | default(false)),
                             'options': {'auto_snapshot': true, 'auto_dataset_creation': false,
-                                        'timemachine_quota': 0, 'hostsdeny': [proxmox_address],
+                                        'timemachine_quota': 0, 'hostsallow': [], 'hostsdeny': [proxmox_address],
                                         'vuid': ('homeserver-timemachine-' ~ mac.name) | to_uuid}}) -%}
   {%- endfor -%}
   {{ out }}

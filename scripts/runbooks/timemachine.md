@@ -74,7 +74,12 @@ SMB, the login, its directory's owner, the share, and the SMB service enabled an
 
 - On the Mac, in a Terminal with Full Disk Access: `tmutil destinationinfo` names the destination, and `sudo tmutil
   listbackups` lists the backups; bring one file back through Time Machine's own window. `tmutil destinationinfo` does
-  not say whether the backup is encrypted: while a backup runs, `diskutil apfs list` shows its volume as FileVault: Yes.
+  not say whether the backup is encrypted: while a backup runs, `diskutil apfs list` shows the disk image's volume,
+  "Backups of <the Mac's name>", as FileVault: Yes (the Mac's own volumes say so too, so read that one's line).
+- If the Mac runs Tailscale and accepts the tailnet's subnet routes, check at home that it reaches the NAS directly:
+  `route -n get <the NAS's address>` names an `en…` interface, not `utun…`. Through the tunnel the share refuses it
+  (it comes from the Proxmox host's address then) and the tailnet guard drops SMB besides, so backups fail at home
+  while Tailscale is up; if so, turn Use Tailscale Subnets off on the Mac at home.
 - On the NAS, read-only: the dataset's snapshots (Datasets, the Mac's dataset, Snapshots) show an `aapltm-<epoch>`
   about a minute after a completed backup, though none within 15 minutes of the one before, and a `weekly-` one each
   Sunday. Samba deletes its `aapltm-` snapshots older than a week when the Mac next opens the backup, as long as more
@@ -87,7 +92,8 @@ SMB, the login, its directory's owner, the share, and the SMB service enabled an
   inside a disk image that still shows free space, which can damage it. If the dataset nears its quota, raise
   `quota_gib` and `just deploy truenas`, or keep the weekly snapshots fewer weeks (`lifetime_value` in
   `group_vars/nas/timemachine.yml`, a change to the repo). Lowering the Mac's limit frees nothing the snapshots hold.
-  TrueNAS raises no quota alert for these datasets, since their refquota is smaller, so this check is yours.
+  TrueNAS raises no quota alert for a Mac's own dataset, since its refquota is smaller, but does for their parent,
+  whose quota is every Mac's together, at 80% and 95%: with one Mac that is the Mac's own figure.
 
 ## Rotating the SMB password
 
@@ -111,35 +117,42 @@ share's volume id is derived from the Mac's name, so a NAS rebuilt from scratch 
 
 ## A lost or stolen Mac
 
-Its keychain holds the SMB password. Retire it (below), or, to go on backing up from a replacement under the same
-name, put a new password in the vault and reset the login (rotating, above). Never lock the login in TrueNAS's web UI
-instead: an active Mac's login is wanted unlocked, so the next `just deploy truenas` would unlock it.
+Its keychain holds the SMB password, so that password must never take effect again. Retire it (below) and replace
+its password in the vault at once, or, to go on backing up from a replacement under the same name, put a new password
+in the vault and reset the login (rotating, above). Never lock the login in TrueNAS's web UI instead: an active Mac's
+login is wanted unlocked, so the next `just deploy truenas` would unlock it. Un-retiring a Mac turns its password back
+on and sends the vault's: put a new one there first, whenever the old one may be known.
 
 ## Rolling back after a damaged disk image
 
 Time Machine verifies a network backup now and then, and when it finds the disk image damaged it says it "must create a
 new backup", which would throw the history away. Answer **Back Up Later**: the snapshots hold earlier states of the
 image. A rollback to anything but the newest snapshot destroys every snapshot after it, so prove a snapshot good before
-rolling back to it. The clone, its share and the rollback are changes made by hand in TrueNAS's web UI, which the rule
-allows for what the role never does (CLAUDE.md): it never rolls back or deletes.
+rolling back to it. What the role never does, deleting, rolling back and a snapshot's check clone with its temporary
+share, is the owner's alone, made in TrueNAS's web UI only where a runbook says how; never an agent's.
 
-1. On the Mac, turn automatic backups off, wait for any backup to stop, and eject the share in Finder.
+1. On the Mac, turn automatic backups off and wait for any backup to stop. In TrueNAS's web UI, turn the Mac's share
+   off (Shares, SMB) until step 5, so that nothing writes to the image while it is checked and rolled back.
 2. Pick a candidate (Datasets, the Mac's dataset, Snapshots): the newest `aapltm-` snapshot, taken with the image at
    rest; after that, older ones in turn, `aapltm-` or weekly. Damage is often older than its discovery.
 3. Check it without touching the backup: clone it (the snapshot's Clone to New Dataset) to
-   `<persistent>/timemachine/<name>-check`, add an SMB share of that path, `tm-<name>-check`, with the default purpose,
-   and on the Mac connect to it (Finder, Go, Connect to Server, `smb://<nas>/tm-<name>-check`) as `tm-<name>`. Open the
+   `<persistent>/timemachine/<name>_check` (an underscore, which no Mac's name can hold), add an SMB share of that path,
+   `tm-<name>_check`, with the default purpose and the Proxmox host's address in its Hosts Deny, and on the Mac
+   connect to it (Finder, Go, Connect to Server, `smb://<nas>/tm-<name>_check`) as `tm-<name>`. Open the
    `.sparsebundle` with the backup's encryption password, run First Aid on its volume in Disk Utility, and eject it.
-4. Delete the check share, then the clone. If First Aid found the image sound, roll the Mac's dataset back to that
-   snapshot: the newest needs nothing more, an older one needs the option that destroys the newer snapshots. If not,
-   go back to step 2 with the next older one.
-5. Turn automatic backups on again, and back up.
+   The image is sound when First Aid reports nothing it had to repair; it repairs the clone, never the backup.
+4. Delete the check share, then the clone. If the image was sound, roll the Mac's dataset back to that snapshot: the
+   newest needs nothing more; an older one needs the safety level Newer Clone, which lets the rollback destroy the
+   newer snapshots (the clone is gone by then). If not, go back to step 2 with the next older one.
+5. Turn the Mac's share back on (or `just deploy truenas`, which does), turn automatic backups on again, and back up.
 
 ## Restoring from a snapshot without a rollback
 
 Files from a state Time Machine has since thinned come back the same way, with nothing rolled back: clone the snapshot
-and share the clone as in step 3 above, open its `.sparsebundle`, and browse the backups' folders in Finder, or point
-Migration Assistant at it for a whole Mac. Delete the share, then the clone, afterwards.
+and share the clone as in step 3 above, `<name>_check` and its Hosts Deny included, open its `.sparsebundle`, and browse
+the backups' folders in Finder, or point Migration Assistant at it for a whole Mac. Delete the share, then the clone,
+afterwards. What the role never does, deleting, rolling back and a snapshot's check clone with its temporary share, is
+the owner's alone, made in TrueNAS's web UI only where a runbook says how; never an agent's.
 
 ## When automatic backups fail with "error 80"
 
@@ -163,13 +176,13 @@ one shows, report it to Apple, set Time Machine to back up daily, and lean on a 
    `just deploy truenas`. Its login is taken out of SMB, locked and its password disabled (TrueNAS keeps the hash,
    unused), its share and weekly task are disabled, and its dataset and snapshots stay as they are. With no Mac left
    backing up, the SMB stage stops SMB, and no login check stands in the way of that. Its password can then leave the
-   vault.
+   vault, and must when the Mac was lost or stolen: un-retiring it turns its password back on and sends the vault's.
 2. The entry can stay, or go: once retired, its login is no SMB login, so deleting it is refused by nothing.
-3. **Deleting the backup itself** is by hand, as `teardown.md` does for the cluster's datasets, since the role never
-   deletes and the rule allows by hand what it never does (CLAUDE.md): once you no longer want it, remove in
-   TrueNAS's web UI the share (Shares, SMB), the snapshot task (Data Protection), the login (Credentials, Users) and
-   the dataset with its snapshots (Datasets), in that order. Remove the entry from `local.yml` first, or the next run
-   makes them again.
+3. **Deleting the backup itself** is by hand, as `teardown.md` does for the cluster's datasets. What the role never
+   does, deleting, rolling back and a snapshot's check clone with its temporary share, is the owner's alone, made in
+   TrueNAS's web UI only where a runbook says how; never an agent's. Once you no longer want it, remove in TrueNAS's web
+   UI the share (Shares, SMB), the snapshot task (Data Protection), the login (Credentials, Users) and the dataset with
+   its snapshots (Datasets), in that order. Remove the entry from `local.yml` first, or the next run makes them again.
 
 ## When the deploy refuses an SMB login
 
