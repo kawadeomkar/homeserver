@@ -68,11 +68,13 @@ status_tailscale_state: {}
 status_parallel: 8
 status_timeout: 30
 # The report entry point: the hosts whose findings it puts together, the file it writes the report to (empty writes
-# none), whether the text it shows is in colour, and whether it shows none.
+# none), whether the text it shows is in colour, whether it shows none, and whether every IPv4 and IPv6 address in the
+# text reads <addr>, the file keeping them.
 status_hosts: []
 status_report_file: ""
 status_color: false
 status_quiet: false
+status_mask: false
 # When the report was read, as its first line says it and in seconds since the epoch, which the ages it shows count
 # from; empty and 0 take the time the report is put together.
 status_read_at: ""

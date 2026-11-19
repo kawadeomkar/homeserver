@@ -774,6 +774,32 @@ def test_the_apps_are_asked_from_here(tree, tmp_path):
 SPINNER = re.compile(r"reading  .*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] \d+\.\d s")
 
 
+def test_mask_shows_no_address_and_the_report_keeps_them(tree, tmp_path):
+    """just status --mask, for a report pasted where others read it: every address in the text reads <addr>, piped and
+    on a terminal alike, with the same lines otherwise, while the report's file, and so --json, keeps them."""
+    state = tmp_path / "pve.json"
+    seed(state)
+    rc, plain, err = just_status(tree, state)
+    assert rc == 0, plain + err
+    addresses = set(re.findall(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?!\w)", plain))
+    addresses |= {a for a in fake_tailscale.NODE_ADDRESSES + fake_tailscale.PEER_ADDRESSES if a in plain}
+    assert addresses, plain
+    rc, masked, err = just_status(tree, state, "--mask")
+    assert rc == 0 and "<addr>" in masked, masked + err
+    assert not [a for a in addresses if a in masked], masked
+    assert len(masked.splitlines()) == len(plain.splitlines()), masked
+    assert any(a in json.dumps(report_of(tree)) for a in addresses)
+    rc, stream = just_status_on_a_terminal(tree, state, "--mask")
+    assert rc == 0, stream
+    terminal = VT(120, 20)
+    terminal.feed(stream.encode())
+    assert without_times("\n".join(terminal.transcript()) + "\n") == without_times(masked), stream
+    # --json is the report's file, addresses and all.
+    rc, printed, err = just_status(tree, state, "--mask", "--json")
+    assert rc == 0 and json.loads(printed) == report_of(tree), printed + err
+    assert any(a in printed for a in addresses), printed
+
+
 def test_on_a_terminal_each_section_shows_as_it_is_read(tree, tmp_path):
     """On a terminal, the report's head comes at once, then each section in its order as the hosts it needs are read,
     the sections still to come and the line on what is being read redrawn in place below them, a spinner beside what

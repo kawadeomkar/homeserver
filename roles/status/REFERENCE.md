@@ -390,6 +390,16 @@ Description: Read the homeserver's machines without changing them, and report wh
   
   
 
+  - **status_mask**
+    - **Required**: false
+    - **Type**: bool
+    - **Default**: False
+  
+    - **Description**: Whether every IPv4 and IPv6 address in the report entry point's text reads <addr>, for a report pasted where others read it; the report's file keeps them.
+  
+  
+  
+
   - **status_read_at**
     - **Required**: false
     - **Type**: str
@@ -525,6 +535,16 @@ Description: Read the homeserver's machines without changing them, and report wh
   
   
 
+  - **status_mask**
+    - **Required**: false
+    - **Type**: bool
+    - **Default**: False
+  
+    - **Description**: Whether every IPv4 and IPv6 address in the text reads <addr>, for a report pasted where others read it; the report's file keeps them.
+  
+  
+  
+
   - **status_read_at**
     - **Required**: false
     - **Type**: str
@@ -612,16 +632,17 @@ Description: Read the homeserver's machines without changing them, and report wh
 | [status_tailscale_state](defaults/main.yml#L66)   | dict | `{}` |    
 | [status_parallel](defaults/main.yml#L68)   | int | `8` |    
 | [status_timeout](defaults/main.yml#L69)   | int | `30` |    
-| [status_hosts](defaults/main.yml#L72)   | list | `[]` |    
-| [status_report_file](defaults/main.yml#L73)   | str |  |    
-| [status_color](defaults/main.yml#L74)   | bool | `False` |    
-| [status_quiet](defaults/main.yml#L75)   | bool | `False` |    
-| [status_read_at](defaults/main.yml#L78)   | str |  |    
-| [status_now](defaults/main.yml#L79)   | int | `0` |    
-| [status_probe_apps](defaults/main.yml#L82)   | bool | `True` |    
-| [status_probe_timeout](defaults/main.yml#L83)   | int | `5` |    
-| [status_admin](defaults/main.yml#L86)   | list | `[]` |    
-| [status_commands](defaults/main.yml#L94)   | dict | `{}` |    
+| [status_hosts](defaults/main.yml#L73)   | list | `[]` |    
+| [status_report_file](defaults/main.yml#L74)   | str |  |    
+| [status_color](defaults/main.yml#L75)   | bool | `False` |    
+| [status_quiet](defaults/main.yml#L76)   | bool | `False` |    
+| [status_mask](defaults/main.yml#L77)   | bool | `False` |    
+| [status_read_at](defaults/main.yml#L80)   | str |  |    
+| [status_now](defaults/main.yml#L81)   | int | `0` |    
+| [status_probe_apps](defaults/main.yml#L84)   | bool | `True` |    
+| [status_probe_timeout](defaults/main.yml#L85)   | int | `5` |    
+| [status_admin](defaults/main.yml#L88)   | list | `[]` |    
+| [status_commands](defaults/main.yml#L96)   | dict | `{}` |    
 
 
 

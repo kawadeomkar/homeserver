@@ -213,6 +213,7 @@ its mount in `status_cluster_volumes`.
 | `status_report_file` | `""` | report: where it writes the report as JSON; empty writes none |
 | `status_color` | `false` | report: whether the text is in colour |
 | `status_quiet` | `false` | report: whether it shows no text |
+| `status_mask` | `false` | report: whether every IPv4 and IPv6 address in the text reads `<addr>`; the file keeps them |
 | `status_read_at` | `""` | report: when the report was read, as its first line says it; empty takes now |
 | `status_now` | `0` | report: when the report was read, in seconds since the epoch, which its ages count from; 0 takes now |
 | `status_probe_apps` | `true` | Whether each host's play asks the addresses of the apps it found from this machine |
@@ -259,12 +260,22 @@ the file, runs the playbook, and exits with the file's `exit` (0, 1 or 2), or wi
 wrote no report. just passes the recipe's code on as its own (`[no-exit-message]`, so it adds no line of its own), so
 `just status` exits 0, 1, 2 or 3; the code also ends the report's last line and is `--json`'s `exit`. `--json` prints
 the report's file alone on stdout. The recipe sets `STATUS_COLOR` on a terminal without `NO_COLOR`, `STATUS_LIVE` on
-a terminal without `--json` whose `TERM` is not `dumb`, and `STATUS_QUIET` with `--json`.
+a terminal without `--json` whose `TERM` is not `dumb`, `STATUS_QUIET` with `--json`, and `STATUS_MASK` with `--mask`.
+
+**`--mask`** shows every IPv4 and IPv6 address in the text as `<addr>`, for a report pasted where others read it, such
+as a pull request's description: the report play's text (`status_mask`, the filter's `mask_addresses`) and, on a
+terminal, the callback's blocks alike, each piece of a line masked before its colour, so that a colour's code never
+hides an address. A port, a prefix length, brackets and a zone stay (`https://<addr>:8006`, `<addr>/24`,
+`[<addr>]:8006`), and so does what only looks like an address, a time, a version or four numbers past 255: each
+candidate is masked only when Python's `ipaddress` takes it for one. A column after an address may move, since
+`<addr>` is shorter. The report's file, and so `--json`, keeps every address.
 
 The callback prints the report task's text with one line above its last, the exit line, saying for each host the
 reading play ran on whether it answered and was read and how long it took (a host with nothing to read in this setup,
 such as the NAS's without a NAS, is left out of it); every failure and unreachable host on stderr, and nothing else of
-Ansible's; and nothing on stdout with `STATUS_QUIET`. **On a terminal** (`STATUS_LIVE`) it prints the report itself,
+Ansible's; and nothing on stdout with `STATUS_QUIET`. With `STATUS_MASK`, what it prints of the report, live or not,
+has every address as `<addr>`; its own lines and stderr have none to mask but Ansible's own failures, left as they
+are. **On a terminal** (`STATUS_LIVE`) it prints the report itself,
 block by block (the filter's `blocks`, which its `text` joins), from the same filter, which it loads by path from
 `roles/status/filter_plugins/status.py` beside the playbook, and the settings the first play says, which the report
 play then uses too: the head at once, then each section in the report's fixed order as soon as every source it is
@@ -287,9 +298,14 @@ Without the filter, the sections are shown at the end, and the callback says so 
   out with made-up names, addresses and sizes. `test_each_section_depends_only_on_its_sources` removes every other
   source in turn and compares each section, which is what lets the callback print it early. A NAS that answered at
   another address than its static one says so in its header and is a thing to do, and one that answered at its static
-  address, or has none configured, neither (`test_a_nas_that_answered_at_its_bootstrap_address`).
+  address, or has none configured, neither (`test_a_nas_that_answered_at_its_bootstrap_address`). `--mask`'s
+  `mask_addresses` masks every IPv4 and IPv6 address, its port, prefix length, brackets and zone kept, and leaves a
+  time, a version, a number past 255 and a MAC (`test_mask_addresses`); the masked text has no address left, in colour
+  too, the same lines otherwise, and the report keeps them
+  (`test_the_masked_text_has_no_address_and_the_report_keeps_them`).
 - `tests/unit/test_status_callback.py`: the callback's `Progress`, which is pure: the sections in order whatever host
-  answers first, the lines below them, and that what it prints in the end is the report play's own text.
+  answers first, the lines below them, and that what it prints in the end is the report play's own text, masked too
+  (`test_masked_on_a_terminal_too`).
 - `tests/unit/test_status_read.py`: the read list, every form allowed and others refused, and the parallel runs.
 - `tests/unit/test_status_probe.py`: the probe, against servers in the test's process.
 - `tests/policy/test_roles.py`: `test_status_reads_only_through_status_read` keeps every other task of the role to a
@@ -309,7 +325,9 @@ Without the filter, the sections are shown at the end, and the callback says so 
   served and an unapproved route, `tailscaled` down, and no other device's or the tailnet's name in the report), each
   of the four setups' sections and attention list against what it should have, and that no fake's state changes. It
   also runs `just status` on a pseudo-terminal, replays what it wrote through `tests/vt.py`'s terminal and compares the
-  result with the piped report, with no frame wrapped and no sequence a terminal would not know.
+  result with the piped report, with no frame wrapped and no sequence a terminal would not know; and `just status
+  --mask`, piped and on a terminal, with no address of the plain run's left and the same lines, while `--json` keeps
+  them (`test_mask_shows_no_address_and_the_report_keeps_them`).
 - The fake NAS's alerts, scans, topology and root-dataset space follow TrueNAS 25.10's API reference, not a capture
   (the home NAS's key was not at hand).
 

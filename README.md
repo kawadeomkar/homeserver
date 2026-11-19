@@ -141,10 +141,11 @@ closed, DNS missing for the apps' names, Tailscale down, unguarded or with a rou
 missing, a VM's backup that failed or was missed, the backup job not as configured or missing). On a terminal, each
 section shows as soon as the machines it needs are read, always in the same order, with a line for each still to come,
 and the line on what is being read, kept up to date below. `just status vms storage` shows some sections (of admin,
-vms, nas, storage, cluster, apps, tailscale and backups), reading only the machines they need, and `--json` prints the
-report as JSON. It exits with the report's own code: 0 when nothing is wrong, 1 for a problem, 2 when a source could
-not be read, 3 when the run failed; the code also ends its last line and is the `exit` field of `--json`. It reads no
-Secret and checks no certificate, and never uses a kubeconfig of another cluster.
+vms, nas, storage, cluster, apps, tailscale and backups), reading only the machines they need, `--json` prints the
+report as JSON, and `--mask` shows every address in its text as `<addr>`, for pasting where others read it. It exits
+with the report's own code: 0 when nothing is wrong, 1 for a problem, 2 when a source could not be read, 3 when the run
+failed; the code also ends its last line and is the `exit` field of `--json`. It reads no Secret and checks no
+certificate, and never uses a kubeconfig of another cluster.
 
 **What a run shows.** Every playbook run is drawn as it goes, whether just starts it or you run `ansible-playbook`
 yourself. At a terminal, the bottom of the screen shows each stage (the NAS, the Proxmox host, Home Assistant, the

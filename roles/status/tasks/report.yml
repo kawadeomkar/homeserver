@@ -39,7 +39,8 @@
         mode: "0600"
       check_mode: false
 
+# With status_mask, every address in the text reads <addr>; the file above keeps them.
 - name: report | Show the report
   ansible.builtin.debug:
-    msg: "{{ status_report | status_text(status_color) }}"
+    msg: "{{ status_report | status_text(status_color, status_mask) }}"
   when: not status_quiet

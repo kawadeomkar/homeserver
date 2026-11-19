@@ -10,6 +10,7 @@ Ingresses, volumes, Flux's objects, a Certificate, kubelet's statistics, amtool'
 
 import base64
 import importlib.util
+import ipaddress
 import json
 import re
 from datetime import UTC, datetime, timedelta
@@ -2486,6 +2487,70 @@ def blocks_of(found, types=()):
         now=NOW,
     )
     return dict(fs.blocks(model)), model
+
+
+# A link-local IPv6 address and a MAC, built at run time: gitleaks flags either written out.
+LINK_LOCAL = ":".join(["fe80", "", "1"])
+A_MAC = ":".join(["aa", "bb", "cc", "dd", "ee", "ff"])
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param(
+            "NAS  truenas · TrueNAS 25.10.7 at 192.0.2.10 · up 34 d",
+            "NAS  truenas · TrueNAS 25.10.7 at <addr> · up 34 d",
+            id="ipv4",
+        ),
+        pytest.param(
+            "https://192.0.2.10:8006 and 192.0.2.0/24.", "https://<addr>:8006 and <addr>/24.", id="port-and-prefix"
+        ),
+        pytest.param(
+            f"mounted by 2001:db8::5 · [2001:db8::1]:8006 · {LINK_LOCAL}%eth0 · ::1",
+            "mounted by <addr> · [<addr>]:8006 · <addr>%eth0 · <addr>",
+            id="ipv6",
+        ),
+        pytest.param("::ffff:192.0.2.30", "::ffff:<addr>", id="ipv4-mapped"),
+        pytest.param(
+            "2026-10-21 14:32 PDT · 10:00:00 · Proxmox VE 9.2.2-1 · kernel 7.0.2-6-pve · TrueNAS 25.10.7",
+            "2026-10-21 14:32 PDT · 10:00:00 · Proxmox VE 9.2.2-1 · kernel 7.0.2-6-pve · TrueNAS 25.10.7",
+            id="times-and-versions",
+        ),
+        pytest.param(f"999.1.2.3, v1.2.3.4 and {A_MAC}", f"999.1.2.3, v1.2.3.4 and {A_MAC}", id="no-address"),
+    ],
+)
+def test_mask_addresses(text, expected):
+    """just status --mask: every IPv4 and IPv6 address as <addr>, its port, prefix length, brackets and zone kept, and
+    what only looks like one, a time, a version, a number past 255 or a MAC, left as it is."""
+    assert fs.mask_addresses(text) == expected
+
+
+def addresses_in(text):
+    """The IPv4 and IPv6 addresses written in `text`."""
+    found = re.findall(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?!\w)", text)
+    found += re.findall(r"(?<![\w:])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?![\w:])", text)
+    out = set()
+    for address in found:
+        try:
+            ipaddress.ip_address(address)
+        except ValueError:
+            continue
+        out.add(address)
+    return out
+
+
+@pytest.mark.parametrize("color", [False, True], ids=["plain", "colour"])
+def test_the_masked_text_has_no_address_and_the_report_keeps_them(color):
+    """Every address in the text reads <addr>, in colour too, since each piece of a line is masked before its colour;
+    the text has the same lines otherwise, and the report, which --json prints, keeps the addresses."""
+    _, model = blocks_of(everything())
+    plain = fs.text(model)
+    addresses = addresses_in(plain)
+    assert addresses, plain
+    masked = fs.text(model, color, mask=True)
+    assert "<addr>" in masked and not [a for a in addresses if a in masked], masked
+    assert len(masked.splitlines()) == len(plain.splitlines())
+    assert "192.0.2.10" in addresses and "192.0.2.10" in json.dumps(model), "the NAS's, for one"
 
 
 def test_the_text_is_its_blocks_in_order():

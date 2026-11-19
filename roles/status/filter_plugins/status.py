@@ -2240,6 +2240,11 @@ def report(found, setup=None, types=(), read_at="", probes=None, admin=(), comma
 # -------------------------------------------------------------------------------------------- the text ---
 
 WIDTH = 100
+# What just status --mask puts in place of an address: four dotted numbers, and a run of hex digits with two colons or
+# more, each an address only when ipaddress takes it for one, so that a version (25.10.7) or a time (10:00:00) stays.
+ADDRESS_MASK = "<addr>"
+IPV4 = re.compile(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?!\w|\.\d)")
+IPV6 = re.compile(r"(?<![\w:])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?![\w:])")
 # The dots of a VM this setup does not make, running or not, and the most a VM's name takes of a row.
 OTHER_DOTS = {"running": ("◆", "g"), "": ("◇", "d")}
 NAME_ROOM = 25
@@ -2950,11 +2955,26 @@ def _error_lines(errors):
     return [*lines, Line()] if lines else []
 
 
-def blocks(model, color=False):
+def mask_addresses(text):
+    """`text` with every IPv4 and IPv6 address in it as <addr>, a port, a prefix length or brackets around it kept:
+    what just status --mask shows, for a report pasted where others read it."""
+
+    def masked(found):
+        try:
+            ipaddress.ip_address(found.group(0))
+        except ValueError:
+            return found.group(0)
+        return ADDRESS_MASK
+
+    return IPV6.sub(masked, IPV4.sub(masked, text))
+
+
+def blocks(model, color=False, mask=False):
     """The report's text in blocks, in order, each (name, lines), with ANSI colours when `color`: the head, each section
     shown that has anything to show, in TYPES' order, then the reads that failed (errors), what needs attention, last,
     where a terminal leaves it in view, and the exit line. just status's callback prints them one by one, each section
-    as soon as the sources it is worked out from are read (section_sources), and text() joins them."""
+    as soon as the sources it is worked out from are read (section_sources), and text() joins them. With `mask`, every
+    address reads <addr> (mask_addresses), each piece of a line masked before its colour, and the model keeps them."""
     out = []
     head = Line().add("homeserver", "b")
     if model.get("read_at"):
@@ -2995,12 +3015,18 @@ def blocks(model, color=False):
     )
     foot = Line().add(f"exit {model['exit']}", "r" if model["exit"] else "g")
     out.append(("exit", [foot.add(f" · {summary} · sections: {' '.join(TYPES)} · --json", "d")]))
+    if mask:
+        return [
+            (name, [screen.render([(mask_addresses(t), s) for t, s in line.parts], color) for line in lines])
+            for name, lines in out
+        ]
     return [(name, [line.text(color) for line in lines]) for name, lines in out]
 
 
-def text(model, color=False):
-    """The report as the terminal shows it, with ANSI colours when `color`: its blocks, joined."""
-    return "\n".join(line for _, lines in blocks(model, color) for line in lines) + "\n"
+def text(model, color=False, mask=False):
+    """The report as the terminal shows it, with ANSI colours when `color`, and every address as <addr> when `mask`:
+    its blocks, joined."""
+    return "\n".join(line for _, lines in blocks(model, color, mask) for line in lines) + "\n"
 
 
 class FilterModule:

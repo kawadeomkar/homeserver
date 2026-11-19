@@ -230,6 +230,12 @@ argument_specs:
         type: bool
         default: false
         description: Whether the report entry point shows no report.
+      status_mask:
+        type: bool
+        default: false
+        description: >-
+          Whether every IPv4 and IPv6 address in the report entry point's text reads <addr>, for a report pasted where
+          others read it; the report's file keeps them.
       status_read_at:
         type: str
         default: ""
@@ -296,6 +302,12 @@ argument_specs:
         type: bool
         default: false
         description: Whether no report is shown.
+      status_mask:
+        type: bool
+        default: false
+        description: >-
+          Whether every IPv4 and IPv6 address in the text reads <addr>, for a report pasted where others read it; the
+          report's file keeps them.
       status_read_at:
         type: str
         default: ""

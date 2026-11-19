@@ -507,19 +507,22 @@ etcd-snapshot *ansible_args:
 # from the first word that begins with -.
 # Colour only on a terminal, and never with NO_COLOR set; on a terminal, without --json, the line on what is being read
 # is drawn at once and kept up to date (STATUS_LIVE), except on one that says it can do nothing but print (TERM=dumb).
+# --mask (STATUS_MASK) shows every IPv4 and IPv6 address in the text as <addr>, for a report pasted where others read
+# it, such as a pull request's description; the report's file, and so --json, keeps them.
 # The setup's links are checked by vars_plugins/setup_links.py, which keeps stdout to the report alone.
 [arg('json', long='json', value='true', help='the report as JSON, alone on stdout')]
+[arg('mask', long='mask', value='true', help='every IPv4 and IPv6 address in the text as <addr>, for pasting; --json keeps them')]
 [arg('sections', help="some of admin vms nas storage cluster apps tailscale backups; then, after --, ansible-playbook's arguments")]
 [doc('What runs, where to reach it and what needs doing, read without changing anything; sections: admin vms nas storage cluster apps tailscale backups')]
 [group('machines')]
 [no-exit-message]
 [script]
-status json='' *sections:
-    json=$1; shift
+status json='' mask='' *sections:
+    json=$1 mask=$2; shift 2
     test -x {{ ansible_playbook }} || { echo "{{ ansible_playbook }} not found: run just install in the project's virtualenv, or point just at it (pyenv local <env>, or VENV=<its path>)" >&2; exit 3; }
     sections=()
     while [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; do
-      case $1 in TYPE=* | JSON=* | ANSIBLE_ARGS=* | VENV=*)
+      case $1 in TYPE=* | JSON=* | MASK=* | ANSIBLE_ARGS=* | VENV=*)
         echo "$1: just takes no make-style parameter; just help status says what it takes" >&2; exit 3 ;;
       esac
       [[ $1 =~ ^({{ status_sections }})$ ]] || { echo "just status has no section $1: it takes {{ replace(status_sections, '|', ' ') }}" >&2; exit 3; }
@@ -531,7 +534,7 @@ status json='' *sections:
     live=; if [ -t 1 ] && [ -z "$json" ] && [ "${TERM:-dumb}" != dumb ]; then live=1; fi
     rm -f {{ status_report }}
     rc=0
-    ANSIBLE_STDOUT_CALLBACK=homeserver_status STATUS_COLOR=$color STATUS_LIVE=$live STATUS_QUIET=$json \
+    ANSIBLE_STDOUT_CALLBACK=homeserver_status STATUS_COLOR=$color STATUS_LIVE=$live STATUS_QUIET=$json STATUS_MASK=$mask \
       {{ ansible_playbook }} status.yml --check ${extra[@]+"${extra[@]}"} ${@+"$@"} </dev/null || rc=$?
     if [ "$rc" -ne 0 ] || [ ! -s {{ status_report }} ]; then echo "just status: the run failed (ansible-playbook exited $rc)" >&2; exit 3; fi
     if [ -n "$json" ]; then cat {{ status_report }}; fi
