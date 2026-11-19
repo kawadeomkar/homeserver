@@ -23,6 +23,9 @@ EXAMPLE = ROOT / "group_vars" / "all" / "local.vault.yml.example"
 # What the group_vars read from the vault but no setup puts there: the Talos secrets bundle, which every playbook
 # refuses in the vault.
 NEVER_IN_THE_VAULT = {"vault_talos_secrets"}
+# The keys that hold a mapping, empty as {} rather than "": each Mac's name to its SMB password. Every reader takes
+# either for unset.
+MAPPINGS = {"vault_timemachine_passwords"}
 
 
 def git(*args: str) -> subprocess.CompletedProcess:
@@ -40,13 +43,14 @@ def test_the_vault_is_ignored_and_its_example_is_not():
 
 
 def test_the_example_lists_every_secret_the_playbooks_read():
-    """The example is the template just vault new encrypts: every key the group_vars read, each empty, which
-    every reader takes for unset, where a placeholder secret would pass for a real one."""
+    """The example is the template just vault new encrypts: every key the group_vars read, each empty ("", or {}
+    for a mapping), which every reader takes for unset, where a placeholder secret would pass for a real one."""
     read = set()
     for path in (ROOT / "group_vars").rglob("*.yml"):
         if "vault" not in path.name and path.name != "local.yml":
             read |= set(re.findall(r"\bvault_[a-z0-9_]+\b", path.read_text()))
-    assert yaml.safe_load(EXAMPLE.read_text()) == dict.fromkeys(sorted(read - NEVER_IN_THE_VAULT), "")
+    expected = {key: {} if key in MAPPINGS else "" for key in sorted(read - NEVER_IN_THE_VAULT)}
+    assert yaml.safe_load(EXAMPLE.read_text()) == expected
 
 
 def test_each_key_of_the_example_says_what_it_is_for():

@@ -33,7 +33,14 @@ status_cluster_flux_ref: "{{ flux_sync_ref | default('refs/heads/main', true) }}
 status_cluster_pins:
   talos: "{{ talos_version }}"
   kubernetes: "{{ talos_kubernetes_version }}"
+# Where this machine's Tailscale sends the apps' domain, read with the cluster whenever the Proxmox host runs Tailscale
+# (the switch group_vars/proxmox/tailscale.yml works out, here from local.yml alike): the filter then shows it only
+# for a route the host really advertises, as its Tailscale says, whatever local.yml lists today.
+status_tailnet_dns: "{{ tailscale_enabled | default(tailscale_advertise_routes | default([], true) | length > 0) }}"
 # Where roles/talos keeps the etcd snapshots just etcd-snapshot and just talos-upgrade take.
 status_cluster_snapshot_dir: "{{ talos_config_dir }}/etcd"
-# A cluster that does not answer should not hold the report up for long: kubectl gives up after its own 10 seconds.
+# A cluster that does not answer should not hold the report up for long: kubectl gives up after its own 10 seconds,
+# and every read runs at once, each a light client on this machine, so that such a cluster costs one wait, not two
+# (its 16 reads took 10.5 s 8 at a time when its API refused connections, each giving up after 5 s, 2026-11-17).
 status_timeout: 15
+status_parallel: 32

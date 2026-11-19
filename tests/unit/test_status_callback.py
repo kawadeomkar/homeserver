@@ -29,17 +29,18 @@ SETTINGS = {
 
 
 def findings(**changes):
-    """What each host's play leaves, by host: the Proxmox host's (its Tailscale early too), the cluster's, the NAS's,
-    the probes split between the first two as each asks them."""
+    """What each host's play leaves, by host: the Proxmox host's (its Tailscale early too), the cluster's (with this
+    machine's view of the tailnet's DNS), the NAS's, the probes split between the first two as each asks them."""
     full = tsf.everything() | changes
     vm = [p for p in full["probes"] if "homeserver.internal" not in p["url"]]
-    early = {"tailscale": full["tailscale"], "tailnet_dns": full["tailnet_dns"]}
+    early = {"tailscale": full["tailscale"]}
     return {
         "homeserver": ({**early, "proxmox": full["proxmox"], "probes": vm}, early),
         "homeserver-k8s": (
             {
                 "cluster": full["cluster"],
                 "etcd_snapshots": full["etcd_snapshots"],
+                "tailnet_dns": full["tailnet_dns"],
                 "probes": [p for p in full["probes"] if p not in vm],
             },
             None,
@@ -48,8 +49,8 @@ def findings(**changes):
     }
 
 
-def report_text(hosts, settings=SETTINGS):
-    """The report play's own text, from the same findings."""
+def report_text(hosts, settings=SETTINGS, mask=False):
+    """The report play's own text, from the same findings, every address as <addr> with `mask`."""
     found = fs.merge([found for found, _ in hosts.values()])
     model = fs.report(
         found,
@@ -60,7 +61,7 @@ def report_text(hosts, settings=SETTINGS):
         commands=settings["commands"],
         now=settings["now"],
     )
-    return fs.text(model)
+    return fs.text(model, mask=mask)
 
 
 def printed(progress, blocks, end, reading="reading  proxmox ok 4.1 s"):
@@ -148,6 +149,21 @@ def test_a_section_shows_once_the_sections_before_it_have():
     assert printed(progress, seen, end) == with_reading(report_text(hosts))
 
 
+def test_masked_on_a_terminal_too():
+    """just status --mask on a terminal: what the callback prints, block by block, is the report play's own text with
+    every address as <addr>."""
+    hosts = findings()
+    progress = callback.Progress(fs, SETTINGS, mask=True)
+    seen, end = [], None
+    for host in ("homeserver-k8s", "homeserver", "truenas"):
+        progress.update(host, found=hosts[host][0])
+        blocks, end = progress.advance()
+        seen += blocks
+    text = printed(progress, seen, end)
+    assert text == with_reading(report_text(hosts, mask=True))
+    assert "<addr>" in text and report_text(hosts) != report_text(hosts, mask=True)
+
+
 def test_a_host_that_could_not_be_read_says_so():
     hosts = findings(nas={"unread": "Connection refused"})
     progress = callback.Progress(fs, SETTINGS)
@@ -202,4 +218,4 @@ def test_the_live_lines_fit_the_terminal():
 def test_the_callbacks_documentation_is_yaml():
     """Ansible reads it as it loads the callback, and ends the run with an error if it is not YAML."""
     doc = yaml.safe_load(callback.DOCUMENTATION)
-    assert doc["name"] == "homeserver_status" and doc["type"] == "stdout" and len(doc["description"]) == 4
+    assert doc["name"] == "homeserver_status" and doc["type"] == "stdout" and len(doc["description"]) == 5
