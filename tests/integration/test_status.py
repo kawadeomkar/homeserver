@@ -1242,7 +1242,8 @@ def seed_details(path, refused=()):
     """The NAS seed_nas leaves, with something for each of the NAS section's details to say: two ports, both up, at
     2.5 Gb/s and 1 Gb/s; nvme3n1 hot, 74 °C of its critical 80.85, and nvme2n1 with three checksum errors, which make
     persistent not healthy; ssh running though the configuration keeps it stopped; the shares mounted by the Proxmox
-    host over NFSv3, and by the worker and an address of no machine of this setup over NFSv4; the NAS's clock 95 s
+    host over NFSv3 and by two NFSv4 clients behind its address, by the worker and an address of no machine of this
+    setup over NFSv4, and an NFSv4 client that stopped renewing its lease, which no longer counts; the NAS's clock 95 s
     behind; and the methods `refused` refused."""
     fake = fake_truenas.FakeTrueNAS(path)
     fake.load()
@@ -1256,9 +1257,17 @@ def seed_details(path, refused=()):
     next(s for s in fake.s["services"] if s["service"] == "ssh").update(state="RUNNING")
     fake.s["nfs3_clients"] = [{"ip": "192.0.2.20", "export": "/mnt/persistent/nextcloud"}]
     states = [{"1": {"type": "open", "access": "rw", "filename": NFS_OPEN_FILE}}]
+    # The kernel keeps a client that stopped renewing its lease as courtesy for up to a day.
+    clients = [
+        ("192.0.2.31:812", "confirmed"),
+        ("198.51.100.7:740", "confirmed"),
+        ("192.0.2.20:801", "confirmed"),
+        ("192.0.2.20:802", "confirmed"),
+        ("198.51.100.8:741", "courtesy"),
+    ]
     fake.s["nfs4_clients"] = [
-        {"id": str(n), "info": {"address": address, "status": "confirmed", "name": NFS_CLIENT_NAME}, "states": states}
-        for n, address in enumerate(["192.0.2.31:812", "198.51.100.7:740"])
+        {"id": str(n), "info": {"address": address, "status": status, "name": NFS_CLIENT_NAME}, "states": states}
+        for n, (address, status) in enumerate(clients)
     ]
     fake.s["clock_offset"] = -95
     fake.s["refused"] = list(refused)
@@ -1284,8 +1293,10 @@ def test_the_nas_sections_details(nas_tree, nas, tmp_path):
     assert " Network    2.5 Gb/s · 1 Gb/s · 2 of 2 ports up" in lines, out
     disks = lines.index(" Disks °C   persistent  nvme1n1 36 · nvme2n1 37 (3 checksum) · nvme3n1 74")
     assert lines[disks + 1 : disks + 3] == ["            ephemeral   sda 30", "            boot-pool   nvme0n1 45"], out
-    nfs = " NFS        running · 1 share · mounted by the Proxmox host · homeserver-worker-1 · 198.51.100.7"
-    assert nfs in lines and " Services   ssh running, configured stopped" in lines, out
+    # The line wraps between its clients.
+    nfs = lines.index(" NFS        running · 1 share · mounted by the Proxmox host (2 clients) · homeserver-worker-1")
+    assert lines[nfs + 1] == "            198.51.100.7", out
+    assert " Services   ssh running, configured stopped" in lines, out
     keys = [line[:12].strip() for line in lines[lines.index("NAS  truenas · TrueNAS 25.10.7 · up 34 d") + 1 :]]
     assert [k for k in keys[: keys.index("Alerts") + 1] if k] == [
         "Network",
@@ -1318,9 +1329,9 @@ def test_the_nas_sections_details(nas_tree, nas, tmp_path):
         ("nvme0n1", "boot-pool", 45, 81, 0),
     ]
     assert found["nfs"]["clients"] == [
-        {"address": "192.0.2.20", "name": "the Proxmox host"},
-        {"address": "192.0.2.31", "name": "homeserver-worker-1"},
-        {"address": "198.51.100.7", "name": ""},
+        {"address": "192.0.2.20", "name": "the Proxmox host", "clients": 2},
+        {"address": "192.0.2.31", "name": "homeserver-worker-1", "clients": 1},
+        {"address": "198.51.100.7", "name": "", "clients": 1},
     ]
     assert (found["unexpected_clients"], found["unexpected_services"]) == (["198.51.100.7"], ["ssh"])
     assert found["clock_drift"] == -95 and found["errors"] == []
@@ -1329,7 +1340,9 @@ def test_the_nas_sections_details(nas_tree, nas, tmp_path):
     calls = [call["method"] for call in logged]
     assert calls.count("auth.login_with_api_key") == 1 and set(calls) <= NAS_READS, calls
     new = [(call["method"], call["params"]) for call in logged if call["method"].startswith(("disk.t", "nfs."))]
-    assert new == [("disk.temperatures", [[], True]), ("nfs.get_nfs3_clients", []), ("nfs.get_nfs4_clients", [])]
+    # Of each NFSv4 client, its address and status alone: its own name and the files it holds open stay on the NAS.
+    select = [[], {"select": ["info.address", "info.status"]}]
+    assert new == [("disk.temperatures", [[], True]), ("nfs.get_nfs3_clients", []), ("nfs.get_nfs4_clients", select)]
     assert json.loads(nas["state"].read_text())["mutations"] == 0
     written = (nas_tree / ".cache" / "status" / "report.json").read_text()
     for secret in (fake_truenas.DISK_SERIAL, fake_truenas.DISK_MODEL, NFS_CLIENT_NAME, NFS_OPEN_FILE):

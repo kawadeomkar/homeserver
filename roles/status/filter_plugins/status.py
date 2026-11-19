@@ -1353,14 +1353,22 @@ def _address_key(address):
     return str(mapped or ip)
 
 
-def _nfs_clients(addresses, known):
-    """Who has the NFS shares mounted: each address named by `known` ({address: name}, the machines of this setup),
-    first in its order, then every other, named by none. None when they were not read."""
-    if not isinstance(addresses, list):
+def _nfs_clients(entries, known):
+    """Who has the NFS shares mounted, from truenas_info's {address, clients}: each address once, with how many
+    clients it is, named by `known` ({address: name}, the machines of this setup), those first in its order, then
+    every other, named by none. None when they were not read."""
+    if not isinstance(entries, list):
         return None
     names = {_address_key(address): str(name) for address, name in (known or {}).items()}
     order = list(names)
-    clients = [{"address": a, "name": names.get(a, "")} for a in dict.fromkeys(_address_key(a) for a in addresses)]
+    counts = {}
+    for entry in entries:
+        address = _address_key(str(entry.get("address") or "")) if isinstance(entry, dict) else ""
+        count = entry.get("clients") if address else None
+        count = count if isinstance(count, int) and not isinstance(count, bool) and count > 0 else 1
+        if address:
+            counts[address] = max(counts.get(address, 0), count)
+    clients = [{"address": a, "name": names.get(a, ""), "clients": n} for a, n in counts.items()]
     return sorted(clients, key=lambda c: order.index(c["address"]) if c["name"] else len(order))
 
 
@@ -3189,15 +3197,16 @@ def _disk_phrase(disk, temperatures):
 
 def _mounted_by(clients, unexpected):
     """Who has the NFS shares mounted, as phrases of the NFS line, a client each, so that the line wraps between them:
-    a machine of this setup by its name and any other by its address, in red when it is `unexpected`; none when they
-    were not read."""
+    a machine of this setup by its name and any other by its address, in red when it is `unexpected`, and how many
+    clients it is when more than one (the Proxmox host (2 clients)); none when they were not read."""
     if clients is None:
         return []
     if not clients:
         return [[("mounted by nothing", "d")]]
-    phrases = [
-        [(client["name"] or client["address"], "r" if client["address"] in unexpected else "")] for client in clients
-    ]
+    phrases = []
+    for client in clients:
+        many = [(f" ({client['clients']} clients)", "")] if client.get("clients", 1) > 1 else []
+        phrases.append([(client["name"] or client["address"], "r" if client["address"] in unexpected else ""), *many])
     return [[("mounted by ", ""), *phrases[0]], *phrases[1:]]
 
 

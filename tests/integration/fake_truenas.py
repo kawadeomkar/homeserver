@@ -23,7 +23,7 @@ works it out (FAILING_DEV), disk.details' used disks by the pool they are in, th
 (plugins/disk_/availability.py), and disk.temperatures' [celsius, critical celsius] for every disk
 (plugins/disk_/temperature.py), with stand-in serials and models, and alert() with the texts of the alerts that
 quote a disk's serial or model (alert/source/disk_temp.py, smart.py, volume_status.py); so do the NFS clients
-(plugins/nfs_/status.py),
+(plugins/nfs_/status.py), selected on dotted paths as utils/filter_list.py selects them,
 interface.query's link state, MTU and active media (plugins/interface/netif_linux), and system.info's clock, which
 state["clock_offset"] sets apart from this machine's. A method named in state["refused"] is refused as TrueNAS refuses
 a call the key may not make. Any other method is an error, so an unexpected call fails the test.
@@ -186,6 +186,24 @@ FAILING_DEV = (
     "Applications are unaffected."
 )
 ERROR_COUNTS = ("read_errors", "write_errors", "checksum_errors")
+
+
+def select_paths(entry, paths):
+    """`entry` with only `paths` kept, each a key or a dotted path, which keeps that key alone of its parent: what
+    TrueNAS's filter_list does with a query's select (utils/filter_list.py at TS-25.10.7), a path not there left out."""
+    out = {}
+    for path in paths:
+        keys, value = path.split("."), entry
+        for key in keys:
+            if not isinstance(value, dict) or key not in value:
+                break
+            value = value[key]
+        else:
+            target = out
+            for key in keys[:-1]:
+                target = target.setdefault(key, {})
+            target[keys[-1]] = copy.deepcopy(value)
+    return out
 
 
 def failing(topology_):
@@ -992,7 +1010,9 @@ class FakeTrueNAS:
         return [copy.deepcopy(c) for c in self.s.get("nfs3_clients", []) if matches(c, filters)]
 
     def m_nfs_get_nfs4_clients(self, filters=None, options=None):
-        return [copy.deepcopy(c) for c in self.s.get("nfs4_clients", []) if matches(c, filters)]
+        found = [copy.deepcopy(c) for c in self.s.get("nfs4_clients", []) if matches(c, filters)]
+        select = (options or {}).get("select")
+        return [select_paths(c, select) for c in found] if select else found
 
     SHARE_FIELDS = frozenset(
         {

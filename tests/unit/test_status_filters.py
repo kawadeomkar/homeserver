@@ -1544,6 +1544,14 @@ def disk_details():
     ]
 
 
+def nfs_clients(*addresses):
+    """The NFS clients as truenas_info's status reads them, each address once with how many clients it is: one, or
+    the count given with it as (address, clients)."""
+    return [
+        {"address": a, "clients": 1} if isinstance(a, str) else {"address": a[0], "clients": a[1]} for a in addresses
+    ]
+
+
 def port(name, up=True, media="10000Mb/s Twisted Pair", mtu=1500, kind="PHYSICAL"):
     """An interface as truenas_info reads it from interface.query; a port that is down has no speed."""
     link = "LINK_STATE_UP" if up else "LINK_STATE_DOWN"
@@ -2400,13 +2408,20 @@ def test_the_network_line(ports, line):
             ["192.0.2.99"],
             id="an-unknown-client",
         ),
+        pytest.param(
+            [("192.0.2.20", 2), "192.0.2.31"],
+            NAS_MACHINES,
+            "mounted by the Proxmox host (2 clients) · homeserver-worker-1",
+            [],
+            id="two-clients-behind-one-address",
+        ),
         pytest.param(["192.0.2.99"], {}, "mounted by 192.0.2.99", [], id="no-machine-configured"),
     ],
 )
 def test_who_has_the_nfs_shares_mounted(addresses, known, mounted, unexpected):
-    """Each client named by the machines of this setup, theirs first; any other address is a problem, unless the
-    configuration names no machine at all."""
-    model = nas_report(nas_state(health={"nfs_clients": addresses}), known=known)
+    """Each client named by the machines of this setup, theirs first, with how many clients it is when more than one;
+    any other address is a problem, unless the configuration names no machine at all."""
+    model = nas_report(nas_state(health={"nfs_clients": nfs_clients(*addresses)}), known=known)
     assert f" NFS        running · 3 shares · {mounted}" in nas_block(model)
     assert model["nas"]["unexpected_clients"] == unexpected
     text = "an NFS share is mounted from {}, which is no machine of this setup"
@@ -2415,16 +2430,16 @@ def test_who_has_the_nfs_shares_mounted(addresses, known, mounted, unexpected):
     if unexpected:
         assert "\033[31m192.0.2.99\033[0m" in "\n".join(nas_block(model, True))
         assert model["nas"]["nfs"]["clients"] == [
-            {"address": "192.0.2.20", "name": "the Proxmox host"},
-            {"address": "192.0.2.30", "name": "homeserver-cp-1"},
-            {"address": "192.0.2.99", "name": ""},
+            {"address": "192.0.2.20", "name": "the Proxmox host", "clients": 1},
+            {"address": "192.0.2.30", "name": "homeserver-cp-1", "clients": 1},
+            {"address": "192.0.2.99", "name": "", "clients": 1},
         ]
 
 
 def test_the_nfs_line_wraps_between_clients():
     """Each client a phrase of its own, so that many wrap the NFS line between them, under its first phrase."""
     addresses = ["192.0.2.20", "192.0.2.31", *(f"198.51.100.{n}" for n in range(101, 106))]
-    lines = nas_block(nas_report(nas_state(health={"nfs_clients": addresses}), known=NAS_MACHINES))
+    lines = nas_block(nas_report(nas_state(health={"nfs_clients": nfs_clients(*addresses)}), known=NAS_MACHINES))
     nfs = next(i for i, line in enumerate(lines) if line.startswith(" NFS "))
     assert lines[nfs : nfs + 2] == [
         " NFS        running · 3 shares · mounted by the Proxmox host · homeserver-worker-1 · 198.51.100.101",
@@ -2509,7 +2524,7 @@ def rich_nas():
         pools=[failing, pool("ephemeral", 1.0, 2.6, layout="stripe")],
         health={
             "temperatures": temperatures(nvme3n1=(74.0, 80.85)),
-            "nfs_clients": ["192.0.2.20", "192.0.2.99"],
+            "nfs_clients": nfs_clients("192.0.2.20", "192.0.2.99"),
             "datetime": iso(NAS_NOW - 95),
             "read_at": iso(NAS_NOW),
         },

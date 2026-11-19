@@ -20,9 +20,10 @@ description:
     snapshot on the NAS with every property first.
   - With O(status), also reports each pool's disks by device name, with their state and ZFS's error counts, every
     disk's temperature and critical temperature (C(disk.temperatures), which TrueNAS reads from the kernel's sensors
-    and keeps for five minutes), the addresses that have the NFS shares mounted (C(nfs.get_nfs3_clients) and
-    C(nfs.get_nfs4_clients)), and the NAS's clock beside this machine's. These reads come last, and one that fails
-    leaves its part null, with why in C(unread), never the whole read failed.
+    and keeps for five minutes), the addresses that have the NFS shares mounted, with how many live clients each is
+    (C(nfs.get_nfs3_clients), and C(nfs.get_nfs4_clients) asked for each client's address and status alone), and the
+    NAS's clock beside this machine's. These reads come last, each within 10 seconds, and one that fails or answers
+    null leaves its part null, with why in C(unread), never the whole read failed.
   - With O(status), no disk's serial or model is reported, not even in TrueNAS's alerts, whose texts quote them - Disk
     Temperature Is Too Hot and the SMART alerts a disk's serial, Pool Status Is Not Healthy a gone disk's model and
     serial. Each serial and model the read knows (C(disk.details)', a gone disk's in a pool's topology, and the NAS's
@@ -101,8 +102,9 @@ status:
       by the one TrueNAS last knew there, else by its ZFS guid), never by the vdev's own name, which can carry a
       serial.
       C(temperatures) is each disk's reading and critical temperature in degrees Celsius, either null when TrueNAS
-      has none, and C(nfs_clients) the addresses that have a share mounted, without their ports; each is null when
-      its read failed, and C(unread) then says why. C(datetime) is the NAS's clock, and C(read_at) this machine's,
+      has none, and C(nfs_clients) the addresses that have a share mounted, without their ports, each with how many
+      clients it is (an NFSv4 client counts only while live, C(confirmed)); each is null when its read failed or
+      answered null, and C(unread) then says why. C(datetime) is the NAS's clock, and C(read_at) this machine's,
       halfway through the call that read it.
   type: dict
   returned: success and O(status)
@@ -114,7 +116,7 @@ status:
          end_time: "2026-10-12T03:14:51+00:00", percentage: 100.0, errors: 0}, scrub: {threshold: 35, enabled: true},
          disks: [{name: nvme1n1, status: ONLINE, gone: false, read_errors: 0, write_errors: 0, checksum_errors: 0}]}
     temperatures: {nvme0n1: {temp: 45.0, critical: 80.85}, sda: {temp: 30.0, critical: 70.85}}
-    nfs_clients: [192.0.2.20]
+    nfs_clients: [{address: 192.0.2.20, clients: 1}]
     datetime: "2026-11-18T10:00:00.250000+00:00"
     read_at: "2026-11-18T10:00:00.210000+00:00"
     unread: {}
@@ -150,6 +152,15 @@ FUTURE_SLACK = 3600
 # vdev stats), which `zpool clear` and a pool's import reset.
 VDEV_KINDS = ("data", "special", "dedup", "log", "cache", "spare")
 ERROR_COUNTS = ("read_errors", "write_errors", "checksum_errors")
+# Seconds each read that may fail on its own may take, where every other call has the client's api_timeout: a disk that
+# is slow to answer its sensor's read holds disk.temperatures up, and the status would wait for it.
+OPTIONAL_TIMEOUT = 10
+# What is asked of each NFSv4 client: its address and its status alone, which TrueNAS's filter_list selects on dotted
+# paths (utils/filter_list.py at TS-25.10.7), so the client's own name and every file it holds open stay on the NAS.
+NFS4_SELECT = {"select": ["info.address", "info.status"]}
+# The status of an NFSv4 client that is live. The kernel keeps a client that stopped renewing its lease as courtesy for
+# up to a day, then expirable, and one that never confirmed itself unconfirmed: none of them has a share mounted.
+NFS4_LIVE = "confirmed"
 
 
 def _address(alias):
@@ -289,21 +300,35 @@ def _client_address(text):
 
 
 def nfs_clients(v3, v4):
-    """The addresses that have an NFS share mounted, each once, in the order read: NFSv3's from rmtab (`ip`), which
-    may keep a client that has gone, and NFSv4's from the kernel's list of clients (`info.address`). Nothing else of
-    either is kept: an NFSv4 client's entry also names the client's host and the files it holds open."""
-    addresses = [str(c.get("ip") or "").strip() for c in v3 or [] if isinstance(c, dict)]
-    addresses += [_client_address((c.get("info") or {}).get("address")) for c in v4 or [] if isinstance(c, dict)]
-    return list(dict.fromkeys(a for a in addresses if a))
+    """The addresses that have an NFS share mounted, each once, in the order read, with how many clients it is:
+    NFSv3's from rmtab (`ip`), which may keep a client that has gone and tells no two clients of one address apart, one
+    client each, and NFSv4's live clients from the kernel's list (`info.address`, `info.status` NFS4_LIVE), each a
+    client of its own, so that a second client behind one address counts. Nothing else of either is kept."""
+    counts = {}
+    for client in v3 or []:
+        address = str(client.get("ip") or "").strip() if isinstance(client, dict) else ""
+        if address:
+            counts.setdefault(address, 0)
+    for client in v4 or []:
+        info = client.get("info") if isinstance(client, dict) else None
+        info = info if isinstance(info, dict) else {}
+        address = _client_address(info.get("address"))
+        if address and info.get("status") == NFS4_LIVE:
+            counts[address] = counts.get(address, 0) + 1
+    return [{"address": address, "clients": max(count, 1)} for address, count in counts.items()]
 
 
 def _optional(api, unread, part, method, *params):
-    """A read that may fail on its own: its answer, or None with why in unread[part]. The NAS is still read."""
+    """A read that may fail on its own, within OPTIONAL_TIMEOUT: its answer, or None with why in unread[part], also
+    for a null answer, which TrueNAS never gives for these. The NAS is still read."""
     try:
-        return api.call(method, *params)
+        answer = api.call(method, *params, timeout=OPTIONAL_TIMEOUT)
     except TrueNASError as exc:
         unread[part] = str(exc)
         return None
+    if answer is None:
+        unread[part] = f"{method}: TrueNAS answered null"
+    return answer
 
 
 def time_machine(api, shares, datasets):
@@ -401,11 +426,11 @@ def health(api, info, pools, datasets, smb_shares=(), info_at=None, details=None
         "read_at": _date(info_at),
     }
     unread = {}
-    # Every disk, with its critical temperature: TrueNAS reads the kernel's sensors (hwmon) and keeps each reading for
-    # five minutes, so this asks nothing of the disks themselves.
+    # Every disk, with its critical temperature: TrueNAS reads the kernel's sensors (hwmon), each read a command to the
+    # disk, and keeps each reading for five minutes, which its own temperature alert's checks keep fresh.
     temperatures = _optional(api, unread, "temperatures", "disk.temperatures", [], True)
     v3 = _optional(api, unread, "nfs_clients", "nfs.get_nfs3_clients")
-    v4 = _optional(api, unread, "nfs_clients", "nfs.get_nfs4_clients") if v3 is not None else None
+    v4 = _optional(api, unread, "nfs_clients", "nfs.get_nfs4_clients", [], NFS4_SELECT) if v3 is not None else None
     return out | {
         "temperatures": None if temperatures is None else _temperatures(temperatures),
         "nfs_clients": None if v3 is None or v4 is None else nfs_clients(v3, v4),

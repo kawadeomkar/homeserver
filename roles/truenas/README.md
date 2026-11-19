@@ -71,11 +71,13 @@ and snapshots' share, and its newest `aapltm-<epoch>` snapshot) to what it reads
 none without such a share; times turned from the API's `{"$date": <milliseconds>}` into RFC 3339), in the same login.
 A share's `dataset_found` is false when its path names no dataset, and an `aapltm-` time more than an hour ahead of
 the controller's clock is ignored. It also keeps each pool's disks from `pool.query`'s topology, by device name, with
-their state and ZFS's error counts, each interface's type, MTU and link speed (never its MAC), and `system.info`'s
-clock beside the controller's, and reads last, each of which may fail without failing the read (its part then null,
-and why in `unread`): every disk's temperature and critical temperature (`disk.temperatures` with `[]` and `true`,
-from the kernel's sensors, which TrueNAS keeps five minutes), and the addresses that have the NFS shares mounted
-(`nfs.get_nfs3_clients` and `nfs.get_nfs4_clients`, their ports and everything else left out). No disk's serial or
+their state, whether it is gone and ZFS's error counts, each interface's type, MTU and link speed (never its MAC), and
+`system.info`'s clock beside the controller's, and reads last, each within 10 s, each of which may fail or answer null
+without failing the read (its part then null, and why in `unread`): every disk's temperature and critical temperature
+(`disk.temperatures` with `[]` and `true`, from the kernel's sensors, which TrueNAS keeps five minutes), and the
+addresses that have the NFS shares mounted, with how many live clients each is (`nfs.get_nfs3_clients`, and
+`nfs.get_nfs4_clients` asked for each client's address and status alone, a client that no longer renews its lease
+left out; their ports and everything else left out). No disk's serial or
 model is in what it reports, TrueNAS's alerts included: their texts quote them (Disk Temperature Is Too Hot and the
 SMART alerts a disk's serial, Pool Status Is Not Healthy a gone disk's model and serial), so each serial and model it
 knows, `disk.details`' and a gone disk's in a pool's topology, and the NAS's own serial, is replaced by the disk's

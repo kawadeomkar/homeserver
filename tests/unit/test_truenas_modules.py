@@ -364,7 +364,10 @@ class ScriptedAPI:
             {"ip": "192.0.2.20", "export": "/mnt/persistent/proxmox/vm"},
             {"ip": "192.0.2.20", "export": "/mnt/persistent/proxmox/backup"},
         ],
-        # ...and the kernel's NFSv4 clients, an address with its port, IPv6 in brackets, and one whose info went away.
+        # ...and the kernel's NFSv4 clients, an address with its port, IPv6 in brackets: two live ones behind one
+        # address, one whose info went away, and three that are not live, one that stopped renewing its lease
+        # (courtesy), one about to be cleaned up (expirable) and one that never confirmed itself. The answer is the
+        # same whatever the select, as a NAS that ignored it would give it, so nothing else may be kept.
         "nfs.get_nfs4_clients": [
             {
                 "id": "4",
@@ -377,8 +380,13 @@ class ScriptedAPI:
                 },
                 "states": [{"1": {"type": "open", "access": "rw", "filename": OPEN_FILE}}],
             },
-            {"id": "5", "info": {"address": "[2001:db8::5]:801", "status": "courtesy"}, "states": []},
+            {"id": "5", "info": {"address": "[2001:db8::5]:801", "status": "confirmed"}, "states": []},
             {"id": "6", "info": {}, "states": []},
+            {"id": "7", "info": {"address": "192.0.2.20:812", "status": "confirmed"}, "states": []},
+            {"id": "8", "info": {"address": "192.0.2.20:901", "status": "confirmed"}, "states": []},
+            {"id": "9", "info": {"address": "198.51.100.9:700", "status": "courtesy"}, "states": []},
+            {"id": "10", "info": {"address": "198.51.100.10:700", "status": "expirable"}, "states": []},
+            {"id": "11", "info": {"address": "198.51.100.11:700", "status": "unconfirmed"}, "states": []},
         ],
     }
 
@@ -386,10 +394,14 @@ class ScriptedAPI:
         self.calls = []
         # Each call with its parameters; the answers do not depend on them.
         self.sent = []
+        # The timeout each call was given, where it was given one.
+        self.timeouts = {}
 
-    def call(self, method, *params):
+    def call(self, method, *params, timeout=None):
         self.calls.append(method)
         self.sent.append((method, params))
+        if timeout is not None:
+            self.timeouts[method] = timeout
         return self.ANSWERS[method]
 
 
@@ -520,8 +532,13 @@ def test_status_reports_the_nas_health_in_the_same_login():
             "sda": {"temp": None, "critical": None},
             "vda": {"temp": None, "critical": None},
         },
-        # Each address once, without its port: nothing else of an NFSv4 client's entry.
-        "nfs_clients": ["192.0.2.20", "192.0.2.31", "2001:db8::5"],
+        # Each address once, without its port, with how many live clients it is: nothing else of an NFSv4 client's
+        # entry, and no client that is not live.
+        "nfs_clients": [
+            {"address": "192.0.2.20", "clients": 2},
+            {"address": "192.0.2.31", "clients": 1},
+            {"address": "2001:db8::5", "clients": 1},
+        ],
         "unread": {},
     }
     for secret in (SERIAL, MODEL, VDEV_NAME, LINK_ADDRESS, CLIENT_NAME, OPEN_FILE):
@@ -530,7 +547,10 @@ def test_status_reports_the_nas_health_in_the_same_login():
     # The reads that may fail on their own come last, the temperatures of every disk with their thresholds.
     assert api.calls[-3:] == ["disk.temperatures", "nfs.get_nfs3_clients", "nfs.get_nfs4_clients"]
     assert [params for method, params in api.sent if method == "disk.temperatures"] == [([], True)]
-    assert [params for method, params in api.sent if method.startswith("nfs.")] == [(), ()]
+    select = ([], {"select": ["info.address", "info.status"]})
+    assert [params for method, params in api.sent if method.startswith("nfs.")] == [(), select]
+    # Each of them within 10 s, where every other call has the client's own timeout.
+    assert api.timeouts == {"disk.temperatures": 10, "nfs.get_nfs3_clients": 10, "nfs.get_nfs4_clients": 10}
     # The shares are read once, for the shares and the Time Machine backups alike.
     assert api.calls.count("sharing.smb.query") == 1
     assert not {"user.query", "auth.me"} & set(api.calls) and "smb_users" not in result
@@ -774,11 +794,37 @@ class RefusingAPI(ScriptedAPI):
         super().__init__()
         self.refused = refused
 
-    def call(self, method, *params):
+    def call(self, method, *params, timeout=None):
         if method in self.refused:
             self.calls.append(method)
             raise api.TrueNASCallError(f"{method}: [EPERM] Not authorized")
-        return super().call(method, *params)
+        return super().call(method, *params, timeout=timeout)
+
+
+class TimingOutAPI(ScriptedAPI):
+    """ScriptedAPI, whose methods given here answer nothing in time, as the client then says."""
+
+    def __init__(self, *slow):
+        super().__init__()
+        self.slow = slow
+
+    def call(self, method, *params, timeout=None):
+        if method in self.slow:
+            self.calls.append(method)
+            raise api.TrueNASConnectionError(f"{method}: connection to 192.0.2.10 failed: timed out")
+        return super().call(method, *params, timeout=timeout)
+
+
+class NullAPI(ScriptedAPI):
+    """ScriptedAPI, answering null to the methods given here, which TrueNAS never does for these."""
+
+    def __init__(self, *null):
+        super().__init__()
+        self.null = null
+
+    def call(self, method, *params, timeout=None):
+        answer = super().call(method, *params, timeout=timeout)
+        return None if method in self.null else answer
 
 
 @pytest.mark.parametrize(
@@ -821,6 +867,29 @@ def test_a_read_that_fails_on_its_own_leaves_its_part_out(refused, temperatures,
     assert [m for m in api.calls if m.startswith(("disk.temperatures", "nfs."))] == asked
     for key in ("pools", "alerts", "snapshot_tasks", "time_machine", "datetime"):
         assert status[key] == whole[key], key
+
+
+def test_a_read_that_times_out_leaves_its_part_out():
+    """disk.temperatures not answering within its 10 s: the temperatures left out, why said, the rest whole."""
+    status = info.gather(TimingOutAPI("disk.temperatures"), importable=False, status=True)["status"]
+    assert status["temperatures"] is None and status["nfs_clients"] is not None
+    assert status["unread"] == {"temperatures": "disk.temperatures: connection to 192.0.2.10 failed: timed out"}
+
+
+@pytest.mark.parametrize(
+    ("method", "part"),
+    [
+        ("disk.temperatures", "temperatures"),
+        ("nfs.get_nfs3_clients", "nfs_clients"),
+        ("nfs.get_nfs4_clients", "nfs_clients"),
+    ],
+)
+def test_a_null_answer_is_said_among_the_reads_that_failed(method, part):
+    """A read that answers null leaves its part out as one that fails does, and says so, never a part left out with no
+    word of why."""
+    status = info.gather(NullAPI(method), importable=False, status=True)["status"]
+    assert status[part] is None
+    assert status["unread"] == {part: f"{method}: TrueNAS answered null"}
 
 
 @pytest.mark.parametrize(
