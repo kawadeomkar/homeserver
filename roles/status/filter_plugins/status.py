@@ -290,14 +290,15 @@ def proxmox(found, vms, budget_storages=(), headroom_gib=0, reboot_file="", back
     """What the Proxmox host's reads say, as the report needs it.
 
     `found` is {unread, node, address, results}: why the host could not be read at all (else ""), the node's name, the
-    address it was reached at, and status_read's results by name (running, permissions, resources, hostname, node,
-    rrd-node, rrd-<vmid>, pending-<vmid>, fsinfo-<vmid>, osinfo-<vmid>, network-<vmid>, content-<storage>, updates,
-    reboot, and for the backups backup-jobs, backup-tasks, backups-<storage>, schedule-<job> and log-<upid>). `vms` is
-    this repo's VMs, each {vmid, name, made_by, start, guest_agent, node, app}: `node` the cluster node it is, `app`
-    {name, url, port} the app it serves (its address from its guest agent when `url` is empty). Every other VM on the
-    host, another project's or one made by hand, is shown as Proxmox sees it (others), with its day's history when it
-    runs, and never judged. Storages in `budget_storages` show their disk budget. `backup_jobs` is the backup jobs this
-    setup has, as roles/proxmox_backup takes them ({id, schedule, storage, vmid, enabled}), checked against the host's.
+    address it was reached at, and
+    status_read's results by name (running, permissions, resources, hostname, node, rrd-node, rrd-<vmid>,
+    pending-<vmid>, fsinfo-<vmid>, osinfo-<vmid>, network-<vmid>, content-<storage>, updates, reboot, and for the
+    backups backup-jobs, backup-tasks, backups-<storage>, schedule-<job> and log-<upid>). `vms` is this repo's VMs,
+    each {vmid, name, made_by, start, guest_agent, node, app}: `node` the cluster node it is, `app` {name, url, port}
+    the app it serves (its address from its guest agent when `url` is empty). Every other VM on the host, another
+    project's or one made by hand, is shown as Proxmox sees it (others), with its day's history when it runs, and
+    never judged. Storages in `budget_storages` show their disk budget. `backup_jobs` is the backup jobs this setup
+    has, as roles/proxmox_backup takes them ({id, schedule, storage, vmid, enabled}), checked against the host's.
     """
     found = found or {}
     if found.get("unread"):
@@ -1482,16 +1483,17 @@ def _unexpected_services(services, configured):
 
 
 def nas(state, release="", macs=(), services=None, clients=None, static_address=""):
-    """What the NAS says, from truenas_info with its status option (roles/truenas's status entry point): its ports, each
-    pool's health, capacity and last scrub, each disk's temperature, state and errors, TrueNAS's alerts, each periodic
-    snapshot task's last run, the NFS and SMB services, who has the NFS shares mounted, each Time Machine backup against
-    `macs`, the Macs the configuration has, each {share, retired}, the release it runs against `release`, the one its
-    role is written for, the services that run against `services`, the configuration's ({name: {enabled, state}}), and
-    its clock against this machine's. `clients` names the machines of this setup by address, which the NFS clients are
-    named by. `static_address` is the address it is to answer at, the first it is tried at: one that answered at
-    another, its bootstrap lease, has lost it (`bootstrap`); empty compares none. A NAS that did not answer, refused the
-    key or presented another certificate than the pinned one is {"unread": why}; a read of the disks' temperatures or of
-    the NFS clients that failed leaves that part out, and says why in `errors`."""
+    """What the NAS says, from truenas_info with its status option (roles/truenas's status entry point): its ports,
+    each pool's health, capacity and last scrub, each disk's temperature, state and errors, TrueNAS's alerts, each
+    periodic snapshot task's last run, the NFS and SMB services, who has the NFS shares mounted, each Time Machine
+    backup against `macs`, the Macs the configuration has, each {share, retired}, the release it runs against
+    `release`, the one its role is written for, the services that run against `services`, the configuration's
+    ({name: {enabled, state}}), and its clock against this machine's. `clients` names the machines of this setup by
+    address, which the NFS clients are named by. `static_address` is the address it is to answer at, the first it is
+    tried at: one that answered at another, its bootstrap lease, has lost it (`bootstrap`); empty compares none. A NAS
+    that did not answer, refused the key or presented another
+    certificate than the pinned one is {"unread": why}; a read of the disks' temperatures or of the NFS clients that
+    failed leaves that part out, and says why in `errors`."""
     state = state if isinstance(state, dict) else {}
     health = state.get("status")
     if not state.get("api_host") or not isinstance(health, dict):
