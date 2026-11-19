@@ -376,6 +376,26 @@ resource = load("truenas_resource", ROLE / "library" / "truenas_resource.py")
 permission = load("truenas_permission", ROLE / "library" / "truenas_permission.py")
 
 
+class StubAPI:
+    """An API that answers every query with `items` and records anything else, for a module's ensure() alone."""
+
+    def __init__(self, items):
+        self.items, self.sent = items, []
+
+    def call(self, method, *params):
+        if method.endswith(".query"):
+            return self.items
+        self.sent.append((method, params))
+        return {}
+
+
+class StubModule:
+    check_mode = True
+
+    def fail_json(self, **result):
+        raise AssertionError(result)
+
+
 class TestUpdateTogether:
     """sharing.smb.update refuses options without purpose, and fills options in from their defaults when purpose
     comes alone (TrueNAS 25.10.7's normalize_legacy_fields): the two go to an update together, or not at all."""
@@ -407,10 +427,28 @@ class TestUpdateTogether:
         data = {"purpose": "LEGACY_SHARE", "options": {"recyclebin": True}}
         assert self.updates(data) == {"purpose": "LEGACY_SHARE", "options": {"recyclebin": True}}
 
-    def test_a_field_of_the_group_the_entry_does_not_give_is_not_sent(self):
+    def test_a_field_of_the_group_the_entry_does_not_give_goes_as_the_item_has_it(self):
+        # TrueNAS refuses the options without the purpose, so the current purpose goes with them.
         assert self.updates({"options": {"auto_snapshot": False}}) == {
-            "options": {"vuid": "d12aafdc", "auto_snapshot": False, "timemachine_quota": 0}
+            "purpose": "TIMEMACHINE_SHARE",
+            "options": {"vuid": "d12aafdc", "auto_snapshot": False, "timemachine_quota": 0},
         }
+
+    def test_the_diff_shows_the_options_as_sent(self):
+        # The options are laid over the current ones, so the diff keeps what the entry does not give (TM-26).
+        share = {**self.SHARE, "name": "tm-laptop", "options": {**self.SHARE["options"], "hostsdeny": ["192.0.2.20"]}}
+        data = {"purpose": "TIMEMACHINE_SHARE", "options": {"auto_snapshot": False}}
+        action, before, after = resource.ensure(
+            StubAPI([share]),
+            StubModule(),
+            "sharing.smb",
+            {"name": "tm-laptop"},
+            data,
+            "present",
+            update_together=self.TOGETHER,
+        )
+        assert action == "update" and before["options"]["hostsdeny"] == ["192.0.2.20"]
+        assert after["options"] == {**share["options"], "auto_snapshot": False}
 
     def test_nothing_differs_nothing_is_sent(self):
         assert self.updates({"purpose": "TIMEMACHINE_SHARE", "options": {"auto_snapshot": True}}) == {}
