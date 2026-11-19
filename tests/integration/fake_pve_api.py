@@ -44,7 +44,7 @@ def answer(path, query):
     """(HTTP status, reason, body) for one GET, from fake_pve's routes and state."""
     agent = AGENT.fullmatch(path)
     out, err = io.StringIO(), io.StringIO()
-    with LOCK:
+    with LOCK, fake_pve.locked():
         state = fake_pve.load()
         try:
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):

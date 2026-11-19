@@ -91,6 +91,8 @@ started or restarted keeps the drop-ins it started with (`started_with`), so a t
 was started with; `is-enabled`, `is-active`, `enable` and `restart` answer for the units installed packages bring.
 """
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -152,6 +154,16 @@ def fresh_state():
 
 def state_path():
     return Path(os.environ["FAKE_PVE_STATE"])
+
+
+@contextlib.contextmanager
+def locked():
+    """The state held from one command's load to its save. just status runs commands side by side, and the fake API
+    answers beside them: one that loaded the state before another saved it would put the other's change back
+    (apt_get_runs, which the status tests count). The lock is a file of its own, as store() renames over the state."""
+    with open(state_path().with_name(f".{state_path().name}.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
 
 
 def load():
@@ -1348,19 +1360,20 @@ def hostname(state, args):
 
 def main():
     tool, args = sys.argv[1], sys.argv[2:]
-    state = load()
-    tools = {
-        "pvesh": pvesh,
-        "pvesm": pvesm,
-        "qm": qm,
-        "pvenode": pvenode,
-        "hostname": hostname,
-        "systemctl": systemctl,
-        "apt-get": apt_get,
-        "dpkg-query": dpkg_query,
-    }
-    tools[tool](state, args)
-    save(state)
+    with locked():
+        state = load()
+        tools = {
+            "pvesh": pvesh,
+            "pvesm": pvesm,
+            "qm": qm,
+            "pvenode": pvenode,
+            "hostname": hostname,
+            "systemctl": systemctl,
+            "apt-get": apt_get,
+            "dpkg-query": dpkg_query,
+        }
+        tools[tool](state, args)
+        save(state)
 
 
 if __name__ == "__main__":
