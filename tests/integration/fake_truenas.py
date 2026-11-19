@@ -57,7 +57,8 @@ SYSTEM_SERIAL = "FAKE-SYSTEM-SERIAL-MUST-NOT-LEAK"
 DISK_SERIAL = "FAKE-DISK-SERIAL-MUST-NOT-LEAK"
 DISK_MODEL = "FAKE-DISK-MODEL-MUST-NOT-LEAK"
 BOOT_POOL = "boot-pool"
-# The user the API key logs in as: a hand-made full administrator that is an SMB login, as on the home NAS.
+# The user the API key logs in as, an example for the tests and not the project's own setup: a hand-made full
+# administrator that is an SMB login, as TrueNAS makes every new user unless told otherwise.
 API_USER = "api-admin"
 # The shells user.shell_choices offers a user with no extra groups.
 SHELLS = (
