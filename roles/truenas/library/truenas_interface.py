@@ -14,7 +14,7 @@ description:
   - Static IPv6 aliases already configured on the interface are kept.
 options:
   interface:
-    description: Interface name, for example C(enp7s0).
+    description: Interface name, for example C(eno1).
     type: str
   address:
     description: The static address in CIDR form, for example C(192.0.2.10/24).
