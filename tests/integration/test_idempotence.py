@@ -286,7 +286,7 @@ def test_truenas_role_is_idempotent(nas):
     expect(result, "truenas", changed=0, note="dry run after applying")
 
     s = read(nas["state"])
-    iface = s["interfaces"]["enp7s0"]
+    iface = s["interfaces"]["eno1"]
     assert iface["ipv4_dhcp"] is False and iface["aliases"] == [{"type": "INET", "address": NAS_ADDRESS, "netmask": 8}]
     assert s["interface_snapshot"] is None and s["checkin_waiting"] is None, "the address change was not checked in"
     assert (s["network"]["ipv4gateway"], s["network"]["nameserver1"]) == ("127.0.0.254", "127.0.0.53")

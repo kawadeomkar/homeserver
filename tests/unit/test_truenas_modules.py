@@ -153,7 +153,7 @@ class ScriptedAPI:
         "system.version": "TrueNAS-25.10.7",
         "system.ready": True,
         "system.info": {"hostname": "truenas", "uptime_seconds": 86400.5, "system_serial": SERIAL},
-        "interface.websocket_interface": {"name": "enp7s0"},
+        "interface.websocket_interface": {"name": "eno1"},
         "interface.websocket_local_ip": "192.0.2.10",
         "interface.query": [],
         "interface.has_pending_changes": False,
