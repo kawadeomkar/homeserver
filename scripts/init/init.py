@@ -388,7 +388,16 @@ class Init:
     def needed(self, s: cfg.Setting) -> str:
         if s.required_without_nas and not self.on("nas"):
             return "required"
+        if s.kind == "mac_passwords" and not self.active_macs():
+            return "optional"  # every Mac retired: its login is closed and wants no password
         return s.need
+
+    def active_macs(self) -> list[str]:
+        """The names of the Macs timemachine_backups lists that are not retired."""
+        macs = self.values.get("timemachine_backups")
+        if not isinstance(macs, list):
+            return []
+        return [str(m["name"]) for m in macs if isinstance(m, dict) and m.get("name") and m.get("retired") is not True]
 
     def applies(self, s: cfg.Setting) -> bool:
         """Whether the setting means anything in this setup: with or without a NAS as it needs, its lead set."""
@@ -423,7 +432,7 @@ class Init:
                     self.vault.set(s.key, answer, self.order)
                 elif has_value(self.current(s)):
                     # Emptied, as just vault new writes it, so its line stays under its comment.
-                    self.vault.set(s.key, "", self.order)
+                    self.vault.set(s.key, {} if s.kind == "mac_passwords" else "", self.order)
                 return
             if answer is CLEAR:
                 if self.local.unset(s.key):
@@ -515,6 +524,9 @@ class Init:
             if not self.vault.is_open:
                 self.console.say(f"  Skipped: the vault {self.vault_problem()}.")
                 return
+            if s.kind == "mac_passwords":
+                self.ask_mac_passwords(s)
+                return
             self.apply(s, self.ask_value(s, self.current(s), None, lambda t: cfg.parse(s, t), secret=True))
         elif s.kind == "bool":
             self.ask_bool(s)
@@ -528,6 +540,8 @@ class Init:
             self.ask_parts(s, ("cores", "memory_mib", "disk_gib"), cfg.DEFAULTS["haos_size"])
         elif s.kind == "pool_disks":
             self.ask_pool_disks(s)
+        elif s.kind == "macs":
+            self.ask_macs(s)
         elif not (s.key in PINNED and self.offer_certificate(s)):
             now = self.current(s)
             if s.key == "flux_sync_url" and not has_value(now):
@@ -630,6 +644,59 @@ class Init:
                 out[pool] = answer
         self.apply(s, out or CLEAR)
 
+    def ask_macs(self, s: cfg.Setting) -> None:
+        """timemachine_backups: the Macs' names, then each one's quota and uid, offered for a new one. Whatever else an
+        entry holds (retired, set by hand) is kept, and a Mac whose name is left out goes."""
+        now = self.current(s)
+        macs = [m for m in now if isinstance(m, dict) and m.get("name")] if isinstance(now, list) else []
+        by_name = {str(m["name"]): m for m in macs}
+        names = self.ask_value(
+            s, list(by_name) or None, None, cfg.PARSERS["mac_names"], part="names", label="the Macs' names"
+        )
+        if names is CLEAR:
+            self.apply(s, CLEAR)
+            return
+        if names is KEEP:
+            names = list(by_name)
+        taken = {m.get("uid") for m in macs}
+        out = []
+        for name in names:
+            mac = dict(by_name.get(name, {"name": name}))
+            quota, uid = mac.get("quota_gib"), mac.get("uid")
+            free = next(n for n in range(cfg.MAC_FIRST_UID, cfg.MAC_FIRST_UID + 1000) if n not in taken)
+            for part, value, suggestion, parse, label in (
+                ("quota_gib", quota, cfg.MAC_QUOTA_GIB, "quota_gib", f"{name}: the most its dataset may hold, in GiB"),
+                ("uid", uid, free, "uid", f"{name}: its login's uid"),
+            ):
+                answer = self.ask_value(
+                    s,
+                    value,
+                    None if has_value(value) else str(suggestion),
+                    cfg.PARSERS[parse],
+                    part=f"{name}.{part}",
+                    label=label,
+                )
+                if answer is CLEAR:
+                    mac.pop(part, None)
+                elif answer is not KEEP:
+                    mac[part] = answer
+            taken.add(mac.get("uid"))
+            out.append(mac)
+        self.apply(s, out or CLEAR)
+
+    def ask_mac_passwords(self, s: cfg.Setting) -> None:
+        """vault_timemachine_passwords: each Mac's SMB password, a retired one's not asked; no suggestion is shown,
+        since a password the screen showed is one the scrollback keeps."""
+        now = self.current(s) if isinstance(self.current(s), dict) else {}
+        out = dict(now)
+        for name in self.active_macs():
+            answer = self.ask_value(s, now.get(name), None, cfg.PARSERS["smb_password"], part=name, secret=True)
+            if answer is CLEAR:
+                out.pop(name, None)
+            elif answer is not KEEP:
+                out[name] = answer
+        self.apply(s, out or CLEAR)
+
     # ------------------------------------------------------------------------------------------ suggestions ---
     def taken_macs(self) -> set[str]:
         v = self.values
@@ -718,16 +785,21 @@ class Init:
     # ---------------------------------------------------------------------------------------------- sections ---
     def switch(self, section: str) -> bool:
         question, key = cfg.SWITCHES[section]
-        on = self.yes_no(f"\n{question}", self.present(section), f"switch:{section}")
+        need = cfg.NEEDS.get(section)
+        # Without the section it needs it means nothing, and the playbooks refuse its settings: off, unasked, and any
+        # settings it has left offered for deletion with delete as the answer.
+        orphaned = bool(need) and not self.on(need)
+        on = not orphaned and self.yes_no(f"\n{question}", self.present(section), f"switch:{section}")
         if on:
             if cfg.BY_KEY[key].kind == "bool":
                 self.apply(cfg.BY_KEY[key], True)
             return True
         keys = [s.key for s in cfg.SETTINGS if s.section == section and not s.secret and s.key in self.values]
         real = [k for k in keys if has_value(self.values[k])]
+        why = f" Without the {cfg.SECTIONS[need]} the playbooks refuse them." if orphaned else ""
         if real and not self.yes_no(
-            f"  local.yml sets {', '.join(real)}. Delete them, so the playbooks see no {cfg.SECTIONS[section]}?",
-            False,
+            f"  local.yml sets {', '.join(real)}. Delete them, so the playbooks see no {cfg.SECTIONS[section]}?{why}",
+            orphaned,
             f"clear:{section}",
         ):
             self.console.say("  Kept as they are, so the playbooks still see it: its settings come next.")
@@ -1196,6 +1268,11 @@ class Init:
                 + (" and DNS" if routes else "")
                 + " in Tailscale's admin console, before the first run (scripts/runbooks/tailscale.md, "
                 + ("sections 1 and 2)" if routes else "section 1)")
+            )
+        if on["timemachine"] and self.active_macs():
+            manual.append(
+                "After just deploy truenas, each Mac's own steps: add its disk in Time Machine's settings, with "
+                "encryption on (scripts/runbooks/timemachine.md)"
             )
         if on["cluster"]:
             macs = v.get("kubernetes_node_macs") if isinstance(v.get("kubernetes_node_macs"), dict) else {}

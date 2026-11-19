@@ -19,7 +19,9 @@ audit of the tree before the cluster was built.
       `haos_url` at that name (`scripts/runbooks/haos.md`)
 - [ ] A servers VLAN for the NAS, the Proxmox host and the nodes, which the IoT and Wi-Fi devices cannot reach: NFS
       with sec=sys trusts addresses, and the nightly VM backups on the NAS hold the cluster's keys and etcd
-      (CLAUDE.md, Landmines). Then narrow `kubernetes_ingress_allowed_range` to the clients' VLAN
+      (CLAUDE.md, Landmines). Then narrow `kubernetes_ingress_allowed_range` to the clients' VLAN, and let the clients'
+      VLAN reach the NAS on tcp/445 for Time Machine: Bonjour stops at the VLAN's edge, so a Mac then adds its disk by
+      address (`smb://tm-<name>@<nas>/tm-<name>`), or the router repeats mDNS
 
 ## CI
 
@@ -47,6 +49,21 @@ audit of the tree before the cluster was built.
 
 The NAS was reinstalled on TrueNAS Community Edition and is configured only through Ansible:
 `roles/truenas` (`truenas.yml`) and, on the Proxmox side, `roles/proxmox_storage` (`proxmox.yml`).
+
+- [ ] Back the Macs up to the NAS with Time Machine (`scripts/runbooks/timemachine.md`), after deciding the pool rename
+      below: once the Macs' backups are on the persistent pool, it is never destroyed to rename it. In order:
+      1. First, a backup of each Mac to its local disk, with the charger connected.
+      2. Each Mac in `local.yml`'s `timemachine_backups` and its SMB password in the vault, then
+         `just check truenas`, and `just deploy truenas` twice; the second changes nothing.
+      3. The Mac's own steps in the runbook: the disk added with encryption on, its limit, the first backup on
+         Ethernet, then one automatic backup.
+      4. Over the first months, the snapshots' share of each Mac's quota (`just status nas`).
+- [ ] A local disk of 1 TB or more for each Mac, as Time Machine's second destination beside the NAS
+- [ ] When the router takes over Tailscale (`docs/WIREGUARD-PLAN.md`), each Time Machine share's
+      `hostsdeny: [proxmox_address]` (`group_vars/nas/timemachine.yml`) no longer names the address tailnet clients
+      come from: replace it with an allow list of the LAN except the router's masquerading address
+      (`hostsallow: ['<LAN> EXCEPT <address>']`, from `local.yml`'s variables), and check what routed WireGuard
+      clients arrive as
 
 - [ ] Recreate the home NAS's redundant pool under its class name, `persistent`. It is still called by its
       old hardware name, so until then `local.yml` must set `truenas_pool_persistent` to that name, or every

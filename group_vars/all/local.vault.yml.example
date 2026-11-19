@@ -19,6 +19,16 @@ vault_truenas_api_key: ""
 # next run sends it to the NAS.
 vault_truenas_mail_password: ""
 
+# With Time Machine (timemachine_backups in local.yml): each Mac's SMB password,
+# 20 characters at least, long and random (openssl rand -base64 30 | pbcopy,
+# which prints nothing); the Mac keeps it in its keychain. Not the backup's own
+# encryption password, which never leaves the Mac and your password manager.
+# Replace the {} with an indented line per Mac, under its name:
+#   vault_timemachine_passwords:
+#     laptop: <password>
+# Changing one here is not enough: scripts/runbooks/timemachine.md says how.
+vault_timemachine_passwords: {}
+
 # ------------------------------------------------------------------- Router ---
 # With the router (opnsense_address in local.yml): the API key pair of its user
 # for this project, made under System > Access > Users

@@ -8,7 +8,7 @@ by their variable in `group_vars/all/local.yml`; the real values live only there
 
 | Failure | What survives | What Ansible restores | What you do by hand |
 | --- | --- | --- | --- |
-| NAS boot drive | The data pools, with every dataset and its properties | Network, pool import, settings, NFS shares, services | Reinstall, API user and key, certificate pin |
+| NAS boot drive | The data pools, with every dataset and its properties, the Macs' Time Machine backups and their snapshots among them | Network, pool import, settings, NFS shares, the Macs' logins (same uids, passwords from the vault) and Time Machine shares (same volume ids), services | Reinstall, API user and key, certificate pin |
 | One disk of the RAIDZ1 pool (`persistent`) | The pool, degraded | Nothing until the pool is healthy: the role only imports ONLINE pools | Replace the disk and resilver (see [Known limits](#known-limits)) |
 | The single disk of `ephemeral` | Nothing: that pool and the media on it are lost, and so is the worker's system disk | A new, empty pool on a blank replacement disk, then its datasets and share | Allow pool creation and list the new disk; give the worker a new system disk and reinstall it ([dead-worker.md](dead-worker.md)) |
 | NAS network card | Everything on disk | Everything, once the NAS is reachable | Update the router's DHCP reservation to the new MAC |
@@ -93,7 +93,7 @@ minute and a full dry run uses about 16, so leave a minute between a full dry ru
 | 2 | `just deploy truenas --tags truenas_network` | DHCP off, static address applied. If the role can't reconnect, TrueNAS rolls back by itself after 90 s |
 | 3 | `just deploy truenas --tags truenas_pools` | System dataset pinned to the boot pool, both pools imported. Don't accept TrueNAS's offer to upgrade pool features |
 | 4 | `just check truenas --tags truenas_datasets` | No change: the datasets and their properties came back with the pools. Only a recreated pool shows new datasets |
-| 5 | `just deploy truenas` | HTTPS redirect, snapshot tasks, NFS shares, alert mail, NFS started. Shares, tasks and settings live in TrueNAS's own database, so they come back here. The mail password comes from the vault |
+| 5 | `just deploy truenas` | HTTPS redirect, snapshot tasks, NFS shares, alert mail, NFS started; with Macs in `timemachine_backups`, their logins, directory owners and Time Machine shares, SMB started. Shares, tasks, users and settings live in TrueNAS's own database, so they come back here. The mail and SMB passwords come from the vault. The Macs need nothing: their shares announce the volumes they knew |
 | 6 | `just deploy truenas` | `changed=0` |
 
 The Proxmox host needs nothing: its NFS storages reconnect once the shares exist. `just check proxmox` should

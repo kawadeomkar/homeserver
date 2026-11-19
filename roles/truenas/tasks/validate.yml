@@ -39,3 +39,22 @@
     label: "{{ item.path }}"
   vars:
     _share: "{{ truenas_nfs_share_defaults | combine(item) }}"
+
+# The SMB service is the SMB stage's, which starts it only after its login check; the services stage, which runs under
+# its own tag without that check, must not touch it.
+- name: validate | Refuse the SMB service among the services stage's
+  ansible.builtin.assert:
+    that: "'cifs' not in truenas_services"
+    fail_msg: >-
+      cifs is in truenas_services. The SMB service is the SMB stage's, which starts it only after checking that no SMB
+      login the role does not list exists: set truenas_smb_service ({enabled, state}) instead.
+    quiet: true
+
+- name: validate | Refuse a truenas_api_user_smb that is not false or null
+  ansible.builtin.assert:
+    that: truenas_api_user_smb is none or truenas_api_user_smb is false
+    fail_msg: >-
+      truenas_api_user_smb is {{ truenas_api_user_smb | to_json }}: false takes the API key's user out of SMB, null
+      leaves it alone, and true is refused, since turning SMB on needs that user's password. Given with -e, false is
+      the string "false": write -e '{"truenas_api_user_smb": false}'.
+    quiet: true
